@@ -348,15 +348,27 @@ class StopConfirmationTests(unittest.TestCase):
         self.assertGreater(conductor.APP_STOP_DELAYED_LAUNCH_GUARD_SECONDS, 10.0)
         self.assertGreater(conductor.APP_STOP_DELAYED_LAUNCH_CONFIRM_TIMEOUT_SECONDS, conductor.APP_STOP_DELAYED_LAUNCH_GUARD_SECONDS)
 
+    @contextlib.contextmanager
     def patched_timing(self):
-        return mock.patch.multiple(
+        current_time = 0.0
+
+        def fake_now() -> float:
+            return current_time
+
+        def fake_sleep(seconds: float) -> None:
+            nonlocal current_time
+            current_time += seconds
+
+        with mock.patch.multiple(
             conductor,
             APP_STOP_POLL_SECONDS=0.001,
             APP_STOP_QUIET_SECONDS=0.002,
             APP_STOP_DELAYED_LAUNCH_GUARD_SECONDS=0.004,
             APP_STOP_CONFIRM_TIMEOUT_SECONDS=0.02,
             APP_STOP_DELAYED_LAUNCH_CONFIRM_TIMEOUT_SECONDS=0.02,
-        )
+            now=fake_now,
+        ), mock.patch.object(conductor.time, "sleep", side_effect=fake_sleep):
+            yield
 
     def test_already_stopped_is_confirmed_without_termination(self) -> None:
         with self.patched_timing(), mock.patch.object(conductor, "find_repoprompt_pids", return_value=[]), mock.patch.object(
