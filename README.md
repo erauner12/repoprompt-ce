@@ -56,6 +56,14 @@ Xcode.
 | `x` | Stop the app                                |
 | `q` | Close the launcher without stopping the app |
 
+**Install a local production build**
+
+Double-click
+[`Install RepoPrompt CE Local Production.command`](Install%20RepoPrompt%20CE%20Local%20Production.command)
+in Finder to build and install a release-mode app under `/Applications` using
+your own self-signed local certificate. The resulting app is local-only: it is
+not notarized and should not be redistributed.
+
 ## About the Community Edition
 
 RepoPrompt CE is the open-source community edition of RepoPrompt, originally a

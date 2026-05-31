@@ -18,6 +18,44 @@ PINNED_CERTIFICATE_NAME = "RepoPrompt CE Local Self-Signed Code Signing"
 
 
 class LocalProductionInstallerTests(unittest.TestCase):
+    def test_finder_launcher_routes_confirmed_install_through_conductor(self) -> None:
+        launcher = ROOT_DIR / "Install RepoPrompt CE Local Production.command"
+        self.assertTrue(os.access(launcher, os.X_OK))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            copied_launcher = root / launcher.name
+            shutil.copy2(launcher, copied_launcher)
+            capture = root / "capture.txt"
+            conductor = root / "conductor"
+            conductor.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    printf '%s\\n' "$CONFIRM_LOCAL_PRODUCTION_INSTALL" > "$LAUNCHER_CAPTURE"
+                    printf '%s\\n' "$@" >> "$LAUNCHER_CAPTURE"
+                    """
+                ),
+                encoding="utf-8",
+            )
+            conductor.chmod(0o755)
+
+            env = os.environ.copy()
+            env["LAUNCHER_CAPTURE"] = str(capture)
+            result = subprocess.run(
+                ["bash", str(copied_launcher)],
+                env=env,
+                input="y\n\n",
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
+            captured_lines = capture.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(captured_lines, ["1", "release", "local-install"])
+
     def test_local_entitlements_keep_runtime_capabilities_without_developer_id_identity_keys(self) -> None:
         template = ROOT_DIR / "AppBundle" / "RepoPrompt.local-self-signed.entitlements.template"
         with template.open("rb") as handle:

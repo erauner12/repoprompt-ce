@@ -66,7 +66,13 @@ for packaging review and local testing only.
 ## Install a local self-signed production build
 
 Users who want a release-mode build without maintainer credentials can install
-a local-only production app with:
+a local-only production app by double-clicking
+[`Install RepoPrompt CE Local Production.command`](../Install%20RepoPrompt%20CE%20Local%20Production.command)
+in Finder. The launcher confirms the local-only install, runs the coordinated
+developer daemon when Python 3 is available, and keeps the terminal window open
+so certificate approval prompts and build results remain visible.
+
+The equivalent command-line path is:
 
 ```bash
 CONFIRM_LOCAL_PRODUCTION_INSTALL=1 make dev-install-local-production
