@@ -2,7 +2,7 @@ import Foundation
 @testable import RepoPrompt
 import XCTest
 
-final class CodexNativeSessionControllerThreadStartTests: XCTestCase {
+final class CodexNativeSessionControllerGoalConfigTests: XCTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {
@@ -11,44 +11,6 @@ final class CodexNativeSessionControllerThreadStartTests: XCTestCase {
         }
         temporaryDirectories.removeAll()
         try super.tearDownWithError()
-    }
-
-    func testFreshThreadStartEphemeralJSONRPCShapeMatrix() async throws {
-        let rows: [(label: String, options: CodexNativeSessionController.Options?, instructions: String, expectedEphemeral: Bool?)] = [
-            ("opted-in standard chat", makeStandardChatOptions(startNewThreadsEphemerally: true), "Oracle", true),
-            ("default standard chat", makeStandardChatOptions(startNewThreadsEphemerally: false), "Chat", nil),
-            ("Agent Mode default", nil, "Agent", nil)
-        ]
-
-        for row in rows {
-            let (controller, recordURL) = try await makeController(options: row.options)
-
-            _ = try await controller.startOrResume(existing: nil, baseInstructions: row.instructions)
-            await controller.shutdown()
-
-            let params = try recordedParams(for: "thread/start", at: recordURL)
-            if let expectedEphemeral = row.expectedEphemeral {
-                XCTAssertEqual(params["ephemeral"] as? Bool, expectedEphemeral, row.label)
-            } else {
-                XCTAssertNil(params["ephemeral"], row.label)
-            }
-        }
-    }
-
-    func testResumeNeverIncludesEphemeralWhenFreshStartsAreOptedIn() async throws {
-        let (controller, recordURL) = try await makeController(options: makeStandardChatOptions(startNewThreadsEphemerally: true))
-        let existing = CodexNativeSessionController.SessionRef(
-            conversationID: "existing-thread",
-            rolloutPath: nil,
-            model: nil,
-            reasoningEffort: nil
-        )
-
-        _ = try await controller.startOrResume(existing: existing, baseInstructions: "Oracle")
-        await controller.shutdown()
-
-        let params = try recordedParams(for: "thread/resume", at: recordURL)
-        XCTAssertNil(params["ephemeral"])
     }
 
     func testAgentModeDefaultCarriesGoalFeatureConfigToStartAndResume() async throws {
@@ -86,23 +48,11 @@ final class CodexNativeSessionControllerThreadStartTests: XCTestCase {
         )
     }
 
-    private func makeStandardChatOptions(startNewThreadsEphemerally: Bool) -> CodexNativeSessionController.Options {
-        CodexNativeSessionController.Options(
-            requestTimeout: 5,
-            configOverridesProvider: { [:] },
-            approvalPolicyProvider: { .never },
-            sandboxModeProvider: { .readOnly },
-            approvalReviewerProvider: { .user },
-            authTokensRefreshHandler: nil,
-            startNewThreadsEphemerally: startNewThreadsEphemerally
-        )
-    }
-
     private func makeController(
-        options: CodexNativeSessionController.Options?
+        options: CodexNativeSessionController.Options
     ) async throws -> (CodexNativeSessionController, URL) {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CodexNativeSessionControllerThreadStartTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("CodexNativeSessionControllerGoalConfigTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         temporaryDirectories.append(directory)
 
