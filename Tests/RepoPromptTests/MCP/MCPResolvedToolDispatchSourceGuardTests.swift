@@ -24,9 +24,44 @@ final class MCPResolvedToolDispatchSourceGuardTests: XCTestCase {
         XCTAssertEqual(callToolHandler.occurrenceCount(of: "self.schemaDeclaresWindowID(schema: toolDef.inputSchema)"), 1)
         XCTAssertEqual(callToolHandler.occurrenceCount(of: "schemaDeclaresWindowID: selectedSchemaDeclaresWindowID"), 2)
         XCTAssertEqual(callToolHandler.occurrenceCount(of: "try await toolDef.callAsFunction(effectiveArgs)"), 2)
+        XCTAssertEqual(callToolHandler.occurrenceCount(of: "self.serviceRegistry.isCurrent(indexedRoute)"), 1)
+        XCTAssertTrue(callToolHandler.contains("catalog changed while this call was queued"))
         XCTAssertFalse(callToolHandler.contains("service.call("))
         XCTAssertTrue(callToolHandler.contains("if let wsSvc, shouldTrackToolOwnership"))
         XCTAssertTrue(callToolHandler.contains("// Not window-scoped → no ownership tracking needed"))
+    }
+
+    func testToolListHandlersResolveCapturedPublicationBoundary() throws {
+        let source = try String(
+            contentsOf: RepoRoot.url()
+                .appendingPathComponent("Sources/RepoPrompt/Infrastructure/MCP/MCPConnectionManager.swift"),
+            encoding: .utf8
+        )
+        let debugList = try XCTUnwrap(source.slice(
+            from: "        func debugListToolNames(\n",
+            to: "        @discardableResult\n        func debugFireToolCalledObservers(\n"
+        ))
+        let productionList = try XCTUnwrap(source.slice(
+            from: "        await server.withMethodHandler(ListTools.self) { [weak self] _ in\n",
+            to: "        // ------------------------------------------------------------------\n        //  tools/call"
+        ))
+
+        for handler in [debugList, productionList] {
+            XCTAssertTrue(handler.contains("capturePublicationBoundary()"))
+            XCTAssertTrue(handler.contains("snapshot(for: catalogBoundary)"))
+            XCTAssertFalse(handler.contains("routeSnapshot()"))
+            let readiness = try XCTUnwrap(handler.range(of: "toolCatalogReadiness.awaitReady("))
+            let warming = handler.range(
+                of: "toolCatalogReadiness.warmToolCache",
+                range: readiness.upperBound ..< handler.endIndex
+            )
+            let boundary = try XCTUnwrap(handler.range(of: "capturePublicationBoundary()"))
+            if let warming {
+                XCTAssertLessThan(warming.lowerBound, boundary.lowerBound)
+            } else {
+                XCTAssertLessThan(readiness.lowerBound, boundary.lowerBound)
+            }
+        }
     }
 
     func testOrdinaryCallToolHandlerPreservesWindowRoutingPriorityBeforeInvocation() throws {

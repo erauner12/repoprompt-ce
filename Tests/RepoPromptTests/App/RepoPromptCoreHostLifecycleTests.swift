@@ -18,7 +18,7 @@ final class RepoPromptCoreHostLifecycleTests: XCTestCase {
         XCTAssertFalse(registry.hasActiveWindow(id: 42))
 
         registry.setMCPEnabled(windowID: 42, enabled: true)
-        host.activate(handle)
+        XCTAssertTrue(host.activate(handle))
         XCTAssertEqual(handle.snapshot.lifecycle, .active)
         XCTAssertTrue(registry.isInvocationAllowed(windowID: 42))
 
@@ -33,6 +33,37 @@ final class RepoPromptCoreHostLifecycleTests: XCTestCase {
         XCTAssertFalse(registry.hasActiveWindow(id: 42))
         #if DEBUG
             XCTAssertTrue(registry.debugIsRetired(windowID: 42))
+        #endif
+    }
+
+    func testDuplicateRoutingIDActivationIsRejectedAndCannotTeardownOwner() {
+        let registry = MCPRuntimeSessionRegistry()
+        let host = RepoPromptCoreHost(
+            workspaceRepository: WorkspaceRepository(),
+            workspaceAccessPolicy: UnrestrictedWorkspaceAccessPolicy(),
+            runtimeSessionRegistry: registry,
+            platformDependencies: MacOSRepoPromptCorePlatformDependencies.embeddedApp()
+        )
+        let owner = host.makeEmbeddedSession(routingSessionID: MCPRoutingSessionID(rawValue: 84))
+        let duplicate = host.makeEmbeddedSession(routingSessionID: MCPRoutingSessionID(rawValue: 84))
+
+        registry.setMCPEnabled(windowID: 84, enabled: true)
+        XCTAssertTrue(host.activate(owner))
+        XCTAssertFalse(host.activate(duplicate))
+        XCTAssertEqual(duplicate.snapshot.lifecycle, .created)
+        XCTAssertTrue(registry.isInvocationAllowed(windowID: 84))
+
+        host.beginDraining(duplicate)
+        host.remove(duplicate)
+        XCTAssertEqual(duplicate.snapshot.lifecycle, .removed)
+        XCTAssertEqual(owner.snapshot.lifecycle, .active)
+        XCTAssertTrue(registry.isInvocationAllowed(windowID: 84))
+
+        host.beginDraining(owner)
+        host.remove(owner)
+        XCTAssertFalse(registry.hasActiveWindow(id: 84))
+        #if DEBUG
+            XCTAssertTrue(registry.debugIsRetired(windowID: 84))
         #endif
     }
 

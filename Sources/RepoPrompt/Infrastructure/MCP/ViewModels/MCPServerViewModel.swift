@@ -476,7 +476,11 @@ final class MCPServerViewModel: ObservableObject {
     /// Whether this window's tools are enabled
     @Published var windowToolsEnabled: Bool = false {
         didSet {
-            runtimeSessionRegistry.setMCPEnabled(windowID: windowID, enabled: windowToolsEnabled)
+            runtimeSessionRegistry.setMCPEnabled(
+                windowID: windowID,
+                expectedSessionID: coreSessionHandle.sessionID,
+                enabled: windowToolsEnabled
+            )
             updateDashboardSubscriptionIfNeeded()
             recomputeCloseSafetyState()
             #if DEBUG || EDIT_FLOW_PERF
@@ -1617,7 +1621,11 @@ final class MCPServerViewModel: ObservableObject {
 
         // Enable tools based on auto-start setting. CE builds do not license-gate MCP.
         windowToolsEnabled = GlobalSettingsStore.shared.mcpAutoStart()
-        runtimeSessionRegistry.setMCPEnabled(windowID: windowID, enabled: windowToolsEnabled)
+        runtimeSessionRegistry.setMCPEnabled(
+            windowID: windowID,
+            expectedSessionID: coreSessionHandle.sessionID,
+            enabled: windowToolsEnabled
+        )
     }
 
     // MARK: – Private helpers
@@ -1784,7 +1792,19 @@ final class MCPServerViewModel: ObservableObject {
     /// Reconcile pending auto-start after the window-backed runtime session becomes active.
     @MainActor
     func windowDidRegister() {
-        runtimeSessionRegistry.setMCPEnabled(windowID: windowID, enabled: windowToolsEnabled)
+        guard runtimeSessionRegistry.hasActiveSession(
+            windowID: windowID,
+            expectedSessionID: coreSessionHandle.sessionID
+        ) else {
+            serviceRegistry.unregister(windowToolCatalogService)
+            Task { await service.leave(windowID: windowID) }
+            return
+        }
+        runtimeSessionRegistry.setMCPEnabled(
+            windowID: windowID,
+            expectedSessionID: coreSessionHandle.sessionID,
+            enabled: windowToolsEnabled
+        )
         if windowToolsEnabled {
             Task { await updateToolRegistration(invalidateCatalogBeforeUpdate: false) }
         } else {
@@ -1798,7 +1818,10 @@ final class MCPServerViewModel: ObservableObject {
     /// Remove routing eligibility before asynchronous listener and catalog cleanup completes.
     @MainActor
     func windowWillUnregister() {
-        runtimeSessionRegistry.beginDraining(windowID: windowID)
+        runtimeSessionRegistry.beginDraining(
+            windowID: windowID,
+            expectedSessionID: coreSessionHandle.sessionID
+        )
         serviceRegistry.unregister(windowToolCatalogService)
         Task { await service.leave(windowID: windowID) }
     }
@@ -1816,7 +1839,12 @@ final class MCPServerViewModel: ObservableObject {
             #endif
         }
 
-        if windowToolsEnabled, runtimeSessionRegistry.hasActiveWindow(id: windowID) {
+        if windowToolsEnabled,
+           runtimeSessionRegistry.hasActiveSession(
+               windowID: windowID,
+               expectedSessionID: coreSessionHandle.sessionID
+           )
+        {
             serviceRegistry.register(windowToolCatalogService) // idempotent
             do {
                 try await service.join(windowID: windowID)

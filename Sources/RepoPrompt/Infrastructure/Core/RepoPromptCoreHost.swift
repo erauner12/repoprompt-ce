@@ -130,25 +130,38 @@ final class RepoPromptCoreHost {
         return RepoPromptCoreSessionHandle(session: session)
     }
 
-    func activate(_ handle: RepoPromptCoreSessionHandle) {
+    @discardableResult
+    func activate(_ handle: RepoPromptCoreSessionHandle) -> Bool {
         let session = handle.session
-        guard session.lifecycle == .created else { return }
+        guard session.lifecycle == .created else { return session.lifecycle == .active }
+        let registration = runtimeSessionRegistry.register(session: session)
+        guard registration == .accepted || registration == .alreadyRegistered else {
+            return false
+        }
         session.lifecycle = .active
         activeSessions[session.sessionID] = session
-        runtimeSessionRegistry.register(session: session)
+        return true
     }
 
     func beginDraining(_ handle: RepoPromptCoreSessionHandle) {
         let session = handle.session
         guard session.lifecycle == .active else { return }
+        guard runtimeSessionRegistry.beginDraining(
+            windowID: session.routingSessionID.rawValue,
+            expectedSessionID: session.sessionID
+        ) else {
+            return
+        }
         session.lifecycle = .draining
-        runtimeSessionRegistry.beginDraining(windowID: session.routingSessionID.rawValue)
     }
 
     func remove(_ handle: RepoPromptCoreSessionHandle) {
         let session = handle.session
         guard session.lifecycle != .removed else { return }
-        runtimeSessionRegistry.remove(windowID: session.routingSessionID.rawValue)
+        _ = runtimeSessionRegistry.remove(
+            windowID: session.routingSessionID.rawValue,
+            expectedSessionID: session.sessionID
+        )
         activeSessions.removeValue(forKey: session.sessionID)
         createdSessions.removeValue(forKey: session.sessionID)
         session.workspaceSessionController.detach()

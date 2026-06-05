@@ -7,6 +7,13 @@ import Foundation
 /// session IDs and no longer retain app windows.
 @MainActor
 final class MCPRuntimeSessionRegistry {
+    enum RegistrationResult: Equatable {
+        case accepted
+        case alreadyRegistered
+        case routingIDInUse
+        case retiredRoutingID
+    }
+
     enum Lifecycle {
         case active
         case draining
@@ -40,74 +47,136 @@ final class MCPRuntimeSessionRegistry {
 
     private final class Entry {
         let windowID: Int
+        let sessionID: RepoPromptSessionID
         weak var session: RepoPromptCoreSession?
         var lifecycle: Lifecycle
         var isMCPEnabled: Bool
 
         init(session: RepoPromptCoreSession, isMCPEnabled: Bool) {
             windowID = session.routingSessionID.rawValue
+            sessionID = session.sessionID
             self.session = session
             lifecycle = .active
             self.isMCPEnabled = isMCPEnabled
         }
     }
 
+    private struct PendingEnable {
+        let sessionID: RepoPromptSessionID?
+        let enabled: Bool
+    }
+
     private var entriesByID: [Int: Entry] = [:]
     private var orderedIDs: [Int] = []
-    private var pendingEnabledByUnknownID: [Int: Bool] = [:]
+    private var pendingEnabledByUnknownID: [Int: PendingEnable] = [:]
     private var retiredIDs: Set<Int> = []
     private var generation: UInt64 = 0
 
     nonisolated init() {}
 
-    func register(session: RepoPromptCoreSession) {
+    @discardableResult
+    func register(session: RepoPromptCoreSession) -> RegistrationResult {
         let windowID = session.routingSessionID.rawValue
-        guard !retiredIDs.contains(windowID) else { return }
+        guard !retiredIDs.contains(windowID) else { return .retiredRoutingID }
         if let existing = entriesByID[windowID] {
-            guard existing.lifecycle == .active else { return }
+            guard existing.sessionID == session.sessionID else { return .routingIDInUse }
+            guard existing.lifecycle == .active else { return .routingIDInUse }
             existing.session = session
-            existing.isMCPEnabled = pendingEnabledByUnknownID.removeValue(forKey: windowID)
-                ?? existing.isMCPEnabled
-            generation &+= 1
-            return
+            return .alreadyRegistered
         }
 
-        let isEnabled = pendingEnabledByUnknownID.removeValue(forKey: windowID) ?? false
+        let pendingEnable = pendingEnabledByUnknownID.removeValue(forKey: windowID)
+        let isEnabled = if let pendingEnable,
+                           pendingEnable.sessionID == nil || pendingEnable.sessionID == session.sessionID
+        {
+            pendingEnable.enabled
+        } else {
+            false
+        }
         entriesByID[windowID] = Entry(session: session, isMCPEnabled: isEnabled)
         orderedIDs.append(windowID)
         generation &+= 1
+        return .accepted
     }
 
     func setMCPEnabled(windowID: Int, enabled: Bool) {
-        if retiredIDs.contains(windowID) {
-            return
-        }
-        guard let entry = entriesByID[windowID] else {
-            pendingEnabledByUnknownID[windowID] = enabled
-            return
-        }
-        if entry.lifecycle == .draining, enabled {
-            return
-        }
-        guard entry.isMCPEnabled != enabled else { return }
-        entry.isMCPEnabled = enabled
-        generation &+= 1
+        _ = setMCPEnabled(windowID: windowID, expectedSessionID: nil, enabled: enabled)
     }
 
-    func beginDraining(windowID: Int) {
-        guard let entry = entriesByID[windowID], entry.lifecycle == .active else { return }
+    @discardableResult
+    func setMCPEnabled(
+        windowID: Int,
+        expectedSessionID: RepoPromptSessionID,
+        enabled: Bool
+    ) -> Bool {
+        setMCPEnabled(windowID: windowID, expectedSessionID: Optional(expectedSessionID), enabled: enabled)
+    }
+
+    private func setMCPEnabled(
+        windowID: Int,
+        expectedSessionID: RepoPromptSessionID?,
+        enabled: Bool
+    ) -> Bool {
+        if retiredIDs.contains(windowID) {
+            return false
+        }
+        guard let entry = entriesByID[windowID] else {
+            if let pending = pendingEnabledByUnknownID[windowID] {
+                if let expectedSessionID,
+                   let pendingSessionID = pending.sessionID,
+                   pendingSessionID != expectedSessionID
+                {
+                    return false
+                }
+                if expectedSessionID == nil, pending.sessionID != nil {
+                    return false
+                }
+                guard pending.enabled != enabled || pending.sessionID != expectedSessionID else { return true }
+            }
+            pendingEnabledByUnknownID[windowID] = PendingEnable(
+                sessionID: expectedSessionID,
+                enabled: enabled
+            )
+            generation &+= 1
+            return true
+        }
+        if let expectedSessionID, entry.sessionID != expectedSessionID { return false }
+        if entry.lifecycle == .draining, enabled {
+            return false
+        }
+        guard entry.isMCPEnabled != enabled else { return true }
+        entry.isMCPEnabled = enabled
+        generation &+= 1
+        return true
+    }
+
+    @discardableResult
+    func beginDraining(windowID: Int, expectedSessionID: RepoPromptSessionID) -> Bool {
+        guard let entry = entriesByID[windowID],
+              entry.sessionID == expectedSessionID
+        else {
+            return false
+        }
+        guard entry.lifecycle == .active else { return true }
         entry.lifecycle = .draining
         entry.isMCPEnabled = false
         generation &+= 1
+        return true
     }
 
-    func remove(windowID: Int) {
-        if entriesByID.removeValue(forKey: windowID) != nil {
-            orderedIDs.removeAll { $0 == windowID }
-            generation &+= 1
+    @discardableResult
+    func remove(windowID: Int, expectedSessionID: RepoPromptSessionID) -> Bool {
+        guard let entry = entriesByID[windowID],
+              entry.sessionID == expectedSessionID
+        else {
+            return false
         }
+        entriesByID.removeValue(forKey: windowID)
+        orderedIDs.removeAll { $0 == windowID }
+        generation &+= 1
         pendingEnabledByUnknownID.removeValue(forKey: windowID)
         retiredIDs.insert(windowID)
+        return true
     }
 
     func routingSnapshot() -> RoutingSnapshot {
@@ -143,6 +212,17 @@ final class MCPRuntimeSessionRegistry {
 
     func hasActiveWindow(id windowID: Int) -> Bool {
         session(withRoutingID: windowID) != nil
+    }
+
+    func hasActiveSession(windowID: Int, expectedSessionID: RepoPromptSessionID) -> Bool {
+        guard let entry = entriesByID[windowID],
+              entry.sessionID == expectedSessionID,
+              entry.lifecycle == .active,
+              entry.session != nil
+        else {
+            return false
+        }
+        return true
     }
 
     func hasMCPEnabledWindow(id windowID: Int) -> Bool {

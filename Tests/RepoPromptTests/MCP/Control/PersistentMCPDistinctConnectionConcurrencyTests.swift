@@ -40,6 +40,22 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
         #endif
     }
 
+    func testQueuedCallRejectsRouteInvalidatedWhileWaitingForConnectionPermit() async throws {
+        #if DEBUG
+            let fixture = try await Fixture.make()
+            do {
+                try await runQueuedCatalogInvalidationCheckpoint(fixture: fixture)
+                await fixture.cleanup()
+                try await fixture.assertCleanedUp()
+            } catch {
+                await fixture.cleanup()
+                throw error
+            }
+        #else
+            throw XCTSkip("Queued MCP dispatch regression requires DEBUG limiter observation.")
+        #endif
+    }
+
     func testRemoveConnectionSourceStillDropsPerConnectionLimiter() throws {
         let sourceURL = try RepoRoot.url()
             .appendingPathComponent("Sources/RepoPrompt/Infrastructure/MCP/MCPConnectionManager.swift")
@@ -56,6 +72,52 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
 
 #if DEBUG
     private extension PersistentMCPDistinctConnectionConcurrencyTests {
+        func runQueuedCatalogInvalidationCheckpoint(fixture: Fixture) async throws {
+            let endpoint = try fixture.endpointA()
+            try await Self.bind(endpoint, to: fixture.contextA.tabID)
+            let probe = RouteInvocationProbe()
+            let service = MutableQueuedRouteService(
+                toolName: "queued_catalog_revision_test",
+                probe: probe
+            )
+            fixture.networkManager.serviceRegistry.register(service)
+            _ = await fixture.networkManager.serviceRegistry.awaitCurrentSnapshot()
+
+            do {
+                let firstCall = Task {
+                    try await endpoint.callTool(name: service.toolName, arguments: [:])
+                }
+                await probe.waitUntilOldInvocationStarted()
+
+                let queuedCall = Task {
+                    try await endpoint.callTool(name: service.toolName, arguments: [:])
+                }
+                await fixture.networkManager.debugWaitForLimiterWaiter(for: endpoint.connectionID)
+
+                await service.installNewRevision()
+                fixture.networkManager.serviceRegistry.invalidateCatalog(for: service)
+                _ = await fixture.networkManager.serviceRegistry.awaitCurrentSnapshot()
+                await probe.releaseOldInvocation()
+
+                let firstResponse = try await firstCall.value
+                let queuedResponse = try await queuedCall.value
+                XCTAssertTrue(try Self.toolText(from: firstResponse).contains("old"))
+                let queuedError = try Self.toolErrorText(from: queuedResponse)
+                XCTAssertTrue(queuedError.contains("catalog changed while this call was queued"), queuedError)
+
+                let freshResponse = try await endpoint.callTool(name: service.toolName, arguments: [:])
+                XCTAssertTrue(try Self.toolText(from: freshResponse).contains("new"))
+                let counts = await probe.counts()
+                XCTAssertEqual(counts.old, 1)
+                XCTAssertEqual(counts.new, 1)
+            } catch {
+                await probe.releaseOldInvocation()
+                fixture.networkManager.serviceRegistry.unregister(service)
+                throw error
+            }
+            fixture.networkManager.serviceRegistry.unregister(service)
+        }
+
         func runCheckpoint(fixture: Fixture) async throws {
             let endpointA = try fixture.endpointA()
             let endpointB = try fixture.endpointB()
@@ -706,6 +768,14 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
                 throw ClientFixtureError.toolReturnedError(text)
             }
             return text
+        }
+
+        static func toolErrorText(from response: RPCResponse) throws -> String {
+            let object = try responseObject(from: response)
+            let result = try XCTUnwrap(object["result"] as? [String: Any])
+            let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+            XCTAssertEqual(result["isError"] as? Bool, true)
+            return content.compactMap { $0["text"] as? String }.joined()
         }
 
         nonisolated static func responseObject(from response: RPCResponse) throws -> [String: Any] {
@@ -1428,6 +1498,82 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
 
         func isMarked() -> Bool {
             marked
+        }
+    }
+
+    private actor MutableQueuedRouteService: Service {
+        nonisolated let toolName: String
+        private let probe: RouteInvocationProbe
+        private var storedTools: [RepoPrompt.Tool]
+
+        init(toolName: String, probe: RouteInvocationProbe) {
+            self.toolName = toolName
+            self.probe = probe
+            storedTools = [Self.makeTool(name: toolName, revision: "old", probe: probe)]
+        }
+
+        var tools: [RepoPrompt.Tool] {
+            get async { storedTools }
+        }
+
+        func installNewRevision() {
+            storedTools = [Self.makeTool(name: toolName, revision: "new", probe: probe)]
+        }
+
+        private static func makeTool(
+            name: String,
+            revision: String,
+            probe: RouteInvocationProbe
+        ) -> RepoPrompt.Tool {
+            RepoPrompt.Tool(
+                name: name,
+                description: "queued catalog revision regression",
+                inputSchema: .object(properties: [:])
+            ) { _ in
+                if revision == "old" {
+                    await probe.invokeOld()
+                } else {
+                    await probe.invokeNew()
+                }
+                return ["revision": revision]
+            }
+        }
+    }
+
+    private actor RouteInvocationProbe {
+        private var oldCount = 0
+        private var newCount = 0
+        private var oldStarted = false
+        private var oldReleased = false
+        private var oldStartWaiters: [CheckedContinuation<Void, Never>] = []
+        private var oldReleaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+        func invokeOld() async {
+            oldCount += 1
+            oldStarted = true
+            oldStartWaiters.forEach { $0.resume() }
+            oldStartWaiters.removeAll()
+            guard !oldReleased else { return }
+            await withCheckedContinuation { oldReleaseWaiters.append($0) }
+        }
+
+        func invokeNew() {
+            newCount += 1
+        }
+
+        func waitUntilOldInvocationStarted() async {
+            guard !oldStarted else { return }
+            await withCheckedContinuation { oldStartWaiters.append($0) }
+        }
+
+        func releaseOldInvocation() {
+            oldReleased = true
+            oldReleaseWaiters.forEach { $0.resume() }
+            oldReleaseWaiters.removeAll()
+        }
+
+        func counts() -> (old: Int, new: Int) {
+            (oldCount, newCount)
         }
     }
 

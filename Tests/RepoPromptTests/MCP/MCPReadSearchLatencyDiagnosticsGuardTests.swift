@@ -757,7 +757,10 @@
             let helperStart = try XCTUnwrap(viewModel.range(of: "private func updateToolRegistration(invalidateCatalogBeforeUpdate: Bool = true) async {"))
             let policy = try XCTUnwrap(viewModel.range(of: "if invalidateCatalogBeforeUpdate {", range: helperStart.upperBound ..< viewModel.endIndex))
             let invalidate = try XCTUnwrap(viewModel.range(of: "invalidateToolsCache()", range: policy.upperBound ..< viewModel.endIndex))
-            let enabled = try XCTUnwrap(viewModel.range(of: "if windowToolsEnabled, runtimeSessionRegistry.hasActiveWindow(id: windowID) {", range: invalidate.upperBound ..< viewModel.endIndex))
+            let enabled = try XCTUnwrap(viewModel.range(
+                of: "if windowToolsEnabled,\n           runtimeSessionRegistry.hasActiveSession(",
+                range: invalidate.upperBound ..< viewModel.endIndex
+            ))
             let register = try XCTUnwrap(viewModel.range(of: "serviceRegistry.register(windowToolCatalogService)", range: enabled.upperBound ..< viewModel.endIndex))
             let join = try XCTUnwrap(viewModel.range(of: "try await service.join(windowID: windowID)", range: register.upperBound ..< viewModel.endIndex))
             let enabledRefresh = try XCTUnwrap(viewModel.range(of: "await service.refreshState()", range: join.upperBound ..< viewModel.endIndex))
@@ -777,14 +780,15 @@
             XCTAssertTrue(readiness.contains("_ = await mcpServer.windowMCPTools"))
 
             let dedupe = try XCTUnwrap(registry.range(of: "guard !contains(service) else { return }"))
-            let append = try XCTUnwrap(registry.range(of: "registeredServices.append(service)", range: dedupe.upperBound ..< registry.endIndex))
-            let invalidation = try XCTUnwrap(registry.range(of: "invalidateSnapshot()", range: append.upperBound ..< registry.endIndex))
-            let publication = try XCTUnwrap(registry.range(of: "MCPWindowToolCatalog.serviceRegistryToolsPublication", range: invalidation.upperBound ..< registry.endIndex))
-            XCTAssertLessThan(dedupe.lowerBound, append.lowerBound)
-            XCTAssertLessThan(append.lowerBound, invalidation.lowerBound)
+            let invalidation = try XCTUnwrap(registry.range(of: "invalidateSnapshot()", range: dedupe.upperBound ..< registry.endIndex))
+            let append = try XCTUnwrap(registry.range(of: "registeredServices.append(RegisteredService(", range: invalidation.upperBound ..< registry.endIndex))
+            let publication = try XCTUnwrap(registry.range(of: "MCPWindowToolCatalog.serviceRegistryToolsPublication", range: append.upperBound ..< registry.endIndex))
             XCTAssertLessThan(invalidation.lowerBound, publication.lowerBound)
+            XCTAssertLessThan(dedupe.lowerBound, invalidation.lowerBound)
+            XCTAssertLessThan(invalidation.lowerBound, append.lowerBound)
+            XCTAssertLessThan(append.lowerBound, publication.lowerBound)
             XCTAssertEqual(registry.components(separatedBy: "MCPWindowToolCatalog.serviceRegistryToolsPublication").count - 1, 1)
-            XCTAssertTrue(registry.contains("guard generation == requestedGeneration else { continue }"))
+            XCTAssertTrue(registry.contains("guard boundary.generation == requestedGeneration"))
             XCTAssertTrue(registry.contains("routesByCanonicalName[canonicalName, default: []].append(route)"))
 
             let enable = try XCTUnwrap(codexRunner.range(of: "await mcpServerEnabler()"))

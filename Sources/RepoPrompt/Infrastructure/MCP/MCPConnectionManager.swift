@@ -5934,6 +5934,11 @@ actor ServerNetworkManager {
             }
         }
 
+        func debugWaitForLimiterWaiter(for connectionID: UUID) async {
+            let limiter = limiter(for: connectionID)
+            await limiter.debugWaitForWaiter()
+        }
+
         func debugListToolNames(
             for connectionID: UUID,
             hydratePersistedPolicy: Bool = true
@@ -5943,12 +5948,13 @@ actor ServerNetworkManager {
                 windowID: windowID,
                 timeout: 5.0
             )
-            if !isReady, windowID != nil {
+            if !isReady {
                 throw MCPError.internalError("Tool catalog not ready. Please retry.")
             }
             if let windowID {
                 await toolCatalogReadiness.warmToolCache(windowID: windowID)
             }
+            let catalogBoundary = await serviceRegistry.capturePublicationBoundary()
 
             if hydratePersistedPolicy {
                 _ = await hydratePersistedAgentModePolicyForConnectionIfNeeded(
@@ -5957,8 +5963,8 @@ actor ServerNetworkManager {
                 )
             }
 
+            let indexedToolSnapshot = await serviceRegistry.snapshot(for: catalogBoundary)
             let disabled = await MainActor.run { ToolAvailabilityStore.shared.effectiveDisabledTools }
-            let indexedToolSnapshot = await serviceRegistry.routeSnapshot()
             let policy = effectivePolicyState(for: connectionID)
             let restricted = policy.restricted
             let additionalTools = policy.additional
@@ -6577,21 +6583,15 @@ actor ServerNetworkManager {
                 timeout: 2.0 // Shorter timeout here since handshake should have waited
             )
             if !isReady {
-                // Only fail closed if we had a specific window to wait for.
-                // If windowID is nil (true multi-window ambiguity), log warning but proceed
-                // with whatever tools are available - the client will need to select a window.
-                if windowID != nil {
-                    log.warning("Tool catalog not ready for tools/list - failing closed for connection \(connectionID) window \(windowID!)")
-                    throw MCPError.internalError("Tool catalog not ready. Please retry.")
-                } else {
-                    connectionLog("Tool catalog readiness skipped for multi-window ambiguous connection \(connectionID)")
-                }
+                log.warning("Tool catalog not ready for tools/list - failing closed for connection \(connectionID) window \(windowID.map(String.init) ?? "unbound")")
+                throw MCPError.internalError("Tool catalog not ready. Please retry.")
             }
 
             // Warm tool cache if we have a bound window
             if let windowID {
                 await toolCatalogReadiness.warmToolCache(windowID: windowID)
             }
+            let catalogBoundary = await serviceRegistry.capturePublicationBoundary()
 
             // Opportunistic persisted hydration for resumed agent-mode sessions.
             // Persisted routing metadata may restore window/run mapping, and cached
@@ -6602,8 +6602,8 @@ actor ServerNetworkManager {
             )
 
             // Get all MainActor-isolated data in one hop
+            let indexedToolSnapshot = await serviceRegistry.snapshot(for: catalogBoundary)
             let disabled = await MainActor.run { ToolAvailabilityStore.shared.effectiveDisabledTools }
-            let indexedToolSnapshot = await serviceRegistry.routeSnapshot()
             let policy = await effectivePolicyState(for: connectionID)
             let restricted = policy.restricted
             let additionalTools = policy.additional
@@ -7399,14 +7399,17 @@ actor ServerNetworkManager {
                                     }
 
                                     @Sendable func ensureIndexedRouteStillInvocable() async throws {
-                                        let isAllowed = await MainActor.run {
-                                            guard self.serviceRegistry.isRegistered(serviceIdentity: indexedRoute.serviceIdentity) else {
-                                                return false
-                                            }
-                                            guard let routeWindowID else { return true }
-                                            return self.runtimeSessionRegistry.isInvocationAllowed(windowID: routeWindowID)
+                                        let routeIsCurrent = await MainActor.run {
+                                            self.serviceRegistry.isCurrent(indexedRoute)
                                         }
-                                        guard isAllowed else {
+                                        guard routeIsCurrent else {
+                                            throw MCPError.invalidParams("The MCP tool catalog changed while this call was queued. Retry the call after refreshing tools/list.")
+                                        }
+                                        guard let routeWindowID else { return }
+                                        let windowIsAllowed = await MainActor.run {
+                                            self.runtimeSessionRegistry.isInvocationAllowed(windowID: routeWindowID)
+                                        }
+                                        guard windowIsAllowed else {
                                             throw MCPError.invalidParams("Selected MCP window is no longer available. Use bind_context op='list' to refresh window_id routing.")
                                         }
                                     }
@@ -8487,6 +8490,9 @@ actor AsyncLimiter {
     private let limit: Int
     private var permits: Int
     private var waiters: [CheckedContinuation<Void, Never>] = []
+    #if DEBUG
+        private var debugWaiterObservers: [CheckedContinuation<Void, Never>] = []
+    #endif
 
     /// Tracks the number of tasks currently inside withPermit (including queued ones)
     private var inFlight: Int = 0
@@ -8502,7 +8508,14 @@ actor AsyncLimiter {
             permits -= 1
             return
         }
-        await withCheckedContinuation { waiters.append($0) }
+        await withCheckedContinuation {
+            waiters.append($0)
+            #if DEBUG
+                let observers = debugWaiterObservers
+                debugWaiterObservers.removeAll()
+                observers.forEach { $0.resume() }
+            #endif
+        }
         // When resumed, the caller now has a permit (recycled from a release)
     }
 
@@ -8522,6 +8535,13 @@ actor AsyncLimiter {
     func activeCount() -> Int {
         inFlight
     }
+
+    #if DEBUG
+        func debugWaitForWaiter() async {
+            guard waiters.isEmpty else { return }
+            await withCheckedContinuation { debugWaiterObservers.append($0) }
+        }
+    #endif
 
     /// Executes an operation with a permit, limiting concurrency.
     func withPermit<T>(
