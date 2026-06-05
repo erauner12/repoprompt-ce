@@ -1,3 +1,5 @@
+import RepoPromptCore
+
 //
 //	MacOSBootstrapSocketServer.swift
 //	RepoPrompt

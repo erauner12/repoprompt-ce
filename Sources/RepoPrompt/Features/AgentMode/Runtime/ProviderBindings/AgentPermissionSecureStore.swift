@@ -1,4 +1,5 @@
 import Foundation
+import RepoPromptCore
 
 // SEARCH-HELPER: Secure Agent Permission Storage, Keychain-backed permission documents, fail-closed permissions
 
@@ -272,7 +273,9 @@ struct SecureCursorPermissionDocument: Codable, Equatable {
 }
 
 final class AgentPermissionSecureStore {
-    static let shared = AgentPermissionSecureStore(secureStrings: SecureKeysService())
+    static let shared = AgentPermissionSecureStore(
+        secureStrings: SecureKeysService(secureStorage: SecureKeyValueStorageFactory.defaultBackend())
+    )
 
     private let secureStrings: SecurePlainStringStoring
     private let lock = NSRecursiveLock()
@@ -287,7 +290,7 @@ final class AgentPermissionSecureStore {
     private var openCodeCache: SecureOpenCodePermissionDocument?
     private var cursorCache: SecureCursorPermissionDocument?
     private var diagnosticsByDomain: [AgentPermissionSecureDomain: AgentPermissionStorageDiagnostic] = [:]
-    private let permissionDecisionAccessMode: KeychainAccessMode = .nonInteractive(reason: .permissionDecision)
+    private let permissionDecisionAccessMode: SecureStorageAccessMode = .nonInteractive(reason: .permissionDecision)
 
     private struct DeferredSideEffects {
         private var requestedDiagnosticsDomains: Set<AgentPermissionSecureDomain> = []
@@ -739,7 +742,7 @@ final class AgentPermissionSecureStore {
     private func saveDocument(
         _ document: some Codable,
         domain: AgentPermissionSecureDomain,
-        accessMode: KeychainAccessMode = .interactive
+        accessMode: SecureStorageAccessMode = .interactive
     ) throws {
         let data = try encoder.encode(document)
         guard let payload = String(data: data, encoding: .utf8) else {
@@ -928,7 +931,7 @@ final class AgentPermissionSecureStore {
     }
 
     private func isAccessDeniedFailure(_ error: Error) -> Bool {
-        guard let keychainError = error as? KeychainService.KeychainError else {
+        guard let keychainError = error as? SecureStorageError else {
             return false
         }
         switch keychainError {
@@ -943,7 +946,7 @@ final class AgentPermissionSecureStore {
         for error: Error,
         fallback: AgentPermissionStorageDiagnostic.Kind
     ) -> AgentPermissionStorageDiagnostic.Kind {
-        guard let keychainError = error as? KeychainService.KeychainError else {
+        guard let keychainError = error as? SecureStorageError else {
             return fallback
         }
         switch keychainError {

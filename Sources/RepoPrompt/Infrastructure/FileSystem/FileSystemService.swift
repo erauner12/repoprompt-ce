@@ -1,6 +1,8 @@
 import Combine
 import Dispatch
 import Foundation
+import RepoPromptCore
+import RepoPromptCoreMacOS
 
 actor FileSystemService {
     // Internal for FileSystemService same-target extensions only.

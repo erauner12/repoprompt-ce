@@ -2,6 +2,8 @@ import CoreFoundation
 import CoreServices
 import Foundation
 @testable import RepoPrompt
+@testable import RepoPromptCore
+@testable import RepoPromptCoreMacOS
 import XCTest
 
 final class MacOSFSEventsWatcherTests: XCTestCase {

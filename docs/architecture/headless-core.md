@@ -1,6 +1,6 @@
 # Headless Core Architecture Lock
 
-Status: Item 0 architecture record, 2026-06-04. This document reserves a future boundary and inventories later moves. It does **not** create a core target, add a headless executable, move runtime ownership, or change app-proxy behavior.
+Status: Item 5 bounded physical-boundary record, 2026-06-04. Items 0-4 are committed, and Item 5 now creates enforceable SwiftPM roots for reusable contracts, narrow workspace policy helpers, macOS adapters, and Tree-sitter declarations. The embedded session/workspace-context runtime closure remains explicitly deferred where moving it would require the larger bounded-stream and diagnostics refactor described below. No headless executable is added and app-proxy behavior is unchanged.
 
 ## Locked target graph
 
@@ -22,20 +22,20 @@ The migration uses a library-first host architecture. The macOS app will embed t
   AppKit/SwiftUI shell     direct stdio MCP       existing app proxy
 ```
 
-Item 0 reserves these future source roots. They intentionally do not exist yet and are not added to `Package.swift` in this item:
+The package graph now contains the first three Item 5 source roots and library products. The standalone executable root remains reserved for Item 6:
 
 | Reserved target or product | Reserved source root | Responsibility |
 | --- | --- | --- |
-| `RepoPromptCore` library | `Sources/RepoPromptCore` | UI-independent host/session API, workspace state, transport-neutral MCP runtime, tool providers, neutral policies, and platform contracts |
-| `RepoPromptCoreMacOS` library | `Sources/RepoPromptCoreMacOS` | FSEvents, POSIX/Darwin process and socket implementations, Keychain, code-signing inspection, peer verification, and macOS adapters |
-| `RepoPromptSyntaxCBridge` target | `Sources/RepoPromptSyntaxCBridge` | Narrow Tree-sitter declarations required by core syntax parsing without the app target's bridging header |
-| `repoprompt-headless` executable | `Sources/RepoPromptHeadless` | Independent direct-stdio host composition, secure configuration commands, and doctor flow |
+| `RepoPromptCore` library | `Sources/RepoPromptCore` | Enforced UI-independent platform contracts, workspace access/root policy helpers, and narrow MCP transport/admission values; runtime-host promotion remains deferred below |
+| `RepoPromptCoreMacOS` library | `Sources/RepoPromptCoreMacOS` | FSEvents, POSIX process/descriptor-write, Keychain, code-signing inspection, peer verification, and macOS adapters |
+| `RepoPromptSyntaxCBridge` target | `Sources/RepoPromptSyntaxCBridge` | Narrow Tree-sitter declarations and grammar/scanner linkage without an app target-wide bridging header |
+| `repoprompt-headless` executable | `Sources/RepoPromptHeadless` | Reserved for Item 6: independent direct-stdio host composition, secure configuration commands, and doctor flow |
 
-Existing owners remain unchanged during Item 0:
+Existing app/proxy owners remain compatible during the bounded Item 5 split:
 
 | Existing target | Current responsibility retained during Item 0 |
 | --- | --- |
-| `RepoPrompt` | SwiftUI/AppKit shell plus today's monolithic app runtime |
+| `RepoPrompt` | SwiftUI/AppKit shell plus deferred embedded runtime closure; imports `RepoPromptCore` and `RepoPromptCoreMacOS` explicitly |
 | `RepoPromptMCP` / `repoprompt-mcp` | Existing app-bundled socket proxy, interactive client, and exec client |
 | `RepoPromptShared` | Narrow app/CLI MCP control-message and POSIX descriptor support seams |
 
@@ -67,7 +67,7 @@ Later items may centralize or move implementations only if these behaviors remai
 | CLI admission | spoofable `RepoPrompt CLI` names bypass the generic allow-list only after trusted peer PID lookup and canonical bundled-executable path equality |
 | Persisted MCP allow-list | entries matching the trimmed, case-sensitive `RepoPrompt CLI` prefix are removed and cannot be persisted |
 
-The app and CLI currently compile mirrored bootstrap DTO and endpoint implementations. Item 1 may centralize only verified-equivalent wire contracts into `RepoPromptShared`; Item 0 pins their present behavior first.
+The app and CLI now consume the verified-equivalent bootstrap DTO and endpoint implementations centralized in `RepoPromptShared`. Keep that shared wire contract single-sourced while later runtime ownership moves.
 
 ### Current routing priority
 
@@ -122,9 +122,9 @@ These are locked future constraints, not implemented Item 0 behavior:
 | app UI adapters | `@MainActor` |
 | standalone stdio read/write pumps | independent tasks; serialize stdout protocol writes and send diagnostics only to stderr |
 
-## Move inventory
+## Historical Item 0 move inventory
 
-This is a future ownership inventory only. `move`, `split`, `stay`, and `audit` describe later work; Item 0 does not perform the disposition.
+This inventory records the ownership plan captured before the bounded Item 5 split. Its `Current path` column is historical unless a later section explicitly says a seam remains app-owned; the landed Item 5 roots and explicit deferrals below are authoritative.
 
 ### Workspace ownership
 
@@ -270,7 +270,7 @@ Item 4 stages neutral contracts and macOS-owned implementations inside the exist
 | App-proxy socket boundary | `Infrastructure/MCP/Platform/MCPAppProxyTransportBoundary.swift` | `Infrastructure/MCP/AppProxy/` | Accepted sockets produce a normalized peer identity with trusted-socket versus handshake-fallback provenance. Only `LOCAL_PEERPID` is authorization input; the range-checked handshake PID is diagnostic metadata and admission fails closed when trusted socket credentials are unavailable. |
 | Bundled-helper verification | `Infrastructure/MCP/Platform/BundledHelperPeerVerifying.swift` | `Infrastructure/MCP/PeerVerification/MacOSBundledHelperPeerVerifier.swift` | Bundle helper URL and peer PID are explicit verifier inputs; canonical symlink-aware executable matching is preserved. |
 | Process ancestry | `Infrastructure/MCP/Platform/ProcessAncestryInspecting.swift` | `Infrastructure/MCP/PeerVerification/MacOSProcessAncestryInspector.swift` | Admission policy retains its ancestor walk while `sysctl` / `kinfo_proc` lookup moves to the adapter. |
-| Syntax declarations | syntax-only residual in `RepoPrompt-Bridging-Header.h` | deferred narrow syntax bridge target | Existing grammar entry points and scanner fallback remain unchanged. |
+| Syntax declarations | syntax-only residual removed during Item 5 | `Sources/RepoPromptSyntaxCBridge` | Existing grammar entry points and scanner fallback remain unchanged behind the narrow declaration shim. |
 
 ## Closed Item 4 portability ledger
 
@@ -283,20 +283,34 @@ Item 4 stages neutral contracts and macOS-owned implementations inside the exist
 | Application Support defaults | adapter-owned embedded-app policy | Reusable stores receive state-directory URLs. Existing embedded-app Application Support defaults stay shell/adapter-owned; the standalone host later receives its separate `Headless/` profile URL explicitly. |
 | `UserDefaults` | shell-only preferences or injected configuration | Reusable runtime code must not read `.standard`. Existing preference reads remain transitional in the monolithic target and move to shell-owned configuration snapshots or standalone JSON profile persistence as the Item 5 boundary is enforced. |
 
-## Exact seams deferred to Item 5
+## Bounded Item 5 physical split landed
 
-- Create `RepoPromptCore`, `RepoPromptCoreMacOS`, and `RepoPromptSyntaxCBridge` targets and physical roots atomically; update `Package.swift` only then.
-- Move staged neutral contracts into `RepoPromptCore`, move macOS FSEvents, POSIX launcher, Keychain/signing policy, app-proxy socket files, peer verification, and ancestry lookup into `RepoPromptCoreMacOS`, and remove transitional macOS default arguments from reusable initializers in favor of composition-root injection.
-- Split remaining app-proxy connection/runtime policy so raw descriptors and Unix transport lifecycle remain adapter-owned while neutral routing/admission policy becomes reusable.
-- Promote process-launcher call-site injection only when the corresponding capability owners move; Item 4 intentionally preserves the existing static compatibility facade.
-- Replace movable Combine runtime channels with bounded async-stream seams, introduce a core logging port, and inject state-directory/configuration snapshots instead of carrying `UserDefaults.standard` or embedded-app Application Support defaults into core.
-- Create `RepoPromptSyntaxCBridge`, move the syntax-only residual declarations out of `RepoPrompt-Bridging-Header.h`, wire grammar products narrowly, and remove the target-wide bridging-header setting.
-- Run standalone Swift-toolchain compilation after the physical boundary lands and decide whether CryptoKit digest calls need a package-backed helper and where conditional `FoundationNetworking` imports belong.
+The enforceable package boundary now includes:
+
+- `RepoPromptCore`, `RepoPromptCoreMacOS`, and `RepoPromptSyntaxCBridge` library products/targets and physical source roots.
+- Direct `RepoPromptCore` dependencies on `RepoPromptC`, `CSwiftPCRE2`, and `RepoPromptSyntaxCBridge`. These are an intentional temporary native-linkage umbrella preserving narrow future ownership while the reusable search, PCRE, and syntax consumers remain app-owned until their runtime closure is promotable.
+- A declaration-only Tree-sitter C shim with all fourteen entry points used by syntax parsing. Grammar products and `TreeSitterScannerSupport` now link through that shim; the app target-wide bridging header and unsafe flags are removed.
+- Platform-neutral filesystem watching, process launching, secure-storage, workspace access/root policy, and MCP peer/admission contracts under `Sources/RepoPromptCore`.
+- macOS FSEvents, POSIX launcher/descriptor-write support, Keychain, runtime signing, bundled-helper verification, and process-ancestry adapters under `Sources/RepoPromptCoreMacOS`.
+- Enforced core-boundary guardrails that fail on forbidden platform/UI imports, embedded-app policy references, missing roots, or accidental standalone packaging references.
+
+## Explicitly deferred seams after the bounded Item 5 split
+
+These files remain app-owned because moving them now would require the larger runtime refactor, not merely a physical owner change:
+
+- `Infrastructure/Core/RepoPromptCoreHost.swift`, `MCPRuntimeSessionRegistry.swift`, and the embedded workspace-context graph remain app-owned until `WorkspaceFileContextStore` and `FileSystemService` replace Combine publication/cancellable ingress with bounded async-stream seams while preserving callback-watermark freshness barriers.
+- `WorkspaceRepository.swift` remains app-owned until its `UserDefaults.standard` / `WorkspaceStoragePaths.defaultRoot` policy and `WorkspaceManagerViewModel.loadWorkspaceFromFile` decoder dependency are replaced by injected roots and a neutral decoder projection.
+- `WorkspaceSessionController.swift` remains app-owned until the `WorkspaceManagerViewModel` backing conformance and broad workspace-model selection surface are split into an app adapter.
+- `SyntaxManager.swift` stays app-owned while it depends on app code-map diagnostics (`CodeMapPerfRuntime` and `CodeMapSyntaxStartupPerfStats`). It imports the new narrow declaration shim immediately, so no bridging header remains.
+- `FileSystemService` and `WorkspaceFileContextStore` still receive transitional macOS watcher defaults inside the app target. Remove those defaults when their runtime closure moves behind composition-root injection.
+- `MacOSFSEventsWatcher` retains its pre-split explicit `stop()` lifecycle requirement and non-atomic concurrent `start()` / `stop()` handling. Harden watcher lifetime/state with dedicated regression tests in the runtime-promotion work; do not fold that behavioral refactor into this physical ownership split.
+- App-proxy `MacOSBootstrapSocketServer`, accepted-FD connection management, Unix transport, and app filesystem constants remain app-owned until listener diagnostics, socket-directory policy, and `ServerNetworkManager` coupling are split. The existing `repoprompt-mcp` proxy behavior is intentionally unchanged.
+- The static `ProcessLauncher` facade lives in `RepoPromptCoreMacOS` temporarily because deferred app capabilities still call it directly. Promote call-site injection only with the corresponding capability owners.
 - Do not create the standalone host, package/install scripts, or headless commands until Items 6–7.
 
-## Advisory boundary guardrail
+## Enforced boundary guardrail
 
-`Scripts/core_boundary_guardrails.sh` is intentionally report-only during Item 0. It scans `Sources/RepoPromptCore` only if that future root exists, reports forbidden imports and app-owned references, and reports any app-packaging reference to standalone command names. Missing `Sources/RepoPromptCore` is expected and succeeds. Findings are advisory until the physical boundary lands in Item 5.
+`Scripts/core_boundary_guardrails.sh` now requires `Sources/RepoPromptCore`, `Sources/RepoPromptCoreMacOS`, and `Sources/RepoPromptSyntaxCBridge`; rejects forbidden imports and embedded-app references under core; and rejects app-packaging references to standalone command names before Items 6-7 intentionally revise that policy. Findings fail `make guardrails`.
 
 The existing `Scripts/source_layout_guardrails.sh` remains responsible for shared `MCPControlMessages.swift` single-sourcing and the narrow `TreeSitterScannerSupport` compatibility target.
 
@@ -304,12 +318,12 @@ The existing `Scripts/source_layout_guardrails.sh` remains responsible for share
 
 | Compatibility surface | Characterization owner |
 | --- | --- |
-| Bootstrap JSON, versions, exact socket path, temporary app/CLI mirror contract | `Tests/RepoPromptTests/MCP/Control/MCPBootstrapContractCharacterizationTests.swift` |
+| Bootstrap JSON, versions, exact socket path, and shared app/CLI wire contract | `Tests/RepoPromptTests/MCP/Control/MCPBootstrapContractCharacterizationTests.swift` |
 | Logical-context priority and tools/call source-order markers | `TabContextRoutingTests.swift`, `MCPResolvedToolDispatchSourceGuardTests.swift` |
 | Bundled CLI path verification and MCP allow-list sanitization | `ServerControllerAdmissionTests.swift` |
 | Embedded app helper path and compatibility symlinks | `Scripts/validate_embedded_mcp_helper_layout.sh`, `Scripts/test_release_tooling.py` |
-| Advisory boundary wiring | `make guardrails`, `make dev-guardrails`, and `./conductor guardrails` |
+| Enforced boundary wiring | `make guardrails`, `make dev-guardrails`, and `./conductor guardrails` |
 
-## Explicitly deferred work
+## Remaining deferred work
 
-Items 1–7 remain deferred. In particular, Item 0 does not centralize bootstrap contracts, replace singleton/window hot-path ownership, extract sessions, isolate Apple implementations, create SwiftPM boundaries, add a standalone host, or package/install headless artifacts.
+The bounded Item 5 split does not promote the larger runtime closures listed above. Items 6–7 remain deferred: do not add the standalone host, headless commands, package/install scripts, or CI packaging lanes yet. Future runtime promotion must also replace singleton/window hot-path ownership, extract reusable sessions, complete adapter injection, and preserve the characterized app-proxy behavior.

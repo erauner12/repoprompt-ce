@@ -1,3 +1,6 @@
+import RepoPromptCore
+import RepoPromptCoreMacOS
+
 // MARK: - Connection Management Components
 
 import Darwin

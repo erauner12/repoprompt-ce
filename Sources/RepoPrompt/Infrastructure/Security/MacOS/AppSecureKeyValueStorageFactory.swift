@@ -1,4 +1,6 @@
 import Foundation
+import RepoPromptCore
+import RepoPromptCoreMacOS
 
 /// Embedded macOS app policy for selecting the secure-storage adapter.
 enum SecureKeyValueStorageFactory {

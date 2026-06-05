@@ -1,6 +1,7 @@
 import Combine
 import Dispatch
 import Foundation
+import RepoPromptCore
 
 extension FileSystemService {
     // MARK: - Public watchers API

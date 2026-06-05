@@ -6,50 +6,53 @@
 //
 
 import Foundation
+import RepoPromptCore
 import Security
 
-protocol SecItemClient {
+package protocol SecItemClient {
     func copyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<AnyObject?>?) -> OSStatus
     func add(_ query: CFDictionary, _ result: UnsafeMutablePointer<AnyObject?>?) -> OSStatus
     func update(_ query: CFDictionary, _ attributes: CFDictionary) -> OSStatus
     func delete(_ query: CFDictionary) -> OSStatus
 }
 
-struct SystemSecItemClient: SecItemClient {
-    func copyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<AnyObject?>?) -> OSStatus {
+package struct SystemSecItemClient: SecItemClient {
+    package init() {}
+
+    package func copyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<AnyObject?>?) -> OSStatus {
         SecItemCopyMatching(query, result)
     }
 
-    func add(_ query: CFDictionary, _ result: UnsafeMutablePointer<AnyObject?>?) -> OSStatus {
+    package func add(_ query: CFDictionary, _ result: UnsafeMutablePointer<AnyObject?>?) -> OSStatus {
         SecItemAdd(query, result)
     }
 
-    func update(_ query: CFDictionary, _ attributes: CFDictionary) -> OSStatus {
+    package func update(_ query: CFDictionary, _ attributes: CFDictionary) -> OSStatus {
         SecItemUpdate(query, attributes)
     }
 
-    func delete(_ query: CFDictionary) -> OSStatus {
+    package func delete(_ query: CFDictionary) -> OSStatus {
         SecItemDelete(query)
     }
 }
 
 /// Secure storage service using the canonical CE macOS Keychain service.
-final class KeychainService: SecureKeyValueStorageBackend {
-    static let canonicalServiceName = "com.pvncher.repoprompt.ce.keychain"
-    static let localSelfSignedServiceName = "com.pvncher.repoprompt.ce.local-self-signed.keychain"
+package final class KeychainService: SecureKeyValueStorageBackend {
+    package static let canonicalServiceName = "com.pvncher.repoprompt.ce.keychain"
+    package static let localSelfSignedServiceName = "com.pvncher.repoprompt.ce.local-self-signed.keychain"
 
-    static let shared = KeychainService()
-    static let localSelfSignedShared = KeychainService(serviceName: localSelfSignedServiceName)
+    package static let shared = KeychainService()
+    package static let localSelfSignedShared = KeychainService(serviceName: localSelfSignedServiceName)
 
     private let serviceName: String
     private let secItemClient: SecItemClient
     private let operationLock = NSRecursiveLock()
 
-    let persistsValuesAcrossLaunches = true
+    package let persistsValuesAcrossLaunches = true
 
-    init(
+    package init(
         serviceName: String = KeychainService.canonicalServiceName,
-        secItemClient: SecItemClient = SystemSecItemClient()
+        secItemClient: any SecItemClient = SystemSecItemClient()
     ) {
         self.serviceName = serviceName
         self.secItemClient = secItemClient
@@ -61,7 +64,7 @@ final class KeychainService: SecureKeyValueStorageBackend {
         return try body()
     }
 
-    private func query(_ values: [String: Any], accessMode: KeychainAccessMode) -> [String: Any] {
+    private func query(_ values: [String: Any], accessMode: SecureStorageAccessMode) -> [String: Any] {
         guard accessMode.isNonInteractive else {
             return values
         }
@@ -71,7 +74,7 @@ final class KeychainService: SecureKeyValueStorageBackend {
         return query
     }
 
-    private func keychainError(for status: OSStatus) -> KeychainError {
+    private func keychainError(for status: OSStatus) -> SecureStorageError {
         switch status {
         case errSecItemNotFound:
             .itemNotFound
@@ -88,19 +91,17 @@ final class KeychainService: SecureKeyValueStorageBackend {
         }
     }
 
-    typealias KeychainError = SecureStorageError
-
     // MARK: - Save to Keychain
 
     /// Save a UTF-8 string to the canonical CE keychain service.
-    func save(
+    package func save(
         _ value: String,
         for key: String,
-        accessMode: KeychainAccessMode = .interactive
+        accessMode: SecureStorageAccessMode = .interactive
     ) throws {
         try withLock {
             guard let data = value.data(using: .utf8) else {
-                throw KeychainError.invalidData
+                throw SecureStorageError.invalidData
             }
 
             let itemQuery = query([
@@ -142,9 +143,9 @@ final class KeychainService: SecureKeyValueStorageBackend {
     // MARK: - Retrieve from Keychain
 
     /// Retrieve a UTF-8 string from the canonical CE keychain service only.
-    func get(
+    package func get(
         for key: String,
-        accessMode: KeychainAccessMode = .interactive
+        accessMode: SecureStorageAccessMode = .interactive
     ) throws -> String {
         let data = try withLock {
             let itemQuery = query([
@@ -163,12 +164,12 @@ final class KeychainService: SecureKeyValueStorageBackend {
             }
 
             guard let data = result as? Data else {
-                throw KeychainError.invalidData
+                throw SecureStorageError.invalidData
             }
             return data
         }
         guard let value = String(data: data, encoding: .utf8) else {
-            throw KeychainError.invalidData
+            throw SecureStorageError.invalidData
         }
         return value
     }
@@ -176,7 +177,7 @@ final class KeychainService: SecureKeyValueStorageBackend {
     // MARK: - Delete from Keychain
 
     /// Delete an item from canonical CE keychain storage only.
-    func delete(for key: String, accessMode: KeychainAccessMode = .interactive) throws {
+    package func delete(for key: String, accessMode: SecureStorageAccessMode = .interactive) throws {
         try withLock {
             let itemQuery = query([
                 kSecClass as String: kSecClassGenericPassword,

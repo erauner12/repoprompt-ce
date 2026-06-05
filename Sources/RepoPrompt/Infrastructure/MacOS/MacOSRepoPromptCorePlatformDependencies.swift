@@ -1,3 +1,6 @@
+import RepoPromptCore
+import RepoPromptCoreMacOS
+
 /// Embedded-app composition of macOS platform adapters.
 enum MacOSRepoPromptCorePlatformDependencies {
     static func embeddedApp() -> RepoPromptCorePlatformDependencies {

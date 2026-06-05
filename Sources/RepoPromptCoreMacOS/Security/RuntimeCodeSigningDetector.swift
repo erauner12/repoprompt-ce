@@ -1,14 +1,20 @@
 import Foundation
 import Security
 
-struct RuntimeCodeSigningInfo: Equatable {
-    let teamIdentifier: String?
-    let codeIdentifier: String?
-    let detectionErrorDescription: String?
+package struct RuntimeCodeSigningInfo: Equatable, Sendable {
+    package let teamIdentifier: String?
+    package let codeIdentifier: String?
+    package let detectionErrorDescription: String?
+
+    package init(teamIdentifier: String?, codeIdentifier: String?, detectionErrorDescription: String?) {
+        self.teamIdentifier = teamIdentifier
+        self.codeIdentifier = codeIdentifier
+        self.detectionErrorDescription = detectionErrorDescription
+    }
 }
 
-enum RuntimeCodeSigningDetector {
-    static func currentProcessSigningInfo() -> RuntimeCodeSigningInfo {
+package enum RuntimeCodeSigningDetector {
+    package static func currentProcessSigningInfo() -> RuntimeCodeSigningInfo {
         var code: SecCode?
         let selfStatus = SecCodeCopySelf([], &code)
         guard selfStatus == errSecSuccess, let code else {

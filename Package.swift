@@ -5,6 +5,9 @@ let package = Package(
     name: "RepoPromptCE",
     platforms: [.macOS(.v14)],
     products: [
+        .library(name: "RepoPromptCore", targets: ["RepoPromptCore"]),
+        .library(name: "RepoPromptCoreMacOS", targets: ["RepoPromptCoreMacOS"]),
+        .library(name: "RepoPromptSyntaxCBridge", targets: ["RepoPromptSyntaxCBridge"]),
         .executable(name: "RepoPrompt", targets: ["RepoPrompt"]),
         .executable(name: "repoprompt-mcp", targets: ["RepoPromptMCP"])
     ],
@@ -43,8 +46,8 @@ let package = Package(
         .executableTarget(
             name: "RepoPrompt",
             dependencies: [
-                "RepoPromptShared",
-                "RepoPromptC", "CSwiftPCRE2", "TreeSitterScannerSupport",
+                "RepoPromptShared", "RepoPromptCore", "RepoPromptCoreMacOS", "RepoPromptSyntaxCBridge",
+                "RepoPromptC", "CSwiftPCRE2",
                 "Sparkle",
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
@@ -53,19 +56,6 @@ let package = Package(
                 .product(name: "SwiftyJSON", package: "SwiftyJSON"),
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
-                .product(name: "TreeSitterC", package: "tree-sitter-c"),
-                .product(name: "TreeSitterDart", package: "tree-sitter-dart"),
-                .product(name: "TreeSitterGo", package: "tree-sitter-go"),
-                .product(name: "TreeSitterJava", package: "tree-sitter-java"),
-                .product(name: "TreeSitterJavaScript", package: "tree-sitter-javascript"),
-                .product(name: "TreeSitterPython", package: "tree-sitter-python"),
-                .product(name: "TreeSitterRust", package: "tree-sitter-rust"),
-                .product(name: "TreeSitterTypeScript", package: "tree-sitter-typescript"),
-                .product(name: "TreeSitterRuby", package: "tree-sitter-ruby"),
-                .product(name: "TreeSitterSwift", package: "tree-sitter-swift"),
-                .product(name: "TreeSitterCSharp", package: "tree-sitter-c-sharp"),
-                .product(name: "TreeSitterCPP", package: "tree-sitter-cpp"),
-                .product(name: "TreeSitterPHP", package: "tree-sitter-php"),
                 .product(name: "SwiftAnthropic", package: "SwiftAnthropic"),
                 .product(name: "SwiftOpenAI", package: "SwiftOpenAI"),
                 .product(name: "Neon", package: "Neon"),
@@ -78,11 +68,7 @@ let package = Package(
             path: "Sources/RepoPrompt",
             swiftSettings: [
                 .define("DEBUG", .when(configuration: .debug)),
-                .enableUpcomingFeature("BareSlashRegexLiterals"),
-                .unsafeFlags([
-                    "-import-objc-header", "Sources/RepoPrompt/Support/RepoPrompt-Bridging-Header.h",
-                    "-disable-bridging-pch"
-                ])
+                .enableUpcomingFeature("BareSlashRegexLiterals")
             ]
         ),
         .executableTarget(
@@ -92,15 +78,46 @@ let package = Package(
             swiftSettings: [.define("DEBUG", .when(configuration: .debug))]
         ),
         .target(name: "RepoPromptShared", path: "Sources/RepoPromptShared"),
+        .target(
+            name: "RepoPromptCore",
+            dependencies: ["RepoPromptShared", "RepoPromptC", "CSwiftPCRE2", "RepoPromptSyntaxCBridge"],
+            path: "Sources/RepoPromptCore"
+        ),
+        .target(
+            name: "RepoPromptCoreMacOS",
+            dependencies: ["RepoPromptCore", "RepoPromptShared"],
+            path: "Sources/RepoPromptCoreMacOS"
+        ),
         .target(name: "CSwiftPCRE2", path: "Sources/CSwiftPCRE2", exclude: ["deps/sljit/sljit_src/sljitNativeARM_64.c", "deps/sljit/sljit_src/sljitSerialize.c", "deps/sljit/sljit_src/sljitUtils.c", "deps/sljit/sljit_src/sljitNativeX86_common.c", "deps/sljit/sljit_src/sljitNativeX86_64.c", "deps/sljit/sljit_src/sljitNativeX86_32.c", "deps/sljit/sljit_src/allocator_src/sljitWXExecAllocatorPosix.c", "deps/sljit/sljit_src/allocator_src/sljitProtExecAllocatorPosix.c", "deps/sljit/sljit_src/allocator_src/sljitExecAllocatorPosix.c", "deps/sljit/sljit_src/allocator_src/sljitExecAllocatorCore.c", "deps/sljit/sljit_src/allocator_src/sljitExecAllocatorApple.c"], publicHeadersPath: "include", cSettings: [.headerSearchPath("include"), .headerSearchPath("src"), .define("PCRE2_CODE_UNIT_WIDTH", to: "8"), .define("HAVE_CONFIG_H")]),
         .target(name: "RepoPromptC", path: "Sources/RepoPromptC", publicHeadersPath: "include", cSettings: [.headerSearchPath("include")]),
         // Exact-snapshot scanner ABI fallback for upstream JavaScript/Python products.
         // See docs/architecture/source-layout.md and ThirdPartyLicenses/tree-sitter/README.md.
         .target(name: "TreeSitterScannerSupport", path: "Sources/TreeSitterScannerSupport", sources: ["src/javascript/scanner.c", "src/python/scanner.c"], publicHeadersPath: "include"),
+        .target(
+            name: "RepoPromptSyntaxCBridge",
+            dependencies: [
+                "TreeSitterScannerSupport",
+                .product(name: "TreeSitterC", package: "tree-sitter-c"),
+                .product(name: "TreeSitterDart", package: "tree-sitter-dart"),
+                .product(name: "TreeSitterGo", package: "tree-sitter-go"),
+                .product(name: "TreeSitterJava", package: "tree-sitter-java"),
+                .product(name: "TreeSitterJavaScript", package: "tree-sitter-javascript"),
+                .product(name: "TreeSitterPython", package: "tree-sitter-python"),
+                .product(name: "TreeSitterRust", package: "tree-sitter-rust"),
+                .product(name: "TreeSitterTypeScript", package: "tree-sitter-typescript"),
+                .product(name: "TreeSitterRuby", package: "tree-sitter-ruby"),
+                .product(name: "TreeSitterSwift", package: "tree-sitter-swift"),
+                .product(name: "TreeSitterCSharp", package: "tree-sitter-c-sharp"),
+                .product(name: "TreeSitterCPP", package: "tree-sitter-cpp"),
+                .product(name: "TreeSitterPHP", package: "tree-sitter-php")
+            ],
+            path: "Sources/RepoPromptSyntaxCBridge",
+            publicHeadersPath: "include"
+        ),
         .binaryTarget(name: "Sparkle", path: "Vendor/Sparkle/Sparkle.xcframework"),
         .testTarget(
             name: "RepoPromptTests",
-            dependencies: ["RepoPrompt", "RepoPromptShared"],
+            dependencies: ["RepoPrompt", "RepoPromptShared", "RepoPromptCore", "RepoPromptCoreMacOS"],
             path: "Tests/RepoPromptTests",
             resources: [
                 .copy("CodeMap/Fixtures"),

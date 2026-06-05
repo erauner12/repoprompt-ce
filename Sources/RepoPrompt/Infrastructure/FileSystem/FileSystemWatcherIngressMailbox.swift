@@ -1,4 +1,5 @@
 import Foundation
+import RepoPromptCore
 
 /// Owns deep-copied filesystem watcher callback payloads synchronously before actor entry.
 ///

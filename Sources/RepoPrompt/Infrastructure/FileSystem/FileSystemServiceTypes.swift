@@ -1,4 +1,5 @@
 import Foundation
+import RepoPromptCore
 
 public enum FileSystemDelta: Sendable, Equatable {
     case fileAdded(String)

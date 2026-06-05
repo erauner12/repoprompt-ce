@@ -1,4 +1,5 @@
 import Foundation
+import RepoPromptCore
 
 struct RepoPromptSessionID: Hashable {
     let rawValue: UUID

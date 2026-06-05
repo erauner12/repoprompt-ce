@@ -1,8 +1,11 @@
 import Darwin
+import RepoPromptCore
 
 /// macOS `sysctl` adapter for parent-process inspection.
-struct MacOSProcessAncestryInspector: ProcessAncestryInspecting {
-    func parentPID(of pid: Int32) -> Int32? {
+package struct MacOSProcessAncestryInspector: ProcessAncestryInspecting {
+    package init() {}
+
+    package func parentPID(of pid: Int32) -> Int32? {
         var info = kinfo_proc()
         var size = MemoryLayout.stride(ofValue: info)
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]

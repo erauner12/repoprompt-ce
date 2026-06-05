@@ -1,13 +1,12 @@
 # Source Layout Ownership Map
 
-Current as of 2026-05-30 after the source-layout refactor, Context Builder discovery cleanup, provider extraction, post-native-tree cleanup guardrail pass, provider-neutral workflow prompt catalog cleanup, and upstream Tree-sitter grammar migration. This document is contributor-facing: use it to decide where new source, tests, fixtures, diagnostics, shared protocol code, and guardrail checks belong.
+Current as of 2026-06-04 after the bounded Item 5 headless-core package split, source-layout refactor, Context Builder discovery cleanup, provider extraction, post-native-tree cleanup guardrail pass, provider-neutral workflow prompt catalog cleanup, and upstream Tree-sitter grammar migration. This document is contributor-facing: use it to decide where new source, tests, fixtures, diagnostics, shared protocol code, and guardrail checks belong.
 
 ## Current source tree shape
 
 ```text
 Sources/
   RepoPrompt/
-    Support/                     # Obj-C bridging header / bridging-header-sensitive support path used by Package.swift
     App/                         # lifecycle, launch/configuration, commands, composition wiring, app notifications, root app views/view models
       Notifications/
       Sparkle/
@@ -43,6 +42,9 @@ Sources/
       VCS/                       # git/VCS substrate
       WorkspaceContext/          # context store, indexing, path lookup, slices, search, token accounting
     ThirdParty/                  # vendored SwiftPCRE2 wrapper
+  RepoPromptCore/               # enforced UI-independent contracts, workspace policy helpers, and narrow MCP transport values
+  RepoPromptCoreMacOS/          # enforced macOS FSEvents, POSIX process, Keychain/signing, and peer-verification adapters
+  RepoPromptSyntaxCBridge/      # narrow Tree-sitter declaration/linkage shim; owns grammar/scanner dependencies
   RepoPromptShared/
     MCP/                         # shared app/CLI MCP control protocol definitions
   RepoPromptMCP/                 # MCP CLI implementation
@@ -53,19 +55,21 @@ Tests/
   RepoPromptTests/               # XCTest tests, support, and fixtures
 ```
 
-## Reserved future headless-core roots
+## Physical headless-core roots
 
-[`headless-core.md`](headless-core.md) locks a future library-first split without creating those roots yet. When the later physical-boundary item lands, use these reserved owners rather than inventing new generic buckets:
+[`headless-core.md`](headless-core.md) locks the library-first split. Item 5 now creates and enforces the reusable contract/adapters substrate:
 
 ```text
 Sources/
-  RepoPromptCore/                # reserved UI-independent host/session library root
-  RepoPromptCoreMacOS/           # reserved Apple/Darwin adapter library root
-  RepoPromptSyntaxCBridge/       # reserved narrow Tree-sitter declaration shim root
-  RepoPromptHeadless/            # reserved independently packaged direct-stdio host root
+  RepoPromptCore/                # UI-independent contracts, workspace policy helpers, and narrow MCP transport values
+  RepoPromptCoreMacOS/           # Apple/Darwin adapter implementations
+  RepoPromptSyntaxCBridge/       # narrow Tree-sitter declaration shim
+  RepoPromptHeadless/            # reserved for Item 6; intentionally absent
 ```
 
-During Item 0, none of these directories is required to exist and `Package.swift` intentionally remains unchanged. `Scripts/core_boundary_guardrails.sh` is report-only: it scans `Sources/RepoPromptCore` if present, reports forbidden imports and app-owned references, and succeeds when the root is absent. Advisory findings do not fail `make guardrails`; enforcement and an independent core build lane are intentionally deferred until the physical boundary lands.
+`RepoPromptCore`, `RepoPromptCoreMacOS`, and `RepoPromptSyntaxCBridge` are SwiftPM library products/targets. `Scripts/core_boundary_guardrails.sh` now fails on forbidden imports, embedded-app policy references, missing roots, and accidental standalone packaging references. The app-wide Objective-C bridging-header flags are removed; the syntax shim owns grammar and scanner-support linkage.
+
+The bounded split intentionally leaves the embedded session host and its workspace-context runtime closure under `Sources/RepoPrompt` for now. Moving `RepoPromptCoreHost` requires the deferred filesystem publication conversion from Combine to bounded async streams, neutral diagnostics instead of `os`/`UserDefaults`, explicit state-directory injection for code-map/partition caches, and app-model decoupling in `WorkspaceRepository` and `WorkspaceSessionController`. Do not bypass those blockers by moving app policy into `RepoPromptCore`.
 
 The legacy top-level layer buckets under `Sources/RepoPrompt` have been pruned and must not be recreated:
 
@@ -91,7 +95,9 @@ The old IDE-era Prompt selected-files panel is also removed. Do not add back `Pr
 
 - New product-flow code goes under `Sources/RepoPrompt/Features/<FeatureName>`.
 - New app lifecycle, launch/configuration, command, root view/view-model, notification-name, and composition-root wiring goes under `Sources/RepoPrompt/App`.
-- Keep bridging-header-sensitive support under `Sources/RepoPrompt/Support` unless `Package.swift` is updated in the same change.
+- Keep Tree-sitter C declarations in the narrow `Sources/RepoPromptSyntaxCBridge` shim. Do not restore target-wide app bridging-header flags.
+- Put new reusable platform contracts and workspace policy helpers in `Sources/RepoPromptCore`; keep embedded-app policy and mixed runtime closures app-owned until they satisfy the enforced core guardrail.
+- Put Apple/Darwin adapter implementations in `Sources/RepoPromptCoreMacOS`; core must never import that module.
 - New cross-cutting service/platform code goes under `Sources/RepoPrompt/Infrastructure/<Area>`.
 - Provider-neutral workflow prompt catalog metadata and renderers go under `Sources/RepoPrompt/Infrastructure/AI/Prompts/Workflows/`; do not add new workflow prompts under provider-specific command names or bundled `AppResources/Services/AI/Prompts` mirrors.
 - New reusable SwiftUI components, text/markdown helpers, and UI services should prefer a narrow feature owner first; otherwise use `Sources/RepoPrompt/Infrastructure/UI/<Area>`.
@@ -125,11 +131,11 @@ These files are intentionally compiled as app-integrated diagnostics and live un
 
 - `App/AppLaunchConfiguration.swift` remains in `App` because it owns process arguments/environment interpretation for launch behavior. It still routes DEBUG-only Agent chat stress settings, but harness-specific configuration lives under `Features/Diagnostics/AgentMode/Stress`.
 - `App/WindowState.swift` remains the composition root and continues to instantiate/pause the DEBUG-only `AgentChatStressHarness`. This is wiring only; harness implementation lives under Diagnostics.
-- `Infrastructure/Security/EphemeralSecureKeyValueStore.swift` remains with security storage code, not Diagnostics, because it is a required debug-app secure-storage backend rather than a fixture or visible diagnostic harness. It is `#if DEBUG`, in-memory only, and preserves existing debug behavior for ad-hoc/ephemeral secure storage.
+- `Sources/RepoPromptCore/Security/EphemeralSecureKeyValueStore.swift` remains with reusable security storage code, not Diagnostics, because it is a required debug-app secure-storage backend rather than a fixture or visible diagnostic harness. It is `#if DEBUG`, in-memory only, and preserves existing debug behavior for ad-hoc/ephemeral secure storage.
 
 ### Tree-sitter scanner linker compatibility target
 
-- `Sources/TreeSitterScannerSupport` is an internal C linker compatibility target, not a restored local grammar target. It contains byte-for-byte exact-snapshot copies of the upstream JavaScript and Python `scanner.c` implementations plus their required `tree_sitter` helper headers. It does not contain parser copies, grammar definitions, queries, or CE-authored scanner code.
+- `Sources/TreeSitterScannerSupport` is an internal C linker compatibility target consumed narrowly through `RepoPromptSyntaxCBridge`, not a restored local grammar target. It contains byte-for-byte exact-snapshot copies of the upstream JavaScript and Python `scanner.c` implementations plus their required `tree_sitter` helper headers. It does not contain parser copies, grammar definitions, queries, or CE-authored scanner code.
 - Clean coordinated SwiftPM root graphs compile the exact-pinned upstream JavaScript and Python parser objects but omit their scanner objects, leaving unresolved external-scanner ABI symbols. `TreeSitterScannerSupport` supplies only those missing symbols while CE continues linking the upstream package products.
 - The tracked checksum manifest at [`ThirdPartyLicenses/tree-sitter/scanner-support.sha256`](../../ThirdPartyLicenses/tree-sitter/scanner-support.sha256) protects the copied snapshots from drift. Do not expand this target, restore the seven retired local grammar directories, or replace the target with transient `.build/checkouts` mutation. Remove the target, guardrails, checksums, and this exception together only after validated upstream revisions or SwiftPM behavior compile the scanners directly from the dependency products in a clean graph.
 
@@ -145,7 +151,7 @@ make guardrails
 make dev-guardrails
 ```
 
-For the source-layout check alone, run `./Scripts/source_layout_guardrails.sh`. For the advisory future-core scan alone during Item 0, run `bash ./Scripts/core_boundary_guardrails.sh`.
+For the source-layout check alone, run `./Scripts/source_layout_guardrails.sh`. For the enforced core-boundary scan alone, run `bash ./Scripts/core_boundary_guardrails.sh`.
 
 The source-layout guardrail verifies:
 
@@ -153,7 +159,9 @@ The source-layout guardrail verifies:
 - no `Tests`, `TestSupport`, or `Fixtures` directories exist under `Sources/RepoPrompt`;
 - `MCPControlMessages.swift` exists only at `Sources/RepoPromptShared/MCP/MCPControlMessages.swift`;
 - parser fixtures/sample inputs do not live under app syntax parsing source;
-- the narrow `TreeSitterScannerSupport` compatibility target has exactly its approved JavaScript/Python scanner snapshots and helper headers, matches curated checksums, remains wired in `Package.swift`, preserves the seven migrated grammar pins/products in `Package.swift` and `Package.resolved`, and keeps the seven retired local grammar directories absent;
+- each Item 5 moved contract/adapter file is single-sourced only under its narrow `RepoPromptCore` or `RepoPromptCoreMacOS` owner, so app-local compatibility copies cannot return;
+- the narrow `RepoPromptSyntaxCBridge` target contains exactly its declaration header and anchor C file, exposes exactly the curated fourteen Tree-sitter declarations, owns the exact grammar/scanner linkage set, and replaces the retired app-wide bridging header;
+- the narrow `TreeSitterScannerSupport` compatibility target has exactly its approved JavaScript/Python scanner snapshots and helper headers, matches curated checksums, remains wired only through `RepoPromptSyntaxCBridge`, preserves the pinned grammar products in `Package.swift` and `Package.resolved`, keeps grammar products off the app target, requires the temporary core native-linkage umbrella, and keeps the retired local grammar directories absent;
 - Agent/MCP runtime code does not depend on `WorkspaceFilesViewModel`, `FileViewModel`, or `FolderViewModel`;
 - removed native-tree/search artifact paths are not tracked again;
 - removed native-tree/search/eager-loading symbols such as `AgentFileTreeBottomPanelView`, `FileTreeViewWrapper`, `FileTreeViewController`, `NativeFileTree`, `SearchFileTreeViewModel`, `RootDescendantMaterialization`, `legacyMaterializedRootKeys`, `legacyMaterializeDescendantsRecursively`, and `legacyEager` are not referenced from app source;
@@ -161,14 +169,14 @@ The source-layout guardrail verifies:
 - `App/WindowState.swift` does not reintroduce scoped `searchViewModel` wiring;
 - `WorkspaceFilesViewModel.swift` does not reintroduce the removed `loadContentsRecursively` eager-loading seam.
 
-The advisory core-boundary guardrail reports:
+The enforced core-boundary guardrail rejects:
 
-- whether the reserved `Sources/RepoPromptCore` root exists yet;
-- forbidden Apple UI/platform imports under that future core root;
-- app-owned `WindowState`, `WindowStatesManager`, `NSApplication`, or `NSWorkspace` references under that future core root;
+- missing `Sources/RepoPromptCore`, `Sources/RepoPromptCoreMacOS`, or `Sources/RepoPromptSyntaxCBridge` roots;
+- forbidden Apple UI/platform imports under `Sources/RepoPromptCore`;
+- app-owned runtime and embedded-app policy references under `Sources/RepoPromptCore`;
 - any accidental app-packaging reference to standalone `repoprompt-headless` / `rpce-headless` command names.
 
-During Item 0 those findings are report-only. Shared MCP single-sourcing and scanner compatibility remain enforced by the source-layout guardrail.
+Shared MCP single-sourcing, syntax-shim ownership, and scanner compatibility remain enforced by the source-layout guardrail.
 
 ## Historical resolved items
 

@@ -1,4 +1,5 @@
 @testable import RepoPrompt
+@testable import RepoPromptCore
 import XCTest
 
 final class WorkspaceFileContextStoreTests: XCTestCase {

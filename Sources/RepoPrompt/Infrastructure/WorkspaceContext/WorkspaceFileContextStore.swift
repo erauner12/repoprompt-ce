@@ -1,5 +1,7 @@
 import Combine
 import Foundation
+import RepoPromptCore
+import RepoPromptCoreMacOS
 
 enum WorkspaceFileTreeSnapshotMode: String {
     case none

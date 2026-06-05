@@ -1,12 +1,12 @@
 import Foundation
 
-enum WorkspaceRootMoveDirection {
+package enum WorkspaceRootMoveDirection {
     case up
     case down
 }
 
-enum WorkspaceRootActions {
-    static func movedRepoPaths(
+package enum WorkspaceRootActions {
+    package static func movedRepoPaths(
         repoPaths: [String],
         movingRootPath: String,
         direction: WorkspaceRootMoveDirection,
@@ -48,7 +48,7 @@ enum WorkspaceRootActions {
         return moved
     }
 
-    static func standardizedUniqueRepoPaths(_ repoPaths: [String]) -> [String] {
+    package static func standardizedUniqueRepoPaths(_ repoPaths: [String]) -> [String] {
         var seen = Set<String>()
         var uniquePaths: [String] = []
         for path in repoPaths {

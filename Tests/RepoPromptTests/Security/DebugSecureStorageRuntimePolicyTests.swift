@@ -1,3 +1,4 @@
+@testable import RepoPromptCoreMacOS
 #if DEBUG
     @testable import RepoPrompt
     import XCTest

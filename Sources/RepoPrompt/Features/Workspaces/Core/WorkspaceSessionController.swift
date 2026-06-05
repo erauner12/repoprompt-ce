@@ -1,4 +1,5 @@
 import Foundation
+import RepoPromptCore
 
 struct WorkspaceSessionBindingCandidate: Equatable {
     let tabID: UUID

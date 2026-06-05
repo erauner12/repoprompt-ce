@@ -1,6 +1,7 @@
 import Foundation
 import JSONSchema
 @testable import RepoPrompt
+@testable import RepoPromptCore
 import XCTest
 
 @MainActor

@@ -1,14 +1,14 @@
 import Foundation
 
-protocol SecurePlainStringStoring {
+package protocol SecurePlainStringStoring {
     var persistsValuesAcrossLaunches: Bool { get }
 
-    func getPlainValue(for key: String, accessMode: KeychainAccessMode) throws -> String?
-    func savePlainValue(_ value: String, for key: String, accessMode: KeychainAccessMode) throws
-    func deletePlainValue(for key: String, accessMode: KeychainAccessMode) throws
+    func getPlainValue(for key: String, accessMode: SecureStorageAccessMode) throws -> String?
+    func savePlainValue(_ value: String, for key: String, accessMode: SecureStorageAccessMode) throws
+    func deletePlainValue(for key: String, accessMode: SecureStorageAccessMode) throws
 }
 
-extension SecurePlainStringStoring {
+package extension SecurePlainStringStoring {
     var persistsValuesAcrossLaunches: Bool {
         true
     }
@@ -27,28 +27,26 @@ extension SecurePlainStringStoring {
 }
 
 /// Secure key storage service backed by canonical Keychain/plain UTF-8 values.
-final class SecureKeysService {
+package final class SecureKeysService {
     private let secureStorage: SecureKeyValueStorageBackend
 
-    init(
-        secureStorage: SecureKeyValueStorageBackend = SecureKeyValueStorageFactory.defaultBackend()
-    ) {
+    package init(secureStorage: any SecureKeyValueStorageBackend) {
         self.secureStorage = secureStorage
     }
 
     // MARK: - API Key Storage
 
-    func saveAPIKey(
+    package func saveAPIKey(
         _ key: String,
         for identifier: String,
-        accessMode: KeychainAccessMode = .interactive
+        accessMode: SecureStorageAccessMode = .interactive
     ) throws {
         try secureStorage.save(key, for: identifier, accessMode: accessMode)
     }
 
-    func getAPIKey(
+    package func getAPIKey(
         for identifier: String,
-        accessMode: KeychainAccessMode = .interactive
+        accessMode: SecureStorageAccessMode = .interactive
     ) async throws -> String? {
         do {
             return try secureStorage.get(for: identifier, accessMode: accessMode)
@@ -57,26 +55,26 @@ final class SecureKeysService {
         }
     }
 
-    func deleteAPIKey(
+    package func deleteAPIKey(
         for identifier: String,
-        accessMode: KeychainAccessMode = .interactive
+        accessMode: SecureStorageAccessMode = .interactive
     ) throws {
         try secureStorage.delete(for: identifier, accessMode: accessMode)
     }
 
     // MARK: - Plain String Storage
 
-    func savePlainValue(
+    package func savePlainValue(
         _ value: String,
         for key: String,
-        accessMode: KeychainAccessMode = .interactive
+        accessMode: SecureStorageAccessMode = .interactive
     ) throws {
         try secureStorage.save(value, for: key, accessMode: accessMode)
     }
 
-    func getPlainValue(
+    package func getPlainValue(
         for key: String,
-        accessMode: KeychainAccessMode = .interactive
+        accessMode: SecureStorageAccessMode = .interactive
     ) throws -> String? {
         do {
             return try secureStorage.get(for: key, accessMode: accessMode)
@@ -85,16 +83,16 @@ final class SecureKeysService {
         }
     }
 
-    func deletePlainValue(
+    package func deletePlainValue(
         for key: String,
-        accessMode: KeychainAccessMode = .interactive
+        accessMode: SecureStorageAccessMode = .interactive
     ) throws {
         try secureStorage.delete(for: key, accessMode: accessMode)
     }
 }
 
 extension SecureKeysService: SecurePlainStringStoring {
-    var persistsValuesAcrossLaunches: Bool {
+    package var persistsValuesAcrossLaunches: Bool {
         secureStorage.persistsValuesAcrossLaunches
     }
 }

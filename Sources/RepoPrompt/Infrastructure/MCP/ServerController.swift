@@ -1,3 +1,6 @@
+import RepoPromptCore
+import RepoPromptCoreMacOS
+
 //
 //  ServerController.swift
 //  RepoPrompt

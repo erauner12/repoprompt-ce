@@ -5,7 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 CORE_ROOT="Sources/RepoPromptCore"
-findings=0
+MACOS_ROOT="Sources/RepoPromptCoreMacOS"
+SYNTAX_BRIDGE_ROOT="Sources/RepoPromptSyntaxCBridge"
+failures=0
 temporary_file=""
 
 cleanup() {
@@ -14,6 +16,11 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+fail() {
+  printf 'ERROR: %s\n' "$*" >&2
+  failures=$((failures + 1))
+}
 
 report_matches() {
   local label="$1"
@@ -27,9 +34,8 @@ report_matches() {
   set -e
 
   if [[ "$status" -eq 0 ]]; then
-    printf 'ADVISORY: %s\n' "$label"
-    printf '%s\n' "$output"
-    findings=$((findings + 1))
+    fail "$label"
+    printf '%s\n' "$output" >&2
   elif [[ "$status" -ne 1 ]]; then
     printf 'ERROR: core boundary grep failed while checking: %s\n' "$label" >&2
     printf '%s\n' "$output" >&2
@@ -37,43 +43,42 @@ report_matches() {
   fi
 }
 
-printf 'Core boundary guardrails are report-only until the physical RepoPromptCore boundary lands.\n'
+for required_root in "$CORE_ROOT" "$MACOS_ROOT" "$SYNTAX_BRIDGE_ROOT"; do
+  if [[ ! -d "$required_root" ]]; then
+    fail "required Item 5 source root missing: $required_root"
+  fi
+done
 
 if [[ -d "$CORE_ROOT" ]]; then
   core_swift_files=()
   temporary_file="$(mktemp "${TMPDIR:-/tmp}/repoprompt-core-boundary.XXXXXX")"
-  if ! find "$CORE_ROOT" -type f -name '*.swift' -print0 > "$temporary_file"; then
-    printf 'ERROR: failed to enumerate Swift files under %s\n' "$CORE_ROOT" >&2
-    exit 1
-  fi
+  find "$CORE_ROOT" -type f -name '*.swift' -print0 > "$temporary_file"
   while IFS= read -r -d '' file; do
     core_swift_files+=("$file")
   done < "$temporary_file"
 
   if [[ "${#core_swift_files[@]}" -eq 0 ]]; then
-    printf 'ADVISORY: %s exists but contains no Swift files to scan.\n' "$CORE_ROOT"
+    fail "$CORE_ROOT contains no Swift files"
   else
     report_matches \
       "forbidden Apple UI/platform import found under $CORE_ROOT" \
-      '^[[:space:]]*(@[[:alnum:]_]+[[:space:]]+)*import([[:space:]]+(class|struct|enum|protocol|func|var|let|typealias))?[[:space:]]+(AppKit|SwiftUI|Sparkle|KeyboardShortcuts|CoreServices|Security|Darwin)([.]|[[:space:]]|$)' \
+      '^[[:space:]]*(@[[:alnum:]_]+[[:space:]]+)*import([[:space:]]+(class|struct|enum|protocol|func|var|let|typealias))?[[:space:]]+(AppKit|SwiftUI|Cocoa|Sparkle|KeyboardShortcuts|CoreServices|Security|Darwin|OSLog|os)([.]|[[:space:]]|$)' \
       "${core_swift_files[@]}"
     report_matches \
-      "app-owned runtime reference found under $CORE_ROOT" \
-      '(^|[^[:alnum:]_])(WindowState|WindowStatesManager|NSApplication|NSWorkspace)([^[:alnum:]_]|$)' \
+      "app-owned runtime or embedded-policy reference found under $CORE_ROOT" \
+      '(^|[^[:alnum:]_])(WindowState|WindowStatesManager|NSApplication|NSWorkspace|SecureKeyValueStorageFactory|MacOSFSEventsWatcherFactory)([^[:alnum:]_]|$)|Bundle[.]main|UserDefaults[.]standard|applicationSupportDirectory' \
       "${core_swift_files[@]}"
   fi
-else
-  printf 'OK: %s is absent as expected before the physical-boundary item; skipping core source scan.\n' "$CORE_ROOT"
 fi
 
 report_matches \
-  "app packaging mentions a standalone headless command; keep the standalone host independently packaged" \
+  "app packaging mentions a standalone headless command; keep Items 6-7 independently packaged" \
   'repoprompt-headless|rpce-headless' \
   Scripts/package_app.sh
 
-if [[ "$findings" -eq 0 ]]; then
-  printf 'OK: advisory core boundary scan found no policy findings.\n'
-else
-  printf 'ADVISORY: core boundary scan reported %s finding%s; Item 0 does not enforce them yet.\n' \
-    "$findings" "$([[ "$findings" == 1 ]] && printf '' || printf 's')"
+if [[ "$failures" -ne 0 ]]; then
+  printf 'Core boundary guardrails failed (%s issue%s).\n' "$failures" "$([[ "$failures" == 1 ]] && printf '' || printf 's')" >&2
+  exit 1
 fi
+
+printf 'OK: enforced core boundary guardrails passed.\n'

@@ -1,4 +1,5 @@
 import Foundation
+import RepoPromptCore
 
 /// App-shell composition container for the staged reusable core host.
 ///

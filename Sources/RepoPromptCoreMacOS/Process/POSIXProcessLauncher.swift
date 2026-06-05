@@ -1,9 +1,10 @@
 import Darwin
 import Foundation
+import RepoPromptCore
 import RepoPromptShared
 
-enum ProcessLauncher {
-    static func spawn(
+package enum ProcessLauncher {
+    package static func spawn(
         command: String,
         arguments: [String],
         environment: [String: String],
@@ -19,12 +20,12 @@ enum ProcessLauncher {
     }
 
     #if DEBUG
-        enum DebugInitializationFailure {
+        package enum DebugInitializationFailure {
             case fileActions(errno: Int32)
             case attributes(errno: Int32)
         }
 
-        static func debugSpawn(
+        package static func debugSpawn(
             command: String,
             arguments: [String],
             environment: [String: String],
@@ -271,8 +272,10 @@ enum ProcessLauncher {
 }
 
 /// macOS POSIX adapter exposed through the neutral process-launching contract.
-struct POSIXProcessLauncher: ProcessLaunching {
-    func spawn(
+package struct POSIXProcessLauncher: ProcessLaunching {
+    package init() {}
+
+    package func spawn(
         command: String,
         arguments: [String],
         environment: [String: String],

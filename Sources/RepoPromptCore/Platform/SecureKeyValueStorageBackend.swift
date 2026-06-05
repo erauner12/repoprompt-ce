@@ -1,11 +1,11 @@
 import Foundation
 
 /// Controls whether secure-storage access may display authentication or approval UI.
-enum SecureStorageAccessMode: Equatable {
+package enum SecureStorageAccessMode: Equatable {
     case interactive
     case nonInteractive(reason: SecureStorageAccessReason)
 
-    var isNonInteractive: Bool {
+    package var isNonInteractive: Bool {
         if case .nonInteractive = self {
             return true
         }
@@ -14,7 +14,7 @@ enum SecureStorageAccessMode: Equatable {
 }
 
 /// Sanitized reason metadata for noninteractive secure-storage access.
-enum SecureStorageAccessReason: Equatable {
+package enum SecureStorageAccessReason: Equatable {
     case launch
     case bulkSettingsLoad
     case permissionDecision
@@ -23,7 +23,7 @@ enum SecureStorageAccessReason: Equatable {
 }
 
 /// Platform-neutral secure-storage failure vocabulary.
-enum SecureStorageError: Error, LocalizedError, Equatable {
+package enum SecureStorageError: Error, LocalizedError, Equatable {
     case itemNotFound
     case duplicateItem
     case invalidData
@@ -32,7 +32,7 @@ enum SecureStorageError: Error, LocalizedError, Equatable {
     case authenticationFailed
     case unexpectedStatus(Int32)
 
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .itemNotFound:
             "Item not found in secure storage"
@@ -52,11 +52,7 @@ enum SecureStorageError: Error, LocalizedError, Equatable {
     }
 }
 
-/// Compatibility names retained while call sites remain in the monolithic target.
-typealias KeychainAccessMode = SecureStorageAccessMode
-typealias KeychainAccessReason = SecureStorageAccessReason
-
-protocol SecureKeyValueStorageBackend: AnyObject {
+package protocol SecureKeyValueStorageBackend: AnyObject {
     var persistsValuesAcrossLaunches: Bool { get }
 
     func save(

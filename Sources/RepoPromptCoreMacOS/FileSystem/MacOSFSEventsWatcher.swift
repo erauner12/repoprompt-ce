@@ -2,12 +2,13 @@ import CoreFoundation
 import CoreServices
 import Dispatch
 import Foundation
+import RepoPromptCore
 
 /// macOS adapter for CoreServices FSEvents lifecycle and raw-flag translation.
 ///
 /// Reusable filesystem policy receives only deep-copied, semantic `FileSystemWatchEvent` values.
 /// Stream references, callback context retention, and native bit mapping remain adapter-owned.
-final class MacOSFSEventsWatcher: FileSystemWatching, @unchecked Sendable {
+package final class MacOSFSEventsWatcher: FileSystemWatching, @unchecked Sendable {
     private let path: String
     private let callbackQueue: DispatchQueue
     private let lock = NSLock()
@@ -15,7 +16,7 @@ final class MacOSFSEventsWatcher: FileSystemWatching, @unchecked Sendable {
     private var retainedSelfPointer: UnsafeMutableRawPointer?
     private var eventHandler: (@Sendable (FileSystemWatchEventPayload) -> Void)?
 
-    init(path: String) {
+    package init(path: String) {
         self.path = path
         callbackQueue = DispatchQueue(
             label: "com.repoprompt.filesystem.fsevents.\(UUID().uuidString)",
@@ -23,14 +24,14 @@ final class MacOSFSEventsWatcher: FileSystemWatching, @unchecked Sendable {
         )
     }
 
-    var isWatching: Bool {
+    package var isWatching: Bool {
         lock.lock()
         defer { lock.unlock() }
         return streamRef != nil
     }
 
     @discardableResult
-    func start(eventHandler: @escaping @Sendable (FileSystemWatchEventPayload) -> Void) -> Bool {
+    package func start(eventHandler: @escaping @Sendable (FileSystemWatchEventPayload) -> Void) -> Bool {
         lock.lock()
         guard streamRef == nil else {
             lock.unlock()
@@ -83,7 +84,7 @@ final class MacOSFSEventsWatcher: FileSystemWatching, @unchecked Sendable {
         return true
     }
 
-    func stop() {
+    package func stop() {
         lock.lock()
         let stream = streamRef
         streamRef = nil
@@ -133,7 +134,7 @@ final class MacOSFSEventsWatcher: FileSystemWatching, @unchecked Sendable {
         watcher.accept(payload)
     }
 
-    nonisolated static func buildOwnedPayload(
+    package nonisolated static func buildOwnedPayload(
         numEvents: Int,
         eventPaths: UnsafeMutableRawPointer,
         eventFlags: UnsafePointer<FSEventStreamEventFlags>,
@@ -166,7 +167,7 @@ final class MacOSFSEventsWatcher: FileSystemWatching, @unchecked Sendable {
         return entries.isEmpty ? nil : FileSystemWatchEventPayload(entries: entries)
     }
 
-    nonisolated static func semanticFlags(for rawFlags: FSEventStreamEventFlags) -> FileSystemWatchEventFlags {
+    package nonisolated static func semanticFlags(for rawFlags: FSEventStreamEventFlags) -> FileSystemWatchEventFlags {
         let raw = UInt32(rawFlags)
         var flags: FileSystemWatchEventFlags = []
         func map(_ nativeFlag: Int, to semanticFlag: FileSystemWatchEventFlags) {
@@ -192,11 +193,11 @@ final class MacOSFSEventsWatcher: FileSystemWatching, @unchecked Sendable {
         return flags
     }
 
-    nonisolated static func deepCopySwiftString(_ source: String) -> String {
+    package nonisolated static func deepCopySwiftString(_ source: String) -> String {
         String(decoding: Array(source.utf8), as: UTF8.self)
     }
 
-    nonisolated static func deepCopyEventPath(_ source: CFString) -> String? {
+    package nonisolated static func deepCopyEventPath(_ source: CFString) -> String? {
         let length = CFStringGetLength(source)
         if length == 0 { return "" }
 
@@ -219,8 +220,10 @@ final class MacOSFSEventsWatcher: FileSystemWatching, @unchecked Sendable {
     }
 }
 
-struct MacOSFSEventsWatcherFactory: FileSystemWatcherCreating {
-    func makeWatcher(path: String) -> any FileSystemWatching {
+package struct MacOSFSEventsWatcherFactory: FileSystemWatcherCreating {
+    package init() {}
+
+    package func makeWatcher(path: String) -> any FileSystemWatching {
         MacOSFSEventsWatcher(path: path)
     }
 }

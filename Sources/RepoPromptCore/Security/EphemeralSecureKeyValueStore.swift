@@ -2,20 +2,20 @@
     import Foundation
 
     /// Debug-build-only in-memory secure storage used when local app signing cannot safely use Keychain.
-    final class EphemeralSecureKeyValueStore: SecureKeyValueStorageBackend {
-        static let shared = EphemeralSecureKeyValueStore()
+    package final class EphemeralSecureKeyValueStore: SecureKeyValueStorageBackend {
+        package static let shared = EphemeralSecureKeyValueStore()
 
-        let persistsValuesAcrossLaunches = false
+        package let persistsValuesAcrossLaunches = false
 
         private var entries: [String: Data] = [:]
         private let lock = NSRecursiveLock()
 
-        init() {}
+        package init() {}
 
-        func save(
+        package func save(
             _ value: String,
             for key: String,
-            accessMode: KeychainAccessMode
+            accessMode: SecureStorageAccessMode
         ) throws {
             guard let data = value.data(using: .utf8) else {
                 throw SecureStorageError.invalidData
@@ -26,9 +26,9 @@
             }
         }
 
-        func get(
+        package func get(
             for key: String,
-            accessMode: KeychainAccessMode
+            accessMode: SecureStorageAccessMode
         ) throws -> String {
             let data = try withLock {
                 guard let data = entries[key] else {
@@ -42,9 +42,9 @@
             return value
         }
 
-        func delete(
+        package func delete(
             for key: String,
-            accessMode: KeychainAccessMode
+            accessMode: SecureStorageAccessMode
         ) throws {
             _ = withLock {
                 entries.removeValue(forKey: key)

@@ -26,6 +26,9 @@ required_dirs=(
   "Sources/RepoPrompt/Features"
   "Sources/RepoPrompt/Infrastructure"
   "Sources/RepoPrompt/Infrastructure/SyntaxParsing"
+  "Sources/RepoPromptCore"
+  "Sources/RepoPromptCoreMacOS"
+  "Sources/RepoPromptSyntaxCBridge/include"
   "Sources/RepoPromptShared/MCP"
   "Tests/RepoPromptTests"
 )
@@ -48,6 +51,69 @@ fi
 if [[ ! -f "docs/architecture/headless-core.md" ]]; then
   fail "required headless-core architecture lock document missing"
 fi
+
+syntax_bridge_files=(
+  "Sources/RepoPromptSyntaxCBridge/include/RepoPromptSyntaxCBridge.h"
+  "Sources/RepoPromptSyntaxCBridge/RepoPromptSyntaxCBridge.c"
+)
+for file in "${syntax_bridge_files[@]}"; do
+  if [[ ! -f "$file" ]]; then
+    fail "required narrow syntax-bridge file missing: $file"
+  fi
+done
+if [[ -d "Sources/RepoPromptSyntaxCBridge" ]]; then
+  unexpected_syntax_bridge_files="$(find Sources/RepoPromptSyntaxCBridge -type f \
+    ! -path 'Sources/RepoPromptSyntaxCBridge/include/RepoPromptSyntaxCBridge.h' \
+    ! -path 'Sources/RepoPromptSyntaxCBridge/RepoPromptSyntaxCBridge.c' \
+    -print)"
+  if [[ -n "$unexpected_syntax_bridge_files" ]]; then
+    fail "unexpected file found under narrow RepoPromptSyntaxCBridge target"
+    printf '%s\n' "$unexpected_syntax_bridge_files" >&2
+  fi
+fi
+if [[ -e "Sources/RepoPrompt/Support/RepoPrompt-Bridging-Header.h" ]]; then
+  fail "retired app target-wide bridging header still exists"
+fi
+if grep -n -E -- '-import-objc-header|-disable-bridging-pch' Package.swift >/dev/null 2>&1; then
+  fail "Package.swift still contains retired app target-wide bridging-header flags"
+fi
+if [[ -e "Sources/RepoPromptHeadless" ]] || grep -n -E -- 'repoprompt-headless|RepoPromptHeadless' Package.swift >/dev/null 2>&1; then
+  fail "Items 6-7 standalone host artifacts landed before their dedicated implementation item"
+fi
+
+# Item 5 physically moved these files into narrow package owners. Fail if a legacy
+# app-target copy or a duplicate compatibility copy reappears anywhere under Sources.
+assert_single_source_file() {
+  local filename="$1"
+  local expected_path="$2"
+  local matches=()
+  while IFS= read -r file; do
+    matches+=("$file")
+  done < <(find Sources -name "$filename" -type f -print | sort)
+  if [[ "${#matches[@]}" -ne 1 || "${matches[0]:-}" != "$expected_path" ]]; then
+    fail "$filename must exist only at $expected_path"
+    printf '%s\n' "${matches[@]}" >&2
+  fi
+}
+
+assert_single_source_file "FileSystemWatching.swift" "Sources/RepoPromptCore/Platform/FileSystemWatching.swift"
+assert_single_source_file "ProcessLaunching.swift" "Sources/RepoPromptCore/Platform/ProcessLaunching.swift"
+assert_single_source_file "RepoPromptCorePlatformDependencies.swift" "Sources/RepoPromptCore/Platform/RepoPromptCorePlatformDependencies.swift"
+assert_single_source_file "SecureKeyValueStorageBackend.swift" "Sources/RepoPromptCore/Platform/SecureKeyValueStorageBackend.swift"
+assert_single_source_file "BundledHelperPeerVerifying.swift" "Sources/RepoPromptCore/MCP/Platform/BundledHelperPeerVerifying.swift"
+assert_single_source_file "MCPAppProxyTransportBoundary.swift" "Sources/RepoPromptCore/MCP/Platform/MCPAppProxyTransportBoundary.swift"
+assert_single_source_file "ProcessAncestryInspecting.swift" "Sources/RepoPromptCore/MCP/Platform/ProcessAncestryInspecting.swift"
+assert_single_source_file "WorkspaceAccessPolicy.swift" "Sources/RepoPromptCore/Workspaces/WorkspaceAccessPolicy.swift"
+assert_single_source_file "WorkspaceRootActions.swift" "Sources/RepoPromptCore/Workspaces/WorkspaceRootActions.swift"
+assert_single_source_file "EphemeralSecureKeyValueStore.swift" "Sources/RepoPromptCore/Security/EphemeralSecureKeyValueStore.swift"
+assert_single_source_file "SecureKeyService.swift" "Sources/RepoPromptCore/Security/SecureKeyService.swift"
+assert_single_source_file "MacOSFSEventsWatcher.swift" "Sources/RepoPromptCoreMacOS/FileSystem/MacOSFSEventsWatcher.swift"
+assert_single_source_file "POSIXProcessLauncher.swift" "Sources/RepoPromptCoreMacOS/Process/POSIXProcessLauncher.swift"
+assert_single_source_file "FDWriteSupport.swift" "Sources/RepoPromptCoreMacOS/Process/FDWriteSupport.swift"
+assert_single_source_file "KeychainService.swift" "Sources/RepoPromptCoreMacOS/Security/KeychainService.swift"
+assert_single_source_file "RuntimeCodeSigningDetector.swift" "Sources/RepoPromptCoreMacOS/Security/RuntimeCodeSigningDetector.swift"
+assert_single_source_file "MacOSBundledHelperPeerVerifier.swift" "Sources/RepoPromptCoreMacOS/MCP/PeerVerification/MacOSBundledHelperPeerVerifier.swift"
+assert_single_source_file "MacOSProcessAncestryInspector.swift" "Sources/RepoPromptCoreMacOS/MCP/PeerVerification/MacOSProcessAncestryInspector.swift"
 
 # Exact-snapshot Tree-sitter scanner support must remain narrow and reproducible.
 # Remove this block together with the support target only after validated upstream
@@ -94,6 +160,47 @@ if [[ -f "ThirdPartyLicenses/tree-sitter/scanner-support.sha256" ]]; then
   fi
 fi
 
+if ! syntax_bridge_header_output="$(python3 <<'PY'
+import re
+from pathlib import Path
+
+expected = [
+    "tree_sitter_javascript",
+    "tree_sitter_python",
+    "tree_sitter_c_sharp",
+    "tree_sitter_swift",
+    "tree_sitter_c",
+    "tree_sitter_cpp",
+    "tree_sitter_rust",
+    "tree_sitter_go",
+    "tree_sitter_java",
+    "tree_sitter_dart",
+    "tree_sitter_php",
+    "tree_sitter_ruby",
+    "tree_sitter_typescript",
+    "tree_sitter_tsx",
+]
+text = Path("Sources/RepoPromptSyntaxCBridge/include/RepoPromptSyntaxCBridge.h").read_text()
+pattern = re.compile(r"^const TSLanguage \* (tree_sitter_[a-z_]+)\(void\);$", re.MULTILINE)
+declarations = pattern.findall(text)
+unexpected_semicolon_lines = [
+    line for line in text.splitlines()
+    if line.strip().endswith(";")
+    and line.strip() != "typedef struct TSLanguage TSLanguage;"
+    and pattern.fullmatch(line) is None
+]
+if declarations != expected or unexpected_semicolon_lines:
+    raise SystemExit(
+        "RepoPromptSyntaxCBridge header must contain exactly the curated fourteen declarations"
+        f"\nfound declarations: {declarations}"
+        f"\nunexpected declaration lines: {unexpected_semicolon_lines}"
+    )
+PY
+)"; then
+  fail "RepoPromptSyntaxCBridge declaration shim drifted"
+  printf '%s\n' "$syntax_bridge_header_output" >&2
+fi
+
 if ! tree_sitter_scanner_support_manifest_output="$(python3 <<'PY'
 import json
 import subprocess
@@ -107,6 +214,12 @@ expected_packages = {
     "tree-sitter-javascript": ("https://github.com/tree-sitter/tree-sitter-javascript", "39798e26b6d4dbcee8e522b8db83f8b2df33a5ea", "TreeSitterJavaScript"),
     "tree-sitter-python": ("https://github.com/tree-sitter/tree-sitter-python", "c5fca1a186e8e528115196178c28eefa8d86b0b0", "TreeSitterPython"),
     "tree-sitter-rust": ("https://github.com/tree-sitter/tree-sitter-rust", "2eaf126458a4d6a69401089b6ba78c5e5d6c1ced", "TreeSitterRust"),
+    "tree-sitter-typescript": ("https://github.com/tree-sitter/tree-sitter-typescript", "75b3874edb2dc714fb1fd77a32013d0f8699989f", "TreeSitterTypeScript"),
+    "tree-sitter-ruby": ("https://github.com/tree-sitter/tree-sitter-ruby", "7a010836b74351855148818d5cb8170dc4df8e6a", "TreeSitterRuby"),
+    "tree-sitter-swift": ("https://github.com/alex-pinkus/tree-sitter-swift", "9253825dd2570430b53fa128cbb40cb62498e75d", "TreeSitterSwift"),
+    "tree-sitter-c-sharp": ("https://github.com/tree-sitter/tree-sitter-c-sharp.git", "b27b091bfdc5f16d0ef76421ea5609c82a57dff0", "TreeSitterCSharp"),
+    "tree-sitter-cpp": ("https://github.com/tree-sitter/tree-sitter-cpp", "e5cea0ec884c5c3d2d1e41a741a66ce13da4d945", "TreeSitterCPP"),
+    "tree-sitter-php": ("https://github.com/provencher/tree-sitter-php", "0a99deca13c4af1fb9adcb03c958bfc9f4c740a9", "TreeSitterPHP"),
 }
 errors = []
 manifest_text = Path("Package.swift").read_text()
@@ -116,10 +229,25 @@ package = json.loads(subprocess.check_output(["swift", "package", "dump-package"
 targets = {target["name"]: target for target in package["targets"]}
 repo_prompt = targets.get("RepoPrompt", {})
 repo_prompt_dependencies = repo_prompt.get("dependencies", [])
+core = targets.get("RepoPromptCore", {})
+core_dependencies = core.get("dependencies", [])
+macos = targets.get("RepoPromptCoreMacOS", {})
+macos_dependencies = macos.get("dependencies", [])
+syntax_bridge = targets.get("RepoPromptSyntaxCBridge", {})
+syntax_bridge_dependencies = syntax_bridge.get("dependencies", [])
+syntax_bridge_products = {
+    (dependency["product"][0], dependency["product"][1])
+    for dependency in syntax_bridge_dependencies
+    if "product" in dependency
+}
 repo_prompt_products = {
     (dependency["product"][0], dependency["product"][1])
     for dependency in repo_prompt_dependencies
     if "product" in dependency
+}
+expected_syntax_bridge_products = {
+    (product, identity)
+    for identity, (_, _, product) in expected_packages.items()
 }
 
 for identity, (url, revision, product) in expected_packages.items():
@@ -131,8 +259,14 @@ for identity, (url, revision, product) in expected_packages.items():
         errors.append(f"Package.resolved missing pin: {identity}")
     elif pin.get("location") != url or pin.get("state", {}).get("revision") != revision:
         errors.append(f"Package.resolved pin drift: {identity}")
-    if (product, identity) not in repo_prompt_products:
-        errors.append(f"RepoPrompt missing upstream grammar product dependency: {product} ({identity})")
+    if (product, identity) not in syntax_bridge_products:
+        errors.append(f"RepoPromptSyntaxCBridge missing upstream grammar product dependency: {product} ({identity})")
+
+if syntax_bridge_products != expected_syntax_bridge_products:
+    errors.append("RepoPromptSyntaxCBridge grammar product dependencies must remain exactly the curated set")
+unexpected_repo_prompt_grammar_products = sorted(repo_prompt_products & expected_syntax_bridge_products)
+if unexpected_repo_prompt_grammar_products:
+    errors.append(f"RepoPrompt must not directly depend on Tree-sitter grammar products: {unexpected_repo_prompt_grammar_products}")
 
 support = targets.get("TreeSitterScannerSupport")
 if support is None:
@@ -143,8 +277,30 @@ else:
     expected_sources = ["src/javascript/scanner.c", "src/python/scanner.c"]
     if sorted(support.get("sources", [])) != expected_sources:
         errors.append("TreeSitterScannerSupport sources must remain exactly JavaScript/Python scanner.c")
-if not any(dependency.get("byName", [None])[0] == "TreeSitterScannerSupport" for dependency in repo_prompt_dependencies):
-    errors.append("RepoPrompt must directly depend on TreeSitterScannerSupport")
+def has_by_name(dependencies, name):
+    return any(dependency.get("byName", [None])[0] == name for dependency in dependencies)
+
+if syntax_bridge.get("path") != "Sources/RepoPromptSyntaxCBridge":
+    errors.append("RepoPromptSyntaxCBridge target path drifted")
+syntax_bridge_by_name_dependencies = sorted(
+    dependency["byName"][0]
+    for dependency in syntax_bridge_dependencies
+    if "byName" in dependency
+)
+if syntax_bridge_by_name_dependencies != ["TreeSitterScannerSupport"]:
+    errors.append("RepoPromptSyntaxCBridge must directly depend only on TreeSitterScannerSupport plus the curated grammar products")
+if has_by_name(repo_prompt_dependencies, "TreeSitterScannerSupport"):
+    errors.append("RepoPrompt must not directly depend on TreeSitterScannerSupport")
+if not has_by_name(core_dependencies, "RepoPromptSyntaxCBridge"):
+    errors.append("RepoPromptCore must directly depend on RepoPromptSyntaxCBridge")
+if not has_by_name(core_dependencies, "RepoPromptC") or not has_by_name(core_dependencies, "CSwiftPCRE2"):
+    errors.append("RepoPromptCore must directly depend on RepoPromptC and CSwiftPCRE2")
+if not has_by_name(repo_prompt_dependencies, "RepoPromptCore") or not has_by_name(repo_prompt_dependencies, "RepoPromptCoreMacOS"):
+    errors.append("RepoPrompt must directly depend on RepoPromptCore and RepoPromptCoreMacOS")
+if not has_by_name(repo_prompt_dependencies, "RepoPromptSyntaxCBridge"):
+    errors.append("RepoPrompt must directly depend on RepoPromptSyntaxCBridge while SyntaxManager remains app-owned")
+if not has_by_name(macos_dependencies, "RepoPromptCore"):
+    errors.append("RepoPromptCoreMacOS must directly depend on RepoPromptCore")
 
 if errors:
     raise SystemExit("\n".join(errors))

@@ -1,16 +1,18 @@
 import Darwin
 import Foundation
+import RepoPromptCore
 
 /// macOS `proc_pidpath` adapter for bundled-helper executable verification.
-struct MacOSBundledHelperPeerVerifier: BundledHelperPeerVerifying {
-    func matches(_ input: BundledHelperPeerVerificationInput) -> Bool {
+package struct MacOSBundledHelperPeerVerifier: BundledHelperPeerVerifying {
+    package init() {}
+    package func matches(_ input: BundledHelperPeerVerificationInput) -> Bool {
         guard let actualPath = Self.executablePath(forPID: input.peerPID) else {
             return false
         }
         return Self.pathsMatch(expectedURL: input.expectedExecutableURL, actualPath: actualPath)
     }
 
-    static func pathsMatch(expectedURL: URL, actualPath: String) -> Bool {
+    package static func pathsMatch(expectedURL: URL, actualPath: String) -> Bool {
         let expected = expectedURL.resolvingSymlinksInPath().standardizedFileURL.path
         let actual = URL(fileURLWithPath: actualPath).resolvingSymlinksInPath().standardizedFileURL.path
         return actual == expected

@@ -2,15 +2,23 @@ import Foundation
 import RepoPromptShared
 
 /// Platform-neutral description of a spawned child process.
-struct SpawnedProcess: @unchecked Sendable {
-    let pid: Int32
-    let stdin: FileHandle?
-    let stdinDescriptor: Int32?
-    let stdout: FileHandle
-    let stderr: FileHandle
+package struct SpawnedProcess: @unchecked Sendable {
+    package let pid: Int32
+    package let stdin: FileHandle?
+    package let stdinDescriptor: Int32?
+    package let stdout: FileHandle
+    package let stderr: FileHandle
+
+    package init(pid: Int32, stdin: FileHandle?, stdinDescriptor: Int32?, stdout: FileHandle, stderr: FileHandle) {
+        self.pid = pid
+        self.stdin = stdin
+        self.stdinDescriptor = stdinDescriptor
+        self.stdout = stdout
+        self.stderr = stderr
+    }
 }
 
-enum ProcessLauncherError: Error {
+package enum ProcessLauncherError: Error {
     case pipeCreationFailed(String)
     case descriptorConfigurationFailed(label: String, fd: Int32, underlying: POSIXDescriptorConfigurationError)
     case spawnFileActionsFailed(operation: String, errno: Int32)
@@ -20,7 +28,7 @@ enum ProcessLauncherError: Error {
 }
 
 /// Injected child-process boundary for reusable runtime owners.
-protocol ProcessLaunching: Sendable {
+package protocol ProcessLaunching: Sendable {
     func spawn(
         command: String,
         arguments: [String],
