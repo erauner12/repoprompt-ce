@@ -28,6 +28,7 @@ required_dirs=(
   "Sources/RepoPrompt/Infrastructure/SyntaxParsing"
   "Sources/RepoPromptCore"
   "Sources/RepoPromptCoreMacOS"
+  "Sources/RepoPromptHeadless"
   "Sources/RepoPromptSyntaxCBridge/include"
   "Sources/RepoPromptShared/MCP"
   "Tests/RepoPromptTests"
@@ -77,8 +78,25 @@ fi
 if grep -n -E -- '-import-objc-header|-disable-bridging-pch' Package.swift >/dev/null 2>&1; then
   fail "Package.swift still contains retired app target-wide bridging-header flags"
 fi
-if [[ -e "Sources/RepoPromptHeadless" ]] || grep -n -E -- 'repoprompt-headless|RepoPromptHeadless' Package.swift >/dev/null 2>&1; then
-  fail "Items 6-7 standalone host artifacts landed before their dedicated implementation item"
+if ! grep -n -E -- '\.executable\(name: "repoprompt-headless", targets: \["RepoPromptHeadless"\]\)' Package.swift >/dev/null 2>&1; then
+  fail "Package.swift must declare the standalone repoprompt-headless executable product"
+fi
+if ! grep -n -E -- 'name: "RepoPromptHeadless"' Package.swift >/dev/null 2>&1; then
+  fail "Package.swift must declare the RepoPromptHeadless executable target"
+fi
+if [[ -d "Sources/RepoPromptHeadless" ]]; then
+  headless_swift_files=()
+  while IFS= read -r file; do
+    headless_swift_files+=("$file")
+  done < <(find Sources/RepoPromptHeadless -type f -name '*.swift' -print | sort)
+  if [[ "${#headless_swift_files[@]}" -eq 0 ]]; then
+    fail "Sources/RepoPromptHeadless must contain Swift source files"
+  else
+    print_matches \
+      "standalone headless host references app UI, app bundle policy, or app-proxy socket behavior" \
+      grep -n -E '^[[:space:]]*(@[[:alnum:]_]+[[:space:]]+)*import([[:space:]]+(class|struct|enum|protocol|func|var|let|typealias))?[[:space:]]+(AppKit|SwiftUI|Cocoa|Sparkle|KeyboardShortcuts)([.]|[[:space:]]|$)|Bundle[.]main|RepoPrompt[.]app|BootstrapSocketProxy|MCPFilesystemConstants[.]bootstrapSocketURL|MCPBootstrapEndpoint[.]bootstrapSocketURL|NSApplication|MCPBackgroundModeCoordinator|UserDefaults[.]standard' \
+      "${headless_swift_files[@]}"
+  fi
 fi
 
 # Item 5 physically moved these files into narrow package owners. Fail if a legacy

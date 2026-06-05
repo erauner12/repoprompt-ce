@@ -9,7 +9,8 @@ let package = Package(
         .library(name: "RepoPromptCoreMacOS", targets: ["RepoPromptCoreMacOS"]),
         .library(name: "RepoPromptSyntaxCBridge", targets: ["RepoPromptSyntaxCBridge"]),
         .executable(name: "RepoPrompt", targets: ["RepoPrompt"]),
-        .executable(name: "repoprompt-mcp", targets: ["RepoPromptMCP"])
+        .executable(name: "repoprompt-mcp", targets: ["RepoPromptMCP"]),
+        .executable(name: "repoprompt-headless", targets: ["RepoPromptHeadless"])
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-log.git", exact: "1.6.3"),
@@ -75,6 +76,17 @@ let package = Package(
             name: "RepoPromptMCP",
             dependencies: ["RepoPromptShared", .product(name: "Logging", package: "swift-log"), .product(name: "MCP", package: "swift-sdk"), .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"), .product(name: "SystemPackage", package: "swift-system")],
             path: "Sources/RepoPromptMCP",
+            swiftSettings: [.define("DEBUG", .when(configuration: .debug))]
+        ),
+        .executableTarget(
+            name: "RepoPromptHeadless",
+            dependencies: [
+                "RepoPromptShared",
+                "RepoPromptCore",
+                "RepoPromptCoreMacOS",
+                .product(name: "Logging", package: "swift-log")
+            ],
+            path: "Sources/RepoPromptHeadless",
             swiftSettings: [.define("DEBUG", .when(configuration: .debug))]
         ),
         .target(name: "RepoPromptShared", path: "Sources/RepoPromptShared"),
