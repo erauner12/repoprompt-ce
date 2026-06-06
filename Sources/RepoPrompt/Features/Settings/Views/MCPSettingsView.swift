@@ -244,10 +244,19 @@ struct MCPSettingsView: View {
     private var statusIndicator: some View {
         HStack(spacing: 6) {
             Circle()
-                .fill((vm.isRunning && vm.windowToolsEnabled) ? Color.green : Color.gray)
+                .fill(vm.pendingClientID == nil ? ((vm.isRunning && vm.windowToolsEnabled) ? Color.green : Color.gray) : Color.orange)
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
-                if vm.windowToolsEnabled {
+                if let pendingClientID = vm.pendingClientID {
+                    Text("Approval required")
+                        .font(fontPreset.font.weight(.semibold))
+                        .foregroundColor(.orange)
+                    Text("Review request from \(pendingClientID)")
+                        .font(fontPreset.captionFont)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else if vm.windowToolsEnabled {
                     Text(vm.isRunning ? "Active" : "Waiting for listener…")
                         .font(fontPreset.font)
                         .foregroundColor(vm.isRunning ? .primary : .secondary)

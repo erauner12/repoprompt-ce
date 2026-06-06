@@ -17,37 +17,47 @@ struct MCPInlineApprovalActionsView: View {
     @State private var isResolving = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: presentation?.transport == .remoteHTTP ? "network.badge.shield.half.filled" : "link.badge.plus")
-                    .foregroundColor(.orange)
-                    .imageScale(.medium)
-                    .padding(.top, 1)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(Color.orange.opacity(0.16))
+                        .frame(width: 30, height: 30)
+                    Image(systemName: approvalIcon)
+                        .foregroundColor(.orange)
+                        .imageScale(.medium)
+                }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Waiting for approval: \(clientID)")
-                        .font(.caption.weight(.semibold))
+                    Text("Approval required")
+                        .font(.subheadline.weight(.semibold))
                         .foregroundColor(.primary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
 
-                    Text(isRemoteApproval ? "Remote HTTP client wants access to RepoPrompt." : "Client wants to connect to RepoPrompt.")
+                    Text(approvalSummary)
                         .font(.caption)
                         .foregroundColor(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer(minLength: 0)
+
+                if isResolving {
+                    ProgressView()
+                        .controlSize(.small)
+                }
             }
 
+            clientDetailRow
+
             if let remoteDetails, !remoteDetails.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 5) {
                     ForEach(remoteDetails, id: \.label) { detail in
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Text(detail.label)
                                 .font(.caption2.weight(.semibold))
                                 .foregroundColor(.secondary)
+                                .frame(width: 52, alignment: .leading)
                             Text(detail.value)
                                 .font(.caption2.monospaced())
                                 .foregroundColor(.secondary)
@@ -57,34 +67,68 @@ struct MCPInlineApprovalActionsView: View {
                         }
                     }
                 }
+                .padding(.horizontal, 2)
             }
 
             if let warning = presentation?.warning, !warning.isEmpty {
-                Text(warning)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                        .font(.caption2)
+                    Text(warning)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
-            if isRemoteApproval {
-                remoteActions
-            } else {
-                localActions
-            }
+            actionButtons
         }
-        .padding(10)
+        .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.orange.opacity(0.08))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.orange.opacity(0.11))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.orange.opacity(0.2), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.orange.opacity(0.35), lineWidth: 1)
                 )
         )
     }
 
     private var isRemoteApproval: Bool {
         presentation?.transport == .remoteHTTP
+    }
+
+    private var approvalIcon: String {
+        isRemoteApproval ? "network.badge.shield.half.filled" : "link.badge.plus"
+    }
+
+    private var approvalSummary: String {
+        if isRemoteApproval {
+            "Remote HTTP client \(clientID) wants access to RepoPrompt."
+        } else {
+            "Local MCP client \(clientID) wants to connect to RepoPrompt."
+        }
+    }
+
+    private var clientDetailRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(isRemoteApproval ? "Remote" : "Local")
+                .font(.caption2.weight(.semibold))
+                .foregroundColor(.orange)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.orange.opacity(0.16)))
+
+            Text(clientID)
+                .font(.caption.monospaced())
+                .foregroundColor(.primary)
+                .textSelection(.enabled)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 0)
+        }
     }
 
     private var remoteDetails: [(label: String, value: String)]? {
@@ -99,54 +143,73 @@ struct MCPInlineApprovalActionsView: View {
         return details
     }
 
-    private var remoteActions: some View {
-        HStack(spacing: 8) {
-            denyButton
-
-            Spacer(minLength: 0)
-
-            Button("Always Allow") {
-                resolve(allow: true, alwaysAllow: true)
-            }
-            .buttonStyle(.borderless)
-            .disabled(isResolving)
-
-            Button("Allow Once") {
-                resolve(allow: true, alwaysAllow: false)
-            }
-            .buttonStyle(CustomButtonStyle())
-            .disabled(isResolving)
+    @ViewBuilder
+    private var actionButtons: some View {
+        if isRemoteApproval {
+            remoteActionButtons
+        } else {
+            localActionButtons
         }
-        .font(.caption)
     }
 
-    private var localActions: some View {
+    private var remoteActionButtons: some View {
         HStack(spacing: 8) {
             denyButton
 
             Spacer(minLength: 0)
 
-            Button("Allow Once") {
-                resolve(allow: true, alwaysAllow: false)
-            }
-            .buttonStyle(.borderless)
-            .disabled(isResolving)
-
-            Button("Always Allow") {
-                resolve(allow: true, alwaysAllow: true)
-            }
-            .buttonStyle(CustomButtonStyle())
-            .disabled(isResolving)
+            allowOnceButton(isPrimary: true)
+            alwaysAllowButton(isPrimary: false)
         }
-        .font(.caption)
+        .font(.caption.weight(.medium))
+    }
+
+    private var localActionButtons: some View {
+        HStack(spacing: 8) {
+            denyButton
+
+            Spacer(minLength: 0)
+
+            allowOnceButton(isPrimary: false)
+            alwaysAllowButton(isPrimary: true)
+        }
+        .font(.caption.weight(.medium))
     }
 
     private var denyButton: some View {
-        Button("Deny") {
+        Button {
             resolve(allow: false, alwaysAllow: false)
+        } label: {
+            inlineActionLabel("Deny")
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(MCPDenyButtonStyle())
         .disabled(isResolving)
+    }
+
+    private func allowOnceButton(isPrimary: Bool) -> some View {
+        Button {
+            resolve(allow: true, alwaysAllow: false)
+        } label: {
+            inlineActionLabel("Allow Once")
+        }
+        .buttonStyle(isPrimary ? .primaryMCPInline : .secondaryMCPInline)
+        .disabled(isResolving)
+    }
+
+    private func alwaysAllowButton(isPrimary: Bool) -> some View {
+        Button {
+            resolve(allow: true, alwaysAllow: true)
+        } label: {
+            inlineActionLabel("Always Allow")
+        }
+        .buttonStyle(isPrimary ? .primaryMCPInline : .secondaryMCPInline)
+        .disabled(isResolving)
+    }
+
+    private func inlineActionLabel(_ title: String) -> some View {
+        Text(title)
+            .padding(.horizontal, 10)
+            .frame(minHeight: 28)
     }
 
     private func resolve(allow: Bool, alwaysAllow: Bool) {
@@ -156,6 +219,58 @@ struct MCPInlineApprovalActionsView: View {
             await server.resolveApproval(allow: allow, alwaysAllow: alwaysAllow)
             await MainActor.run { isResolving = false }
         }
+    }
+}
+
+private struct MCPInlineApprovalButtonStyle: ButtonStyle {
+    enum Emphasis {
+        case primary
+        case secondary
+    }
+
+    let emphasis: Emphasis
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundColor(emphasis == .primary ? .white : .primary)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(backgroundColor)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(borderColor, lineWidth: 1)
+            )
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+    }
+
+    private var backgroundColor: Color {
+        switch emphasis {
+        case .primary:
+            Color.green
+        case .secondary:
+            Color.primary.opacity(0.04)
+        }
+    }
+
+    private var borderColor: Color {
+        switch emphasis {
+        case .primary:
+            Color.white.opacity(0.2)
+        case .secondary:
+            Color.primary.opacity(0.12)
+        }
+    }
+}
+
+private extension ButtonStyle where Self == MCPInlineApprovalButtonStyle {
+    static var primaryMCPInline: MCPInlineApprovalButtonStyle {
+        MCPInlineApprovalButtonStyle(emphasis: .primary)
+    }
+
+    static var secondaryMCPInline: MCPInlineApprovalButtonStyle {
+        MCPInlineApprovalButtonStyle(emphasis: .secondary)
     }
 }
 
