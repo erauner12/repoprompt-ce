@@ -1,6 +1,6 @@
 # Source Layout Ownership Map
 
-Current as of 2026-06-05 after shared-runtime Phase 2 Slice 1 from checkpoint `7e686cf`. `RepoPromptCore` owns the canonical app-v1 workspace value graph, repository, process-shared persistence writer, and authoritative session controller. The app remains the only production constructor/consumer through app-owned adapters; file/context runtime ownership remains app-local for Slice 2, and headless source/tests remain unchanged.
+Current as of 2026-06-05 after the Phase 2 Slice 2 ownership checkpoint `de21a1e`. `RepoPromptCore` owns the canonical app-v1 workspace/session authority plus the neutral filesystem, catalog, path, search, selection, slices, token-accounting, codemap, and syntax runtime closure. `RepoPromptCoreMacOS` owns macOS directory listing and FSEvents watching. The app remains the only production constructor/consumer through app-owned composition, mutation, diagnostics, readiness, observation, and UI adapters; headless source/tests remain unchanged from `7e686cf` and do not construct this runtime.
 
 ## Current source tree shape
 
@@ -16,7 +16,7 @@ Sources/
       AgentMode/                 # Agent Mode UI, models, view models, onboarding, recommendations, and shared agent runtime ownership
         Runtime/Providers/       # provider/runtime enum and provider factory shared by Context Builder, Agent Mode, MCP, and recommendations
       Chat/                      # chat/oracle models, services, diff state, view models, and views
-      CodeMap/                   # code-map extraction feature code and FileAPI model
+      CodeMap/                   # app codemap extraction/view-model adapters; neutral generation/models live in RepoPromptCore
       ContextBuilder/            # Context Builder product UI/runtime, view models, settings, prompts, budget defaults, and response-type mapping
       Diagnostics/               # app-integrated benchmark/debug/stress/diagnostic surfaces
       Prompt/                    # prompt UI, copy/prompt models, packaging, accounting, compact selected-files components, and view models
@@ -29,21 +29,21 @@ Sources/
         Prompts/Workflows/       # provider-neutral RepoPrompt workflow prompt catalog and renderers
       Concurrency/               # cross-cutting async primitives
       Diffing/                   # diff parsing/application/generation substrate
-      FileSystem/                # filesystem seams/services
+      FileSystem/                # app-only filesystem policy/adapters; neutral services live in RepoPromptCore and macOS listing/watching in RepoPromptCoreMacOS
       MCP/                       # app-side MCP infrastructure, app-local MCP helpers, and MCP view model adapters
       Networking/                # HTTP and decoding substrate
       Persistence/               # shared persistence helpers such as preset file storage
       Process/                   # process/CLI launch substrate
       Regex/                     # reusable regex adapters/toolkit
       Security/                  # keychain, signing, and secure storage
-      SyntaxParsing/             # syntax parsing and tree-sitter query infrastructure
+      SyntaxParsing/             # app-only syntax consumers/adapters; neutral parser/query ownership lives in RepoPromptCore
       UI/                        # reusable UI components, text/markdown/tooltip/mention substrate, UI services
       Utilities/                 # narrow generic utilities/extensions
       VCS/                       # git/VCS substrate
-      WorkspaceContext/          # context store, indexing, path lookup, slices, search, token accounting
+      WorkspaceContext/          # app observation, diagnostics, mutation, readiness, and view-model adapters over RepoPromptCore
     ThirdParty/                  # vendored SwiftPCRE2 wrapper
-  RepoPromptCore/               # Foundation-only contracts plus canonical workspace values, app-v1 codec/repository, shared writer, and session authority
-  RepoPromptCoreMacOS/          # enforced macOS FSEvents, POSIX process, Keychain/signing, and peer-verification adapters
+  RepoPromptCore/               # canonical workspace/session authority plus neutral filesystem, catalog, path, search, selection, slices, token, codemap, and syntax runtime
+  RepoPromptCoreMacOS/          # macOS directory listing/FSEvents plus POSIX process, Keychain/signing, and peer-verification adapters
   RepoPromptPOSIXSupport/       # package-internal shared descriptor/socket helpers for MCP and CoreMacOS
   RepoPromptSyntaxCBridge/      # narrow Tree-sitter declaration/linkage shim; owns grammar/scanner dependencies
   RepoPromptShared/
@@ -61,20 +61,20 @@ Tests/
 
 ## Physical headless-core roots
 
-[`headless-core.md`](headless-core.md) locks the library-first split. Item 5 now creates and enforces the reusable contract/adapters substrate:
+[`headless-core.md`](headless-core.md) locks the library-first split. Phase 2 Slice 2 now enforces the reusable runtime and adapter substrate:
 
 ```text
 Sources/
-  RepoPromptCore/                # UI-independent contracts, workspace policy helpers, and narrow MCP transport values
-  RepoPromptCoreMacOS/           # Apple/Darwin adapter implementations
+  RepoPromptCore/                # canonical workspace/session and neutral file/context/search/selection/codemap/syntax runtime
+  RepoPromptCoreMacOS/           # Apple/Darwin directory listing, watcher, process, security, and peer adapters
   RepoPromptPOSIXSupport/        # shared POSIX descriptor/socket implementation support
   RepoPromptSyntaxCBridge/       # narrow Tree-sitter declaration shim
   RepoPromptHeadless/            # landed independent direct-stdio runtime; not yet a shared-Core consumer
 ```
 
-SwiftPM advertises only the `RepoPrompt`, `repoprompt-mcp`, and `repoprompt-headless` executable products. `RepoPromptCore`, `RepoPromptCoreMacOS`, `RepoPromptPOSIXSupport`, and `RepoPromptSyntaxCBridge` are package-internal targets. `RepoPromptHeadless` still has a separate v1 workspace/tool stack. Guardrails enforce Foundation-only Shared/Core code, single-source workspace authority, app-only construction, frozen headless source/tests, importer-backed native dependencies, and executable-only products.
+SwiftPM advertises only the `RepoPrompt`, `repoprompt-mcp`, and `repoprompt-headless` executable products. `RepoPromptCore`, `RepoPromptCoreMacOS`, `RepoPromptPOSIXSupport`, and `RepoPromptSyntaxCBridge` are package-internal targets. `RepoPromptHeadless` still has a separate v1 workspace/tool stack. Guardrails enforce Core ownership of the Slice 2 closure, app-only construction, frozen headless source/tests and Phase 0 fixtures, importer-backed native dependencies, and executable-only products.
 
-Phase 2 Slice 1 intentionally leaves the app-owned `RepoPromptCoreHost`, file/context store, search, selection coordinator, codemap, syntax, prompt rendering, and MCP adaptation under `Sources/RepoPrompt`. The app manager is now an adapter over `RepoPromptCore.WorkspaceSessionController`, not a second state owner. `WorkspaceSessionObservationBridge` adapts immutable snapshots to Combine, and `WorkspaceSessionSelectionForwarder` is temporary and must be deleted in Slice 2. Do not move Slice 2/3 runtime ownership early or activate canonical-v2 persistence.
+Phase 2 Slice 2 moves the complete neutral filesystem/catalog/path/search/selection/slices/token/codemap/syntax closure to Core and deletes the temporary Slice 1 selection forwarder. `RepoPromptEmbeddedWorkspaceRuntimeFactory` is the sole production factory. App adapters retain Combine publication, UI/view-model conversion, app mutation policy, diagnostics and readiness integration, storage-root discovery, and cache-root policy. Prompt rendering, workspace-context projection, MCP provider/catalog/DTO/formatter/dispatch ownership, and standalone-headless adoption remain deferred to Slice 3 or Phase 3; canonical-v2 persistence remains inactive.
 
 The legacy top-level layer buckets under `Sources/RepoPrompt` have been pruned and must not be recreated:
 
@@ -101,7 +101,7 @@ The old IDE-era Prompt selected-files panel is also removed. Do not add back `Pr
 - New product-flow code goes under `Sources/RepoPrompt/Features/<FeatureName>`.
 - New app lifecycle, launch/configuration, command, root view/view-model, notification-name, and composition-root wiring goes under `Sources/RepoPrompt/App`.
 - Keep Tree-sitter C declarations in the narrow `Sources/RepoPromptSyntaxCBridge` shim. Do not restore target-wide app bridging-header flags.
-- Put canonical neutral workspace values, codecs, repository/persistence behavior, session authority, reusable platform contracts, and workspace policy helpers in `Sources/RepoPromptCore`. Keep app storage-root discovery, Combine observation, diagnostics/tracing, UI behavior, and mixed Slice 2/3 runtime closures app-owned.
+- Put canonical neutral workspace values, codecs, repository/persistence behavior, session authority, filesystem/catalog/path/search/selection/slices/token/codemap/syntax behavior, reusable platform contracts, and workspace policy helpers in `Sources/RepoPromptCore`. Keep app storage-root discovery, Combine observation, diagnostics/tracing adapters, mutation policy, readiness integration, UI behavior, prompt/rendering, and MCP product ownership app-owned.
 - Put Apple/Darwin adapter implementations in `Sources/RepoPromptCoreMacOS`; core must never import that module.
 - Put descriptor/socket helpers shared by the app proxy, proxy CLI, and CoreMacOS in `Sources/RepoPromptPOSIXSupport`; never place them in `RepoPromptShared` or expose them from Core contracts.
 - New cross-cutting service/platform code goes under `Sources/RepoPrompt/Infrastructure/<Area>`.
@@ -114,7 +114,7 @@ The old IDE-era Prompt selected-files panel is also removed. Do not add back `Pr
 - New app-proxy CLI-only implementation code goes under `Sources/RepoPromptMCP`.
 - New standalone direct-stdio/profile adapter code goes under `Sources/RepoPromptHeadless`; do not add a second implementation of canonical workspace/search/codemap/selection/prompt behavior while convergence is in progress.
 - New test doubles, parser inputs, sample projects, benchmark-only fixture data, and XCTest-only helpers go under the matching test target. Cross-target convergence fixtures belong under `Tests/SharedRuntimeConvergenceFixtures`, never under production sources.
-- Intentionally promoted durable characterization records belong under `docs/characterization`. This directory is not a general home for agent working notes. Current records are the frozen Phase 0 baseline, `shared-runtime-phase1-2026-06-05.md`, and `shared-runtime-phase2-slice1-2026-06-05.md`.
+- Intentionally promoted durable characterization records belong under `docs/characterization`. This directory is not a general home for agent working notes. Current records are the frozen Phase 0 baseline, `shared-runtime-phase1-2026-06-05.md`, `shared-runtime-phase2-slice1-2026-06-05.md`, and `shared-runtime-phase2-slice2-2026-06-05.md`.
 - Do not create directories named `Tests`, `TestSupport`, or `Fixtures` under `Sources/RepoPrompt`.
 - Do not put parser fixtures or sample parser inputs under `Sources/RepoPrompt/Infrastructure/SyntaxParsing`; keep only production parser/query code there.
 - Keep `App/WindowState.swift` in `App` until there is a separate composition-root refactor; physical moves must preserve initialization order.
@@ -159,7 +159,7 @@ make guardrails
 make dev-guardrails
 ```
 
-For the source-layout check alone, run `./Scripts/source_layout_guardrails.sh`. For the enforced core-boundary scan alone, run `bash ./Scripts/core_boundary_guardrails.sh`. Slice 1 workspace-authority, app-constructor, frozen-headless, and no-read-rewrite boundaries are enforced by `python3 Scripts/test_shared_runtime_phase2_slice1_boundaries.py`.
+For the source-layout check alone, run `./Scripts/source_layout_guardrails.sh`. For the enforced core-boundary scan alone, run `bash ./Scripts/core_boundary_guardrails.sh`. Phase 2 workspace authority, Slice 2 runtime ownership, sole app construction, importer-backed dependency, frozen-headless/fixture, and no-Slice-3 boundaries are enforced by `python3 Scripts/test_shared_runtime_phase2_slice1_boundaries.py` and `python3 Scripts/test_shared_runtime_phase2_boundaries.py`.
 
 The source-layout guardrail verifies:
 
@@ -168,7 +168,7 @@ The source-layout guardrail verifies:
 - `MCPControlMessages.swift` exists only at `Sources/RepoPromptShared/MCP/MCPControlMessages.swift`;
 - parser fixtures/sample inputs do not live under app syntax parsing source;
 - tracked contributor-facing documentation remains within the explicit file allowlist, including individually promoted durable characterization records;
-- each moved contract/adapter file is single-sourced under its narrow `RepoPromptCore`, `RepoPromptCoreMacOS`, or `RepoPromptPOSIXSupport` owner;
+- each moved contract/runtime/adapter file is single-sourced under its narrow `RepoPromptCore`, `RepoPromptCoreMacOS`, or `RepoPromptPOSIXSupport` owner;
 - the narrow `RepoPromptSyntaxCBridge` target contains exactly its declaration header and anchor C file, exposes exactly the curated fourteen Tree-sitter declarations, owns the exact grammar/scanner linkage set, and replaces the retired app-wide bridging header;
 - the narrow `TreeSitterScannerSupport` compatibility target has exactly its approved JavaScript/Python scanner snapshots and helper headers, matches curated checksums, remains wired only through `RepoPromptSyntaxCBridge`, preserves the pinned grammar products in `Package.swift` and `Package.resolved`, keeps grammar products off the app target, and keeps the retired local grammar directories absent;
 - Agent/MCP runtime code does not depend on `WorkspaceFilesViewModel`, `FileViewModel`, or `FolderViewModel`;
@@ -185,6 +185,8 @@ The enforced core-boundary guardrail rejects:
 - non-Foundation imports or POSIX descriptor/socket ownership under `Sources/RepoPromptShared`;
 - Darwin/POSIX-backed types, raw accepted descriptors, or POSIX support imports in Core contracts;
 - app-owned runtime and embedded-app policy references under `Sources/RepoPromptCore`;
+- missing Slice 2 Core/CoreMacOS owners, retired app runtime paths, obsolete selection forwarding, multiple production runtime factories, speculative native dependencies, or headless runtime construction;
+- premature Slice 3 prompt/rendering/MCP catalog/provider/DTO/formatter/dispatch ownership in Core;
 - any accidental app-packaging reference to standalone `repoprompt-headless` / `rpce-headless` command names.
 
 Shared MCP single-sourcing, syntax-shim ownership, and scanner compatibility remain enforced by the source-layout guardrail.

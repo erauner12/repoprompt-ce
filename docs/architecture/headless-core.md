@@ -1,10 +1,10 @@
 # Headless Core Architecture Lock
 
-Status: Phase 2 Slice 1 implemented from frozen checkpoint `7e686cf`, 2026-06-05. Shared remains Foundation-only; Core now owns the canonical app workspace value graph, app-v1 codec/repository, process-shared persistence writer, and `@MainActor` session authority. The app is the only production constructor/consumer. Headless source/tests remain byte-identical to the checkpoint and still own their parallel v1 runtime. Shared-runtime convergence remains incomplete until Slices 2 and 3.
+Status: Phase 2 Slice 2 ownership implemented at checkpoint `de21a1e`, with validation hardening in progress on 2026-06-05. Shared remains Foundation-only; Core owns canonical app workspace/session authority and the neutral filesystem, catalog, path, search, selection, slices, token-accounting, codemap, and syntax closure. CoreMacOS owns directory listing and FSEvents watching. The app is the only production constructor/consumer. Headless source/tests remain byte-identical to `7e686cf` and still own their parallel v1 runtime. Shared-runtime convergence remains incomplete until Slice 3 and Phase 3.
 
 ## Locked target graph
 
-The target graph below is the convergence destination, not current runtime ownership. Today the app embeds the mature runtime under `Sources/RepoPrompt`, while the separately packaged headless executable uses its own v1 runtime without requiring `RepoPrompt.app` to be installed or running.
+The target graph below is the convergence destination. Today the app constructs the mature shared workspace/file-context runtime from Core and CoreMacOS through app-owned adapters, while the separately packaged headless executable uses its own frozen v1 runtime without requiring `RepoPrompt.app` to be installed or running.
 
 ```text
                            RepoPromptShared
@@ -26,31 +26,32 @@ The current package graph contains bounded contract/adapter roots plus the stand
 
 | Reserved target or product | Reserved source root | Responsibility |
 | --- | --- | --- |
-| `RepoPromptCore` internal target | `Sources/RepoPromptCore` | Foundation-only platform/session/capability contracts plus canonical persisted workspace values, embedded app-v1 codec/repository, process-shared writer, and authoritative workspace session controller |
-| `RepoPromptCoreMacOS` internal target | `Sources/RepoPromptCoreMacOS` | FSEvents, POSIX process/descriptor-write, Keychain, code-signing inspection, peer verification, and macOS adapters |
+| `RepoPromptCore` internal target | `Sources/RepoPromptCore` | Canonical persisted workspace/session authority plus neutral filesystem/catalog/path/search/selection/slices/token/codemap/syntax runtime and platform contracts |
+| `RepoPromptCoreMacOS` internal target | `Sources/RepoPromptCoreMacOS` | Workspace directory listing, FSEvents, POSIX process/descriptor-write, Keychain, code-signing inspection, peer verification, and macOS adapters |
 | `RepoPromptPOSIXSupport` internal target | `Sources/RepoPromptPOSIXSupport` | Shared close-on-exec and socket-shutdown helpers used by current POSIX importers |
 | `RepoPromptSyntaxCBridge` target | `Sources/RepoPromptSyntaxCBridge` | Narrow Tree-sitter declarations and grammar/scanner linkage without an app target-wide bridging header |
 | `repoprompt-headless` executable | `Sources/RepoPromptHeadless` | Independent direct-stdio JSON-RPC host with fail-closed config/state/root policy, permission defaults, terminal doctor/config commands, the read-oriented safe MCP profile, and separate package/install/smoke lane |
 
-Existing app/proxy owners remain compatible during the bounded Item 5 split:
+Existing app/proxy owners remain compatible through Phase 2 Slice 2:
 
 | Existing target | Current responsibility retained during Item 0 |
 | --- | --- |
-| `RepoPrompt` | SwiftUI/AppKit shell, sole constructor/consumer of the Slice 1 workspace runtime, and owner of observation, diagnostics, selection forwarding, file/context, MCP, and prompt adapters |
+| `RepoPrompt` | SwiftUI/AppKit shell, sole constructor/consumer of the Slice 2 runtime, and owner of composition, observation, mutation, diagnostics, readiness, UI conversion, MCP, and prompt/rendering adapters |
 | `RepoPromptMCP` / `repoprompt-mcp` | Existing app-bundled socket proxy, interactive client, and exec client |
 | `RepoPromptShared` | Foundation-only app/CLI MCP bootstrap and control wire contracts |
 
 Keep `platforms: [.macOS(.v14)]` during this migration. The first milestone is a standalone Swift-toolchain core boundary, not a Linux or Windows product claim.
 
-## Phase 2 Slice 1 workspace lock
+## Phase 2 Slice 2 runtime lock
 
-- `RepoPromptCore.WorkspaceSessionController` is the sole mutable owner of ordered workspaces, active workspace ID, index projection, dirty/save generations, selection revisions, and repository-path baselines.
-- `WorkspacePersistenceWriter` is one process-shared actor supplied by `RepoPromptAppCoreContainer` to every app session controller. It owns cross-window selection revision allocation and explicit-write serialization.
-- `EmbeddedWorkspaceCodecV1` preserves current app-v1 keys and normalization behavior. Decode/load is side-effect free; only explicit saves enter the writer. Canonical-v2 writes remain inactive.
-- `WorkspaceManagerViewModel` exposes read-only controller projections and routes every workspace/tab mutation through controller operations or bounded transactions.
-- Combine observation, UserDefaults/Application Support root policy, durability tracing, and the temporary Slice 1 selection forwarder remain app-owned adapters.
-- `Sources/RepoPromptHeadless/**` and `Tests/RepoPromptHeadlessTests/**` must remain byte-for-byte unchanged from `7e686cf`; headless does not construct the new runtime.
-- `Scripts/test_shared_runtime_phase2_slice1_boundaries.py` enforces the constructor, authority, no-read-rewrite, Core-import, frozen-fixture, and frozen-headless boundaries.
+- `RepoPromptCore.WorkspaceSessionController` remains the sole mutable workspace/session authority; `WorkspacePersistenceWriter` and `EmbeddedWorkspaceCodecV1` preserve explicit-write-only app-v1 persistence and keep canonical-v2 writes inactive.
+- Core owns the canonical neutral filesystem/catalog/path/search/selection/slices/token/codemap/syntax closure, including accepted-ingress/watermark/unload barriers and bounded search admission/backpressure.
+- `RepoPromptCoreMacOS` owns workspace directory listing and FSEvents watching behind injected Core contracts. Core has no default macOS watcher construction or Application Support discovery.
+- `RepoPromptEmbeddedWorkspaceRuntimeFactory` is the sole production factory. The app supplies CoreMacOS listing/watching plus app mutation, diagnostics, readiness, observation, cache-root, and view-model adapters.
+- The temporary Slice 1 `WorkspaceSessionSelectionForwarder` and obsolete app runtime source paths are deleted; app behavior is adapted rather than duplicated.
+- Prompt rendering, workspace-context projection, MCP provider/catalog/DTO/formatter/dispatch ownership, and app-proxy transport remain app-owned for Slice 3/Phase 3.
+- `Sources/RepoPromptHeadless/**` and `Tests/RepoPromptHeadlessTests/**` remain byte-for-byte unchanged from `7e686cf`; headless does not construct the new runtime.
+- `Scripts/test_shared_runtime_phase2_slice1_boundaries.py` and `Scripts/test_shared_runtime_phase2_boundaries.py` enforce authority, no-read-rewrite, runtime ownership, sole construction, importer-backed dependencies, frozen fixtures/headless, and no-Slice-3 boundaries.
 
 ## Locked ownership rules
 
@@ -353,23 +354,20 @@ The enforceable package boundary now includes:
 - macOS FSEvents, POSIX launcher/descriptor-write support, Keychain, runtime signing, bundled-helper verification, and process-ancestry adapters under `Sources/RepoPromptCoreMacOS`.
 - Enforced core-boundary guardrails that fail on forbidden platform/UI imports, embedded-app policy references, missing roots, or accidental standalone packaging references.
 
-## Explicitly deferred seams after the bounded Item 5 split
+## Explicitly deferred seams after Phase 2 Slice 2
 
-These files remain app-owned because moving them now would require the larger runtime refactor, not merely a physical owner change:
+The reusable file/context runtime move is complete. These owners remain intentionally app-local until Slice 3 or Phase 3:
 
-- `Infrastructure/Core/RepoPromptCoreHost.swift`, `MCPRuntimeSessionRegistry.swift`, and the embedded workspace-context graph remain app-owned until `WorkspaceFileContextStore` and `FileSystemService` replace Combine publication/cancellable ingress with bounded async-stream seams while preserving callback-watermark freshness barriers.
-- `WorkspaceRepository.swift` remains app-owned until its `UserDefaults.standard` / `WorkspaceStoragePaths.defaultRoot` policy and `WorkspaceManagerViewModel.loadWorkspaceFromFile` decoder dependency are replaced by injected roots and a neutral decoder projection.
-- `WorkspaceSessionController.swift` remains app-owned until the `WorkspaceManagerViewModel` backing conformance and broad workspace-model selection surface are split into an app adapter.
-- `SyntaxManager.swift` stays app-owned while it depends on app code-map diagnostics (`CodeMapPerfRuntime` and `CodeMapSyntaxStartupPerfStats`). It imports the new narrow declaration shim immediately, so no bridging header remains.
-- `FileSystemService` and `WorkspaceFileContextStore` still receive transitional macOS watcher defaults inside the app target. Remove those defaults when their runtime closure moves behind composition-root injection.
-- `MacOSFSEventsWatcher` remains the macOS adapter for the neutral watcher contract; its generation-scoped lifecycle now hardens concurrent/reentrant `start()` / `stop()` and stale native callbacks. Broader `FileSystemService` / `WorkspaceFileContextStore` runtime promotion remains deferred; do not fold that refactor into this physical ownership split.
-- App-proxy `MacOSBootstrapSocketServer`, accepted-FD connection management, Unix transport, and app filesystem constants remain app-owned until listener diagnostics, socket-directory policy, and `ServerNetworkManager` coupling are split. The existing `repoprompt-mcp` proxy behavior is intentionally unchanged.
-- The static `ProcessLauncher` facade lives in `RepoPromptCoreMacOS` temporarily because deferred app capabilities still call it directly. Promote call-site injection only with the corresponding capability owners.
-- The headless safe tool profile and independent package/install/smoke/CI lane now live under `Sources/RepoPromptHeadless` and `Scripts/package_headless.sh` / `install_headless_cli.sh` / `smoke_headless_mcp.sh`; keep future parity work additive and do not route it through `repoprompt-mcp` or the app bundle.
+- Neutral prompt assembly/rendering, workspace-context projections, and their app preset/conversation/VCS/clipboard adapters remain in their current Slice 3 owners.
+- MCP safe-tool providers, catalog, descriptor vocabulary, argument normalization, DTOs, text formatting, capability composition, and dispatch remain app-owned; Slice 2 does not establish headless parity or move product protocol ownership.
+- App-proxy `MacOSBootstrapSocketServer`, accepted-FD connection management, Unix transport, app filesystem constants, admission/approval, routing, and lifecycle policy remain app-owned. Existing `repoprompt-mcp` behavior is unchanged.
+- App mutation authorization, diagnostics/telemetry, readiness, Combine publication, UI/view-model conversion, Application Support/UserDefaults policy, and visible-app lifecycle remain adapters in `Sources/RepoPrompt`.
+- The static `ProcessLauncher` facade remains in `RepoPromptCoreMacOS` while deferred app capabilities call it directly; promote call-site injection only with those capability owners.
+- The independent headless safe profile remains frozen under `Sources/RepoPromptHeadless`; future adoption must be a separately characterized Phase 3 change and must not route through the app proxy or app bundle.
 
 ## Enforced boundary guardrail
 
-`Scripts/core_boundary_guardrails.sh` requires Core, CoreMacOS, POSIXSupport, Shared, and SyntaxBridge roots; enforces Foundation-only Shared/Core contracts; rejects raw descriptor/socket types in Core; and continues to reject app-packaging references to standalone command names. `Scripts/test_shared_runtime_phase1_boundaries.py` additionally verifies the product/dependency graph and byte-compares Phase 0 fixtures to `48a335e`. Findings fail `make guardrails`.
+`Scripts/core_boundary_guardrails.sh` requires Core, CoreMacOS, POSIXSupport, Shared, and SyntaxBridge roots; rejects forbidden platform/UI/app policy in Core; and continues to reject app-packaging references to standalone command names. `Scripts/test_shared_runtime_phase1_boundaries.py`, `Scripts/test_shared_runtime_phase2_slice1_boundaries.py`, and `Scripts/test_shared_runtime_phase2_boundaries.py` verify the product/dependency graph, canonical authority, Slice 2 owner paths, sole app factory, importer-backed native edges, frozen Phase 0 fixtures/headless trees, and no premature Slice 3 ownership. Findings fail `make guardrails`.
 
 `Scripts/source_layout_guardrails.sh` remains responsible for shared `MCPControlMessages.swift` single-sourcing and the narrow `TreeSitterScannerSupport` compatibility target. It requires `Sources/RepoPromptHeadless`/`RepoPromptHeadless`/`repoprompt-headless` and rejects app UI, app bundle policy, or app-proxy socket references from the standalone source root.
 
@@ -385,4 +383,4 @@ These files remain app-owned because moving them now would require the larger ru
 
 ## Remaining deferred work
 
-The bounded Item 5 split and Slices 5A-5C do not promote the larger runtime closures listed above. The first standalone safe profile and independent package/install/smoke/CI/docs lane are additive and intentionally narrower than app parity. Future runtime promotion must replace singleton/window hot-path ownership, extract reusable sessions, complete adapter injection, and preserve the characterized app-proxy behavior.
+Phase 2 Slice 3 may move only the designed neutral prompt/rendering and workspace-context projection closure while preserving app preset/UI/MCP adaptation. Phase 3 may then converge catalog/provider/DTO/formatter/dispatch behavior and explicitly adopt Core from headless. Neither step may change the frozen app-v1/Phase 0 bytes, app-proxy routing, or standalone security/profile boundaries without new characterization.

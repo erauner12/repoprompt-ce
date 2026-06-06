@@ -527,6 +527,7 @@ allowed_tracked_docs=(
   "docs/characterization/shared-runtime-phase0-2026-06-05.md"
   "docs/characterization/shared-runtime-phase1-2026-06-05.md"
   "docs/characterization/shared-runtime-phase2-slice1-2026-06-05.md"
+  "docs/characterization/shared-runtime-phase2-slice2-2026-06-05.md"
   "docs/open-source-readiness.md"
   "docs/releasing.md"
   "docs/worktrees.md"
