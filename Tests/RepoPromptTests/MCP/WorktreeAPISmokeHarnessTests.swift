@@ -35,11 +35,14 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: createdWorktreePath), createdWorktreePath)
 
         let bindSessionID = UUID()
-        let activeWorkspaceID = try XCTUnwrap(window.workspaceManager.activeWorkspace?.id)
         let bindTabID = try XCTUnwrap(window.workspaceManager.activeWorkspace?.activeComposeTabID)
         let bindSession = window.agentModeViewModel.session(for: bindTabID)
-        bindSession.activeAgentSessionID = bindSessionID
-        XCTAssertTrue(window.workspaceManager.setActiveAgentSessionID(bindSessionID, forTabID: bindTabID, inWorkspaceID: activeWorkspaceID))
+        _ = window.agentModeViewModel.test_installPersistentSessionBinding(
+            sessionID: bindSessionID,
+            on: bindSession,
+            updateWorkspaceMetadata: true
+        )
+        XCTAssertEqual(window.workspaceManager.activeAgentSessionID(forTabID: bindTabID), bindSessionID)
 
         let bindValue = try await manageWorktree([
             "op": .string("bind"),
@@ -120,7 +123,11 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
         let sessionID = UUID()
         let tabID = try XCTUnwrap(window.workspaceManager.activeWorkspace?.activeComposeTabID)
         let session = window.agentModeViewModel.session(for: tabID)
-        session.activeAgentSessionID = sessionID
+        _ = window.agentModeViewModel.test_installPersistentSessionBinding(
+            sessionID: sessionID,
+            on: session,
+            updateWorkspaceMetadata: true
+        )
 
         let createValue = try await manageWorktree([
             "op": .string("create"),

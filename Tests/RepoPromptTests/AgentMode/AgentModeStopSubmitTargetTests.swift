@@ -17,7 +17,7 @@ final class AgentModeStopSubmitTargetTests: XCTestCase {
         let attemptID = UUID()
         runningSession.runState = .running
         runningSession.runID = runID
-        runningSession.activeAgentSessionID = agentSessionID
+        runningSession.testInstallPersistentSessionBinding(sessionID: agentSessionID)
         runningSession.beginRunAttempt(source: "test", attemptID: attemptID)
         idleSession.runState = .idle
 
@@ -48,11 +48,11 @@ final class AgentModeStopSubmitTargetTests: XCTestCase {
         let otherRunID = UUID()
         targetSession.runState = .running
         targetSession.runID = targetRunID
-        targetSession.activeAgentSessionID = UUID()
+        targetSession.testInstallPersistentSessionBinding(sessionID: UUID())
         targetSession.beginRunAttempt(source: "test")
         otherSession.runState = .running
         otherSession.runID = otherRunID
-        otherSession.activeAgentSessionID = UUID()
+        otherSession.testInstallPersistentSessionBinding(sessionID: UUID())
         otherSession.beginRunAttempt(source: "test")
         let cancelTarget = vm.makeRunCancelTarget(tabID: targetTabID, session: targetSession)
         vm.test_setCurrentTabIDOverride(otherTabID)
@@ -77,7 +77,7 @@ final class AgentModeStopSubmitTargetTests: XCTestCase {
         let session = try XCTUnwrap(vm.sessions[tabID])
         session.runState = .running
         session.runID = UUID()
-        session.activeAgentSessionID = UUID()
+        session.testInstallPersistentSessionBinding(sessionID: UUID())
         session.beginRunAttempt(source: "test")
         let staleTarget = vm.makeRunCancelTarget(tabID: tabID, session: session)
         let newerRunID = UUID()

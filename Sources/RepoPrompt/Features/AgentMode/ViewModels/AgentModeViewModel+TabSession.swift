@@ -122,6 +122,7 @@ extension AgentModeViewModel {
         var mcpControlContext: AgentMCPControlContext?
         var mcpStateObservationCancellable: AnyCancellable?
         var mcpControlCleanupTask: Task<Void, Never>?
+        var mcpControlActivationGeneration: UInt64 = 0
         var mcpFollowUpRunPendingUpdatedAt: Date?
         var mcpFollowUpRunPending: Bool = false {
             didSet {
@@ -346,7 +347,15 @@ extension AgentModeViewModel {
         }
 
         // Persistence
-        var activeAgentSessionID: UUID?
+        private(set) var persistentSessionBindingIdentity: AgentPersistentSessionBindingIdentity?
+        var activeAgentSessionID: UUID? {
+            persistentSessionBindingIdentity?.sessionID
+        }
+
+        private(set) var bindingTransitionGeneration: UInt64 = 0
+        private(set) var bindingTransitionInProgress: Bool = false
+        private(set) var persistenceMutationGeneration: UInt64 = 0
+        var saveGeneration: UInt64 = 0
         var parentSessionID: UUID?
         var hasLoadedPersistedState: Bool = false
         var persistedLoadTask: Task<Void, Never>?
@@ -354,7 +363,14 @@ extension AgentModeViewModel {
         var lastUserMessageAt: Date?
         var lastCommandOutputSaveAt: Date?
         var saveDebounceTask: Task<Void, Never>?
-        var isDirty: Bool = false
+        var isDirty: Bool = false {
+            didSet {
+                if isDirty {
+                    persistenceMutationGeneration &+= 1
+                }
+            }
+        }
+
         var sourceItemsRevision: Int = 0
         var pendingSourceItemsMutationSummary: PendingSourceItemsMutationSummary?
         var pendingDerivedTranscriptRefreshReason: DerivedTranscriptRefreshReason?
@@ -382,6 +398,57 @@ extension AgentModeViewModel {
         init(tabID: UUID) {
             self.tabID = tabID
         }
+
+        @discardableResult
+        func beginPersistentBindingTransition() -> UInt64 {
+            bindingTransitionGeneration &+= 1
+            bindingTransitionInProgress = true
+            return bindingTransitionGeneration
+        }
+
+        func installPersistentSessionBinding(_ binding: AgentPersistentSessionBindingIdentity?) {
+            precondition(binding == nil || binding?.tabID == tabID)
+            persistentSessionBindingIdentity = binding
+            bindingTransitionInProgress = false
+        }
+
+        func finishPersistentBindingTransition(generation: UInt64) {
+            guard bindingTransitionGeneration == generation else { return }
+            bindingTransitionInProgress = false
+        }
+
+        var hasBindingBlockingInteraction: Bool {
+            waitingPrompt != nil
+                || instructionContinuation != nil
+                || pendingAskUser != nil
+                || pendingUserInputRequest != nil
+                || pendingApproval != nil
+                || pendingPermissionsRequest != nil
+                || pendingMCPElicitationRequest != nil
+                || pendingApplyEditsReview != nil
+                || pendingWorktreeMergeReview != nil
+                || !queuedUserInputRequests.isEmpty
+                || !queuedMCPElicitationRequests.isEmpty
+        }
+
+        func persistentBindingTransitionToken() -> PersistentBindingTransitionToken {
+            PersistentBindingTransitionToken(
+                tabID: tabID,
+                sessionIdentity: ObjectIdentifier(self),
+                binding: persistentSessionBindingIdentity,
+                transitionGeneration: bindingTransitionGeneration,
+                sourceItemsRevision: sourceItemsRevision
+            )
+        }
+
+        #if DEBUG
+            func testInstallPersistentSessionBinding(sessionID: UUID?) {
+                _ = beginPersistentBindingTransition()
+                installPersistentSessionBinding(
+                    sessionID.map { AgentPersistentSessionBindingIdentity(tabID: tabID, sessionID: $0) }
+                )
+            }
+        #endif
 
         @discardableResult
         func beginRunAttempt(source: String, attemptID: UUID = UUID()) -> AgentRunOwnership {

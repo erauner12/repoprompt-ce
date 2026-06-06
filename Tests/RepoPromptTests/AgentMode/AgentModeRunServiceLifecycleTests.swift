@@ -101,7 +101,7 @@ final class AgentModeRunServiceLifecycleTests: XCTestCase {
             let harness = makeHarness(recorder: recorder, codexController: codexController)
             let session = AgentModeViewModel.TabSession(tabID: UUID())
             session.selectedAgent = .codexExec
-            session.activeAgentSessionID = UUID()
+            session.testInstallPersistentSessionBinding(sessionID: UUID())
 
             let outcome = await harness.service.startRun(
                 tabID: session.tabID,

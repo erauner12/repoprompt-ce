@@ -441,7 +441,7 @@
                 guard let workspace = test_workspaceManager?.activeWorkspace else {
                     throw StressHarnessPersistenceError.noActiveWorkspace
                 }
-                guard var tab = test_workspaceManager?.composeTab(with: tabID) else {
+                guard test_workspaceManager?.composeTab(with: tabID) != nil else {
                     throw StressHarnessPersistenceError.missingComposeTab(tabID)
                 }
 
@@ -452,8 +452,6 @@
                 let fileURL = try await test_dataService.saveAgentSession(agentSession, for: workspace)
                 agentSession.fileURL = fileURL
 
-                tab.activeAgentSessionID = agentSession.id
-                test_workspaceManager?.updateComposeTabStoredOnly(tab)
                 upsertSessionIndex(
                     sessionID: agentSession.id,
                     tabID: tabID,
@@ -468,10 +466,15 @@
                     autoEditEnabled: agentSession.autoEditEnabled
                 )
 
-                if let liveSession = session(for: tabID, createIfNeeded: false) {
+                let liveSession = session(for: tabID)
+                _ = test_installPersistentSessionBinding(
+                    sessionID: agentSession.id,
+                    on: liveSession,
+                    updateWorkspaceMetadata: true
+                )
+                if liveSession.activeAgentSessionID == agentSession.id {
                     cancelPersistedLoad(for: liveSession)
                     removePendingUIRefresh(for: tabID)
-                    liveSession.activeAgentSessionID = agentSession.id
                     liveSession.hasLoadedPersistedState = false
                     applyTranscriptViewportBindingState(
                         to: liveSession,
