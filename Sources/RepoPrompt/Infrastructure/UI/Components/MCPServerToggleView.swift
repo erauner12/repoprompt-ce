@@ -314,11 +314,11 @@ struct MCPServerPopoverContent: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if let client = server.pendingClientID {
-                Text("Waiting for approval: \(client)")
-                    .font(fontPreset.captionFont)
-                    .foregroundColor(.orange)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                MCPInlineApprovalActionsView(
+                    server: server,
+                    clientID: client,
+                    presentation: server.pendingApprovalPresentation
+                )
             }
         }
     }

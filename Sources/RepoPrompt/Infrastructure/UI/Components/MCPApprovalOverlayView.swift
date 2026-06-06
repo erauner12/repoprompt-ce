@@ -7,6 +7,158 @@
 
 import SwiftUI
 
+/// Inline MCP client approval controls for places where the full-screen overlay is hidden behind
+/// the current UI surface, such as toolbar popovers or settings panes.
+struct MCPInlineApprovalActionsView: View {
+    @ObservedObject var server: MCPServerViewModel
+    let clientID: String
+    let presentation: MCPApprovalPresentation?
+
+    @State private var isResolving = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: presentation?.transport == .remoteHTTP ? "network.badge.shield.half.filled" : "link.badge.plus")
+                    .foregroundColor(.orange)
+                    .imageScale(.medium)
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Waiting for approval: \(clientID)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text(isRemoteApproval ? "Remote HTTP client wants access to RepoPrompt." : "Client wants to connect to RepoPrompt.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            if let remoteDetails, !remoteDetails.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(remoteDetails, id: \.label) { detail in
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(detail.label)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundColor(.secondary)
+                            Text(detail.value)
+                                .font(.caption2.monospaced())
+                                .foregroundColor(.secondary)
+                                .textSelection(.enabled)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
+            }
+
+            if let warning = presentation?.warning, !warning.isEmpty {
+                Text(warning)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if isRemoteApproval {
+                remoteActions
+            } else {
+                localActions
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.orange.opacity(0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.orange.opacity(0.2), lineWidth: 1)
+                )
+        )
+    }
+
+    private var isRemoteApproval: Bool {
+        presentation?.transport == .remoteHTTP
+    }
+
+    private var remoteDetails: [(label: String, value: String)]? {
+        guard isRemoteApproval else { return nil }
+        var details: [(String, String)] = []
+        if let address = presentation?.remoteAddress, !address.isEmpty {
+            details.append(("Address", address))
+        }
+        if let fingerprint = presentation?.tokenFingerprint, !fingerprint.isEmpty {
+            details.append(("Token", fingerprint))
+        }
+        return details
+    }
+
+    private var remoteActions: some View {
+        HStack(spacing: 8) {
+            denyButton
+
+            Spacer(minLength: 0)
+
+            Button("Always Allow") {
+                resolve(allow: true, alwaysAllow: true)
+            }
+            .buttonStyle(.borderless)
+            .disabled(isResolving)
+
+            Button("Allow Once") {
+                resolve(allow: true, alwaysAllow: false)
+            }
+            .buttonStyle(CustomButtonStyle())
+            .disabled(isResolving)
+        }
+        .font(.caption)
+    }
+
+    private var localActions: some View {
+        HStack(spacing: 8) {
+            denyButton
+
+            Spacer(minLength: 0)
+
+            Button("Allow Once") {
+                resolve(allow: true, alwaysAllow: false)
+            }
+            .buttonStyle(.borderless)
+            .disabled(isResolving)
+
+            Button("Always Allow") {
+                resolve(allow: true, alwaysAllow: true)
+            }
+            .buttonStyle(CustomButtonStyle())
+            .disabled(isResolving)
+        }
+        .font(.caption)
+    }
+
+    private var denyButton: some View {
+        Button("Deny") {
+            resolve(allow: false, alwaysAllow: false)
+        }
+        .buttonStyle(.borderless)
+        .disabled(isResolving)
+    }
+
+    private func resolve(allow: Bool, alwaysAllow: Bool) {
+        guard !isResolving else { return }
+        isResolving = true
+        Task {
+            await server.resolveApproval(allow: allow, alwaysAllow: alwaysAllow)
+            await MainActor.run { isResolving = false }
+        }
+    }
+}
+
 /// A full-screen takeover overlay for MCP client approval requests.
 /// Presents a modern, polished UI that blocks interaction until the user responds.
 struct MCPApprovalOverlayView: View {

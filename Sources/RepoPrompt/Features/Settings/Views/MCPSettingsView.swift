@@ -137,9 +137,11 @@ struct MCPSettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if let client = vm.pendingClientID {
-                Text("Waiting for approval: \(client)")
-                    .font(fontPreset.captionFont)
-                    .foregroundColor(.orange)
+                MCPInlineApprovalActionsView(
+                    server: vm,
+                    clientID: client,
+                    presentation: vm.pendingApprovalPresentation
+                )
             }
         }
     }
