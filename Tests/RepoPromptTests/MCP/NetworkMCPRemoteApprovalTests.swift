@@ -181,6 +181,10 @@ final class NetworkMCPRemoteApprovalTests: XCTestCase {
     func testAddressClassifierHandlesLANLoopbackAndPublicAddresses() {
         XCTAssertTrue(MCPRemoteClientAddress("localhost").isLoopback)
         XCTAssertTrue(MCPRemoteClientAddress("[::1]:4150").isLoopback)
+        XCTAssertTrue(MCPRemoteClientAddress("IPv4(host: \"127.0.0.1\", port: 52178)").isLoopback)
+        XCTAssertEqual(MCPRemoteClientAddress("IPv4(host: \"127.0.0.1\", port: 52178)").normalizedHost, "127.0.0.1")
+        XCTAssertTrue(MCPRemoteClientAddress("IPv4(host: \"192.168.10.5\", port: 333)").isPrivateLANOrLinkLocal)
+        XCTAssertTrue(MCPRemoteClientAddress("IPv6(host: \"::1\", port: 52178)").isLoopback)
         XCTAssertTrue(MCPRemoteClientAddress("10.0.0.12").isPrivateLANOrLinkLocal)
         XCTAssertTrue(MCPRemoteClientAddress("172.16.2.3").isPrivateLANOrLinkLocal)
         XCTAssertTrue(MCPRemoteClientAddress("192.168.10.5:333").isPrivateLANOrLinkLocal)

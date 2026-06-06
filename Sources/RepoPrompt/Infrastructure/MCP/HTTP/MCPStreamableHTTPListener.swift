@@ -132,7 +132,7 @@ private final class MCPStreamableHTTPChannelHandler: ChannelInboundHandler, @unc
             path: path,
             headers: headers,
             body: body,
-            remoteAddress: context.channel.remoteAddress?.description ?? "unknown"
+            remoteAddress: context.channel.remoteAddress?.ipAddress ?? context.channel.remoteAddress?.description ?? "unknown"
         )
     }
 

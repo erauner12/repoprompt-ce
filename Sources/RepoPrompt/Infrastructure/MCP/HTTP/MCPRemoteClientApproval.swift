@@ -129,6 +129,10 @@ struct MCPRemoteClientAddress: Equatable {
         var value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return value }
 
+        if let nioHost = extractNIOAddressDescriptionHost(from: value) {
+            return stripIPv6ZoneIdentifier(nioHost)
+        }
+
         if value.hasPrefix("[") {
             if let end = value.firstIndex(of: "]") {
                 let start = value.index(after: value.startIndex)
@@ -148,6 +152,23 @@ struct MCPRemoteClientAddress: Equatable {
         }
 
         return stripIPv6ZoneIdentifier(value.trimmingCharacters(in: CharacterSet(charactersIn: "[] ").union(.whitespacesAndNewlines)))
+    }
+
+    private static func extractNIOAddressDescriptionHost(from value: String) -> String? {
+        guard value.hasPrefix("IPv4(") || value.hasPrefix("IPv6(") else { return nil }
+        guard let hostRange = value.range(of: "host:") else { return nil }
+        let remainder = String(value[hostRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if remainder.hasPrefix("\"") {
+            let afterQuote = remainder.index(after: remainder.startIndex)
+            guard let closingQuote = remainder[afterQuote...].firstIndex(of: "\"") else { return nil }
+            return String(remainder[afterQuote ..< closingQuote])
+        }
+        let terminators = CharacterSet(charactersIn: ",)").union(.whitespacesAndNewlines)
+        let host = remainder.prefix { character in
+            character.unicodeScalars.allSatisfy { !terminators.contains($0) }
+        }
+        let normalized = String(host).trimmingCharacters(in: CharacterSet(charactersIn: "[] ").union(.whitespacesAndNewlines))
+        return normalized.isEmpty ? nil : normalized
     }
 
     private static func stripIPv6ZoneIdentifier(_ host: String) -> String {
