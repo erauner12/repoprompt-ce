@@ -109,7 +109,7 @@ final class NetworkMCPStreamableHTTPTransportTests: XCTestCase {
         XCTAssertEqual(afterDelete.statusCode, 404)
     }
 
-    func testPendingRequestTimesOutDeterministically() async throws {
+    func testPendingRequestTimeoutPreservesSingleRequestID() async throws {
         let transport = MCPStreamableHTTPTransport(sessionID: "session-7", responseTimeout: 0.01)
         try await transport.connect()
         let body = jsonData(["jsonrpc": "2.0", "id": 1, "method": "tools/list"])
@@ -117,6 +117,31 @@ final class NetworkMCPStreamableHTTPTransportTests: XCTestCase {
         let response = await transport.handle(post(body: body, sessionID: "session-7"))
 
         XCTAssertEqual(response.statusCode, 504)
+        let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(response.body)) as? [String: Any])
+        let error = try XCTUnwrap(object["error"] as? [String: Any])
+        XCTAssertEqual(error["code"] as? Int, -32002)
+        XCTAssertEqual(object["id"] as? Int, 1)
+    }
+
+    func testPendingBatchRequestTimeoutPreservesRequestIDsInOrder() async throws {
+        let transport = MCPStreamableHTTPTransport(sessionID: "session-8", responseTimeout: 0.01)
+        try await transport.connect()
+        let body = jsonData([
+            ["jsonrpc": "2.0", "id": "a", "method": "tools/list"],
+            ["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "x"]]
+        ])
+
+        let response = await transport.handle(post(body: body, sessionID: "session-8"))
+
+        XCTAssertEqual(response.statusCode, 504)
+        let array = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(response.body)) as? [[String: Any]])
+        XCTAssertEqual(array.count, 2)
+        let firstError = try XCTUnwrap(array[0]["error"] as? [String: Any])
+        let secondError = try XCTUnwrap(array[1]["error"] as? [String: Any])
+        XCTAssertEqual(firstError["code"] as? Int, -32002)
+        XCTAssertEqual(secondError["code"] as? Int, -32002)
+        XCTAssertEqual(array[0]["id"] as? String, "a")
+        XCTAssertEqual(array[1]["id"] as? Int, 2)
     }
 
     func testHTTPConnectionManagerPreservesSharedHandlerRegistrationPath() throws {

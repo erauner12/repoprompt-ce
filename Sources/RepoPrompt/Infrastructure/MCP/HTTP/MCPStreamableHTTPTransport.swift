@@ -48,19 +48,38 @@ struct MCPStreamableHTTPResponse: Equatable {
         return MCPStreamableHTTPResponse(statusCode: 200, headers: responseHeaders, body: data)
     }
 
-    static func error(statusCode: Int, message: String, code: Int = -32600, sessionID: String? = nil, extraHeaders: [String: String] = [:]) -> MCPStreamableHTTPResponse {
+    static func error(
+        statusCode: Int,
+        message: String,
+        code: Int = -32600,
+        sessionID: String? = nil,
+        extraHeaders: [String: String] = [:],
+        id: Any? = nil
+    ) -> MCPStreamableHTTPResponse {
+        error(statusCode: statusCode, bodyObject: errorObject(message: message, code: code, id: id), sessionID: sessionID, extraHeaders: extraHeaders)
+    }
+
+    static func batchError(statusCode: Int, message: String, code: Int, sessionID: String? = nil, ids: [Any?]) -> MCPStreamableHTTPResponse {
+        let bodyObject = ids.map { errorObject(message: message, code: code, id: $0) }
+        return error(statusCode: statusCode, bodyObject: bodyObject, sessionID: sessionID)
+    }
+
+    private static func error(statusCode: Int, bodyObject: Any, sessionID: String?, extraHeaders: [String: String] = [:]) -> MCPStreamableHTTPResponse {
         var headers = extraHeaders
         headers["Content-Type"] = "application/json"
         if let sessionID {
             headers[MCPStreamableHTTPHeader.sessionID] = sessionID
         }
-        let bodyObject: [String: Any] = [
-            "jsonrpc": "2.0",
-            "error": ["code": code, "message": message],
-            "id": NSNull()
-        ]
         let body = try? JSONSerialization.data(withJSONObject: bodyObject, options: [])
         return MCPStreamableHTTPResponse(statusCode: statusCode, headers: headers, body: body)
+    }
+
+    private static func errorObject(message: String, code: Int, id: Any?) -> [String: Any] {
+        [
+            "jsonrpc": "2.0",
+            "error": ["code": code, "message": message],
+            "id": id ?? NSNull()
+        ]
     }
 }
 
@@ -102,10 +121,36 @@ actor MCPStreamableHTTPTransport: Transport {
     nonisolated let sessionID: String
 
     private struct PendingHTTPResponse {
-        var expectedIDs: [String]
+        var expectedIDs: [JSONRPCID]
         var isBatch: Bool
         var responsesByID: [String: Data] = [:]
         var continuation: CheckedContinuation<Data, Error>
+    }
+
+    private struct JSONRPCID: Equatable {
+        enum Value: Equatable {
+            case string(String)
+            case int(Int64)
+            case uint(UInt64)
+        }
+
+        var value: Value
+
+        var lookupKey: String {
+            switch value {
+            case let .string(value): value
+            case let .int(value): String(value)
+            case let .uint(value): String(value)
+            }
+        }
+
+        var jsonValue: Any {
+            switch value {
+            case let .string(value): value
+            case let .int(value): value
+            case let .uint(value): value
+            }
+        }
     }
 
     private let responseTimeout: TimeInterval
@@ -122,7 +167,7 @@ actor MCPStreamableHTTPTransport: Transport {
     private var pendingByKey: [UUID: PendingHTTPResponse] = [:]
     private var pendingKeyByID: [String: UUID] = [:]
 
-    init(sessionID: String = UUID().uuidString, responseTimeout: TimeInterval = 30.0, logger: Logger? = nil) {
+    init(sessionID: String = UUID().uuidString, responseTimeout: TimeInterval = 360.0, logger: Logger? = nil) {
         self.sessionID = sessionID
         self.responseTimeout = responseTimeout
         self.logger = logger ?? Logger(label: "com.repoprompt.mcp.http.transport") { _ in SwiftLogNoOpLogHandler() }
@@ -169,7 +214,7 @@ actor MCPStreamableHTTPTransport: Transport {
 
             pending.responsesByID[id] = response.data
             pendingByKey[pendingKey] = pending
-            if pending.expectedIDs.allSatisfy({ pending.responsesByID[$0] != nil }) {
+            if pending.expectedIDs.allSatisfy({ pending.responsesByID[$0.lookupKey] != nil }) {
                 completePendingResponse(key: pendingKey)
             }
         }
@@ -258,11 +303,20 @@ actor MCPStreamableHTTPTransport: Transport {
             return .json(responseData, headers: sessionHeaders())
         } catch {
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            return .error(statusCode: 504, message: message, code: -32002, sessionID: sessionID)
+            if classification.isBatch {
+                return .batchError(
+                    statusCode: 504,
+                    message: message,
+                    code: -32002,
+                    sessionID: sessionID,
+                    ids: classification.requestIDs.map(\.jsonValue)
+                )
+            }
+            return .error(statusCode: 504, message: message, code: -32002, sessionID: sessionID, id: classification.requestIDs.first?.jsonValue)
         }
     }
 
-    private func waitForResponse(key: UUID, expectedIDs: [String], isBatch: Bool, body: Data) async throws -> Data {
+    private func waitForResponse(key: UUID, expectedIDs: [JSONRPCID], isBatch: Bool, body: Data) async throws -> Data {
         try await withThrowingTaskGroup(of: Data.self) { group in
             group.addTask { [self] in
                 try await registerPendingAndWait(
@@ -291,7 +345,7 @@ actor MCPStreamableHTTPTransport: Transport {
         }
     }
 
-    private func registerPendingAndWait(key: UUID, expectedIDs: [String], isBatch: Bool, body: Data) async throws -> Data {
+    private func registerPendingAndWait(key: UUID, expectedIDs: [JSONRPCID], isBatch: Bool, body: Data) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
             let pending = PendingHTTPResponse(
                 expectedIDs: expectedIDs,
@@ -300,7 +354,7 @@ actor MCPStreamableHTTPTransport: Transport {
             )
             pendingByKey[key] = pending
             for id in expectedIDs {
-                pendingKeyByID[id] = key
+                pendingKeyByID[id.lookupKey] = key
             }
             incomingContinuation.yield(body)
         }
@@ -309,17 +363,17 @@ actor MCPStreamableHTTPTransport: Transport {
     private func completePendingResponse(key: UUID) {
         guard let pending = pendingByKey.removeValue(forKey: key) else { return }
         for id in pending.expectedIDs {
-            pendingKeyByID.removeValue(forKey: id)
+            pendingKeyByID.removeValue(forKey: id.lookupKey)
         }
         let responseData: Data
         if pending.isBatch {
             let objects = pending.expectedIDs.compactMap { id -> Any? in
-                guard let data = pending.responsesByID[id] else { return nil }
+                guard let data = pending.responsesByID[id.lookupKey] else { return nil }
                 return try? JSONSerialization.jsonObject(with: data, options: [])
             }
             responseData = (try? JSONSerialization.data(withJSONObject: objects, options: [])) ?? Data("[]".utf8)
         } else {
-            responseData = pending.responsesByID[pending.expectedIDs[0]] ?? Data()
+            responseData = pending.responsesByID[pending.expectedIDs[0].lookupKey] ?? Data()
         }
         pending.continuation.resume(returning: responseData)
     }
@@ -327,7 +381,7 @@ actor MCPStreamableHTTPTransport: Transport {
     private func cancelPendingIfPresent(key: UUID, error: Error) {
         guard let pending = pendingByKey.removeValue(forKey: key) else { return }
         for id in pending.expectedIDs {
-            pendingKeyByID.removeValue(forKey: id)
+            pendingKeyByID.removeValue(forKey: id.lookupKey)
         }
         pending.continuation.resume(throwing: error)
     }
@@ -377,7 +431,7 @@ actor MCPStreamableHTTPTransport: Transport {
     }
 
     private struct ClientMessageClassification {
-        var requestIDs: [String]
+        var requestIDs: [JSONRPCID]
         var containsInitialize: Bool
         var isBatch: Bool
     }
@@ -391,7 +445,7 @@ actor MCPStreamableHTTPTransport: Transport {
         guard let json = try? JSONSerialization.jsonObject(with: data, options: []) else { return nil }
         if let array = json as? [Any] {
             guard !array.isEmpty else { return nil }
-            var requestIDs: [String] = []
+            var requestIDs: [JSONRPCID] = []
             var containsInitialize = false
             for element in array {
                 guard let object = element as? [String: Any] else { return nil }
@@ -412,12 +466,12 @@ actor MCPStreamableHTTPTransport: Transport {
         )
     }
 
-    private static func classifyClientObject(_ object: [String: Any]) -> (isValid: Bool, requestID: String?, isInitialize: Bool) {
+    private static func classifyClientObject(_ object: [String: Any]) -> (isValid: Bool, requestID: JSONRPCID?, isInitialize: Bool) {
         guard let method = object["method"] as? String else {
             // Client responses are accepted and yielded as notification-like messages.
             return (object["result"] != nil || object["error"] != nil, nil, false)
         }
-        let id = normalizedJSONRPCID(object["id"])
+        let id = jsonRPCID(object["id"])
         return (true, id, method == "initialize")
     }
 
@@ -434,24 +488,24 @@ actor MCPStreamableHTTPTransport: Transport {
     }
 
     private static func responseFragment(from object: [String: Any]) -> ResponseFragment? {
-        guard let id = normalizedJSONRPCID(object["id"]),
+        guard let id = jsonRPCID(object["id"]),
               let data = try? JSONSerialization.data(withJSONObject: object, options: [])
         else { return nil }
-        return ResponseFragment(id: id, data: data)
+        return ResponseFragment(id: id.lookupKey, data: data)
     }
 
-    private static func normalizedJSONRPCID(_ rawID: Any?) -> String? {
+    private static func jsonRPCID(_ rawID: Any?) -> JSONRPCID? {
         switch rawID {
         case let value as String:
-            value
+            JSONRPCID(value: .string(value))
         case let value as Int:
-            String(value)
+            JSONRPCID(value: .int(Int64(value)))
         case let value as Int64:
-            String(value)
+            JSONRPCID(value: .int(value))
         case let value as UInt64:
-            String(value)
+            JSONRPCID(value: .uint(value))
         case let value as Double where value.rounded() == value:
-            String(Int64(value))
+            JSONRPCID(value: .int(Int64(value)))
         default:
             nil
         }
