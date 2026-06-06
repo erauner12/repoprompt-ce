@@ -1,5 +1,14 @@
 import Foundation
 
+struct NetworkMCPRemoteConfigExport: Equatable {
+    var endpointURL: String
+    var authorizationHeaderTemplate: String
+    var openClawJSON: String
+    var genericJSON: String
+    var environmentSnippet: String
+    var setupNotes: String
+}
+
 actor MCPConfigExportService {
     static let shared = MCPConfigExportService()
 
@@ -12,6 +21,92 @@ actor MCPConfigExportService {
     }
 
     private init() {}
+
+    nonisolated static func streamableHTTPRemoteConfig(
+        settings: NetworkMCPSettingsSnapshot,
+        hostOverride: String? = nil,
+        serverName: String = RepoPromptMCPServerConfiguration.defaultServerName,
+        envVariableName: String = "REPOPROMPT_MCP_TOKEN"
+    ) -> NetworkMCPRemoteConfigExport {
+        let host = normalizedExportHost(hostOverride) ?? exportHost(forBindAddress: settings.bindAddress)
+        let endpointURL = "http://\(host):\(settings.port)/mcp"
+        let authorizationTemplate = "Bearer ${\(envVariableName)}"
+        let openClawPayload: [String: Any] = [
+            "mcpServers": [
+                serverName: [
+                    "transport": "streamable-http",
+                    "url": endpointURL,
+                    "headers": [
+                        "Authorization": authorizationTemplate
+                    ]
+                ]
+            ]
+        ]
+        let genericPayload: [String: Any] = [
+            "name": serverName,
+            "transport": "streamable-http",
+            "url": endpointURL,
+            "headers": [
+                "Authorization": authorizationTemplate
+            ]
+        ]
+        let targetSummary = settings.defaultTarget?.displayName ?? "Not configured"
+        let rootCount = settings.defaultTarget?.rootPaths.count ?? 0
+        let environmentSnippet = """
+        # Store the bearer token outside MCP config files.
+        # Paste the token copied from RepoPrompt Settings into your shell, secret manager, or OpenClaw secret UI.
+        export \(envVariableName)="<paste RepoPrompt Network MCP token>"
+        """
+        let setupNotes = """
+        Network MCP endpoint: \(endpointURL)
+        Default workspace target: \(targetSummary) (\(rootCount) root\(rootCount == 1 ? "" : "s"))
+        Non-loopback LAN clients require approval in RepoPrompt the first time they connect.
+        Do not expose or port-forward this HTTP endpoint; use it only on loopback or trusted private LANs.
+        """
+        return NetworkMCPRemoteConfigExport(
+            endpointURL: endpointURL,
+            authorizationHeaderTemplate: authorizationTemplate,
+            openClawJSON: prettyPrintedJSONObject(openClawPayload),
+            genericJSON: prettyPrintedJSONObject(genericPayload),
+            environmentSnippet: environmentSnippet,
+            setupNotes: setupNotes
+        )
+    }
+
+    private nonisolated static func exportHost(forBindAddress bindAddress: String) -> String {
+        let trimmed = bindAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch trimmed {
+        case "0.0.0.0", "::":
+            return "<your-mac-lan-ip>"
+        case "127.0.0.1", "::1":
+            return "127.0.0.1"
+        default:
+            if trimmed.contains(":"), !trimmed.hasPrefix("[") {
+                return "[\(trimmed)]"
+            }
+            return trimmed.isEmpty ? "127.0.0.1" : trimmed
+        }
+    }
+
+    private nonisolated static func normalizedExportHost(_ host: String?) -> String? {
+        guard let host else { return nil }
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.contains(":"), !trimmed.hasPrefix("[") {
+            return "[\(trimmed)]"
+        }
+        return trimmed
+    }
+
+    private nonisolated static func prettyPrintedJSONObject(_ object: Any) -> String {
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),
+              let string = String(data: data, encoding: .utf8)
+        else {
+            return "{}"
+        }
+        return string
+    }
 
     @discardableResult
     func prepareConfigFile() async throws -> URL {

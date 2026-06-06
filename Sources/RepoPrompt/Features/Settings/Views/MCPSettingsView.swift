@@ -4,6 +4,7 @@ import SwiftUI
 struct MCPSettingsView: View {
     @ObservedObject var vm: MCPServerViewModel
     @ObservedObject var promptVM: PromptViewModel
+    let windowState: WindowState
     let windowID: Int
     var onNavigate: ((SettingsTab) -> Void)?
     var closeAction: (() -> Void)?
@@ -48,6 +49,7 @@ struct MCPSettingsView: View {
     @State private var showSettingsPopover = false
     @State private var showErrorPopover = false
     @State private var showJSONConfig = false
+    @StateObject private var networkMCPSettings = NetworkMCPSettingsViewModel()
 
     // CLI Installation state
     @State private var cliInstallStatus: CLIPathInstaller.InstallationStatus = .notInstalled
@@ -84,6 +86,11 @@ struct MCPSettingsView: View {
                 Divider()
 
                 serverControlSection
+                Divider()
+                NetworkMCPSettingsView(
+                    viewModel: networkMCPSettings,
+                    windowState: windowState
+                )
                 Divider()
                 modelPresetsSection
                 Divider()

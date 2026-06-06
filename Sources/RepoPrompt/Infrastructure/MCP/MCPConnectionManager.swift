@@ -181,6 +181,28 @@ struct NetworkDashboardSnapshot {
     let recentToolCalls: [ServerNetworkManager.ToolCallHistoryEntry]
 }
 
+struct NetworkMCPHTTPListenerStatusSnapshot: Equatable {
+    var enabled: Bool
+    var isListening: Bool
+    var bindAddress: String
+    var port: Int
+    var activeSessionCount: Int
+    var lastErrorDescription: String?
+
+    var endpointDescription: String {
+        "http://\(bindAddress):\(port)/mcp"
+    }
+
+    var userFacingDescription: String {
+        if let lastErrorDescription {
+            return "HTTP listener failed: \(lastErrorDescription)"
+        }
+        guard enabled else { return "Network MCP is disabled." }
+        guard isListening else { return "Network MCP is enabled and will listen after the MCP server starts." }
+        return "Listening at \(endpointDescription) (\(activeSessionCount) active HTTP session\(activeSessionCount == 1 ? "" : "s"))."
+    }
+}
+
 /// Debug snapshot of identity context for a connection
 struct IdentityContextSnapshot {
     /// How identity was derived
@@ -562,6 +584,9 @@ actor ServerNetworkManager {
     // Streamable HTTP MCP listener
     private var httpListener: MCPStreamableHTTPListener?
     private var httpListenerLifecycleGeneration: UInt64?
+    private var httpListenerBindAddress: String?
+    private var httpListenerPort: Int?
+    private var httpListenerLastErrorDescription: String?
     private var httpSessionsByID: [String: UUID] = [:]
     private var httpApprovedTokenFingerprintBySessionID: [String: String] = [:]
     private var httpTransportsByConnectionID: [UUID: MCPStreamableHTTPTransport] = [:]
@@ -2056,6 +2081,26 @@ actor ServerNetworkManager {
         isRunningState
     }
 
+    func refreshHTTPListenerConfiguration() async {
+        guard isRunningState else { return }
+        await startHTTPListenerIfConfigured(lifecycleGeneration: lifecycleGeneration)
+        emitDashboardUpdate()
+    }
+
+    func networkHTTPListenerStatus() async -> NetworkMCPHTTPListenerStatusSnapshot {
+        let settings = await MainActor.run { GlobalSettingsStore.shared.networkMCPSettingsSnapshot() }
+        return NetworkMCPHTTPListenerStatusSnapshot(
+            enabled: settings.enabled,
+            isListening: httpListener != nil && httpListenerLifecycleGeneration == lifecycleGeneration,
+            bindAddress: settings.bindAddress,
+            port: settings.port,
+            activeSessionCount: httpSessionsByID.count,
+            lastErrorDescription: httpListenerLastErrorDescription
+        )
+    }
+
+    // MARK: - Service Registration
+
     func setConnectionApprovalHandler(_ handler: @escaping ConnectionApprovalHandler) {
         connectionLog("Setting connection approval handler")
         connectionApprovalHandler = handler
@@ -2838,9 +2883,21 @@ actor ServerNetworkManager {
             if let listener = httpListener {
                 httpListener = nil
                 httpListenerLifecycleGeneration = nil
+                httpListenerBindAddress = nil
+                httpListenerPort = nil
                 await listener.stop()
             }
+            httpListenerLastErrorDescription = nil
             return
+        }
+        if let listener = httpListener,
+           httpListenerBindAddress != settings.bindAddress || httpListenerPort != settings.port
+        {
+            httpListener = nil
+            httpListenerLifecycleGeneration = nil
+            httpListenerBindAddress = nil
+            httpListenerPort = nil
+            await listener.stop()
         }
         guard httpListener == nil else { return }
 
@@ -2856,12 +2913,18 @@ actor ServerNetworkManager {
         }
         httpListener = listener
         httpListenerLifecycleGeneration = expectedLifecycleGeneration
+        httpListenerBindAddress = settings.bindAddress
+        httpListenerPort = settings.port
         do {
             try await listener.start()
+            httpListenerLastErrorDescription = nil
         } catch {
             guard httpListener === listener else { return }
             httpListener = nil
             httpListenerLifecycleGeneration = nil
+            httpListenerBindAddress = nil
+            httpListenerPort = nil
+            httpListenerLastErrorDescription = String(describing: error)
             log.error("Failed to start Network MCP HTTP listener: \(String(describing: error))")
         }
     }
@@ -3747,6 +3810,9 @@ actor ServerNetworkManager {
         bootstrapSocketTask = nil
         httpListener = nil
         httpListenerLifecycleGeneration = nil
+        httpListenerBindAddress = nil
+        httpListenerPort = nil
+        httpListenerLastErrorDescription = nil
         httpSessionsByID.removeAll()
         httpApprovedTokenFingerprintBySessionID.removeAll()
         httpTransportsByConnectionID.removeAll()
