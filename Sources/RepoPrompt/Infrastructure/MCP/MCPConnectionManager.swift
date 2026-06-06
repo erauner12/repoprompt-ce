@@ -1207,6 +1207,10 @@ actor ServerNetworkManager {
         connectionWindowMap[connectionID]
     }
 
+    func setRemoteDefaultWindowForConnection(_ connectionID: UUID, windowID: Int) {
+        setConnectionWindowMapping(connectionID, windowID: windowID)
+    }
+
     private func setConnectionWindowMapping(_ connectionID: UUID, windowID: Int) {
         connectionWindowMap[connectionID] = windowID
         windowAssignmentByConnection[connectionID] = windowID

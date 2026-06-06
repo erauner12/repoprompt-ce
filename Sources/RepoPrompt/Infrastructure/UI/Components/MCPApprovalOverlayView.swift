@@ -11,11 +11,18 @@ import SwiftUI
 /// Presents a modern, polished UI that blocks interaction until the user responds.
 struct MCPApprovalOverlayView: View {
     @EnvironmentObject private var server: MCPServerViewModel
-    @State private var alwaysAllow = true
+    @State private var alwaysAllow: Bool
     @State private var isAnimating = false
     @State private var pulseScale: CGFloat = 1.0
 
     let clientID: String
+    let presentation: MCPApprovalPresentation?
+
+    init(clientID: String, presentation: MCPApprovalPresentation? = nil) {
+        self.clientID = clientID
+        self.presentation = presentation
+        _alwaysAllow = State(initialValue: presentation?.transport != .remoteHTTP)
+    }
 
     var body: some View {
         ZStack {
@@ -140,7 +147,7 @@ struct MCPApprovalOverlayView: View {
             }
             .padding(.top, 8)
 
-            Text("Connection Request")
+            Text(presentation?.transport == .remoteHTTP ? "Remote Connection Request" : "Connection Request")
                 .font(.title2.weight(.semibold))
                 .foregroundColor(.primary)
         }
@@ -154,6 +161,14 @@ struct MCPApprovalOverlayView: View {
         VStack(spacing: 20) {
             // Client info card
             clientInfoCard
+
+            if let remoteDetails {
+                remoteInfoCard(remoteDetails)
+            }
+
+            if let warning = presentation?.warning {
+                warningCard(warning)
+            }
 
             // Always allow toggle
             alwaysAllowToggle
@@ -180,7 +195,7 @@ struct MCPApprovalOverlayView: View {
                     .foregroundColor(.primary)
                     .lineLimit(1)
 
-                Text("wants to connect to RepoPrompt")
+                Text(presentation?.transport == .remoteHTTP ? "wants remote HTTP access to RepoPrompt" : "wants to connect to RepoPrompt")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
@@ -198,7 +213,70 @@ struct MCPApprovalOverlayView: View {
         )
     }
 
+    private var remoteDetails: [(label: String, value: String)]? {
+        guard presentation?.transport == .remoteHTTP else { return nil }
+        var details: [(String, String)] = []
+        if let address = presentation?.remoteAddress, !address.isEmpty {
+            details.append(("Address", address))
+        }
+        if let fingerprint = presentation?.tokenFingerprint, !fingerprint.isEmpty {
+            details.append(("Token", fingerprint))
+        }
+        return details.isEmpty ? nil : details
+    }
+
+    private func remoteInfoCard(_ details: [(label: String, value: String)]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(details, id: \.label) { detail in
+                HStack(alignment: .firstTextBaseline) {
+                    Text(detail.label)
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 56, alignment: .leading)
+                    Text(detail.value)
+                        .font(.caption.monospaced())
+                        .foregroundColor(.primary)
+                        .textSelection(.enabled)
+                    Spacer()
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.primary.opacity(0.03))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                )
+        )
+    }
+
+    private func warningCard(_ warning: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.orange)
+            Text(warning)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.orange.opacity(0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.orange.opacity(0.18), lineWidth: 1)
+                )
+        )
+    }
+
     private var clientIcon: String {
+        if presentation?.transport == .remoteHTTP {
+            return "network.badge.shield.half.filled"
+        }
         let lowercased = clientID.lowercased()
         if lowercased.contains("claude") {
             return "brain"
@@ -222,11 +300,11 @@ struct MCPApprovalOverlayView: View {
                 .labelsHidden()
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Always allow this client")
+                Text(presentation?.transport == .remoteHTTP ? "Always allow this remote client" : "Always allow this client")
                     .font(.subheadline.weight(.medium))
                     .foregroundColor(.primary)
 
-                Text("Skip approval for future connections")
+                Text(presentation?.transport == .remoteHTTP ? "Trust this client for this token fingerprint" : "Skip approval for future connections")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
