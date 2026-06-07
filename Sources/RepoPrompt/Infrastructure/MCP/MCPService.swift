@@ -29,12 +29,14 @@ actor MCPService: Sendable {
     struct Snapshot: Equatable {
         var isRunning: Bool
         var pendingClientID: String?
+        var pendingApprovalPresentation: MCPApprovalPresentation?
         var diagnostics: MCPDiagnostics
     }
 
     private var state = Snapshot(
         isRunning: false,
         pendingClientID: nil,
+        pendingApprovalPresentation: nil,
         diagnostics: MCPDiagnostics()
     )
 
@@ -91,6 +93,9 @@ actor MCPService: Sendable {
             await controller.setMCPService(self)
             await controller.setApprovalCallback { [weak self] clientID in
                 await self?.setPendingApproval(clientID)
+            }
+            await controller.setApprovalPresentationCallback { [weak self] presentation in
+                await self?.setPendingApproval(presentation)
             }
             await ServerNetworkManager.shared.setDashboardDidChangeHook { [weak self] in
                 Task { await self?.notifyDashboardUpdate() }
@@ -218,13 +223,20 @@ actor MCPService: Sendable {
         )
         // Clear the pending client ID and notify observers.
         state.pendingClientID = nil
+        state.pendingApprovalPresentation = nil
         updates.continuation.yield(state)
     }
 
     /// Controller → Service callback - called when a new client requests approval
     private func setPendingApproval(_ clientID: String?) {
-        mcpServiceLog("Setting pending approval for client: \(clientID ?? "nil")")
-        state.pendingClientID = clientID
+        let presentation = clientID.map { MCPApprovalPresentation.local(clientID: $0) }
+        setPendingApproval(presentation)
+    }
+
+    private func setPendingApproval(_ presentation: MCPApprovalPresentation?) {
+        mcpServiceLog("Setting pending approval for client: \(presentation?.clientID ?? "nil")")
+        state.pendingClientID = presentation?.clientID
+        state.pendingApprovalPresentation = presentation
         updates.continuation.yield(state)
     }
 

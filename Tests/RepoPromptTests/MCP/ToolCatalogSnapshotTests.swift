@@ -209,6 +209,79 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         #endif
     }
 
+    func testContextBuilderSchemaIsSynchronousOnly() async throws {
+        let window = Self.makeWindowWithoutAutoStart()
+        let tools = await window.mcpServer.windowMCPTools
+        let contextBuilder = try XCTUnwrap(tools.first { $0.name == MCPWindowToolName.contextBuilder })
+        let properties = try Self.schemaProperties(for: contextBuilder)
+
+        for field in ["instructions", "response_type", "export_response"] {
+            XCTAssertNotNil(properties[field], "context_builder schema should advertise property \(field)")
+        }
+        for removedField in ["op", "job_id", "timeout", "server_instance_id", "client_request_id"] {
+            XCTAssertNil(properties[removedField], "context_builder schema should not advertise removed resumable property \(removedField)")
+        }
+    }
+
+    func testOracleSendSchemaIsSynchronousOnlyWithoutMessageRequired() async throws {
+        let window = Self.makeWindowWithoutAutoStart()
+        let tools = await window.mcpServer.windowMCPTools
+        let oracleSend = try XCTUnwrap(tools.first { $0.name == MCPWindowToolName.oracleSend })
+        let properties = try Self.schemaProperties(for: oracleSend)
+
+        for field in ["message", "mode", "chat_id", "new_chat", "model", "export_response"] {
+            XCTAssertNotNil(properties[field], "oracle_send schema should advertise property \(field)")
+        }
+        for removedField in ["op", "job_id", "timeout", "server_instance_id", "client_request_id"] {
+            XCTAssertNil(properties[removedField], "oracle_send schema should not advertise removed resumable property \(removedField)")
+        }
+
+        let required = try Self.schemaRequired(for: oracleSend)
+        XCTAssertFalse(required.contains("message"), "oracle_send keeps message validation at runtime.")
+    }
+
+    func testOracleSendRequiresMessageAtRuntimeAndRejectsRemovedResumableOps() async throws {
+        let window = Self.makeWindowWithoutAutoStart()
+        let tools = await window.mcpServer.windowMCPTools
+        let oracleSend = try XCTUnwrap(tools.first { $0.name == MCPWindowToolName.oracleSend })
+
+        do {
+            _ = try await oracleSend([:])
+            XCTFail("oracle_send should require message at runtime")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("message cannot be empty"), error.localizedDescription)
+        }
+
+        do {
+            _ = try await oracleSend([
+                "op": .string("poll"),
+                "job_id": .string(UUID().uuidString),
+                "message": .string("change input")
+            ])
+            XCTFail("oracle_send should reject removed resumable arguments")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("Unsupported args"), error.localizedDescription)
+            XCTAssertTrue(error.localizedDescription.contains("job_id"), error.localizedDescription)
+            XCTAssertTrue(error.localizedDescription.contains("op"), error.localizedDescription)
+        }
+    }
+
+    func testContextBuilderStaysSynchronousAndRejectsRemovedResumableOps() async throws {
+        let window = Self.makeWindowWithoutAutoStart()
+        let tools = await window.mcpServer.windowMCPTools
+        let contextBuilder = try XCTUnwrap(tools.first { $0.name == MCPWindowToolName.contextBuilder })
+
+        do {
+            _ = try await contextBuilder(["export_response": .bool(true)])
+            XCTFail("context_builder should keep the synchronous validation path")
+        } catch {
+            XCTAssertTrue(
+                error.localizedDescription.contains("export_response requires a response_type"),
+                error.localizedDescription
+            )
+        }
+    }
+
     func testWorktreePublicAPISchemaFieldsRemainAdvertised() async throws {
         let window = Self.makeWindowWithoutAutoStart()
         let tools = await window.mcpServer.windowMCPTools
@@ -426,6 +499,11 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         return try XCTUnwrap(schema["properties"]?.objectValue)
     }
 
+    private static func schemaRequired(for tool: RepoPrompt.Tool) throws -> [String] {
+        let schema = try XCTUnwrap(Value(tool.inputSchema).objectValue)
+        return schema["required"]?.arrayValue?.compactMap(\.stringValue) ?? []
+    }
+
     private static let expectedSignatures: [String] = [
         "0|manage_selection|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=586c45be3d3a4ade60e29ccbbdce01b050be03860a67eee41a3eac95d441d7d9|schema=4b7a043e8e48130ee84cc6bbf7b9fd597b495aef238d44f17df6600088a2bb6f",
         "1|file_actions|enabled=true|ann=title=nil,readOnly=false,destructive=true,idempotent=nil,openWorld=false|desc=81230c22d826458cae079855b133d59da34c4a66ae4a68252727e564931335b8|schema=d4ed12eee8ed779610016aa46a6f3686ed7635436517c0de0a16efc8b0d0d1fe",
@@ -438,7 +516,7 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         "8|apply_edits|enabled=true|ann=title=nil,readOnly=false,destructive=true,idempotent=nil,openWorld=false|desc=d33efa75e3e29e1e4e1cfe90d0e9d621337c397e5329aee02f4a261726d790fa|schema=2eabab77e3cdea6af1e1a509d77b9e8a3211049c1ccd11ec9b64f79149abdbbb",
         "9|oracle_utils|enabled=true|ann=title=nil,readOnly=nil,destructive=nil,idempotent=nil,openWorld=nil|desc=af161abbd2edf82b9cf502e1cf794bc48366b816b3ddc0ec2034b154ecc35c3a|schema=7d3c55c22f02f8825008521e4c20cd304a7c12f3679743b34f5a2bf315d19d7b",
         "10|ask_oracle|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=7a4771154006b3dcf158003d04b2b78da91fe4cc63d1acb5942f64f8a3e04e98|schema=03968f76ace268ccd7128c088ecc2544ca5ec77f47100d03e38a29a155cf81eb",
-        "11|oracle_send|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=4608413a45189586669c6cc3339af4d467939a2477036545ef5d879b676b51fb|schema=6f940dcd0a0d39789189120217abdb60cd0f520b85f862beb81349f98bc1b19c",
+        "11|oracle_send|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=4608413a45189586669c6cc3339af4d467939a2477036545ef5d879b676b51fb|schema=0535c7fe4978818147c58c6b2ffcc2916832aa4c3f2f216c3f049db017b83e1f",
         "12|oracle_chat_log|enabled=true|ann=title=nil,readOnly=true,destructive=false,idempotent=true,openWorld=false|desc=5acbb74a0fcf76bd3717faac8fc355f582f13523685d3bfebf11fda7241958b1|schema=50db94327abe785e20d3628135efa29cf184d18272d5af5b94a43d7246a4a201",
         "13|git|enabled=true|ann=title=nil,readOnly=true,destructive=false,idempotent=true,openWorld=false|desc=60cfcfd61921d3e828c0f49551672db392b928456b3c375e9e3cc819ee126e2b|schema=ebc134daddcab2321f0b9c20c76d0dd660eab1c0b78a54bfb8c83817da24ba77",
         "14|manage_worktree|enabled=true|ann=title=nil,readOnly=false,destructive=true,idempotent=nil,openWorld=false|desc=857ab8975667e3d2e5b35a09c7415e07ca0ab2f0ff16de6895170d4d1b47a820|schema=9263f9f047982b3709d92040f749804d69928d222ce46038a4171ded34d12bc6",
