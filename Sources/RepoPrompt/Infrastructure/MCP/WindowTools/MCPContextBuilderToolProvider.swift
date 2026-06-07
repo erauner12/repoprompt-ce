@@ -96,9 +96,21 @@ enum ContextBuilderResponseDisposition {
     case failed(String)
 }
 
+private struct ContextBuilderExecutionOptions {
+    let instructions: String
+    let responseType: ContextBuilderResponseType?
+    let exportResponse: Bool
+}
+
 @MainActor
 final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
     let group: MCPWindowToolGroup = .contextBuilder
+
+    private nonisolated static let businessArgumentKeys: Set<String> = [
+        "instructions",
+        "response_type",
+        "export_response"
+    ]
 
     private let runtime: MCPWindowToolRuntime
     private let dependencies: MCPWindowToolDependencies
@@ -159,26 +171,17 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
                 required: []
             )
         ) { [dependencies] _, args in
-            let connectionID = ServerNetworkManager.currentConnectionID
             let result = try await Self.executeContextBuilder(
                 args: args,
-                connectionID: connectionID,
+                connectionID: ServerNetworkManager.currentConnectionID,
                 dependencies: dependencies
             )
             return result.toMCPValue()
         }
     }
 
-    private static func executeContextBuilder(
-        args: [String: Value],
-        connectionID: UUID?,
-        dependencies: MCPWindowToolDependencies
-    ) async throws -> ContextBuilderToolResult {
+    private nonisolated static func parseExecutionOptions(args: [String: Value]) throws -> ContextBuilderExecutionOptions {
         let instructions = args["instructions"]?.stringValue ?? ""
-        let metadata = await dependencies.captureRequestMetadata()
-        guard await dependencies.drainReadFileAutoSelection(metadata, .mirroredSelectionAndMetrics) == .completed else {
-            throw CancellationError()
-        }
         let responseType = try ContextBuilderResponseType.parse(from: args["response_type"])
         let exportResponse: Bool
         if let value = args["export_response"] {
@@ -192,6 +195,31 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
         } else {
             exportResponse = false
         }
+        return ContextBuilderExecutionOptions(
+            instructions: instructions,
+            responseType: responseType,
+            exportResponse: exportResponse
+        )
+    }
+
+    private static func validateStartContext(dependencies: MCPWindowToolDependencies) throws {
+        let targetWindow = try dependencies.requireTargetWindow()
+        guard targetWindow.workspaceManager.activeWorkspace != nil else {
+            throw MCPError.invalidParams("No active workspace in this window. Use manage_workspaces action='list' to see available workspaces, then action='switch' to load one.")
+        }
+    }
+
+    private static func executeContextBuilder(
+        args: [String: Value],
+        connectionID: UUID?,
+        dependencies: MCPWindowToolDependencies
+    ) async throws -> ContextBuilderToolResult {
+        let options = try parseExecutionOptions(args: args)
+        let instructions = options.instructions
+        let responseType = options.responseType
+        let exportResponse = options.exportResponse
+        let metadata = await dependencies.captureRequestMetadata()
+        await dependencies.drainReadFileAutoSelection(metadata, .mirroredSelectionAndMetrics)
 
         let targetWindow = try dependencies.requireTargetWindow()
         guard let activeWorkspace = targetWindow.workspaceManager.activeWorkspace else {
@@ -318,18 +346,18 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
             }
 
             func runContextBuilderAndPlan() async throws -> ContextBuilderToolResult {
-                await dependencies.sendStageProgress(
-                    connectionID,
-                    MCPWindowToolName.contextBuilder,
-                    "starting",
-                    "Starting context builder..."
+                await sendContextBuilderProgress(
+                    connectionID: connectionID,
+                    dependencies: dependencies,
+                    stage: "starting",
+                    message: "Starting context builder..."
                 )
 
-                await dependencies.sendStageProgress(
-                    connectionID,
-                    MCPWindowToolName.contextBuilder,
-                    "discovering",
-                    "Running Context Builder agent..."
+                await sendContextBuilderProgress(
+                    connectionID: connectionID,
+                    dependencies: dependencies,
+                    stage: "discovering",
+                    message: "Running Context Builder agent..."
                 )
                 let snapshot = try await withTimelinePhaseCompletion(progressTimeline) {
                     try await withHeartbeat(
@@ -356,11 +384,11 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
                     }
                 }
 
-                await dependencies.sendStageProgress(
-                    connectionID,
-                    MCPWindowToolName.contextBuilder,
-                    "discovered",
-                    "Context Builder run complete, building selection..."
+                await sendContextBuilderProgress(
+                    connectionID: connectionID,
+                    dependencies: dependencies,
+                    stage: "discovered",
+                    message: "Context Builder run complete, building selection..."
                 )
 
                 let resultTab: ComposeTabState
@@ -482,11 +510,11 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
                     }
 
                     let modeLabel = responseType?.generationLabel ?? "question"
-                    await dependencies.sendStageProgress(
-                        connectionID,
-                        MCPWindowToolName.contextBuilder,
-                        "generating",
-                        "Generating \(modeLabel)..."
+                    await sendContextBuilderProgress(
+                        connectionID: connectionID,
+                        dependencies: dependencies,
+                        stage: "generating",
+                        message: "Generating \(modeLabel)..."
                     )
 
                     let reply = try await withTimelinePhaseCompletion(progressTimeline) {
@@ -521,11 +549,11 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
                     followUpHint = "Continue this \(modeLabel) conversation with ask_oracle(chat_id: \"\(reply.shortId)\", new_chat: false)"
                 }
 
-                await dependencies.sendStageProgress(
-                    connectionID,
-                    MCPWindowToolName.contextBuilder,
-                    "complete",
-                    "Context builder complete"
+                await sendContextBuilderProgress(
+                    connectionID: connectionID,
+                    dependencies: dependencies,
+                    stage: "complete",
+                    message: "Context builder complete"
                 )
 
                 let normalizedTokens = selectionReply.totalTokens ?? 0
@@ -634,6 +662,20 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
             }
             return .generate(mode)
         }
+    }
+
+    private static func sendContextBuilderProgress(
+        connectionID: UUID?,
+        dependencies: MCPWindowToolDependencies,
+        stage: String,
+        message: String
+    ) async {
+        await dependencies.sendStageProgress(
+            connectionID,
+            MCPWindowToolName.contextBuilder,
+            stage,
+            message
+        )
     }
 
     private static func withHeartbeat<T: Sendable>(

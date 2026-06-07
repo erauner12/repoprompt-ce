@@ -102,6 +102,14 @@ private let log: Logging.Logger = {
     return logger
 }()
 
+private struct NetworkMCPFixedSessionIDGenerator: MCP.SessionIDGenerator {
+    let sessionID: String
+
+    func generateSessionID() -> String {
+        sessionID
+    }
+}
+
 enum ConnectionStateSnapshot: Equatable {
     case connecting
     case ready
@@ -249,6 +257,28 @@ struct NetworkDashboardSnapshot {
     let isRunning: Bool
     let connections: [ConnectionDashboardEntry]
     let recentToolCalls: [ServerNetworkManager.ToolCallHistoryEntry]
+}
+
+struct NetworkMCPHTTPListenerStatusSnapshot: Equatable {
+    var enabled: Bool
+    var isListening: Bool
+    var bindAddress: String
+    var port: Int
+    var activeSessionCount: Int
+    var lastErrorDescription: String?
+
+    var endpointDescription: String {
+        "http://\(bindAddress):\(port)/mcp"
+    }
+
+    var userFacingDescription: String {
+        if let lastErrorDescription {
+            return "HTTP listener failed: \(lastErrorDescription)"
+        }
+        guard enabled else { return "Network MCP is disabled." }
+        guard isListening else { return "Network MCP is enabled and will listen after the MCP server starts." }
+        return "Listening at \(endpointDescription) (\(activeSessionCount) active HTTP session\(activeSessionCount == 1 ? "" : "s"))."
+    }
 }
 
 /// Debug snapshot of identity context for a connection
@@ -653,6 +683,23 @@ actor ServerNetworkManager {
     private var isRunningState: Bool = false
     private var lifecycleGeneration: UInt64 = 0
     private var isEnabledState: Bool = true
+
+    // Network MCP HTTP listener
+    private var httpListener: MCPNetworkHTTPListener?
+    private var httpListenerLifecycleGeneration: UInt64?
+    private var httpListenerBindAddress: String?
+    private var httpListenerPort: Int?
+    private var httpListenerLastErrorDescription: String?
+    private var httpSessionsByID: [String: UUID] = [:]
+    private var httpApprovedTokenFingerprintBySessionID: [String: String] = [:]
+    private var httpConnectionsByConnectionID: [UUID: MCPHTTPConnectionManager] = [:]
+    private var remoteHTTPConnections: Set<UUID> = []
+    private let remoteBearerTokenStore = MCPRemoteBearerTokenStore()
+    #if DEBUG
+        private var debugNetworkMCPBearerTokenOverride: String?
+    #endif
+    typealias RemoteClientApprovalHandler = @Sendable (MCPRemoteClientApprovalRequest) async -> MCPRemoteClientApprovalDecision
+    private var remoteClientApprovalHandler: RemoteClientApprovalHandler?
 
     // Bootstrap socket server
     private var bootstrapSocketServer: BootstrapSocketServer?
@@ -1578,6 +1625,30 @@ actor ServerNetworkManager {
         dashboardDidChangeHook = hook
     }
 
+    func setRemoteClientApprovalHandler(_ handler: @escaping RemoteClientApprovalHandler) {
+        remoteClientApprovalHandler = handler
+    }
+
+    #if DEBUG
+        func debugSetNetworkMCPBearerTokenOverride(_ token: String?) {
+            debugNetworkMCPBearerTokenOverride = token
+        }
+
+        func debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
+            _ request: MCPNetworkHTTPRequest
+        ) async -> MCPNetworkHTTPResponse {
+            if !isRunningState {
+                isRunningState = true
+                lifecycleGeneration &+= 1
+            }
+            return await handleNetworkHTTPRequest(request, lifecycleGeneration: lifecycleGeneration)
+        }
+
+        func debugNetworkMCPHTTPSessionCount() -> Int {
+            httpSessionsByID.count
+        }
+    #endif
+
     /// 🆕 Connection waiter continuations (replaces polling in waitForNewConnection)
     private struct ConnectionWaiter {
         let lifecycleGeneration: UInt64
@@ -2378,6 +2449,10 @@ actor ServerNetworkManager {
 
     func selectedWindow(for connectionID: UUID) -> Int? {
         connectionWindowMap[connectionID]
+    }
+
+    func setRemoteDefaultWindowForConnection(_ connectionID: UUID, windowID: Int) {
+        setConnectionWindowMapping(connectionID, windowID: windowID)
     }
 
     private func setConnectionWindowMapping(_ connectionID: UUID, windowID: Int) {
@@ -3259,6 +3334,26 @@ actor ServerNetworkManager {
         isRunningState
     }
 
+    func refreshHTTPListenerConfiguration() async {
+        guard isRunningState else { return }
+        await startHTTPListenerIfConfigured(lifecycleGeneration: lifecycleGeneration)
+        emitDashboardUpdate()
+    }
+
+    func networkHTTPListenerStatus() async -> NetworkMCPHTTPListenerStatusSnapshot {
+        let settings = await MainActor.run { GlobalSettingsStore.shared.networkMCPSettingsSnapshot() }
+        return NetworkMCPHTTPListenerStatusSnapshot(
+            enabled: settings.enabled,
+            isListening: httpListener != nil && httpListenerLifecycleGeneration == lifecycleGeneration,
+            bindAddress: settings.bindAddress,
+            port: settings.port,
+            activeSessionCount: httpSessionsByID.count,
+            lastErrorDescription: httpListenerLastErrorDescription
+        )
+    }
+
+    // MARK: - Service Registration
+
     func setConnectionApprovalHandler(_ handler: @escaping ConnectionApprovalHandler) {
         connectionLog("Setting connection approval handler")
         connectionApprovalHandler = handler
@@ -3718,6 +3813,8 @@ actor ServerNetworkManager {
         // A full shutdown may have run while listener startup awaited another actor.
         guard isCurrentLifecycle(startLifecycleGeneration) else { return }
 
+        await startHTTPListenerIfConfigured(lifecycleGeneration: startLifecycleGeneration)
+
         // Start periodic maintenance loop for cleanup tasks
         startMaintenanceLoop(lifecycleGeneration: startLifecycleGeneration)
     }
@@ -4141,6 +4238,337 @@ actor ServerNetworkManager {
                 delay: delay,
                 lifecycleGeneration: expectedLifecycleGeneration
             )
+        }
+    }
+
+    private func startHTTPListenerIfConfigured(lifecycleGeneration expectedLifecycleGeneration: UInt64) async {
+        guard isCurrentLifecycle(expectedLifecycleGeneration) else { return }
+        let settings = await MainActor.run { GlobalSettingsStore.shared.networkMCPSettingsSnapshot() }
+        guard settings.enabled else {
+            if let listener = httpListener {
+                httpListener = nil
+                httpListenerLifecycleGeneration = nil
+                httpListenerBindAddress = nil
+                httpListenerPort = nil
+                await listener.stop()
+            }
+            httpListenerLastErrorDescription = nil
+            return
+        }
+        if let listener = httpListener,
+           httpListenerBindAddress != settings.bindAddress || httpListenerPort != settings.port
+        {
+            httpListener = nil
+            httpListenerLifecycleGeneration = nil
+            httpListenerBindAddress = nil
+            httpListenerPort = nil
+            await listener.stop()
+        }
+        guard httpListener == nil else { return }
+
+        let configuration = MCPNetworkHTTPListener.Configuration(
+            bindAddress: settings.bindAddress,
+            port: settings.port
+        )
+        let listener = MCPNetworkHTTPListener(configuration: configuration, logger: log) { [weak self] request in
+            guard let self else {
+                return .error(statusCode: 503, message: "Server unavailable", code: -32003)
+            }
+            return await handleNetworkHTTPRequest(request, lifecycleGeneration: expectedLifecycleGeneration)
+        }
+        httpListener = listener
+        httpListenerLifecycleGeneration = expectedLifecycleGeneration
+        httpListenerBindAddress = settings.bindAddress
+        httpListenerPort = settings.port
+        do {
+            try await listener.start()
+            httpListenerLastErrorDescription = nil
+        } catch {
+            guard httpListener === listener else { return }
+            httpListener = nil
+            httpListenerLifecycleGeneration = nil
+            httpListenerBindAddress = nil
+            httpListenerPort = nil
+            httpListenerLastErrorDescription = String(describing: error)
+            log.error("Failed to start Network MCP HTTP listener: \(String(describing: error))")
+        }
+    }
+
+    private func handleNetworkHTTPRequest(
+        _ request: MCPNetworkHTTPRequest,
+        lifecycleGeneration expectedLifecycleGeneration: UInt64
+    ) async -> MCPNetworkHTTPResponse {
+        guard isCurrentLifecycle(expectedLifecycleGeneration) else {
+            return .error(statusCode: 503, message: "Server unavailable", code: -32003)
+        }
+        guard request.path == "/mcp" else {
+            return .error(statusCode: 404, message: "Not Found", code: -32600)
+        }
+
+        let authResult = authenticateNetworkMCPBearerToken(
+            authorizationHeader: request.header(MCPNetworkHTTPHeader.authorization)
+        )
+        let tokenFingerprint: String
+        switch authResult {
+        case let .authenticated(fingerprint):
+            tokenFingerprint = fingerprint
+        case let .rejected(failure):
+            var headers: [String: String] = [:]
+            if failure.httpStatusCode == 401 {
+                headers["WWW-Authenticate"] = "Bearer"
+            }
+            return .error(
+                statusCode: failure.httpStatusCode,
+                message: "Network MCP bearer authentication failed: \(failure.diagnosticMessage)",
+                code: failure.mcpErrorCode,
+                extraHeaders: headers
+            )
+        }
+
+        let method = request.method.uppercased()
+
+        if let sessionID = request.header(MCPNetworkHTTPHeader.sessionID) {
+            guard let connectionID = httpSessionsByID[sessionID],
+                  httpConnectionsByConnectionID[connectionID] != nil,
+                  let approvedFingerprint = httpApprovedTokenFingerprintBySessionID[sessionID]
+            else {
+                return .error(statusCode: 404, message: "Invalid or expired MCP-Session-Id", code: -32600)
+            }
+            guard approvedFingerprint == tokenFingerprint else {
+                await removeConnection(connectionID)
+                return .error(statusCode: 403, message: "Network MCP session token fingerprint changed", code: -32001)
+            }
+            let sourceAddress = MCPRemoteClientAddress(request.remoteAddress)
+            guard sourceAddress.isPrivateLANOrLinkLocal else {
+                await removeConnection(connectionID)
+                return .error(statusCode: 403, message: "Remote MCP source is not private/LAN/link-local: \(sourceAddress.normalizedHost)", code: -32001)
+            }
+        } else {
+            switch method {
+            case "POST":
+                guard MCPNetworkHTTPInitializeClassifier.isSingleInitializeRequest(request.body) else {
+                    return .error(statusCode: 400, message: "Initial POST /mcp must be a single initialize request", code: -32600)
+                }
+            case "GET", "DELETE":
+                return .error(statusCode: 400, message: "Missing MCP-Session-Id header", code: -32600)
+            default:
+                return .error(
+                    statusCode: 405,
+                    message: "Method Not Allowed",
+                    code: -32600,
+                    extraHeaders: [MCPNetworkHTTPHeader.allow: "GET, POST, DELETE"]
+                )
+            }
+
+            let approvalRequest = MCPRemoteClientApprovalRequest(
+                clientDisplayName: nil,
+                userAgent: request.header("User-Agent"),
+                sourceAddress: request.remoteAddress,
+                tokenFingerprint: tokenFingerprint
+            )
+            let approvalResult = await evaluateRemoteClientApproval(approvalRequest)
+            switch approvalResult {
+            case .approved:
+                break
+            case .denied:
+                return .error(statusCode: 403, message: "Remote MCP client was denied", code: -32001)
+            case let .rejected(.nonLANSourceAddress(address)):
+                return .error(statusCode: 403, message: "Remote MCP source is not private/LAN/link-local: \(address)", code: -32001)
+            }
+        }
+
+        switch method {
+        case "POST":
+            return await handleHTTPPost(request, tokenFingerprint: tokenFingerprint, lifecycleGeneration: expectedLifecycleGeneration)
+        case "GET", "DELETE":
+            return await handleExistingHTTPSessionRequest(request)
+        default:
+            return .error(
+                statusCode: 405,
+                message: "Method Not Allowed",
+                code: -32600,
+                extraHeaders: [MCPNetworkHTTPHeader.allow: "GET, POST, DELETE"]
+            )
+        }
+    }
+
+    private func authenticateNetworkMCPBearerToken(authorizationHeader: String?) -> MCPRemoteBearerAuthenticationResult {
+        #if DEBUG
+            if let debugToken = debugNetworkMCPBearerTokenOverride {
+                guard let authorizationHeader else {
+                    return .rejected(.missingAuthorizationHeader)
+                }
+                let trimmedHeader = authorizationHeader.trimmingCharacters(in: .whitespacesAndNewlines)
+                let parts = trimmedHeader.split(maxSplits: 1) { $0.isWhitespace }
+                guard parts.count == 2,
+                      String(parts[0]).caseInsensitiveCompare("Bearer") == .orderedSame
+                else {
+                    return .rejected(.unsupportedAuthorizationScheme)
+                }
+                let presentedToken = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !presentedToken.isEmpty else {
+                    return .rejected(.emptyBearerToken)
+                }
+                guard MCPRemoteBearerTokenStore.constantTimeEquals(presentedToken, debugToken) else {
+                    return .rejected(.invalidBearerToken)
+                }
+                return .authenticated(fingerprint: MCPRemoteBearerTokenStore.fingerprint(for: debugToken))
+            }
+        #endif
+        return remoteBearerTokenStore.authenticate(authorizationHeader: authorizationHeader)
+    }
+
+    private func evaluateRemoteClientApproval(_ request: MCPRemoteClientApprovalRequest) async -> MCPRemoteClientApprovalResult {
+        let handler = remoteClientApprovalHandler
+        let manager = await MainActor.run { () -> MCPRemoteClientApprovalManager in
+            MCPRemoteClientApprovalManager { approvalRequest in
+                guard let handler else { return .deny }
+                return await handler(approvalRequest)
+            }
+        }
+        return await manager.evaluate(request)
+    }
+
+    private func handleHTTPPost(
+        _ request: MCPNetworkHTTPRequest,
+        tokenFingerprint: String,
+        lifecycleGeneration expectedLifecycleGeneration: UInt64
+    ) async -> MCPNetworkHTTPResponse {
+        if request.header(MCPNetworkHTTPHeader.sessionID) != nil {
+            return await handleExistingHTTPSessionRequest(request)
+        }
+
+        guard MCPNetworkHTTPInitializeClassifier.isSingleInitializeRequest(request.body) else {
+            return .error(statusCode: 400, message: "Initial POST /mcp must be a single initialize request", code: -32600)
+        }
+        guard isCurrentLifecycle(expectedLifecycleGeneration) else {
+            return .error(statusCode: 503, message: "Server unavailable", code: -32003)
+        }
+        guard connections.count < maxGlobalConnections else {
+            return .error(statusCode: 503, message: "Server at capacity", code: -32003)
+        }
+
+        let sessionID = UUID().uuidString
+        let connectionID = UUID()
+        let transport = MCP.StatefulHTTPServerTransport(
+            sessionIDGenerator: NetworkMCPFixedSessionIDGenerator(sessionID: sessionID),
+            validationPipeline: StandardValidationPipeline(validators: [
+                AcceptHeaderValidator(mode: .sseRequired),
+                ContentTypeValidator(),
+                ProtocolVersionValidator(),
+                SessionValidator()
+            ]),
+            logger: log
+        )
+        let manager = MCPHTTPConnectionManager(
+            connectionID: connectionID,
+            sessionID: sessionID,
+            sourceAddress: request.remoteAddress,
+            initialClientName: request.header("User-Agent"),
+            codeMapsDisabled: false,
+            transport: transport,
+            parentManager: self,
+            logger: log
+        )
+        registerHTTPConnection(
+            connectionID: connectionID,
+            sessionID: sessionID,
+            lifecycleGeneration: expectedLifecycleGeneration,
+            sourceAddress: request.remoteAddress,
+            clientName: request.header("User-Agent"),
+            tokenFingerprint: tokenFingerprint,
+            manager: manager
+        )
+        startMCPServerForHTTPConnection(
+            connectionID: connectionID,
+            lifecycleGeneration: expectedLifecycleGeneration,
+            sessionID: sessionID,
+            manager: manager
+        )
+        return await manager.handle(request)
+    }
+
+    private func handleExistingHTTPSessionRequest(_ request: MCPNetworkHTTPRequest) async -> MCPNetworkHTTPResponse {
+        guard let sessionID = request.header(MCPNetworkHTTPHeader.sessionID) else {
+            return .error(statusCode: 400, message: "Missing MCP-Session-Id header", code: -32600)
+        }
+        guard let connectionID = httpSessionsByID[sessionID],
+              let manager = httpConnectionsByConnectionID[connectionID]
+        else {
+            return .error(statusCode: 404, message: "Invalid or expired MCP-Session-Id", code: -32600)
+        }
+        let response = await manager.handle(request)
+        if request.method.uppercased() == "DELETE", (200 ..< 300).contains(response.statusCode) {
+            await removeConnection(connectionID)
+        }
+        return response
+    }
+
+    private func registerHTTPConnection(
+        connectionID: UUID,
+        sessionID: String,
+        lifecycleGeneration expectedLifecycleGeneration: UInt64,
+        sourceAddress: String,
+        clientName: String?,
+        tokenFingerprint: String,
+        manager: MCPHTTPConnectionManager
+    ) {
+        guard isCurrentLifecycle(expectedLifecycleGeneration) else { return }
+        connections[connectionID] = manager
+        connectionLifecycleGenerationByID[connectionID] = expectedLifecycleGeneration
+        httpSessionsByID[sessionID] = connectionID
+        httpApprovedTokenFingerprintBySessionID[sessionID] = tokenFingerprint
+        httpConnectionsByConnectionID[connectionID] = manager
+        remoteHTTPConnections.insert(connectionID)
+        capabilityTokenByConnection[connectionID] = sessionID
+        identityContextByConnection[connectionID] = ConnectionIdentityContext(
+            clientName: clientName,
+            capabilityToken: sessionID,
+            source: .handshake,
+            hasHandshake: false,
+            lastUpdated: Date()
+        )
+        pendingConnections[connectionID] = clientName ?? "Remote MCP client"
+        if connectionStats[connectionID] == nil {
+            connectionStats[connectionID] = ConnectionStats(createdAt: Date(), totalToolCalls: 0, lastToolCallAt: nil)
+        }
+        emitDashboardUpdate()
+    }
+
+    private func startMCPServerForHTTPConnection(
+        connectionID: UUID,
+        lifecycleGeneration expectedLifecycleGeneration: UInt64,
+        sessionID: String,
+        manager: MCPHTTPConnectionManager
+    ) {
+        connectionTasks[connectionID] = Task { [self] in
+            defer { connectionTasks.removeValue(forKey: connectionID) }
+            guard isCurrentConnection(connectionID, lifecycleGeneration: expectedLifecycleGeneration) else { return }
+            do {
+                try await manager.start { clientInfo in
+                    guard self.isCurrentConnection(connectionID, lifecycleGeneration: expectedLifecycleGeneration) else { return false }
+                    if var ctx = self.identityContextByConnection[connectionID] {
+                        ctx.clientName = clientInfo.name
+                        ctx.hasHandshake = true
+                        ctx.lastUpdated = Date()
+                        self.identityContextByConnection[connectionID] = ctx
+                    }
+                    self.pendingConnections[connectionID] = clientInfo.name
+                    self.clientIDByConnection[connectionID] = clientInfo.name
+                    self.activeConnectionsByClient[clientInfo.name, default: []].insert(connectionID)
+                    self.notifyConnectionWaiters(
+                        connectionID: connectionID,
+                        clientName: clientInfo.name,
+                        lifecycleGeneration: expectedLifecycleGeneration
+                    )
+                    self.emitDashboardUpdate()
+                    return true
+                }
+            } catch {
+                log.error("HTTP MCP connection \(connectionID) start failed: \(String(describing: error))")
+                guard isCurrentConnection(connectionID, lifecycleGeneration: expectedLifecycleGeneration) else { return }
+                await removeConnection(connectionID)
+            }
         }
     }
 
@@ -5120,6 +5548,9 @@ actor ServerNetworkManager {
         let listenerToStop = bootstrapSocketServerLifecycleGeneration == stoppedLifecycleGeneration
             ? bootstrapSocketServer
             : nil
+        let httpListenerToStop = httpListenerLifecycleGeneration == stoppedLifecycleGeneration
+            ? httpListener
+            : nil
         let connectionsToStop = connections.compactMap { connectionID, connectionManager -> (UUID, any MCPServerConnection)? in
             guard connectionLifecycleGenerationByID[connectionID] == stoppedLifecycleGeneration else { return nil }
             return (connectionID, connectionManager)
@@ -5153,6 +5584,15 @@ actor ServerNetworkManager {
         }
         bootstrapSocketTask?.cancel()
         bootstrapSocketTask = nil
+        httpListener = nil
+        httpListenerLifecycleGeneration = nil
+        httpListenerBindAddress = nil
+        httpListenerPort = nil
+        httpListenerLastErrorDescription = nil
+        httpSessionsByID.removeAll()
+        httpApprovedTokenFingerprintBySessionID.removeAll()
+        httpConnectionsByConnectionID.removeAll()
+        remoteHTTPConnections.removeAll()
         maintenanceTask?.cancel()
         maintenanceTask = nil
 
@@ -5223,6 +5663,7 @@ actor ServerNetworkManager {
         }
 
         await stopBootstrapSocketServer(server: listenerToStop, lifecycleGeneration: stoppedLifecycleGeneration)
+        await httpListenerToStop?.stop()
 
         // The registry detach above was synchronous; stale resumptions below only stop the
         // captured manager objects and never mutate a replacement lifecycle's registries.
@@ -5281,6 +5722,10 @@ actor ServerNetworkManager {
         liveRunAffinityByClientSession.removeAll()
         activeToolScopesByWindow.removeAll()
         connectionStats.removeAll()
+        httpSessionsByID.removeAll()
+        httpApprovedTokenFingerprintBySessionID.removeAll()
+        httpConnectionsByConnectionID.removeAll()
+        remoteHTTPConnections.removeAll()
     }
 
     // MARK: - Termination & Kill Semantics
@@ -5989,6 +6434,12 @@ actor ServerNetworkManager {
         let cleanupClientID = clientIDByConnection[id]
         let cleanupClientName = pendingConnections[id] ?? cleanupClientID
         let sessionToken = capabilityTokenByConnection[id] ?? connections[id]?.capabilityToken
+        if remoteHTTPConnections.contains(id), let sessionToken {
+            httpSessionsByID.removeValue(forKey: sessionToken)
+            httpApprovedTokenFingerprintBySessionID.removeValue(forKey: sessionToken)
+        }
+        httpConnectionsByConnectionID.removeValue(forKey: id)
+        remoteHTTPConnections.remove(id)
         #if DEBUG
             debugRecordConnectionEvent(
                 "removed",
@@ -10102,6 +10553,18 @@ actor ServerNetworkManager {
         }
     }
 
+    private func ensureRemoteDefaultTargetIfNeeded(
+        connectionID: UUID,
+        requestedWindowID: Int? = nil,
+        reason: String
+    ) async throws -> Int? {
+        guard remoteHTTPConnections.contains(connectionID) else { return nil }
+        let resolution = try await MCPRemoteDefaultTargetResolver().resolve(requestedWindowID: requestedWindowID)
+        setRemoteDefaultWindowForConnection(connectionID, windowID: resolution.windowID)
+        connectionLog("Network MCP remote default target resolved for \(reason): connection=\(connectionID) window=\(resolution.windowID) workspace=\(resolution.workspaceName)")
+        return resolution.windowID
+    }
+
     func registerHandlers(for server: MCP.Server, connectionID: UUID) async {
         // ------------------------------------------------------------------
         //  prompts/list
@@ -10187,7 +10650,16 @@ actor ServerNetworkManager {
             // The primary readiness wait happens during handshake, but this catches edge cases.
             // Use ensureWindowBindingIfUnambiguous to treat nil as single-window fallback,
             // preventing failures for clients that call tools/list before explicit window selection.
-            let windowID = await ensureWindowBindingIfUnambiguous(connectionID: connectionID, reason: "tools/list")
+            let windowID: Int?
+            do {
+                if let remoteWindowID = try await ensureRemoteDefaultTargetIfNeeded(connectionID: connectionID, reason: "tools/list") {
+                    windowID = remoteWindowID
+                } else {
+                    windowID = await ensureWindowBindingIfUnambiguous(connectionID: connectionID, reason: "tools/list")
+                }
+            } catch {
+                throw MCPError.invalidParams(error.localizedDescription)
+            }
             let isReady = await MCPToolCatalogReadiness.shared.awaitReady(
                 windowID: windowID,
                 timeout: 2.0 // Shorter timeout here since handshake should have waited
@@ -10477,6 +10949,15 @@ actor ServerNetworkManager {
             var dispatchTabContextHint: MCPServerViewModel.TabContextHint? = nil
             var preResolvedWindowID: Int? = nil
             do {
+                preResolvedWindowID = try await ensureRemoteDefaultTargetIfNeeded(
+                    connectionID: connectionID,
+                    requestedWindowID: extractedWindowID,
+                    reason: "tools/call \(toolName)"
+                )
+            } catch {
+                return Self.toolErrorResult(rawJSON: capturedRawJSON, message: error.localizedDescription)
+            }
+            do {
                 let logicalContextState = EditFlowPerf.begin(
                     EditFlowPerf.Stage.MCPToolCall.logicalContextResolution,
                     EditFlowPerf.Dimensions(toolName: toolName)
@@ -10489,7 +10970,7 @@ actor ServerNetworkManager {
                             explicitContextID: extractedContextID,
                             legacyTabID: extractedTabID,
                             workingDirs: [],
-                            requestedWindowID: extractedWindowID
+                            requestedWindowID: extractedWindowID ?? preResolvedWindowID
                         ) {
                             dispatchTabContextHint = MCPServerViewModel.TabContextHint(
                                 tabID: logicalBinding.logicalContext.tabID,
