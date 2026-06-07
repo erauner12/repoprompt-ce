@@ -90,10 +90,14 @@ struct ContentView: View {
             },
             onAppWillRestartForUpdate: { closeAllSheets() }
         ))
-        // Close all sheets when a connection approval request comes in
+        // Close sheets and surface the toolbar action panel when an MCP approval request comes in.
         .onChange(of: viewModel.state.mcpServer.isApprovalOverlayVisible) { _, isVisible in
             if isVisible {
                 closeAllSheets()
+                showRecommendationsPopover = false
+                DispatchQueue.main.async {
+                    showMCPServerPopover = true
+                }
             }
         }
         // Close all sheets when a workspace approval request comes in

@@ -280,6 +280,7 @@ struct SettingsView: View {
             MCPSettingsView(
                 vm: windowState.mcpServer,
                 promptVM: promptViewModel,
+                windowState: windowState,
                 windowID: windowState.windowID,
                 onNavigate: { tab in selectedTab = tab },
                 closeAction: closeAction

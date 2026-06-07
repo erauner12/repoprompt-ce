@@ -71,6 +71,10 @@ enum RepoPromptMCPInstructions {
 
         CONTEXT BUILDING: context_builder is a heavy sub-agent that autonomously explores the codebase to build deep, curated context for a task. Ideal for going from task description to full implementation plan (response_type="plan"), code review ("review"), or deep Q&A ("question"). Its context is stateful — optionally continue with oracle calls using the returned chat_id.
 
+        LONG-RUNNING TOOLS OVER SSE: For remote clients such as OpenClaw, long-running `context_builder` and `oracle_send` calls are ordinary synchronous tool calls carried by the SDK Streamable HTTP SSE transport. Keep the client session open for the tool result, and use `export_response: true` when you need durable response artifacts.
+
+        NETWORK MCP BOUNDARY: Remote clients use the existing RepoPrompt MCP tool catalog after bearer authentication, remote-client approval, and default-target routing. High-impact/mutating tools still rely on the existing tool behavior, approvals, and workspace routing; configure the default target carefully and do not expose the HTTP endpoint beyond loopback or a trusted private LAN.
+
         CONTEXT WORKFLOW: manage_selection curates the file context used by oracle and workspace_context tools — update it before oracle calls. Use add/remove for incremental changes; use set mode=full only for complete replacement; set mode=slices only replaces slices for specified files. Continue chats by passing the returned chat_id to oracle_send.
 
         AGENT DELEGATION: Use agent_run to spawn separate Agent Mode sessions. Omit model_id to use the pair role, or pass model_id with a role label (explore, engineer, pair, design) or a specific model from agent_manage.list_agents. Explore agents are lightweight — use them proactively when codebase investigation would ground your work. Heavier roles (engineer, pair, design) should be launched when the user requests delegation. Design agents produce a markdown review document (saved under docs/reviews/, docs/designs/, or docs/analysis/) as their primary deliverable for review/analysis tasks — expect a report path in their summary, not just an inline response.
