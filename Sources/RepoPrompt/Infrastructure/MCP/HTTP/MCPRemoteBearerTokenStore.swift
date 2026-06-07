@@ -186,6 +186,23 @@ enum MCPRemoteBearerAuthenticationFailure: Equatable {
     case tokenUnavailable
     case secureStorageUnavailable
 
+    var diagnosticMessage: String {
+        switch self {
+        case .missingAuthorizationHeader:
+            "missing Authorization header; send Authorization: Bearer <token>"
+        case .unsupportedAuthorizationScheme:
+            "unsupported Authorization scheme; use Bearer"
+        case .emptyBearerToken:
+            "empty bearer token"
+        case .invalidBearerToken:
+            "bearer token was not accepted"
+        case .tokenUnavailable:
+            "no Network MCP bearer token is configured"
+        case .secureStorageUnavailable:
+            "Network MCP bearer token could not be read from secure storage"
+        }
+    }
+
     var httpStatusCode: Int {
         switch self {
         case .missingAuthorizationHeader, .unsupportedAuthorizationScheme, .emptyBearerToken, .invalidBearerToken:

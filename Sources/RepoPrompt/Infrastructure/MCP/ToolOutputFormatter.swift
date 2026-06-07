@@ -984,6 +984,13 @@ extension ToolOutputFormatter {
         }
         if let serverInstanceID, !serverInstanceID.isEmpty {
             lines.append("- **Server instance**: `\(serverInstanceID)`")
+            if [
+                MCPResumableJobStatus.queued.rawValue,
+                MCPResumableJobStatus.running.rawValue,
+                MCPResumableJobStatus.cancelling.rawValue
+            ].contains(statusRaw) {
+                lines.append("- **Recovery hint**: echo `server_instance_id` on follow-up calls so a restarted RepoPrompt process can be detected explicitly.")
+            }
         }
 
         if let wait {
@@ -1056,11 +1063,14 @@ extension ToolOutputFormatter {
             switch statusRaw {
             case MCPResumableJobStatus.completed.rawValue:
                 return []
+            case MCPResumableJobStatus.serverRestarted.rawValue:
+                return ["- **Next**: RepoPrompt appears to have restarted since this job snapshot. Start a new `\(tool)` job if you still need this work."]
+            case MCPResumableJobStatus.expired.rawValue:
+                return ["- **Next**: this in-memory job expired. Start a new `\(tool)` job if you still need this work; use `export_response: true` when you need durable artifacts."]
+            case MCPResumableJobStatus.notFound.rawValue:
+                return ["- **Next**: no job matched this `job_id` for the current tool/window. Check the `job_id` and target window, or start a new `\(tool)` job."]
             case MCPResumableJobStatus.failed.rawValue,
-                 MCPResumableJobStatus.cancelled.rawValue,
-                 MCPResumableJobStatus.expired.rawValue,
-                 MCPResumableJobStatus.notFound.rawValue,
-                 MCPResumableJobStatus.serverRestarted.rawValue:
+                 MCPResumableJobStatus.cancelled.rawValue:
                 return ["- **Next**: start a new `\(tool)` job if you still need this work."]
             default:
                 return []

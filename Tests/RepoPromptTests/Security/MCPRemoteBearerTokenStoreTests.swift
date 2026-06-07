@@ -59,6 +59,27 @@ final class MCPRemoteBearerTokenStoreTests: XCTestCase {
         XCTAssertEqual(MCPRemoteBearerAuthenticationFailure.invalidBearerToken.mcpErrorCode, -32001)
     }
 
+    func testAuthFailureDiagnosticsAreActionableAndDoNotExposeTokenMaterial() {
+        let presentedToken = "wrong-token-should-not-leak"
+        for failure in [
+            MCPRemoteBearerAuthenticationFailure.missingAuthorizationHeader,
+            .unsupportedAuthorizationScheme,
+            .emptyBearerToken,
+            .invalidBearerToken,
+            .tokenUnavailable,
+            .secureStorageUnavailable
+        ] {
+            let diagnostic = failure.diagnosticMessage
+            XCTAssertFalse(diagnostic.isEmpty)
+            XCTAssertFalse(diagnostic.contains(presentedToken), diagnostic)
+            XCTAssertFalse(diagnostic.contains("secret-token"), diagnostic)
+            XCTAssertFalse(diagnostic.contains("wrong-token"), diagnostic)
+        }
+
+        XCTAssertTrue(MCPRemoteBearerAuthenticationFailure.missingAuthorizationHeader.diagnosticMessage.contains("Authorization: Bearer <token>"))
+        XCTAssertTrue(MCPRemoteBearerAuthenticationFailure.invalidBearerToken.diagnosticMessage.contains("not accepted"))
+    }
+
     func testAuthFailsClosedWhenSecureTokenMissingOrStorageUnavailable() {
         let missingStore = makeStore(secureStrings: FakeNetworkMCPSecurePlainStringStore())
         XCTAssertEqual(

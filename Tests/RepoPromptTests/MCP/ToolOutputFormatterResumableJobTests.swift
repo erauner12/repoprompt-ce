@@ -38,6 +38,7 @@ final class ToolOutputFormatterResumableJobTests: XCTestCase {
         XCTAssertTrue(text.contains("## Resumable MCP Job"), text)
         XCTAssertTrue(text.contains("- **Status**: **Running**"), text)
         XCTAssertTrue(text.contains("- **Wait**: timed out (requested 10s, effective 0.25s)"), text)
+        XCTAssertTrue(text.contains("echo `server_instance_id`"), text)
         XCTAssertTrue(text.contains("job is still resumable and was not marked failed"), text)
         XCTAssertTrue(text.contains("Next wait call"), text)
         XCTAssertTrue(text.contains("\"op\":\"wait\""), text)
@@ -117,14 +118,16 @@ final class ToolOutputFormatterResumableJobTests: XCTestCase {
         XCTAssertTrue(text.contains("abc123"), text)
     }
 
-    func testTerminalProblemStatusesShowStartNewJobGuidance() throws {
-        for status in [
-            MCPResumableJobStatus.failed,
-            .cancelled,
-            .expired,
-            .notFound,
-            .serverRestarted
-        ] {
+    func testTerminalProblemStatusesShowRecoveryGuidance() throws {
+        let expectedGuidance: [(MCPResumableJobStatus, String)] = [
+            (.failed, "start a new `oracle_send` job"),
+            (.cancelled, "start a new `oracle_send` job"),
+            (.expired, "this in-memory job expired"),
+            (.notFound, "Check the `job_id` and target window"),
+            (.serverRestarted, "RepoPrompt appears to have restarted")
+        ]
+
+        for (status, guidance) in expectedGuidance {
             let snapshot = MCPResumableJobSnapshot(
                 jobID: UUID(),
                 serverInstanceID: "server-a",
@@ -151,7 +154,7 @@ final class ToolOutputFormatterResumableJobTests: XCTestCase {
             ))
 
             XCTAssertTrue(text.contains("## Resumable MCP Job"), text)
-            XCTAssertTrue(text.contains("start a new `oracle_send` job"), text)
+            XCTAssertTrue(text.contains(guidance), "Expected \(status) guidance `\(guidance)` in:\n\(text)")
         }
     }
 

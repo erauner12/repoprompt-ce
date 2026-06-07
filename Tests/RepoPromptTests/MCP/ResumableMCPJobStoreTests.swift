@@ -235,6 +235,61 @@ final class ResumableMCPJobStoreTests: XCTestCase {
         XCTAssertNotEqual(first.jobID, differentTool.jobID)
     }
 
+    func testExpiredWaitReturnsExpiredMetadataAndRecoveryStatusText() async throws {
+        let store = makeStore(activeTTL: 0.02, tombstoneTTL: 1)
+        let registration = await store.register(tool: tool, windowID: windowID)
+
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let expired = await store.wait(
+            jobID: registration.jobID,
+            tool: tool,
+            windowID: windowID,
+            requestedTimeoutSeconds: 1,
+            effectiveTimeoutSeconds: 0.01
+        )
+
+        XCTAssertEqual(expired.status, .expired)
+        XCTAssertEqual(expired.wait?.result, .expired)
+        XCTAssertTrue(expired.statusText?.contains("Start a new job") == true, expired.statusText ?? "")
+        XCTAssertNil(expired.result)
+    }
+
+    func testWrongWindowControlOperationsFailClosedWithoutAffectingOriginalJob() async {
+        let store = makeStore()
+        let registration = await store.register(tool: tool, windowID: windowID)
+
+        let wrongWindowWait = await store.wait(
+            jobID: registration.jobID,
+            tool: tool,
+            windowID: windowID + 1,
+            requestedTimeoutSeconds: 0,
+            effectiveTimeoutSeconds: 0
+        )
+        XCTAssertEqual(wrongWindowWait.status, .notFound)
+        XCTAssertEqual(wrongWindowWait.wait?.result, .snapshotReady)
+
+        let wrongWindowCancel = await store.cancel(jobID: registration.jobID, tool: tool, windowID: windowID + 1)
+        XCTAssertEqual(wrongWindowCancel.status, .notFound)
+
+        let original = await store.poll(jobID: registration.jobID, tool: tool, windowID: windowID)
+        XCTAssertEqual(original.status, .queued)
+        XCTAssertNil(original.error)
+    }
+
+    func testMismatchedServerInstanceReportsRestartEvenWhenJobIDIsUnknown() async {
+        let store = makeStore()
+        let restarted = await store.poll(
+            jobID: UUID(),
+            tool: tool,
+            windowID: windowID,
+            serverInstanceID: "old-server"
+        )
+
+        XCTAssertEqual(restarted.status, .serverRestarted)
+        XCTAssertEqual(restarted.serverInstanceID, "test-server")
+        XCTAssertTrue(restarted.statusText?.contains("does not match") == true, restarted.statusText ?? "")
+    }
+
     func testMissingJobWaitReturnsNotFoundSnapshotReadyMetadata() async {
         let store = makeStore()
         let missing = await store.wait(

@@ -2954,7 +2954,7 @@ actor ServerNetworkManager {
             }
             return .error(
                 statusCode: failure.httpStatusCode,
-                message: "Network MCP bearer authentication failed: \(failure)",
+                message: "Network MCP bearer authentication failed: \(failure.diagnosticMessage)",
                 code: failure.mcpErrorCode,
                 extraHeaders: headers
             )

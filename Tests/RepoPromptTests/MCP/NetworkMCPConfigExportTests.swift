@@ -37,6 +37,10 @@ final class NetworkMCPConfigExportTests: XCTestCase {
         XCTAssertTrue(export.setupNotes.contains("oracle_send"), export.setupNotes)
         XCTAssertTrue(export.setupNotes.contains("multi-minute HTTP or tool-call timeouts"), export.setupNotes)
         XCTAssertTrue(export.setupNotes.contains("Resumable jobs are in-memory"), export.setupNotes)
+        XCTAssertTrue(export.setupNotes.contains("existing RepoPrompt MCP tool catalog"), export.setupNotes)
+        XCTAssertTrue(export.setupNotes.contains("High-impact/mutating tools"), export.setupNotes)
+        XCTAssertTrue(export.setupNotes.contains("bearer authentication"), export.setupNotes)
+        XCTAssertTrue(export.setupNotes.contains("default-target routing"), export.setupNotes)
         XCTAssertTrue(export.setupNotes.contains("export_response: true"), export.setupNotes)
     }
 
@@ -74,6 +78,10 @@ final class NetworkMCPConfigExportTests: XCTestCase {
         XCTAssertTrue(instructions.contains("oracle_send"), instructions)
         XCTAssertTrue(instructions.contains("Do not depend on multi-minute HTTP/tool-call timeouts"), instructions)
         XCTAssertTrue(instructions.contains("v1 jobs are in-memory"), instructions)
+        XCTAssertTrue(instructions.contains("NETWORK MCP BOUNDARY"), instructions)
+        XCTAssertTrue(instructions.contains("existing RepoPrompt MCP tool catalog"), instructions)
+        XCTAssertTrue(instructions.contains("High-impact/mutating tools"), instructions)
+        XCTAssertTrue(instructions.contains("default-target routing"), instructions)
         XCTAssertTrue(instructions.contains("export_response: true"), instructions)
     }
 
