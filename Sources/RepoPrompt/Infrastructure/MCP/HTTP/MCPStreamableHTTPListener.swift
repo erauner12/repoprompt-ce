@@ -137,12 +137,19 @@ private final class MCPStreamableHTTPChannelHandler: ChannelInboundHandler, @unc
     }
 
     private func writeResponse(_ response: MCPStreamableHTTPResponse, context: ChannelHandlerContext) {
+        if case .stream = response.body {
+            logger.error("Network MCP HTTP listener received a streaming response before listener streaming is implemented")
+            writeResponse(.error(statusCode: 501, message: "Streaming HTTP responses are not enabled yet", code: -32603), context: context)
+            return
+        }
+
         var headers = HTTPHeaders()
         for (name, value) in response.headers {
             headers.replaceOrAdd(name: name, value: value)
         }
-        if let body = response.body {
-            headers.replaceOrAdd(name: "Content-Length", value: String(body.count))
+        let finiteBody = response.bodyData
+        if let finiteBody {
+            headers.replaceOrAdd(name: "Content-Length", value: String(finiteBody.count))
         } else {
             headers.replaceOrAdd(name: "Content-Length", value: "0")
         }
@@ -152,9 +159,9 @@ private final class MCPStreamableHTTPChannelHandler: ChannelInboundHandler, @unc
 
         let status = HTTPResponseStatus(statusCode: response.statusCode)
         context.write(wrapOutboundOut(.head(HTTPResponseHead(version: .http1_1, status: status, headers: headers))), promise: nil)
-        if let body = response.body, !body.isEmpty {
-            var buffer = context.channel.allocator.buffer(capacity: body.count)
-            buffer.writeBytes(body)
+        if let finiteBody, !finiteBody.isEmpty {
+            var buffer = context.channel.allocator.buffer(capacity: finiteBody.count)
+            buffer.writeBytes(finiteBody)
             context.write(wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
         }
         context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)

@@ -34,7 +34,7 @@ final class NetworkMCPStreamableHTTPTransportTests: XCTestCase {
         let response = await responseTask.value
 
         XCTAssertEqual(response.statusCode, 200)
-        XCTAssertEqual(try JSONObject(response.body), try JSONObject(outbound))
+        XCTAssertEqual(try JSONObject(response.bodyData), try JSONObject(outbound))
         XCTAssertEqual(response.headers[MCPStreamableHTTPHeader.sessionID], "session-2")
     }
 
@@ -57,7 +57,7 @@ final class NetworkMCPStreamableHTTPTransportTests: XCTestCase {
         let response = await responseTask.value
 
         XCTAssertEqual(response.statusCode, 200)
-        let responseArray = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(response.body)) as? [[String: Any]])
+        let responseArray = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(response.bodyData)) as? [[String: Any]])
         XCTAssertEqual(responseArray.compactMap { $0["id"] as? String }, ["a", "b"])
     }
 
@@ -117,7 +117,7 @@ final class NetworkMCPStreamableHTTPTransportTests: XCTestCase {
         let response = await transport.handle(post(body: body, sessionID: "session-7"))
 
         XCTAssertEqual(response.statusCode, 504)
-        let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(response.body)) as? [String: Any])
+        let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(response.bodyData)) as? [String: Any])
         let error = try XCTUnwrap(object["error"] as? [String: Any])
         XCTAssertEqual(error["code"] as? Int, -32002)
         XCTAssertEqual(object["id"] as? Int, 1)
@@ -134,7 +134,7 @@ final class NetworkMCPStreamableHTTPTransportTests: XCTestCase {
         let response = await transport.handle(post(body: body, sessionID: "session-8"))
 
         XCTAssertEqual(response.statusCode, 504)
-        let array = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(response.body)) as? [[String: Any]])
+        let array = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(response.bodyData)) as? [[String: Any]])
         XCTAssertEqual(array.count, 2)
         let firstError = try XCTUnwrap(array[0]["error"] as? [String: Any])
         let secondError = try XCTUnwrap(array[1]["error"] as? [String: Any])
