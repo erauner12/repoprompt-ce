@@ -89,6 +89,14 @@ private let log: Logging.Logger = {
     return logger
 }()
 
+private struct NetworkMCPFixedSessionIDGenerator: MCP.SessionIDGenerator {
+    let sessionID: String
+
+    func generateSessionID() -> String {
+        sessionID
+    }
+}
+
 enum ConnectionStateSnapshot: Equatable {
     case connecting
     case ready
@@ -589,7 +597,7 @@ actor ServerNetworkManager {
     private var httpListenerLastErrorDescription: String?
     private var httpSessionsByID: [String: UUID] = [:]
     private var httpApprovedTokenFingerprintBySessionID: [String: String] = [:]
-    private var httpTransportsByConnectionID: [UUID: MCPStreamableHTTPTransport] = [:]
+    private var httpConnectionsByConnectionID: [UUID: MCPHTTPConnectionManager] = [:]
     private var remoteHTTPConnections: Set<UUID> = []
     private let remoteBearerTokenStore = MCPRemoteBearerTokenStore()
     typealias RemoteClientApprovalHandler = @Sendable (MCPRemoteClientApprovalRequest) async -> MCPRemoteClientApprovalDecision
@@ -3034,11 +3042,11 @@ actor ServerNetworkManager {
     ) async -> MCPStreamableHTTPResponse {
         if let sessionID = request.header(MCPStreamableHTTPHeader.sessionID) {
             guard let connectionID = httpSessionsByID[sessionID],
-                  let transport = httpTransportsByConnectionID[connectionID]
+                  let manager = httpConnectionsByConnectionID[connectionID]
             else {
                 return .error(statusCode: 404, message: "Invalid or expired MCP-Session-Id", code: -32600)
             }
-            return await transport.handle(request)
+            return await manager.handle(request)
         }
 
         guard MCPStreamableHTTPTransport.isSingleInitializeRequest(request.body) else {
@@ -3053,7 +3061,16 @@ actor ServerNetworkManager {
 
         let sessionID = UUID().uuidString
         let connectionID = UUID()
-        let transport = MCPStreamableHTTPTransport(sessionID: sessionID, logger: log)
+        let transport = MCP.StatefulHTTPServerTransport(
+            sessionIDGenerator: NetworkMCPFixedSessionIDGenerator(sessionID: sessionID),
+            validationPipeline: StandardValidationPipeline(validators: [
+                AcceptHeaderValidator(mode: .sseRequired),
+                ContentTypeValidator(),
+                ProtocolVersionValidator(),
+                SessionValidator()
+            ]),
+            logger: log
+        )
         let manager = MCPHTTPConnectionManager(
             connectionID: connectionID,
             sessionID: sessionID,
@@ -3071,7 +3088,6 @@ actor ServerNetworkManager {
             sourceAddress: request.remoteAddress,
             clientName: request.header("User-Agent"),
             tokenFingerprint: tokenFingerprint,
-            transport: transport,
             manager: manager
         )
         startMCPServerForHTTPConnection(
@@ -3080,7 +3096,7 @@ actor ServerNetworkManager {
             sessionID: sessionID,
             manager: manager
         )
-        return await transport.handle(request)
+        return await manager.handle(request)
     }
 
     private func handleHTTPDelete(
@@ -3091,11 +3107,11 @@ actor ServerNetworkManager {
             return .error(statusCode: 400, message: "Missing MCP-Session-Id header", code: -32600)
         }
         guard let connectionID = httpSessionsByID[sessionID],
-              let transport = httpTransportsByConnectionID[connectionID]
+              let manager = httpConnectionsByConnectionID[connectionID]
         else {
             return .error(statusCode: 404, message: "Invalid or expired MCP-Session-Id", code: -32600)
         }
-        let response = await transport.handle(request)
+        let response = await manager.handle(request)
         await removeConnection(connectionID)
         return response
     }
@@ -3107,7 +3123,6 @@ actor ServerNetworkManager {
         sourceAddress: String,
         clientName: String?,
         tokenFingerprint: String,
-        transport: MCPStreamableHTTPTransport,
         manager: MCPHTTPConnectionManager
     ) {
         guard isCurrentLifecycle(expectedLifecycleGeneration) else { return }
@@ -3115,7 +3130,7 @@ actor ServerNetworkManager {
         connectionLifecycleGenerationByID[connectionID] = expectedLifecycleGeneration
         httpSessionsByID[sessionID] = connectionID
         httpApprovedTokenFingerprintBySessionID[sessionID] = tokenFingerprint
-        httpTransportsByConnectionID[connectionID] = transport
+        httpConnectionsByConnectionID[connectionID] = manager
         remoteHTTPConnections.insert(connectionID)
         capabilityTokenByConnection[connectionID] = sessionID
         identityContextByConnection[connectionID] = ConnectionIdentityContext(
@@ -3815,7 +3830,7 @@ actor ServerNetworkManager {
         httpListenerLastErrorDescription = nil
         httpSessionsByID.removeAll()
         httpApprovedTokenFingerprintBySessionID.removeAll()
-        httpTransportsByConnectionID.removeAll()
+        httpConnectionsByConnectionID.removeAll()
         remoteHTTPConnections.removeAll()
         maintenanceTask?.cancel()
         maintenanceTask = nil
@@ -3906,7 +3921,7 @@ actor ServerNetworkManager {
         connectionStats.removeAll()
         httpSessionsByID.removeAll()
         httpApprovedTokenFingerprintBySessionID.removeAll()
-        httpTransportsByConnectionID.removeAll()
+        httpConnectionsByConnectionID.removeAll()
         remoteHTTPConnections.removeAll()
     }
 
@@ -4234,7 +4249,7 @@ actor ServerNetworkManager {
             httpSessionsByID.removeValue(forKey: sessionToken)
             httpApprovedTokenFingerprintBySessionID.removeValue(forKey: sessionToken)
         }
-        httpTransportsByConnectionID.removeValue(forKey: id)
+        httpConnectionsByConnectionID.removeValue(forKey: id)
         remoteHTTPConnections.remove(id)
         #if DEBUG
             debugRecordConnectionEvent(

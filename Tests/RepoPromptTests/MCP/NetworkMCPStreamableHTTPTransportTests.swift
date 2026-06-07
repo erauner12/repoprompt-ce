@@ -156,7 +156,12 @@ final class NetworkMCPStreamableHTTPTransportTests: XCTestCase {
             encoding: .utf8
         )
 
+        XCTAssertTrue(managerSource.contains("private let transport: MCP.StatefulHTTPServerTransport"))
         XCTAssertTrue(managerSource.contains("parentManager.registerHandlers(for: server, connectionID: connectionID)"))
+        XCTAssertTrue(managerSource.contains("server.start(transport: transport)"))
+        XCTAssertTrue(managerSource.contains("func handle(_ request: MCP.HTTPRequest) async -> MCP.HTTPResponse"))
+        XCTAssertFalse(managerSource.contains("transport.closed()"))
+        XCTAssertFalse(managerSource.contains("GET SSE is not supported"))
         XCTAssertFalse(managerSource.contains("ServiceRegistry.services"))
         XCTAssertFalse(managerSource.contains("toolDef.callAsFunction"))
         XCTAssertFalse(transportSource.contains("ServiceRegistry.services"))

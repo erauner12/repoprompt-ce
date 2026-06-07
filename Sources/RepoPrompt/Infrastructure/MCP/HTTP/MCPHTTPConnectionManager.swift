@@ -19,7 +19,7 @@ actor MCPHTTPConnectionManager: MCPServerConnection {
     private let sourceAddress: String
     private let initialClientName: String?
     private let server: MCP.Server
-    private let transport: MCPStreamableHTTPTransport
+    private let transport: MCP.StatefulHTTPServerTransport
     private let parentManager: ServerNetworkManager
     private let logger: Logger
 
@@ -36,8 +36,8 @@ actor MCPHTTPConnectionManager: MCPServerConnection {
     }
 
     private var healthMonitoringTask: Task<Void, Never>?
-    private var closeWatchTask: Task<Void, Never>?
     private var state: ConnectionStateSnapshot = .connecting
+    private var lastActivityAt = Date()
     private var isClosing = false
     private var handshakeComplete = false
 
@@ -47,7 +47,7 @@ actor MCPHTTPConnectionManager: MCPServerConnection {
         sourceAddress: String,
         initialClientName: String?,
         codeMapsDisabled: Bool,
-        transport: MCPStreamableHTTPTransport,
+        transport: MCP.StatefulHTTPServerTransport,
         parentManager: ServerNetworkManager,
         logger: Logger? = nil
     ) {
@@ -72,16 +72,6 @@ actor MCPHTTPConnectionManager: MCPServerConnection {
     }
 
     func start(approvalHandler: @escaping (MCP.Client.Info) async -> Bool) async throws {
-        closeWatchTask = Task { [weak self] in
-            guard let self else { return }
-            for await _ in await transport.closed() {
-                let id = connectionID
-                mcpConnectionLog("MCPHTTPConnectionManager: transport closed for \(id)")
-                await parentManager.removeConnection(id)
-                break
-            }
-        }
-
         do {
             await parentManager.registerHandlers(for: server, connectionID: connectionID)
             try await server.start(transport: transport) { [weak self] clientInfo, _ in
@@ -106,6 +96,7 @@ actor MCPHTTPConnectionManager: MCPServerConnection {
         guard handshakeComplete, !isClosing else { return }
         do {
             try await server.notify(ToolListChangedNotification.message())
+            lastActivityAt = Date()
         } catch {
             if isClosing { return }
             logger.error("Failed to notify HTTP MCP client of tool list change: \(String(describing: error))")
@@ -118,8 +109,6 @@ actor MCPHTTPConnectionManager: MCPServerConnection {
         isClosing = true
         healthMonitoringTask?.cancel()
         healthMonitoringTask = nil
-        closeWatchTask?.cancel()
-        closeWatchTask = nil
         await server.stop()
         await transport.disconnect()
         updateState(.cancelled)
@@ -140,11 +129,17 @@ actor MCPHTTPConnectionManager: MCPServerConnection {
     }
 
     func secondsSinceLastActivity() async -> TimeInterval {
-        await transport.secondsSinceLastActivity() ?? 0
+        Date().timeIntervalSince(lastActivityAt)
+    }
+
+    func handle(_ request: MCP.HTTPRequest) async -> MCP.HTTPResponse {
+        lastActivityAt = Date()
+        return await transport.handleRequest(request)
     }
 
     func handle(_ request: MCPStreamableHTTPRequest) async -> MCPStreamableHTTPResponse {
-        await transport.handle(request)
+        let response = await handle(request.sdkHTTPRequest())
+        return MCPStreamableHTTPResponse.fromSDK(response)
     }
 
     private func markHandshakeComplete() {
@@ -161,18 +156,18 @@ actor MCPHTTPConnectionManager: MCPServerConnection {
             let hardIdleSec = UserDefaults.standard.integer(forKey: "mcp.idleConnectionSeconds")
             while !Task.isCancelled {
                 guard await parentManager.isRunning() else { break }
-                if hardIdleSec > 0,
-                   let idle = await transport.secondsSinceLastActivity(),
-                   idle > TimeInterval(hardIdleSec)
-                {
-                    let hasInFlight = await parentManager.hasInFlightCalls(for: connectionID)
-                    if !hasInFlight {
-                        await parentManager.terminateConnection(
-                            connectionID,
-                            reason: .idleTimeout,
-                            message: "HTTP MCP session idle for \(Int(idle))s"
-                        )
-                        break
+                if hardIdleSec > 0 {
+                    let idle = await secondsSinceLastActivity()
+                    if idle > TimeInterval(hardIdleSec) {
+                        let hasInFlight = await parentManager.hasInFlightCalls(for: connectionID)
+                        if !hasInFlight {
+                            await parentManager.terminateConnection(
+                                connectionID,
+                                reason: .idleTimeout,
+                                message: "HTTP MCP session idle for \(Int(idle))s"
+                            )
+                            break
+                        }
                     }
                 }
                 do { try await Task.sleep(for: .seconds(30)) }
@@ -182,8 +177,8 @@ actor MCPHTTPConnectionManager: MCPServerConnection {
     }
 
     func sendProgress(tool: String, kind: RepoPromptProgressKind, stage: String, message: String) async {
-        // First-slice Streamable HTTP does not implement GET SSE, so progress notifications
-        // have no attached response channel unless they are emitted during a request.
+        // Route progress through the SDK transport so notifications reach an attached GET SSE stream
+        // when present, or are stored by the transport for resumable replay.
         guard !isClosing, handshakeComplete else { return }
         let notification: RepoPromptControlNotification<RepoPromptProgressParams> = switch kind {
         case .stage:
@@ -192,6 +187,11 @@ actor MCPHTTPConnectionManager: MCPServerConnection {
             .heartbeat(tool: tool, stage: stage, message: message)
         }
         guard let data = notification.encodedJSONLine() else { return }
-        try? await transport.send(data)
+        do {
+            try await transport.send(data)
+            lastActivityAt = Date()
+        } catch {
+            // Progress is best-effort and should not fail the in-flight tool call.
+        }
     }
 }

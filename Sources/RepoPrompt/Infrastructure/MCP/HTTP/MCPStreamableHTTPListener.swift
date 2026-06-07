@@ -1,8 +1,8 @@
 import Foundation
 import Logging
-import NIOCore
-import NIOHTTP1
-import NIOPosix
+@preconcurrency import NIOCore
+@preconcurrency import NIOHTTP1
+@preconcurrency import NIOPosix
 
 actor MCPStreamableHTTPListener {
     typealias RequestHandler = @Sendable (MCPStreamableHTTPRequest) async -> MCPStreamableHTTPResponse
@@ -72,6 +72,10 @@ actor MCPStreamableHTTPListener {
             try? await group.shutdownGracefully()
         }
     }
+
+    func boundPort() -> Int? {
+        channel?.localAddress?.port
+    }
 }
 
 private final class MCPStreamableHTTPChannelHandler: ChannelInboundHandler, @unchecked Sendable {
@@ -83,6 +87,9 @@ private final class MCPStreamableHTTPChannelHandler: ChannelInboundHandler, @unc
     private var currentHead: HTTPRequestHead?
     private var bodyBuffer = ByteBuffer()
     private let maxBodyBytes = 8 * 1024 * 1024
+    private var activeStreamTask: Task<Void, Never>?
+    private var activeStreamTaskID = 0
+    private var closingForActiveStreamRequest = false
 
     init(requestHandler: @escaping MCPStreamableHTTPListener.RequestHandler, logger: Logger) {
         self.requestHandler = requestHandler
@@ -90,8 +97,18 @@ private final class MCPStreamableHTTPChannelHandler: ChannelInboundHandler, @unc
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        if closingForActiveStreamRequest {
+            return
+        }
+
         switch unwrapInboundIn(data) {
         case let .head(head):
+            guard activeStreamTask == nil else {
+                logger.warning("Network MCP HTTP channel received another request while a stream response is active; closing channel")
+                closingForActiveStreamRequest = true
+                context.close(promise: nil)
+                return
+            }
             currentHead = head
             bodyBuffer.clear()
         case var .body(part):
@@ -116,8 +133,15 @@ private final class MCPStreamableHTTPChannelHandler: ChannelInboundHandler, @unc
         }
     }
 
+    func channelInactive(context: ChannelHandlerContext) {
+        closingForActiveStreamRequest = false
+        cancelActiveStreamTask()
+        context.fireChannelInactive()
+    }
+
     func errorCaught(context: ChannelHandlerContext, error: Error) {
         logger.warning("Network MCP HTTP channel error: \(String(describing: error))")
+        cancelActiveStreamTask()
         context.close(promise: nil)
     }
 
@@ -137,12 +161,15 @@ private final class MCPStreamableHTTPChannelHandler: ChannelInboundHandler, @unc
     }
 
     private func writeResponse(_ response: MCPStreamableHTTPResponse, context: ChannelHandlerContext) {
-        if case .stream = response.body {
-            logger.error("Network MCP HTTP listener received a streaming response before listener streaming is implemented")
-            writeResponse(.error(statusCode: 501, message: "Streaming HTTP responses are not enabled yet", code: -32603), context: context)
-            return
+        switch response.body {
+        case .none, .data:
+            writeFiniteResponse(response, context: context)
+        case let .stream(stream):
+            writeStreamingResponse(response, stream: stream, context: context)
         }
+    }
 
+    private func writeFiniteResponse(_ response: MCPStreamableHTTPResponse, context: ChannelHandlerContext) {
         var headers = HTTPHeaders()
         for (name, value) in response.headers {
             headers.replaceOrAdd(name: name, value: value)
@@ -165,6 +192,111 @@ private final class MCPStreamableHTTPChannelHandler: ChannelInboundHandler, @unc
             context.write(wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
         }
         context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
+    }
+
+    private func writeStreamingResponse(
+        _ response: MCPStreamableHTTPResponse,
+        stream: AsyncThrowingStream<Data, Error>,
+        context: ChannelHandlerContext
+    ) {
+        cancelActiveStreamTask()
+        activeStreamTaskID += 1
+        let taskID = activeStreamTaskID
+
+        var headers = HTTPHeaders()
+        for (name, value) in response.headers where name.lowercased() != "content-length" {
+            headers.replaceOrAdd(name: name, value: value)
+        }
+        if headers["Transfer-Encoding"].isEmpty {
+            headers.replaceOrAdd(name: "Transfer-Encoding", value: "chunked")
+        }
+
+        let status = HTTPResponseStatus(statusCode: response.statusCode)
+        context.writeAndFlush(wrapOutboundOut(.head(HTTPResponseHead(version: .http1_1, status: status, headers: headers))))
+            .whenFailure { [weak self] error in
+                self?.logger.warning("Network MCP HTTP stream head write failed: \(String(describing: error))")
+                self?.cancelActiveStreamTask()
+            }
+
+        activeStreamTask = Task { [weak self, weak context] in
+            do {
+                for try await chunk in stream {
+                    try Task.checkCancellation()
+                    guard let self, let context else { return }
+                    let writeSucceeded = await writeStreamChunk(chunk, taskID: taskID, context: context)
+                    guard writeSucceeded else { return }
+                }
+                guard !Task.isCancelled, let self, let context else { return }
+                await finishStream(taskID: taskID, context: context)
+            } catch is CancellationError {
+                // Channel teardown owns cancellation; do not write after cancellation.
+            } catch {
+                guard let self, let context else { return }
+                await closeStreamAfterError(error, taskID: taskID, context: context)
+            }
+        }
+    }
+
+    private func writeStreamChunk(_ chunk: Data, taskID: Int, context: ChannelHandlerContext) async -> Bool {
+        await withCheckedContinuation { continuation in
+            context.eventLoop.execute { [weak self, weak context] in
+                guard let self, let context, activeStreamTaskID == taskID, context.channel.isActive else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                var buffer = context.channel.allocator.buffer(capacity: chunk.count)
+                buffer.writeBytes(chunk)
+                context.writeAndFlush(wrapOutboundOut(.body(.byteBuffer(buffer)))).whenComplete { result in
+                    switch result {
+                    case .success:
+                        continuation.resume(returning: true)
+                    case let .failure(error):
+                        self.logger.warning("Network MCP HTTP stream write failed: \(String(describing: error))")
+                        self.cancelActiveStreamTask()
+                        continuation.resume(returning: false)
+                    }
+                }
+            }
+        }
+    }
+
+    private func finishStream(taskID: Int, context: ChannelHandlerContext) async {
+        await withCheckedContinuation { continuation in
+            context.eventLoop.execute { [weak self, weak context] in
+                guard let self, let context, activeStreamTaskID == taskID, context.channel.isActive else {
+                    continuation.resume()
+                    return
+                }
+                context.writeAndFlush(wrapOutboundOut(.end(nil))).whenComplete { _ in
+                    if self.activeStreamTaskID == taskID {
+                        self.activeStreamTask = nil
+                    }
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    private func closeStreamAfterError(_ error: Error, taskID: Int, context: ChannelHandlerContext) async {
+        await withCheckedContinuation { continuation in
+            context.eventLoop.execute { [weak self, weak context] in
+                guard let self, let context, activeStreamTaskID == taskID else {
+                    continuation.resume()
+                    return
+                }
+                logger.warning("Network MCP HTTP stream failed: \(String(describing: error))")
+                activeStreamTask = nil
+                context.close().whenComplete { _ in
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    private func cancelActiveStreamTask() {
+        activeStreamTask?.cancel()
+        activeStreamTask = nil
+        activeStreamTaskID += 1
     }
 }
 
