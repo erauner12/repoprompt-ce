@@ -35,14 +35,14 @@ enum MCPNetworkHTTPInitializeClassifier {
         switch rawID {
         case is NSNull:
             return false
-        case is Bool:
-            return false
         case is String:
             return true
         case let value as NSNumber:
             guard CFGetTypeID(value) != CFBooleanGetTypeID() else { return false }
             let doubleValue = value.doubleValue
             return doubleValue.isFinite && doubleValue.rounded() == doubleValue
+        case is Bool:
+            return false
         case is Int, is Int8, is Int16, is Int32, is Int64:
             return true
         case is UInt, is UInt8, is UInt16, is UInt32, is UInt64:

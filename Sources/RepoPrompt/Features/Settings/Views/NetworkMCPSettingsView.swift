@@ -98,7 +98,7 @@ struct NetworkMCPSettingsView: View {
                 Text(viewModel.listenerStatus.userFacingDescription)
                     .font(fontPreset.captionFont)
                     .foregroundColor(viewModel.listenerStatus.lastErrorDescription == nil ? .secondary : .orange)
-                Text("POST /mcp and DELETE sessions are supported. GET SSE is intentionally deferred for this first slice.")
+                Text("Streamable HTTP supports POST /mcp, GET SSE, and DELETE sessions.")
                     .font(fontPreset.captionFont)
                     .foregroundColor(.secondary)
             }
@@ -245,7 +245,7 @@ struct NetworkMCPSettingsView: View {
     private var safetyNotes: some View {
         VStack(alignment: .leading, spacing: 4) {
             warningLabel("Use HTTP only on loopback or trusted private LANs. Rotate the token if you suspect it was copied to an untrusted place.")
-            Text("OpenClaw/remote clients should connect to /mcp with Streamable HTTP. Legacy HTTP+SSE and same-endpoint GET SSE are not enabled in this slice.")
+            Text("OpenClaw/remote clients should connect to /mcp with Streamable HTTP. Same-endpoint GET SSE is enabled for attached session streams; legacy two-endpoint HTTP+SSE remains deprecated.")
                 .font(fontPreset.captionFont)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

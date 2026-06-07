@@ -32,6 +32,8 @@ final class NetworkMCPConfigExportTests: XCTestCase {
         XCTAssertTrue(export.environmentSnippet.contains("export REPOPROMPT_MCP_TOKEN"), export.environmentSnippet)
         XCTAssertTrue(export.setupNotes.contains("Default workspace target: RepoPrompt CE (1 root)"), export.setupNotes)
         XCTAssertTrue(export.setupNotes.contains("OpenClaw"), export.setupNotes)
+        XCTAssertTrue(export.setupNotes.contains("same-endpoint `GET /mcp` SSE"), export.setupNotes)
+        XCTAssertTrue(export.setupNotes.contains("`DELETE /mcp` for session termination"), export.setupNotes)
         XCTAssertTrue(export.setupNotes.contains("op: \"start\""), export.setupNotes)
         XCTAssertTrue(export.setupNotes.contains("context_builder"), export.setupNotes)
         XCTAssertTrue(export.setupNotes.contains("oracle_send"), export.setupNotes)

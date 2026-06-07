@@ -600,6 +600,9 @@ actor ServerNetworkManager {
     private var httpConnectionsByConnectionID: [UUID: MCPHTTPConnectionManager] = [:]
     private var remoteHTTPConnections: Set<UUID> = []
     private let remoteBearerTokenStore = MCPRemoteBearerTokenStore()
+    #if DEBUG
+        private var debugNetworkMCPBearerTokenOverride: String?
+    #endif
     typealias RemoteClientApprovalHandler = @Sendable (MCPRemoteClientApprovalRequest) async -> MCPRemoteClientApprovalDecision
     private var remoteClientApprovalHandler: RemoteClientApprovalHandler?
 
@@ -1014,6 +1017,26 @@ actor ServerNetworkManager {
     func setRemoteClientApprovalHandler(_ handler: @escaping RemoteClientApprovalHandler) {
         remoteClientApprovalHandler = handler
     }
+
+    #if DEBUG
+        func debugSetNetworkMCPBearerTokenOverride(_ token: String?) {
+            debugNetworkMCPBearerTokenOverride = token
+        }
+
+        func debugHandleStreamableHTTPRequestForNetworkMCPRoutingTest(
+            _ request: MCPStreamableHTTPRequest
+        ) async -> MCPStreamableHTTPResponse {
+            if !isRunningState {
+                isRunningState = true
+                lifecycleGeneration &+= 1
+            }
+            return await handleStreamableHTTPRequest(request, lifecycleGeneration: lifecycleGeneration)
+        }
+
+        func debugNetworkMCPHTTPSessionCount() -> Int {
+            httpSessionsByID.count
+        }
+    #endif
 
     /// 🆕 Connection waiter continuations (replaces polling in waitForNewConnection)
     private struct ConnectionWaiter {
@@ -2948,7 +2971,7 @@ actor ServerNetworkManager {
             return .error(statusCode: 404, message: "Not Found", code: -32600)
         }
 
-        let authResult = remoteBearerTokenStore.authenticate(
+        let authResult = authenticateNetworkMCPBearerToken(
             authorizationHeader: request.header(MCPStreamableHTTPHeader.authorization)
         )
         let tokenFingerprint: String
@@ -2968,23 +2991,41 @@ actor ServerNetworkManager {
             )
         }
 
-        if let sessionID = request.header(MCPStreamableHTTPHeader.sessionID),
-           let approvedFingerprint = httpApprovedTokenFingerprintBySessionID[sessionID]
-        {
+        let method = request.method.uppercased()
+
+        if let sessionID = request.header(MCPStreamableHTTPHeader.sessionID) {
+            guard let connectionID = httpSessionsByID[sessionID],
+                  httpConnectionsByConnectionID[connectionID] != nil,
+                  let approvedFingerprint = httpApprovedTokenFingerprintBySessionID[sessionID]
+            else {
+                return .error(statusCode: 404, message: "Invalid or expired MCP-Session-Id", code: -32600)
+            }
             guard approvedFingerprint == tokenFingerprint else {
-                if let connectionID = httpSessionsByID[sessionID] {
-                    await removeConnection(connectionID)
-                }
+                await removeConnection(connectionID)
                 return .error(statusCode: 403, message: "Network MCP session token fingerprint changed", code: -32001)
             }
             let sourceAddress = MCPRemoteClientAddress(request.remoteAddress)
             guard sourceAddress.isPrivateLANOrLinkLocal else {
-                if let connectionID = httpSessionsByID[sessionID] {
-                    await removeConnection(connectionID)
-                }
+                await removeConnection(connectionID)
                 return .error(statusCode: 403, message: "Remote MCP source is not private/LAN/link-local: \(sourceAddress.normalizedHost)", code: -32001)
             }
         } else {
+            switch method {
+            case "POST":
+                guard MCPNetworkHTTPInitializeClassifier.isSingleInitializeRequest(request.body) else {
+                    return .error(statusCode: 400, message: "Initial POST /mcp must be a single initialize request", code: -32600)
+                }
+            case "GET", "DELETE":
+                return .error(statusCode: 400, message: "Missing MCP-Session-Id header", code: -32600)
+            default:
+                return .error(
+                    statusCode: 405,
+                    message: "Method Not Allowed",
+                    code: -32600,
+                    extraHeaders: [MCPStreamableHTTPHeader.allow: "GET, POST, DELETE"]
+                )
+            }
+
             let approvalRequest = MCPRemoteClientApprovalRequest(
                 clientDisplayName: nil,
                 userAgent: request.header("User-Agent"),
@@ -3002,18 +3043,11 @@ actor ServerNetworkManager {
             }
         }
 
-        switch request.method.uppercased() {
+        switch method {
         case "POST":
             return await handleHTTPPost(request, tokenFingerprint: tokenFingerprint, lifecycleGeneration: expectedLifecycleGeneration)
-        case "DELETE":
-            return await handleHTTPDelete(request, lifecycleGeneration: expectedLifecycleGeneration)
-        case "GET":
-            return .error(
-                statusCode: 405,
-                message: "GET SSE is not supported by this first-slice Streamable HTTP MCP endpoint",
-                code: -32600,
-                extraHeaders: [MCPStreamableHTTPHeader.allow: "POST, DELETE"]
-            )
+        case "GET", "DELETE":
+            return await handleExistingHTTPSessionRequest(request)
         default:
             return .error(
                 statusCode: 405,
@@ -3022,6 +3056,32 @@ actor ServerNetworkManager {
                 extraHeaders: [MCPStreamableHTTPHeader.allow: "GET, POST, DELETE"]
             )
         }
+    }
+
+    private func authenticateNetworkMCPBearerToken(authorizationHeader: String?) -> MCPRemoteBearerAuthenticationResult {
+        #if DEBUG
+            if let debugToken = debugNetworkMCPBearerTokenOverride {
+                guard let authorizationHeader else {
+                    return .rejected(.missingAuthorizationHeader)
+                }
+                let trimmedHeader = authorizationHeader.trimmingCharacters(in: .whitespacesAndNewlines)
+                let parts = trimmedHeader.split(maxSplits: 1) { $0.isWhitespace }
+                guard parts.count == 2,
+                      String(parts[0]).caseInsensitiveCompare("Bearer") == .orderedSame
+                else {
+                    return .rejected(.unsupportedAuthorizationScheme)
+                }
+                let presentedToken = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !presentedToken.isEmpty else {
+                    return .rejected(.emptyBearerToken)
+                }
+                guard MCPRemoteBearerTokenStore.constantTimeEquals(presentedToken, debugToken) else {
+                    return .rejected(.invalidBearerToken)
+                }
+                return .authenticated(fingerprint: MCPRemoteBearerTokenStore.fingerprint(for: debugToken))
+            }
+        #endif
+        return remoteBearerTokenStore.authenticate(authorizationHeader: authorizationHeader)
     }
 
     private func evaluateRemoteClientApproval(_ request: MCPRemoteClientApprovalRequest) async -> MCPRemoteClientApprovalResult {
@@ -3040,16 +3100,11 @@ actor ServerNetworkManager {
         tokenFingerprint: String,
         lifecycleGeneration expectedLifecycleGeneration: UInt64
     ) async -> MCPStreamableHTTPResponse {
-        if let sessionID = request.header(MCPStreamableHTTPHeader.sessionID) {
-            guard let connectionID = httpSessionsByID[sessionID],
-                  let manager = httpConnectionsByConnectionID[connectionID]
-            else {
-                return .error(statusCode: 404, message: "Invalid or expired MCP-Session-Id", code: -32600)
-            }
-            return await manager.handle(request)
+        if request.header(MCPStreamableHTTPHeader.sessionID) != nil {
+            return await handleExistingHTTPSessionRequest(request)
         }
 
-        guard MCPStreamableHTTPTransport.isSingleInitializeRequest(request.body) else {
+        guard MCPNetworkHTTPInitializeClassifier.isSingleInitializeRequest(request.body) else {
             return .error(statusCode: 400, message: "Initial POST /mcp must be a single initialize request", code: -32600)
         }
         guard isCurrentLifecycle(expectedLifecycleGeneration) else {
@@ -3099,10 +3154,7 @@ actor ServerNetworkManager {
         return await manager.handle(request)
     }
 
-    private func handleHTTPDelete(
-        _ request: MCPStreamableHTTPRequest,
-        lifecycleGeneration expectedLifecycleGeneration: UInt64
-    ) async -> MCPStreamableHTTPResponse {
+    private func handleExistingHTTPSessionRequest(_ request: MCPStreamableHTTPRequest) async -> MCPStreamableHTTPResponse {
         guard let sessionID = request.header(MCPStreamableHTTPHeader.sessionID) else {
             return .error(statusCode: 400, message: "Missing MCP-Session-Id header", code: -32600)
         }
@@ -3112,7 +3164,9 @@ actor ServerNetworkManager {
             return .error(statusCode: 404, message: "Invalid or expired MCP-Session-Id", code: -32600)
         }
         let response = await manager.handle(request)
-        await removeConnection(connectionID)
+        if request.method.uppercased() == "DELETE", (200 ..< 300).contains(response.statusCode) {
+            await removeConnection(connectionID)
+        }
         return response
     }
 
