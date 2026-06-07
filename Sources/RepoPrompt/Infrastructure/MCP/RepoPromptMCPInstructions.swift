@@ -71,7 +71,7 @@ enum RepoPromptMCPInstructions {
 
         CONTEXT BUILDING: context_builder is a heavy sub-agent that autonomously explores the codebase to build deep, curated context for a task. Ideal for going from task description to full implementation plan (response_type="plan"), code review ("review"), or deep Q&A ("question"). Its context is stateful — optionally continue with oracle calls using the returned chat_id.
 
-        RESUMABLE LONG-RUNNING TOOLS: For remote clients such as OpenClaw, call long-running `context_builder` and `oracle_send` work with explicit `op: "start"`, then follow up with `op: "wait"` or `op: "poll"` using the returned `job_id`; use `op: "cancel"` to request cancellation. Do not depend on multi-minute HTTP/tool-call timeouts. Omit `op` only when you intentionally want the legacy synchronous behavior. v1 jobs are in-memory and can expire or disappear across RepoPrompt restarts; use `export_response: true` when you need durable response artifacts.
+        LONG-RUNNING TOOLS OVER SSE: For remote clients such as OpenClaw, long-running `context_builder` and `oracle_send` calls are ordinary synchronous tool calls carried by the SDK Streamable HTTP SSE transport. Keep the client session open for the tool result, and use `export_response: true` when you need durable response artifacts.
 
         NETWORK MCP BOUNDARY: Remote clients use the existing RepoPrompt MCP tool catalog after bearer authentication, remote-client approval, and default-target routing. High-impact/mutating tools still rely on the existing tool behavior, approvals, and workspace routing; configure the default target carefully and do not expose the HTTP endpoint beyond loopback or a trusted private LAN.
 

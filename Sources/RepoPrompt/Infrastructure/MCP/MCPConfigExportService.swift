@@ -57,16 +57,16 @@ actor MCPConfigExportService {
         # Paste the token copied from RepoPrompt Settings into your shell, secret manager, or OpenClaw secret UI.
         export \(envVariableName)="<paste RepoPrompt Network MCP token>"
         """
-        let setupNotes = """
-        Network MCP endpoint: \(endpointURL)
-        Default workspace target: \(targetSummary) (\(rootCount) root\(rootCount == 1 ? "" : "s"))
-        Non-loopback LAN clients require approval in RepoPrompt the first time they connect.
-        Streamable HTTP uses `POST /mcp` for client messages, same-endpoint `GET /mcp` SSE for attached session streams, and `DELETE /mcp` for session termination.
-        For long-running `context_builder` and `oracle_send` calls from OpenClaw or other remote clients, use explicit `op: "start"` and follow up with `op: "wait"`/`op: "poll"`/`op: "cancel"` using the returned `job_id` instead of relying on multi-minute HTTP or tool-call timeouts.
-        Resumable jobs are in-memory: they can expire or be lost if RepoPrompt restarts. Use existing `export_response: true` options when you need durable response artifacts.
-        Remote clients use the existing RepoPrompt MCP tool catalog after bearer authentication, remote-client approval, and default-target routing. High-impact/mutating tools still rely on the existing tool behavior, approvals, and workspace routing; configure the default target carefully.
-        Do not expose or port-forward this HTTP endpoint; use it only on loopback or trusted private LANs.
-        """
+        let setupNotes = [
+            "Network MCP endpoint: \(endpointURL)",
+            "Default workspace target: \(targetSummary) (\(rootCount) root\(rootCount == 1 ? "" : "s"))",
+            "Non-loopback LAN clients require approval in RepoPrompt the first time they connect.",
+            "Streamable HTTP uses `POST /mcp` for client messages, same-endpoint `GET /mcp` SSE for attached session streams, and `DELETE /mcp` for session termination.",
+            "Long-running `context_builder` and `oracle_send` calls use the SDK Streamable HTTP SSE transport; keep the client session open for the tool result instead of relying on a separate job-control flow.",
+            "Use existing `export_response: true` options when you need durable response artifacts.",
+            "Remote clients use the existing RepoPrompt MCP tool catalog after bearer authentication, remote-client approval, and default-target routing. High-impact/mutating tools still rely on the existing tool behavior, approvals, and workspace routing; configure the default target carefully.",
+            "Do not expose or port-forward this HTTP endpoint; use it only on loopback or trusted private LANs."
+        ].joined(separator: "\n")
         return NetworkMCPRemoteConfigExport(
             endpointURL: endpointURL,
             authorizationHeaderTemplate: authorizationTemplate,
@@ -141,11 +141,7 @@ actor MCPConfigExportService {
     /// This prevents the CLI from using the user's default MCP config, which may include RepoPrompt.
     @discardableResult
     func prepareEmptyConfigFile() async throws -> URL {
-        let emptyConfigJSON = """
-        {
-        	"mcpServers": {}
-        }
-        """
+        let emptyConfigJSON = "{\n  \"mcpServers\": {}\n}"
         let fm = FileManager.default
         let baseDir = fm.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/RepoPrompt/MCP", isDirectory: true)

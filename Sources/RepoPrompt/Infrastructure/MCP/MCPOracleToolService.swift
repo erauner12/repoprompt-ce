@@ -215,34 +215,9 @@ struct MCPOracleToolService {
     // MARK: - oracle_send
 
     func executeOracleSend(args: [String: Value]) async throws -> Value {
-        let controller = makeOracleSendResumableJobController()
-        let request = try controller.parseRequest(args: args)
-
-        guard let operation = request.operation else {
-            let prepared = try await prepareOracleSendRequest(args: args, allowsResumableStartArguments: false)
-            return try await executePreparedOracleSend(prepared)
-        }
-
-        switch operation {
-        case .start:
-            let prepared = try await prepareOracleSendRequest(args: args, allowsResumableStartArguments: true)
-            let snapshot = try await controller.start(
-                args: args,
-                statusText: "Oracle send job queued.",
-                stage: "queued",
-                progressMessage: "Waiting to start Oracle...",
-                pollAfterSeconds: 1
-            ) { jobID in
-                await runResumableOracleSendJob(jobID: jobID, prepared: prepared)
-            }
-            return snapshot.toValue()
-        case .poll, .wait, .cancel:
-            let snapshot = try await controller.handleControl(args: args)
-            return snapshot.toValue()
-        }
+        let prepared = try await prepareOracleSendRequest(args: args)
+        return try await executePreparedOracleSend(prepared)
     }
-
-    private typealias JobProgressReporter = @Sendable (_ stage: String, _ message: String) async -> Void
 
     private nonisolated static let oracleSendBusinessArgumentKeys: Set<String> = [
         "message",
@@ -251,16 +226,6 @@ struct MCPOracleToolService {
         "new_chat",
         "model",
         "export_response"
-    ]
-
-    private nonisolated static let oracleSendResumableArgumentKeys: Set<String> = [
-        "op",
-        "job_id",
-        "timeout",
-        "server_instance_id",
-        "client_request_id",
-        "context_id",
-        "window_id"
     ]
 
     private struct PreparedOracleSendRequest {
@@ -274,19 +239,8 @@ struct MCPOracleToolService {
         let tabContext: OracleViewModel.OracleSendTabContext?
     }
 
-    private func makeOracleSendResumableJobController() -> MCPResumableJobController {
-        MCPResumableJobController(
-            tool: oracleSendToolName,
-            windowID: windowID,
-            businessArgumentKeys: Self.oracleSendBusinessArgumentKeys
-        )
-    }
-
-    private func prepareOracleSendRequest(
-        args: [String: Value],
-        allowsResumableStartArguments: Bool
-    ) async throws -> PreparedOracleSendRequest {
-        try validateOracleSendAllowedArgs(args, allowsResumableStartArguments: allowsResumableStartArguments)
+    private func prepareOracleSendRequest(args: [String: Value]) async throws -> PreparedOracleSendRequest {
+        try validateOracleSendAllowedArgs(args)
         try validateCommonOracleArgs(args)
 
         let message = (args["message"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -336,11 +290,6 @@ struct MCPOracleToolService {
 
         var chatArgs = args
         chatArgs.removeValue(forKey: "export_response")
-        if allowsResumableStartArguments {
-            chatArgs = chatArgs.filter { key, _ in
-                !Self.oracleSendResumableArgumentKeys.contains(key) && !key.hasPrefix("_")
-            }
-        }
 
         return PreparedOracleSendRequest(
             connectionID: connectionID,
@@ -354,22 +303,15 @@ struct MCPOracleToolService {
         )
     }
 
-    private func executePreparedOracleSend(
-        _ prepared: PreparedOracleSendRequest,
-        jobProgress: JobProgressReporter? = nil
-    ) async throws -> Value {
+    private func executePreparedOracleSend(_ prepared: PreparedOracleSendRequest) async throws -> Value {
         await sendOracleProgress(
             connectionID: prepared.connectionID,
-            jobProgress: jobProgress,
             stage: "starting",
             message: "Starting Oracle..."
         )
 
         let capturedTabContext = prepared.tabContext
         let capturedChatArgs = prepared.chatArgs
-        if let jobProgress {
-            await jobProgress("waiting", "Waiting for Oracle response...")
-        }
         var result = try await withHeartbeat(
             prepared.connectionID,
             oracleSendToolName,
@@ -398,104 +340,22 @@ struct MCPOracleToolService {
 
         await sendOracleProgress(
             connectionID: prepared.connectionID,
-            jobProgress: jobProgress,
             stage: "complete",
             message: "Oracle complete"
         )
         return .object(result)
     }
 
-    private func runResumableOracleSendJob(
-        jobID: UUID,
-        prepared: PreparedOracleSendRequest,
-        store: MCPResumableJobStore = .shared
-    ) async {
-        var oracleSendStarted = false
-        do {
-            try Task.checkCancellation()
-            oracleSendStarted = true
-            let result = try await executePreparedOracleSend(prepared) { stage, message in
-                await store.updateProgress(
-                    jobID: jobID,
-                    tool: oracleSendToolName,
-                    windowID: windowID,
-                    status: .running,
-                    statusText: message,
-                    stage: stage,
-                    progressMessage: message
-                )
-            }
-            if Task.isCancelled {
-                await failResumableOracleSendCancellationUnsupported(jobID: jobID, store: store)
-                return
-            }
-            await store.complete(
-                jobID: jobID,
-                tool: oracleSendToolName,
-                windowID: windowID,
-                result: result,
-                statusText: "Oracle complete.",
-                stage: "complete",
-                progressMessage: "Oracle complete"
-            )
-        } catch is CancellationError {
-            if oracleSendStarted {
-                await failResumableOracleSendCancellationUnsupported(jobID: jobID, store: store)
-            } else {
-                await store.markCancelled(
-                    jobID: jobID,
-                    tool: oracleSendToolName,
-                    windowID: windowID,
-                    statusText: "Oracle send job cancelled before starting.",
-                    stage: "cancelled"
-                )
-            }
-        } catch {
-            await store.fail(
-                jobID: jobID,
-                tool: oracleSendToolName,
-                windowID: windowID,
-                errorType: resumableErrorType(for: error),
-                message: resumableErrorMessage(for: error),
-                stage: "failed"
-            )
-        }
-    }
-
-    private func failResumableOracleSendCancellationUnsupported(
-        jobID: UUID,
-        store: MCPResumableJobStore
-    ) async {
-        await store.fail(
-            jobID: jobID,
-            tool: oracleSendToolName,
-            windowID: windowID,
-            errorType: "cancel_not_supported",
-            message: "oracle_send cancellation was requested, but RepoPrompt cannot confirm that the active Oracle stream stopped before chat state may have changed. Start a new job if you still need this work.",
-            stage: "failed"
-        )
-    }
-
     private func sendOracleProgress(
         connectionID: UUID?,
-        jobProgress: JobProgressReporter?,
         stage: String,
         message: String
     ) async {
-        if let jobProgress {
-            await jobProgress(stage, message)
-        }
         await sendStageProgress(connectionID, oracleSendToolName, stage, message)
     }
 
-    private func validateOracleSendAllowedArgs(
-        _ args: [String: Value],
-        allowsResumableStartArguments: Bool
-    ) throws {
-        var allowedArgs = Self.oracleSendBusinessArgumentKeys
-        if allowsResumableStartArguments {
-            allowedArgs.formUnion(Self.oracleSendResumableArgumentKeys)
-        }
+    private func validateOracleSendAllowedArgs(_ args: [String: Value]) throws {
+        let allowedArgs = Self.oracleSendBusinessArgumentKeys
         let unsupported = args.keys
             .filter { !$0.hasPrefix("_") && !allowedArgs.contains($0) }
             .sorted()
@@ -504,19 +364,6 @@ struct MCPOracleToolService {
                 "oracle_send only accepts: message, mode, chat_id, new_chat, model, export_response. Unsupported args: \(unsupported.joined(separator: ", "))"
             )
         }
-    }
-
-    private func resumableErrorType(for error: Error) -> String {
-        if error is MCPError { return "mcp_error" }
-        return String(reflecting: type(of: error))
-    }
-
-    private func resumableErrorMessage(for error: Error) -> String {
-        let localized = (error as NSError).localizedDescription
-        if !localized.isEmpty, localized != "The operation couldn’t be completed." {
-            return localized
-        }
-        return String(describing: error)
     }
 
     // MARK: - Shared helpers
