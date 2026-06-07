@@ -61,6 +61,8 @@ actor MCPConfigExportService {
         Network MCP endpoint: \(endpointURL)
         Default workspace target: \(targetSummary) (\(rootCount) root\(rootCount == 1 ? "" : "s"))
         Non-loopback LAN clients require approval in RepoPrompt the first time they connect.
+        For long-running `context_builder` and `oracle_send` calls from OpenClaw or other remote clients, use explicit `op: "start"` and follow up with `op: "wait"`/`op: "poll"`/`op: "cancel"` using the returned `job_id` instead of relying on multi-minute HTTP or tool-call timeouts.
+        Resumable jobs are in-memory: they can expire or be lost if RepoPrompt restarts. Use existing `export_response: true` options when you need durable response artifacts.
         Do not expose or port-forward this HTTP endpoint; use it only on loopback or trusted private LANs.
         """
         return NetworkMCPRemoteConfigExport(

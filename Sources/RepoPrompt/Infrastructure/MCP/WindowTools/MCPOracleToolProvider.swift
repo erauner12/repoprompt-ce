@@ -106,6 +106,8 @@ final class MCPOracleToolProvider: MCPWindowToolProviding {
             Pass `export_response: true` to write the response to a shareable file and get back shareable `oracle_export_path` / `oracle_export_instruction` values. To hand the export to a child agent, include `oracle_export_path` inside the `message` (or `messages`) you send on your next delegation call; your system prompt names the specific delegation tool available to you.
 
             Build context first with file reads, `manage_selection`, or `workspace_context`.
+
+            **Resumable jobs**: Omit `op` for the existing synchronous behavior. For remote clients or timeout-prone sends, pass `op: "start"` with the normal arguments to create a resumable `oracle_send` job, then follow up with `op: "wait"` or `op: "poll"` and the returned `job_id`. Use `op: "cancel"` with `job_id` to request cancellation. Jobs are in-memory and may expire or be lost across app restarts; `server_instance_id` is returned as an advisory restart detector.
             """,
             annotations: .repoPromptLocalEphemeralState,
             inputSchema: .object(
@@ -130,9 +132,14 @@ final class MCPOracleToolProvider: MCPWindowToolProviding {
                     ),
                     "export_response": .boolean(
                         description: "When true, export the response to a file and return `oracle_export_path` plus `oracle_export_instruction`. Include `oracle_export_path` inside the `message` you send on your next delegation call; the specific delegation tool is named by your system prompt."
-                    )
+                    ),
+                    "op": .string(description: "Opt-in resumable operation. Omit for existing synchronous behavior. Use 'start' to launch a resumable oracle_send job, then 'poll', 'wait', or 'cancel' with job_id.", enum: ["start", "poll", "wait", "cancel"]),
+                    "job_id": .string(description: "Resumable job UUID returned by op=start. Required for op=poll, op=wait, and op=cancel."),
+                    "timeout": .number(description: "Wait timeout in seconds for op=wait only. The server may clamp this to an HTTP-friendly maximum; 0 returns an immediate poll-style snapshot."),
+                    "server_instance_id": .string(description: "Optional advisory restart detector from a prior job snapshot. If it does not match this RepoPrompt process, the job snapshot reports server_restarted."),
+                    "client_request_id": .string(description: "Optional op=start idempotency key. Retrying start with the same key in the same window returns the existing job snapshot instead of launching a duplicate job.")
                 ],
-                required: ["message"]
+                required: []
             )
         ) { [dependencies] _, args in
             try await dependencies.executeOracleSend(args)

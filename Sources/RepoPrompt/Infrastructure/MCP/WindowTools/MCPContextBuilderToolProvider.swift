@@ -90,9 +90,21 @@ private struct ContextBuilderToolResult: Codable {
     }
 }
 
+private struct ContextBuilderExecutionOptions {
+    let instructions: String
+    let responseType: ContextBuilderResponseType?
+    let exportResponse: Bool
+}
+
 @MainActor
 final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
     let group: MCPWindowToolGroup = .contextBuilder
+
+    private nonisolated static let businessArgumentKeys: Set<String> = [
+        "instructions",
+        "response_type",
+        "export_response"
+    ]
 
     private let runtime: MCPWindowToolRuntime
     private let dependencies: MCPWindowToolDependencies
@@ -142,35 +154,76 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
             **Agent mode behavior**: If this tool is invoked during an Agent Mode run, it reuses the current agent tab instead of creating a new tab.
 
             **Timing**: 30s-5min depending on codebase size and task complexity.
+
+            **Resumable jobs**: Omit `op` for the existing synchronous behavior. For remote clients or timeout-prone runs, pass `op: "start"` with the normal arguments to create a resumable job, then follow up with `op: "wait"` or `op: "poll"` and the returned `job_id`. Use `op: "cancel"` with `job_id` to request cancellation. Jobs are in-memory and may expire or be lost across app restarts; `server_instance_id` is returned as an advisory restart detector.
             """,
             annotations: .repoPromptLocalEphemeralState,
             inputSchema: .object(
                 properties: [
                     "instructions": .string(description: "Your request, ideally structured with XML tags: <task> for the main goal, <context> for background/constraints/file references, <discovery_agent-guidelines> for optional starting hints. Describe what you need — the agent finds the right files."),
                     "response_type": .string(description: "Optional: 'plan' to generate implementation plan, 'question' to ask a question, or 'review' to generate a code review. Omit or 'clarify' to just return context.", enum: ["plan", "question", "review", "clarify"]),
-                    "export_response": .boolean(description: "When true, export the generated response to a file and return `oracle_export_path` plus `oracle_export_instruction`. Requires a response_type that generates a response. Include `oracle_export_path` inside the `message` you send on your next delegation call; the specific delegation tool is named by your system prompt.")
+                    "export_response": .boolean(description: "When true, export the generated response to a file and return `oracle_export_path` plus `oracle_export_instruction`. Requires a response_type that generates a response. Include `oracle_export_path` inside the `message` you send on your next delegation call; the specific delegation tool is named by your system prompt."),
+                    "op": .string(description: "Opt-in resumable operation. Omit for existing synchronous behavior. Use 'start' to launch a resumable context_builder job, then 'poll', 'wait', or 'cancel' with job_id.", enum: ["start", "poll", "wait", "cancel"]),
+                    "job_id": .string(description: "Resumable job UUID returned by op=start. Required for op=poll, op=wait, and op=cancel."),
+                    "timeout": .number(description: "Wait timeout in seconds for op=wait only. The server may clamp this to an HTTP-friendly maximum; 0 returns an immediate poll-style snapshot."),
+                    "server_instance_id": .string(description: "Optional advisory restart detector from a prior job snapshot. If it does not match this RepoPrompt process, the job snapshot reports server_restarted."),
+                    "client_request_id": .string(description: "Optional op=start idempotency key. Retrying start with the same key in the same window returns the existing job snapshot instead of launching a duplicate job.")
                 ],
                 required: []
             )
         ) { [dependencies] _, args in
             let connectionID = ServerNetworkManager.currentConnectionID
-            let result = try await Self.executeContextBuilder(
-                args: args,
-                connectionID: connectionID,
-                dependencies: dependencies
-            )
-            return result.toMCPValue()
+            let controller = Self.makeResumableJobController(dependencies: dependencies)
+            let request = try controller.parseRequest(args: args)
+            guard let operation = request.operation else {
+                let result = try await Self.executeContextBuilder(
+                    args: args,
+                    connectionID: connectionID,
+                    dependencies: dependencies
+                )
+                return result.toMCPValue()
+            }
+
+            switch operation {
+            case .start:
+                _ = try Self.parseExecutionOptions(args: args)
+                try await Self.validateStartContext(dependencies: dependencies)
+                let snapshot = try await controller.start(
+                    args: args,
+                    statusText: "Context Builder job queued.",
+                    stage: "queued",
+                    progressMessage: "Waiting to start Context Builder...",
+                    pollAfterSeconds: 1
+                ) { jobID in
+                    await Self.runResumableContextBuilderJob(
+                        jobID: jobID,
+                        args: args,
+                        connectionID: connectionID,
+                        dependencies: dependencies
+                    )
+                }
+                return snapshot.toValue()
+            case .poll, .wait, .cancel:
+                let snapshot = try await controller.handleControl(args: args)
+                return snapshot.toValue()
+            }
         }
     }
 
-    private static func executeContextBuilder(
-        args: [String: Value],
-        connectionID: UUID?,
+    private typealias JobProgressReporter = @Sendable (_ stage: String, _ message: String) async -> Void
+
+    private nonisolated static func makeResumableJobController(
         dependencies: MCPWindowToolDependencies
-    ) async throws -> ContextBuilderToolResult {
+    ) -> MCPResumableJobController {
+        MCPResumableJobController(
+            tool: MCPWindowToolName.contextBuilder,
+            windowID: dependencies.windowID,
+            businessArgumentKeys: businessArgumentKeys
+        )
+    }
+
+    private nonisolated static func parseExecutionOptions(args: [String: Value]) throws -> ContextBuilderExecutionOptions {
         let instructions = args["instructions"]?.stringValue ?? ""
-        let metadata = await dependencies.captureRequestMetadata()
-        await dependencies.drainReadFileAutoSelection(metadata, .mirroredSelectionAndMetrics)
         let responseType = try ContextBuilderResponseType.parse(from: args["response_type"])
         let exportResponse: Bool
         if let value = args["export_response"] {
@@ -184,6 +237,32 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
         } else {
             exportResponse = false
         }
+        return ContextBuilderExecutionOptions(
+            instructions: instructions,
+            responseType: responseType,
+            exportResponse: exportResponse
+        )
+    }
+
+    private static func validateStartContext(dependencies: MCPWindowToolDependencies) throws {
+        let targetWindow = try dependencies.requireTargetWindow()
+        guard targetWindow.workspaceManager.activeWorkspace != nil else {
+            throw MCPError.invalidParams("No active workspace in this window. Use manage_workspaces action='list' to see available workspaces, then action='switch' to load one.")
+        }
+    }
+
+    private static func executeContextBuilder(
+        args: [String: Value],
+        connectionID: UUID?,
+        dependencies: MCPWindowToolDependencies,
+        jobProgress: JobProgressReporter? = nil
+    ) async throws -> ContextBuilderToolResult {
+        let options = try parseExecutionOptions(args: args)
+        let instructions = options.instructions
+        let responseType = options.responseType
+        let exportResponse = options.exportResponse
+        let metadata = await dependencies.captureRequestMetadata()
+        await dependencies.drainReadFileAutoSelection(metadata, .mirroredSelectionAndMetrics)
 
         let targetWindow = try dependencies.requireTargetWindow()
         guard let workspace = targetWindow.workspaceManager.activeWorkspace else {
@@ -262,18 +341,20 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
             } : nil
 
             func runContextBuilderAndPlan() async throws -> ContextBuilderToolResult {
-                await dependencies.sendStageProgress(
-                    connectionID,
-                    MCPWindowToolName.contextBuilder,
-                    "starting",
-                    "Starting context builder..."
+                await sendContextBuilderProgress(
+                    connectionID: connectionID,
+                    dependencies: dependencies,
+                    jobProgress: jobProgress,
+                    stage: "starting",
+                    message: "Starting context builder..."
                 )
 
-                await dependencies.sendStageProgress(
-                    connectionID,
-                    MCPWindowToolName.contextBuilder,
-                    "discovering",
-                    "Running Context Builder agent..."
+                await sendContextBuilderProgress(
+                    connectionID: connectionID,
+                    dependencies: dependencies,
+                    jobProgress: jobProgress,
+                    stage: "discovering",
+                    message: "Running Context Builder agent..."
                 )
                 let snapshot = try await withHeartbeat(
                     connectionID: connectionID,
@@ -294,11 +375,12 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
                     )
                 }
 
-                await dependencies.sendStageProgress(
-                    connectionID,
-                    MCPWindowToolName.contextBuilder,
-                    "discovered",
-                    "Context Builder run complete, building selection..."
+                await sendContextBuilderProgress(
+                    connectionID: connectionID,
+                    dependencies: dependencies,
+                    jobProgress: jobProgress,
+                    stage: "discovered",
+                    message: "Context Builder run complete, building selection..."
                 )
 
                 let resultTab = await MainActor.run {
@@ -344,11 +426,12 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
                     try Task.checkCancellation()
 
                     let modeLabel = responseType?.generationLabel ?? "question"
-                    await dependencies.sendStageProgress(
-                        connectionID,
-                        MCPWindowToolName.contextBuilder,
-                        "generating",
-                        "Generating \(modeLabel)..."
+                    await sendContextBuilderProgress(
+                        connectionID: connectionID,
+                        dependencies: dependencies,
+                        jobProgress: jobProgress,
+                        stage: "generating",
+                        message: "Generating \(modeLabel)..."
                     )
 
                     let reply = try await withHeartbeat(
@@ -374,11 +457,12 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
                     followUpHint = "Continue this \(modeLabel) conversation with ask_oracle(chat_id: \"\(reply.shortId)\", new_chat: false)"
                 }
 
-                await dependencies.sendStageProgress(
-                    connectionID,
-                    MCPWindowToolName.contextBuilder,
-                    "complete",
-                    "Context builder complete"
+                await sendContextBuilderProgress(
+                    connectionID: connectionID,
+                    dependencies: dependencies,
+                    jobProgress: jobProgress,
+                    stage: "complete",
+                    message: "Context builder complete"
                 )
 
                 let normalizedTokens = selectionReply.totalTokens ?? 0
@@ -458,6 +542,141 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
             }
             return try await runContextBuilderAndPlan()
         }
+    }
+
+    private static func runResumableContextBuilderJob(
+        jobID: UUID,
+        args: [String: Value],
+        connectionID: UUID?,
+        dependencies: MCPWindowToolDependencies,
+        store: MCPResumableJobStore = .shared
+    ) async {
+        let tool = MCPWindowToolName.contextBuilder
+        let windowID = dependencies.windowID
+        do {
+            try Task.checkCancellation()
+            let result = try await executeContextBuilder(
+                args: args,
+                connectionID: connectionID,
+                dependencies: dependencies
+            ) { stage, message in
+                await store.updateProgress(
+                    jobID: jobID,
+                    tool: tool,
+                    windowID: windowID,
+                    status: .running,
+                    statusText: message,
+                    stage: stage,
+                    progressMessage: message
+                )
+            }
+            try Task.checkCancellation()
+            await finishResumableContextBuilderJob(
+                jobID: jobID,
+                result: result,
+                tool: tool,
+                windowID: windowID,
+                store: store
+            )
+        } catch is CancellationError {
+            await store.markCancelled(
+                jobID: jobID,
+                tool: tool,
+                windowID: windowID,
+                statusText: "Context Builder job cancelled.",
+                stage: "cancelled"
+            )
+        } catch {
+            await store.fail(
+                jobID: jobID,
+                tool: tool,
+                windowID: windowID,
+                errorType: resumableErrorType(for: error),
+                message: resumableErrorMessage(for: error),
+                stage: "failed"
+            )
+        }
+    }
+
+    private static func finishResumableContextBuilderJob(
+        jobID: UUID,
+        result: ContextBuilderToolResult,
+        tool: String,
+        windowID: Int?,
+        store: MCPResumableJobStore
+    ) async {
+        if result.status == "completed" {
+            await store.complete(
+                jobID: jobID,
+                tool: tool,
+                windowID: windowID,
+                result: result.toMCPValue(),
+                statusText: "Context Builder complete.",
+                stage: "complete",
+                progressMessage: "Context builder complete"
+            )
+        } else if result.status == "cancelled" {
+            await store.markCancelled(
+                jobID: jobID,
+                tool: tool,
+                windowID: windowID,
+                statusText: "Context Builder job cancelled.",
+                stage: "cancelled"
+            )
+        } else if result.status.hasPrefix("failed:") {
+            let message = result.status
+                .dropFirst("failed:".count)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            await store.fail(
+                jobID: jobID,
+                tool: tool,
+                windowID: windowID,
+                errorType: "context_builder_failed",
+                message: message.isEmpty ? "Context Builder failed." : message,
+                stage: "failed"
+            )
+        } else {
+            await store.complete(
+                jobID: jobID,
+                tool: tool,
+                windowID: windowID,
+                result: result.toMCPValue(),
+                statusText: "Context Builder complete.",
+                stage: "complete",
+                progressMessage: "Context builder complete"
+            )
+        }
+    }
+
+    private static func sendContextBuilderProgress(
+        connectionID: UUID?,
+        dependencies: MCPWindowToolDependencies,
+        jobProgress: JobProgressReporter?,
+        stage: String,
+        message: String
+    ) async {
+        if let jobProgress {
+            await jobProgress(stage, message)
+        }
+        await dependencies.sendStageProgress(
+            connectionID,
+            MCPWindowToolName.contextBuilder,
+            stage,
+            message
+        )
+    }
+
+    private static func resumableErrorType(for error: Error) -> String {
+        if error is MCPError { return "mcp_error" }
+        return String(reflecting: type(of: error))
+    }
+
+    private static func resumableErrorMessage(for error: Error) -> String {
+        let localized = (error as NSError).localizedDescription
+        if !localized.isEmpty, localized != "The operation couldn’t be completed." {
+            return localized
+        }
+        return String(describing: error)
     }
 
     private static func withHeartbeat<T: Sendable>(

@@ -160,6 +160,7 @@ final class MCPServerViewModel: ObservableObject {
             askOracleToolName: MCPWindowToolName.askOracle,
             oracleSendToolName: MCPWindowToolName.oracleSend,
             oracleChatLogToolName: MCPWindowToolName.oracleChatLog,
+            windowID: windowID,
             promptVM: promptVM,
             oracleVM: oracleVM,
             captureRequestMetadata: { [self] in await captureRequestMetadata() },

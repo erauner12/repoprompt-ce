@@ -31,6 +31,13 @@ final class NetworkMCPConfigExportTests: XCTestCase {
         XCTAssertTrue(export.openClawJSON.contains("Bearer ${REPOPROMPT_MCP_TOKEN}"), export.openClawJSON)
         XCTAssertTrue(export.environmentSnippet.contains("export REPOPROMPT_MCP_TOKEN"), export.environmentSnippet)
         XCTAssertTrue(export.setupNotes.contains("Default workspace target: RepoPrompt CE (1 root)"), export.setupNotes)
+        XCTAssertTrue(export.setupNotes.contains("OpenClaw"), export.setupNotes)
+        XCTAssertTrue(export.setupNotes.contains("op: \"start\""), export.setupNotes)
+        XCTAssertTrue(export.setupNotes.contains("context_builder"), export.setupNotes)
+        XCTAssertTrue(export.setupNotes.contains("oracle_send"), export.setupNotes)
+        XCTAssertTrue(export.setupNotes.contains("multi-minute HTTP or tool-call timeouts"), export.setupNotes)
+        XCTAssertTrue(export.setupNotes.contains("Resumable jobs are in-memory"), export.setupNotes)
+        XCTAssertTrue(export.setupNotes.contains("export_response: true"), export.setupNotes)
     }
 
     func testExportForLANBindUsesPlaceholderHostAndNeverIncludesRawToken() {
@@ -55,6 +62,19 @@ final class NetworkMCPConfigExportTests: XCTestCase {
         XCTAssertFalse(combined.contains(rawToken))
         XCTAssertFalse(combined.contains("Bearer \(rawToken)"))
         XCTAssertTrue(export.setupNotes.contains("Non-loopback LAN clients require approval"), export.setupNotes)
+    }
+
+    func testExternalMCPInstructionsTellRemoteClientsToUseResumableLongRunningTools() {
+        let instructions = RepoPromptMCPInstructions.text(for: .unknown)
+
+        XCTAssertTrue(instructions.contains("RESUMABLE LONG-RUNNING TOOLS"), instructions)
+        XCTAssertTrue(instructions.contains("OpenClaw"), instructions)
+        XCTAssertTrue(instructions.contains("op: \"start\""), instructions)
+        XCTAssertTrue(instructions.contains("context_builder"), instructions)
+        XCTAssertTrue(instructions.contains("oracle_send"), instructions)
+        XCTAssertTrue(instructions.contains("Do not depend on multi-minute HTTP/tool-call timeouts"), instructions)
+        XCTAssertTrue(instructions.contains("v1 jobs are in-memory"), instructions)
+        XCTAssertTrue(instructions.contains("export_response: true"), instructions)
     }
 
     func testIPv6HostOverrideIsBracketed() {

@@ -12,6 +12,7 @@ struct MCPOracleToolService {
     let askOracleToolName: String
     let oracleSendToolName: String
     let oracleChatLogToolName: String
+    let windowID: Int?
     let promptVM: PromptViewModel
     let oracleVM: OracleViewModel
     let captureRequestMetadata: () async -> RequestMetadata
@@ -214,20 +215,85 @@ struct MCPOracleToolService {
     // MARK: - oracle_send
 
     func executeOracleSend(args: [String: Value]) async throws -> Value {
-        let allowedArgs: Set = ["message", "mode", "chat_id", "new_chat", "model", "export_response"]
-        let unsupported = args.keys
-            .filter { !$0.hasPrefix("_") && !allowedArgs.contains($0) }
-            .sorted()
-        if !unsupported.isEmpty {
-            throw MCPError.invalidParams(
-                "oracle_send only accepts: message, mode, chat_id, new_chat, model, export_response. Unsupported args: \(unsupported.joined(separator: ", "))"
-            )
+        let controller = makeOracleSendResumableJobController()
+        let request = try controller.parseRequest(args: args)
+
+        guard let operation = request.operation else {
+            let prepared = try await prepareOracleSendRequest(args: args, allowsResumableStartArguments: false)
+            return try await executePreparedOracleSend(prepared)
         }
 
+        switch operation {
+        case .start:
+            let prepared = try await prepareOracleSendRequest(args: args, allowsResumableStartArguments: true)
+            let snapshot = try await controller.start(
+                args: args,
+                statusText: "Oracle send job queued.",
+                stage: "queued",
+                progressMessage: "Waiting to start Oracle...",
+                pollAfterSeconds: 1
+            ) { jobID in
+                await runResumableOracleSendJob(jobID: jobID, prepared: prepared)
+            }
+            return snapshot.toValue()
+        case .poll, .wait, .cancel:
+            let snapshot = try await controller.handleControl(args: args)
+            return snapshot.toValue()
+        }
+    }
+
+    private typealias JobProgressReporter = @Sendable (_ stage: String, _ message: String) async -> Void
+
+    private nonisolated static let oracleSendBusinessArgumentKeys: Set<String> = [
+        "message",
+        "mode",
+        "chat_id",
+        "new_chat",
+        "model",
+        "export_response"
+    ]
+
+    private nonisolated static let oracleSendResumableArgumentKeys: Set<String> = [
+        "op",
+        "job_id",
+        "timeout",
+        "server_instance_id",
+        "client_request_id",
+        "context_id",
+        "window_id"
+    ]
+
+    private struct PreparedOracleSendRequest {
+        let connectionID: UUID?
+        let message: String
+        let mode: String
+        let normalizedChatID: String?
+        let exportResponse: Bool
+        let exportDestination: OracleExportDestination?
+        let chatArgs: [String: Value]
+        let tabContext: OracleViewModel.OracleSendTabContext?
+    }
+
+    private func makeOracleSendResumableJobController() -> MCPResumableJobController {
+        MCPResumableJobController(
+            tool: oracleSendToolName,
+            windowID: windowID,
+            businessArgumentKeys: Self.oracleSendBusinessArgumentKeys
+        )
+    }
+
+    private func prepareOracleSendRequest(
+        args: [String: Value],
+        allowsResumableStartArguments: Bool
+    ) async throws -> PreparedOracleSendRequest {
+        try validateOracleSendAllowedArgs(args, allowsResumableStartArguments: allowsResumableStartArguments)
         try validateCommonOracleArgs(args)
+
         let message = (args["message"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let modeRaw = args["mode"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "chat"
         let exportResponse = try parseExportResponseFlag(args)
+        let normalizedChatIDRaw = args["chat_id"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedChatID = (normalizedChatIDRaw?.isEmpty == false) ? normalizedChatIDRaw : nil
 
         let connectionID = ServerNetworkManager.currentConnectionID
         let runPurpose: MCPRunPurpose = if let connectionID {
@@ -245,10 +311,8 @@ struct MCPOracleToolService {
         var tabContext: OracleViewModel.OracleSendTabContext? = nil
 
         if !resolvedContext.usesActiveTabCompatibility {
-            if let chatIDString = args["chat_id"]?.stringValue,
-               !chatIDString.isEmpty
-            {
-                try rebindChatSessionIfNeeded(metadata, chatIDString)
+            if let normalizedChatID {
+                try rebindChatSessionIfNeeded(metadata, normalizedChatID)
             }
 
             let context = try await requireCurrentTabContext(oracleSendToolName)
@@ -270,15 +334,44 @@ struct MCPOracleToolService {
             nil
         }
 
-        await sendStageProgress(connectionID, oracleSendToolName, "starting", "Starting Oracle...")
-
         var chatArgs = args
         chatArgs.removeValue(forKey: "export_response")
+        if allowsResumableStartArguments {
+            chatArgs = chatArgs.filter { key, _ in
+                !Self.oracleSendResumableArgumentKeys.contains(key) && !key.hasPrefix("_")
+            }
+        }
 
-        let capturedTabContext = tabContext
-        let capturedChatArgs = chatArgs
+        return PreparedOracleSendRequest(
+            connectionID: connectionID,
+            message: message,
+            mode: modeRaw,
+            normalizedChatID: normalizedChatID,
+            exportResponse: exportResponse,
+            exportDestination: exportDestination,
+            chatArgs: chatArgs,
+            tabContext: tabContext
+        )
+    }
+
+    private func executePreparedOracleSend(
+        _ prepared: PreparedOracleSendRequest,
+        jobProgress: JobProgressReporter? = nil
+    ) async throws -> Value {
+        await sendOracleProgress(
+            connectionID: prepared.connectionID,
+            jobProgress: jobProgress,
+            stage: "starting",
+            message: "Starting Oracle..."
+        )
+
+        let capturedTabContext = prepared.tabContext
+        let capturedChatArgs = prepared.chatArgs
+        if let jobProgress {
+            await jobProgress("waiting", "Waiting for Oracle response...")
+        }
         var result = try await withHeartbeat(
-            connectionID,
+            prepared.connectionID,
             oracleSendToolName,
             "waiting",
             "Waiting for Oracle response..."
@@ -290,22 +383,140 @@ struct MCPOracleToolService {
             )
         }
 
-        if exportResponse {
-            let normalizedChatID = args["chat_id"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if prepared.exportResponse {
             let export = try await exportOracleResponse(OracleExportRequest(
                 sourceTool: oracleSendToolName,
-                mode: modeRaw,
-                message: message,
-                chatID: result["chat_id"]?.stringValue ?? ((normalizedChatID?.isEmpty == false) ? normalizedChatID : nil),
+                mode: prepared.mode,
+                message: prepared.message,
+                chatID: result["chat_id"]?.stringValue ?? prepared.normalizedChatID,
                 response: result["response"]?.stringValue,
-                destination: exportDestination
+                destination: prepared.exportDestination
             ))
             result["oracle_export_path"] = .string(export.path)
             result["oracle_export_instruction"] = .string(export.instruction)
         }
 
-        await sendStageProgress(connectionID, oracleSendToolName, "complete", "Oracle complete")
+        await sendOracleProgress(
+            connectionID: prepared.connectionID,
+            jobProgress: jobProgress,
+            stage: "complete",
+            message: "Oracle complete"
+        )
         return .object(result)
+    }
+
+    private func runResumableOracleSendJob(
+        jobID: UUID,
+        prepared: PreparedOracleSendRequest,
+        store: MCPResumableJobStore = .shared
+    ) async {
+        var oracleSendStarted = false
+        do {
+            try Task.checkCancellation()
+            oracleSendStarted = true
+            let result = try await executePreparedOracleSend(prepared) { stage, message in
+                await store.updateProgress(
+                    jobID: jobID,
+                    tool: oracleSendToolName,
+                    windowID: windowID,
+                    status: .running,
+                    statusText: message,
+                    stage: stage,
+                    progressMessage: message
+                )
+            }
+            if Task.isCancelled {
+                await failResumableOracleSendCancellationUnsupported(jobID: jobID, store: store)
+                return
+            }
+            await store.complete(
+                jobID: jobID,
+                tool: oracleSendToolName,
+                windowID: windowID,
+                result: result,
+                statusText: "Oracle complete.",
+                stage: "complete",
+                progressMessage: "Oracle complete"
+            )
+        } catch is CancellationError {
+            if oracleSendStarted {
+                await failResumableOracleSendCancellationUnsupported(jobID: jobID, store: store)
+            } else {
+                await store.markCancelled(
+                    jobID: jobID,
+                    tool: oracleSendToolName,
+                    windowID: windowID,
+                    statusText: "Oracle send job cancelled before starting.",
+                    stage: "cancelled"
+                )
+            }
+        } catch {
+            await store.fail(
+                jobID: jobID,
+                tool: oracleSendToolName,
+                windowID: windowID,
+                errorType: resumableErrorType(for: error),
+                message: resumableErrorMessage(for: error),
+                stage: "failed"
+            )
+        }
+    }
+
+    private func failResumableOracleSendCancellationUnsupported(
+        jobID: UUID,
+        store: MCPResumableJobStore
+    ) async {
+        await store.fail(
+            jobID: jobID,
+            tool: oracleSendToolName,
+            windowID: windowID,
+            errorType: "cancel_not_supported",
+            message: "oracle_send cancellation was requested, but RepoPrompt cannot confirm that the active Oracle stream stopped before chat state may have changed. Start a new job if you still need this work.",
+            stage: "failed"
+        )
+    }
+
+    private func sendOracleProgress(
+        connectionID: UUID?,
+        jobProgress: JobProgressReporter?,
+        stage: String,
+        message: String
+    ) async {
+        if let jobProgress {
+            await jobProgress(stage, message)
+        }
+        await sendStageProgress(connectionID, oracleSendToolName, stage, message)
+    }
+
+    private func validateOracleSendAllowedArgs(
+        _ args: [String: Value],
+        allowsResumableStartArguments: Bool
+    ) throws {
+        var allowedArgs = Self.oracleSendBusinessArgumentKeys
+        if allowsResumableStartArguments {
+            allowedArgs.formUnion(Self.oracleSendResumableArgumentKeys)
+        }
+        let unsupported = args.keys
+            .filter { !$0.hasPrefix("_") && !allowedArgs.contains($0) }
+            .sorted()
+        if !unsupported.isEmpty {
+            throw MCPError.invalidParams(
+                "oracle_send only accepts: message, mode, chat_id, new_chat, model, export_response. Unsupported args: \(unsupported.joined(separator: ", "))"
+            )
+        }
+    }
+
+    private func resumableErrorType(for error: Error) -> String {
+        if error is MCPError { return "mcp_error" }
+        return String(reflecting: type(of: error))
+    }
+
+    private func resumableErrorMessage(for error: Error) -> String {
+        let localized = (error as NSError).localizedDescription
+        if !localized.isEmpty, localized != "The operation couldn’t be completed." {
+            return localized
+        }
+        return String(describing: error)
     }
 
     // MARK: - Shared helpers

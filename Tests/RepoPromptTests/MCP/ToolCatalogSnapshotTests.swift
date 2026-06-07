@@ -63,6 +63,130 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         #endif
     }
 
+    func testContextBuilderResumableSchemaFieldsRemainAdvertised() async throws {
+        let window = Self.makeWindowWithoutAutoStart()
+        let tools = await window.mcpServer.windowMCPTools
+        let contextBuilder = try XCTUnwrap(tools.first { $0.name == MCPWindowToolName.contextBuilder })
+        let properties = try Self.schemaProperties(for: contextBuilder)
+
+        for field in [
+            "instructions",
+            "response_type",
+            "export_response",
+            "op",
+            "job_id",
+            "timeout",
+            "server_instance_id",
+            "client_request_id"
+        ] {
+            XCTAssertNotNil(properties[field], "context_builder schema should advertise property \(field)")
+        }
+
+        let opEnum = properties["op"]?.objectValue?["enum"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        XCTAssertEqual(opEnum, ["start", "poll", "wait", "cancel"])
+    }
+
+    func testOracleSendResumableSchemaFieldsRemainAdvertisedWithoutMessageRequired() async throws {
+        let window = Self.makeWindowWithoutAutoStart()
+        let tools = await window.mcpServer.windowMCPTools
+        let oracleSend = try XCTUnwrap(tools.first { $0.name == MCPWindowToolName.oracleSend })
+        let properties = try Self.schemaProperties(for: oracleSend)
+
+        for field in [
+            "message",
+            "mode",
+            "chat_id",
+            "new_chat",
+            "model",
+            "export_response",
+            "op",
+            "job_id",
+            "timeout",
+            "server_instance_id",
+            "client_request_id"
+        ] {
+            XCTAssertNotNil(properties[field], "oracle_send schema should advertise property \(field)")
+        }
+
+        let opEnum = properties["op"]?.objectValue?["enum"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        XCTAssertEqual(opEnum, ["start", "poll", "wait", "cancel"])
+
+        let required = try Self.schemaRequired(for: oracleSend)
+        XCTAssertFalse(required.contains("message"), "oracle_send cannot require message globally because control ops do not take message")
+    }
+
+    func testOracleSendOmittedOpRequiresMessageAtRuntimeButControlOpsDoNot() async throws {
+        let window = Self.makeWindowWithoutAutoStart()
+        let tools = await window.mcpServer.windowMCPTools
+        let oracleSend = try XCTUnwrap(tools.first { $0.name == MCPWindowToolName.oracleSend })
+
+        do {
+            _ = try await oracleSend([:])
+            XCTFail("omitted-op oracle_send should still require message at runtime")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("message cannot be empty"), error.localizedDescription)
+        }
+
+        let missingJob = UUID()
+        let pollResult = try await oracleSend([
+            "op": .string("poll"),
+            "job_id": .string(missingJob.uuidString)
+        ])
+        let pollObject = try XCTUnwrap(pollResult.objectValue)
+        XCTAssertEqual(pollObject["kind"]?.stringValue, MCPResumableJobSnapshot.envelopeKind)
+        XCTAssertEqual(pollObject["status"]?.stringValue, MCPResumableJobStatus.notFound.rawValue)
+
+        do {
+            _ = try await oracleSend([
+                "op": .string("poll"),
+                "job_id": .string(missingJob.uuidString),
+                "message": .string("change input")
+            ])
+            XCTFail("control oracle_send ops should reject business arguments")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("business arguments"), error.localizedDescription)
+            XCTAssertTrue(error.localizedDescription.contains("message"), error.localizedDescription)
+        }
+    }
+
+    func testContextBuilderOmittedOpStaysSynchronousButControlOpsDoNotNeedInstructions() async throws {
+        let window = Self.makeWindowWithoutAutoStart()
+        let tools = await window.mcpServer.windowMCPTools
+        let contextBuilder = try XCTUnwrap(tools.first { $0.name == MCPWindowToolName.contextBuilder })
+
+        do {
+            _ = try await contextBuilder(["export_response": .bool(true)])
+            XCTFail("omitted-op context_builder should keep the synchronous validation path")
+        } catch {
+            XCTAssertTrue(
+                error.localizedDescription.contains("export_response requires a response_type"),
+                error.localizedDescription
+            )
+        }
+
+        let missingJob = UUID()
+        let pollResult = try await contextBuilder([
+            "op": .string("poll"),
+            "job_id": .string(missingJob.uuidString)
+        ])
+        let pollObject = try XCTUnwrap(pollResult.objectValue)
+        XCTAssertEqual(pollObject["kind"]?.stringValue, MCPResumableJobSnapshot.envelopeKind)
+        XCTAssertEqual(pollObject["status"]?.stringValue, MCPResumableJobStatus.notFound.rawValue)
+
+        do {
+            _ = try await contextBuilder([
+                "op": .string("wait"),
+                "job_id": .string(missingJob.uuidString),
+                "timeout": .double(0),
+                "instructions": .string("change input")
+            ])
+            XCTFail("control context_builder ops should reject business arguments")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("business arguments"), error.localizedDescription)
+            XCTAssertTrue(error.localizedDescription.contains("instructions"), error.localizedDescription)
+        }
+    }
+
     func testWorktreePublicAPISchemaFieldsRemainAdvertised() async throws {
         let window = Self.makeWindowWithoutAutoStart()
         let tools = await window.mcpServer.windowMCPTools
@@ -257,6 +381,11 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         return try XCTUnwrap(schema["properties"]?.objectValue)
     }
 
+    private static func schemaRequired(for tool: RepoPrompt.Tool) throws -> [String] {
+        let schema = try XCTUnwrap(Value(tool.inputSchema).objectValue)
+        return schema["required"]?.arrayValue?.compactMap(\.stringValue) ?? []
+    }
+
     private static let expectedSignatures: [String] = [
         "0|manage_selection|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=586c45be3d3a4ade60e29ccbbdce01b050be03860a67eee41a3eac95d441d7d9|schema=4b7a043e8e48130ee84cc6bbf7b9fd597b495aef238d44f17df6600088a2bb6f",
         "1|file_actions|enabled=true|ann=title=nil,readOnly=false,destructive=true,idempotent=nil,openWorld=false|desc=81230c22d826458cae079855b133d59da34c4a66ae4a68252727e564931335b8|schema=d4ed12eee8ed779610016aa46a6f3686ed7635436517c0de0a16efc8b0d0d1fe",
@@ -269,11 +398,11 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         "8|apply_edits|enabled=true|ann=title=nil,readOnly=false,destructive=true,idempotent=nil,openWorld=false|desc=d33efa75e3e29e1e4e1cfe90d0e9d621337c397e5329aee02f4a261726d790fa|schema=2eabab77e3cdea6af1e1a509d77b9e8a3211049c1ccd11ec9b64f79149abdbbb",
         "9|oracle_utils|enabled=true|ann=title=nil,readOnly=nil,destructive=nil,idempotent=nil,openWorld=nil|desc=af161abbd2edf82b9cf502e1cf794bc48366b816b3ddc0ec2034b154ecc35c3a|schema=7d3c55c22f02f8825008521e4c20cd304a7c12f3679743b34f5a2bf315d19d7b",
         "10|ask_oracle|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=7a4771154006b3dcf158003d04b2b78da91fe4cc63d1acb5942f64f8a3e04e98|schema=03968f76ace268ccd7128c088ecc2544ca5ec77f47100d03e38a29a155cf81eb",
-        "11|oracle_send|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=4608413a45189586669c6cc3339af4d467939a2477036545ef5d879b676b51fb|schema=6f940dcd0a0d39789189120217abdb60cd0f520b85f862beb81349f98bc1b19c",
+        "11|oracle_send|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=c135a3ad9130f638949d5f967a9ba76d50f2cd28a5941ac04d2685127f329d4b|schema=d6ae388f1af672b1f0e13f32cd7cce1515a009514973780deeb8ab9ff292f947",
         "12|oracle_chat_log|enabled=true|ann=title=nil,readOnly=true,destructive=false,idempotent=true,openWorld=false|desc=5acbb74a0fcf76bd3717faac8fc355f582f13523685d3bfebf11fda7241958b1|schema=50db94327abe785e20d3628135efa29cf184d18272d5af5b94a43d7246a4a201",
         "13|git|enabled=true|ann=title=nil,readOnly=true,destructive=false,idempotent=true,openWorld=false|desc=60cfcfd61921d3e828c0f49551672db392b928456b3c375e9e3cc819ee126e2b|schema=ebc134daddcab2321f0b9c20c76d0dd660eab1c0b78a54bfb8c83817da24ba77",
         "14|manage_worktree|enabled=true|ann=title=nil,readOnly=false,destructive=true,idempotent=nil,openWorld=false|desc=857ab8975667e3d2e5b35a09c7415e07ca0ab2f0ff16de6895170d4d1b47a820|schema=9263f9f047982b3709d92040f749804d69928d222ce46038a4171ded34d12bc6",
-        "15|context_builder|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=d83348b6b803b303965401075041ddc5d7dcea3512020afa3f352c04413750fb|schema=2da87e6e171809a1e0eb0614fa8f7db2f91311f655f8427745060be80755da1f",
+        "15|context_builder|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=64b3da5d57c58f0f1f83365416d5da7a1e0243c5cf159d61f84d640d5470ae19|schema=4ed12daf810e2bea28e9afcccd46a82df5c2887bccfd8abf995e80fa2b95f4ae",
         "16|ask_user|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=d51065f56efc22168816ea01ad228b9e3d7dedecd1901ab241c33a2d77ad8577|schema=975c942fdedff40c49de013380ec0293d82201b6f4bb075b041547d4c3238687",
         "17|agent_explore|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=7375413b02af599e638a547a904baf1e8aaea4a2b779e52be0d389e86f62fb7b|schema=7890c7ac74d66ecdbbb6f7dfc04bfe6b4e46ec28e316e06106c5448450adc03e",
         "18|agent_run|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=344cd8cc29d9d136f1d49b74ee92833eab1a76f9d45ddb5f61d66725fdd1cdda|schema=21744873638849e37802752121bc3fb9d5535fec328ad244530957e3daddba21",
