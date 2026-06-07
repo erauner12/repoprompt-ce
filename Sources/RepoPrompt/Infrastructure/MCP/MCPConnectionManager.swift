@@ -10559,10 +10559,96 @@ actor ServerNetworkManager {
         reason: String
     ) async throws -> Int? {
         guard remoteHTTPConnections.contains(connectionID) else { return nil }
-        let resolution = try await MCPRemoteDefaultTargetResolver().resolve(requestedWindowID: requestedWindowID)
+        let resolver = MCPRemoteDefaultTargetResolver(windowOpener: { target in
+            await Self.openRemoteDefaultTargetWindow(target)
+        })
+        let resolution = try await resolver.resolve(requestedWindowID: requestedWindowID)
         setRemoteDefaultWindowForConnection(connectionID, windowID: resolution.windowID)
         connectionLog("Network MCP remote default target resolved for \(reason): connection=\(connectionID) window=\(resolution.windowID) workspace=\(resolution.workspaceName)")
         return resolution.windowID
+    }
+
+    @MainActor
+    private static func openRemoteDefaultTargetWindow(
+        _ target: NetworkMCPDefaultTargetMetadata
+    ) async -> MCPRemoteTargetWindowCandidate? {
+        let targetRoots = WorkspaceRootSetKey(paths: target.rootPaths)
+        guard !targetRoots.isEmpty else { return nil }
+
+        let windowStates = WindowStatesManager.shared
+        if let existingWorkspaceManager = windowStates.allWindows.first?.workspaceManager,
+           workspaceMatchingRemoteDefaultTarget(target, in: existingWorkspaceManager.workspaces) == nil
+        {
+            return nil
+        }
+
+        do {
+            let newWindow = try await windowStates.openNewMainWindow(
+                deferringInitialAgentSystemWorkspaceRefresh: true
+            )
+            defer { newWindow.agentModeViewModel.finishInitialSystemWorkspaceSessionListRefreshDeferral() }
+
+            await newWindow.workspaceManager.awaitInitialized()
+            guard let workspace = workspaceMatchingRemoteDefaultTarget(
+                target,
+                in: newWindow.workspaceManager.workspaces
+            ) else {
+                return nil
+            }
+
+            if newWindow.workspaceManager.activeWorkspaceID != workspace.id {
+                let switchResult = await newWindow.workspaceManager.requestWorkspaceSwitch(to: workspace, saveState: true)
+                guard switchResult.didSwitch || newWindow.workspaceManager.activeWorkspaceID == workspace.id else {
+                    connectionLog("Network MCP remote default target workspace switch failed: \(switchResult.message ?? "unknown error")")
+                    return nil
+                }
+            }
+
+            guard let activeWorkspace = newWindow.workspaceManager.activeWorkspace,
+                  activeWorkspace.id == workspace.id
+            else {
+                return nil
+            }
+
+            let contextIDs = Set(activeWorkspace.composeTabs.map(\.id)).union(
+                activeWorkspace.stashedTabs.map(\.tab.id)
+            )
+            return MCPRemoteTargetWindowCandidate(
+                windowID: newWindow.windowID,
+                workspaceID: activeWorkspace.id,
+                workspaceName: activeWorkspace.name,
+                rootPaths: activeWorkspace.repoPaths,
+                contextIDs: contextIDs
+            )
+        } catch is CancellationError {
+            return nil
+        } catch {
+            connectionLog("Network MCP remote default target window open failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private static func workspaceMatchingRemoteDefaultTarget(
+        _ target: NetworkMCPDefaultTargetMetadata,
+        in workspaces: [WorkspaceModel]
+    ) -> WorkspaceModel? {
+        let targetRoots = WorkspaceRootSetKey(paths: target.rootPaths)
+        guard !targetRoots.isEmpty else { return nil }
+
+        if let workspaceID = target.workspaceID {
+            return workspaces.first { workspace in
+                workspace.id == workspaceID
+                    && !workspace.isSystemWorkspace
+                    && WorkspaceRootSetKey(paths: workspace.repoPaths) == targetRoots
+            }
+        }
+
+        let matches = WorkspaceManagerViewModel.exactWorkspaceMatches(
+            forNormalizedWorkingDirs: targetRoots.normalizedPaths,
+            workspaces: workspaces
+        )
+        guard matches.count == 1 else { return nil }
+        return matches[0]
     }
 
     func registerHandlers(for server: MCP.Server, connectionID: UUID) async {
