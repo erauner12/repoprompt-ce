@@ -312,6 +312,21 @@ final class ToolCatalogSnapshotTests: XCTestCase {
                 error.localizedDescription
             )
         }
+
+        do {
+            _ = try await contextBuilder([
+                "op": .string("poll"),
+                "job_id": .string(UUID().uuidString),
+                "client_request_id": .string(UUID().uuidString),
+                "instructions": .string("change input")
+            ])
+            XCTFail("context_builder should reject removed resumable arguments")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("Unsupported args"), error.localizedDescription)
+            XCTAssertTrue(error.localizedDescription.contains("client_request_id"), error.localizedDescription)
+            XCTAssertTrue(error.localizedDescription.contains("job_id"), error.localizedDescription)
+            XCTAssertTrue(error.localizedDescription.contains("op"), error.localizedDescription)
+        }
     }
 
     func testWorktreePublicAPISchemaFieldsRemainAdvertised() async throws {

@@ -181,6 +181,11 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
     }
 
     private nonisolated static func parseExecutionOptions(args: [String: Value]) throws -> ContextBuilderExecutionOptions {
+        let unsupportedArgs = Set(args.keys).subtracting(businessArgumentKeys).sorted()
+        guard unsupportedArgs.isEmpty else {
+            throw MCPError.invalidParams("Unsupported args for context_builder: \(unsupportedArgs.joined(separator: ", "))")
+        }
+
         let instructions = args["instructions"]?.stringValue ?? ""
         let responseType = try ContextBuilderResponseType.parse(from: args["response_type"])
         let exportResponse: Bool

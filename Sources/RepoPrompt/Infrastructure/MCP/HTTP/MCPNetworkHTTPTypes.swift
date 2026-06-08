@@ -7,18 +7,31 @@ struct MCPNetworkHTTPRequest: Equatable {
     var headers: [String: String]
     var body: Data
     var remoteAddress: String
+    var duplicateHeaderNames: Set<String>
 
-    init(method: String, path: String, headers: [String: String] = [:], body: Data = Data(), remoteAddress: String = "127.0.0.1") {
+    init(
+        method: String,
+        path: String,
+        headers: [String: String] = [:],
+        body: Data = Data(),
+        remoteAddress: String = "127.0.0.1",
+        duplicateHeaderNames: Set<String> = []
+    ) {
         self.method = method
         self.path = path
         self.headers = headers
         self.body = body
         self.remoteAddress = remoteAddress
+        self.duplicateHeaderNames = duplicateHeaderNames
     }
 
     func header(_ name: String) -> String? {
         let lowercased = name.lowercased()
         return headers.first { $0.key.lowercased() == lowercased }?.value
+    }
+
+    func hasDuplicateHeader(_ name: String) -> Bool {
+        duplicateHeaderNames.contains(name.lowercased())
     }
 
     func sdkHTTPRequest() -> MCP.HTTPRequest {
