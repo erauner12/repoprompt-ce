@@ -791,9 +791,9 @@ class GlobalSettingsStore: ObservableObject {
             enabled: settings?.enabled ?? NetworkMCPSettings.defaultEnabled,
             bindAddress: normalizedNetworkMCPBindAddress(settings?.bindAddress) ?? NetworkMCPSettings.defaultBindAddress,
             port: normalizedNetworkMCPPort(settings?.port) ?? NetworkMCPSettings.defaultPort,
-            defaultTarget: settings?.defaultTarget,
-            token: settings?.token,
-            trustedClients: settings?.trustedClients ?? []
+            defaultTarget: normalizedNetworkMCPDefaultTarget(settings?.defaultTarget),
+            token: normalizedNetworkMCPTokenMetadata(settings?.token),
+            trustedClients: normalizedNetworkMCPTrustedClients(settings?.trustedClients ?? [])
         )
     }
 
@@ -840,7 +840,7 @@ class GlobalSettingsStore: ObservableObject {
 
     func setNetworkMCPEnabled(
         _ enabled: Bool,
-        secureTokenMaterialAvailable: Bool,
+        secureTokenFingerprint: String?,
         commit: Bool = true
     ) throws {
         if enabled {
@@ -848,11 +848,14 @@ class GlobalSettingsStore: ObservableObject {
             guard snapshot.defaultTarget != nil else {
                 throw NetworkMCPSettingsError.missingDefaultTarget
             }
-            guard snapshot.token != nil else {
+            guard let token = snapshot.token else {
                 throw NetworkMCPSettingsError.missingTokenMetadata
             }
-            guard secureTokenMaterialAvailable else {
+            guard let secureTokenFingerprint else {
                 throw NetworkMCPSettingsError.missingSecureTokenMaterial
+            }
+            guard secureTokenFingerprint == token.fingerprint else {
+                throw NetworkMCPSettingsError.secureTokenMetadataMismatch
             }
         }
         updateNetworkMCPSettings(commit: commit) { settings in
