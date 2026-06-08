@@ -704,8 +704,10 @@ actor ServerNetworkManager {
     private var remoteHTTPConnections: Set<UUID> = []
     private let remoteBearerTokenStore = MCPRemoteBearerTokenStore()
     #if DEBUG
+        private var debugNetworkMCPBearerTokenOverrideIsActive = false
         private var debugNetworkMCPBearerTokenOverride: String?
         private var debugNetworkMCPSettingsSnapshotOverride: NetworkMCPSettingsSnapshot?
+        private var debugNetworkMCPDefaultTargetResolutionHandler: (@Sendable (Int?, String) async throws -> MCPRemoteDefaultTargetResolution)?
     #endif
     typealias RemoteClientApprovalHandler = @Sendable (MCPRemoteClientApprovalRequest) async -> MCPRemoteClientApprovalDecision
     private var remoteClientApprovalHandler: RemoteClientApprovalHandler?
@@ -1671,7 +1673,14 @@ actor ServerNetworkManager {
 
     #if DEBUG
         func debugSetNetworkMCPBearerTokenOverride(_ token: String?) {
+            debugNetworkMCPBearerTokenOverrideIsActive = true
             debugNetworkMCPBearerTokenOverride = token
+        }
+
+        func debugSetNetworkMCPDefaultTargetResolutionHandler(
+            _ handler: (@Sendable (Int?, String) async throws -> MCPRemoteDefaultTargetResolution)?
+        ) {
+            debugNetworkMCPDefaultTargetResolutionHandler = handler
         }
 
         func debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
@@ -3381,10 +3390,10 @@ actor ServerNetworkManager {
     }
 
     func networkHTTPListenerStatus() async -> NetworkMCPHTTPListenerStatusSnapshot {
-        let settings = await networkMCPSettingsSnapshot()
+        let settings = await effectiveNetworkMCPSettingsSnapshot()
         return NetworkMCPHTTPListenerStatusSnapshot(
             enabled: settings.enabled,
-            isListening: httpListener != nil && httpListenerLifecycleGeneration == lifecycleGeneration,
+            isListening: settings.enabled && httpListener != nil && httpListenerLifecycleGeneration == lifecycleGeneration,
             bindAddress: settings.bindAddress,
             port: settings.port,
             activeSessionCount: httpSessionsByID.count,
@@ -4283,7 +4292,7 @@ actor ServerNetworkManager {
 
     private func startHTTPListenerIfConfigured(lifecycleGeneration expectedLifecycleGeneration: UInt64) async {
         guard isCurrentLifecycle(expectedLifecycleGeneration) else { return }
-        let settings = await networkMCPSettingsSnapshot()
+        let settings = await effectiveNetworkMCPSettingsSnapshot()
         guard isCurrentLifecycle(expectedLifecycleGeneration) else { return }
         let configuration = MCPNetworkHTTPListener.Configuration(
             bindAddress: settings.bindAddress,
@@ -4344,7 +4353,7 @@ actor ServerNetworkManager {
         }
         do {
             try await listener.start()
-            let latestSettings = await networkMCPSettingsSnapshot()
+            let latestSettings = await effectiveNetworkMCPSettingsSnapshot()
             let latestConfiguration = MCPNetworkHTTPListener.Configuration(
                 bindAddress: latestSettings.bindAddress,
                 port: latestSettings.port
@@ -4376,7 +4385,7 @@ actor ServerNetworkManager {
                 scheduleHTTPListenerStartForCurrentLifecycleIfNeeded()
                 return
             }
-            let latestSettings = await networkMCPSettingsSnapshot()
+            let latestSettings = await effectiveNetworkMCPSettingsSnapshot()
             guard isCurrentLifecycle(expectedLifecycleGeneration) else {
                 scheduleHTTPListenerStartForCurrentLifecycleIfNeeded()
                 return
@@ -4406,6 +4415,67 @@ actor ServerNetworkManager {
         }
     }
 
+    private func effectiveNetworkMCPSettingsSnapshot() async -> NetworkMCPSettingsSnapshot {
+        #if DEBUG
+            if var snapshot = debugNetworkMCPSettingsSnapshotOverride {
+                guard snapshot.enabled else { return snapshot }
+                let secureTokenFingerprint = if debugNetworkMCPBearerTokenOverrideIsActive {
+                    debugNetworkMCPBearerTokenOverride.map { MCPRemoteBearerTokenStore.fingerprint(for: $0) }
+                } else {
+                    String?.none
+                }
+                guard let expectedFingerprint = snapshot.token?.fingerprint,
+                      secureTokenFingerprint == expectedFingerprint
+                else {
+                    snapshot.enabled = false
+                    return snapshot
+                }
+                return snapshot
+            }
+        #endif
+
+        return await MainActor.run { NetworkMCPSettingsFacade().settingsSnapshot() }
+    }
+
+    private func rejectNetworkHTTPRequestBecauseNetworkMCPUnavailable(
+        _ request: MCPNetworkHTTPRequest
+    ) async -> MCPNetworkHTTPResponse {
+        if let sessionID = request.header(MCPNetworkHTTPHeader.sessionID),
+           let connectionID = httpSessionsByID[sessionID]
+        {
+            await removeConnection(connectionID)
+        }
+        return .error(
+            statusCode: 503,
+            message: "Network MCP HTTP transport is disabled or secure bearer-token material is missing, stale, or rotated",
+            code: -32003
+        )
+    }
+
+    private func resolveRemoteDefaultTargetForNetworkMCPAdmission(
+        requestedWindowID: Int? = nil,
+        reason: String
+    ) async throws -> MCPRemoteDefaultTargetResolution {
+        #if DEBUG
+            if let handler = debugNetworkMCPDefaultTargetResolutionHandler {
+                return try await handler(requestedWindowID, reason)
+            }
+        #endif
+
+        let resolver = MCPRemoteDefaultTargetResolver(
+            settingsProvider: { [weak self] in
+                if let self {
+                    return await effectiveNetworkMCPSettingsSnapshot()
+                }
+                return await MainActor.run { NetworkMCPSettingsFacade().settingsSnapshot() }
+            },
+            windowOpener: { target in
+                await Self.openRemoteDefaultTargetWindow(target)
+            }
+        )
+        return try await resolver.resolve(requestedWindowID: requestedWindowID)
+    }
+
     private func handleNetworkHTTPRequest(
         _ request: MCPNetworkHTTPRequest,
         lifecycleGeneration expectedLifecycleGeneration: UInt64
@@ -4419,10 +4489,6 @@ actor ServerNetworkManager {
         if let rejectedDuplicateHeader = rejectDuplicateSensitiveNetworkHTTPHeader(request) {
             return rejectedDuplicateHeader
         }
-        guard isEnabledState else {
-            return await rejectNetworkHTTPRequestBecauseDisabled(request)
-        }
-
         let authResult = authenticateNetworkMCPBearerToken(
             authorizationHeader: request.header(MCPNetworkHTTPHeader.authorization)
         )
@@ -4443,7 +4509,16 @@ actor ServerNetworkManager {
             )
         }
 
+        guard isEnabledState else {
+            return await rejectNetworkHTTPRequestBecauseDisabled(request)
+        }
+        let effectiveSettings = await effectiveNetworkMCPSettingsSnapshot()
+        guard effectiveSettings.enabled else {
+            return await rejectNetworkHTTPRequestBecauseNetworkMCPUnavailable(request)
+        }
+
         let method = request.method.uppercased()
+        var remoteDefaultTargetResolution: MCPRemoteDefaultTargetResolution?
 
         if let sessionID = request.header(MCPNetworkHTTPHeader.sessionID) {
             guard let connectionID = httpSessionsByID[sessionID],
@@ -4498,11 +4573,22 @@ actor ServerNetworkManager {
             case let .rejected(.nonLANSourceAddress(address)):
                 return .error(statusCode: 403, message: "Remote MCP source is not private/LAN/link-local: \(address)", code: -32001)
             }
+
+            do {
+                remoteDefaultTargetResolution = try await resolveRemoteDefaultTargetForNetworkMCPAdmission(reason: "initialize")
+            } catch {
+                return .error(statusCode: 403, message: error.localizedDescription, code: -32001)
+            }
         }
 
         switch method {
         case "POST":
-            return await handleHTTPPost(request, tokenFingerprint: tokenFingerprint, lifecycleGeneration: expectedLifecycleGeneration)
+            return await handleHTTPPost(
+                request,
+                tokenFingerprint: tokenFingerprint,
+                defaultWindowID: remoteDefaultTargetResolution?.windowID,
+                lifecycleGeneration: expectedLifecycleGeneration
+            )
         case "GET", "DELETE":
             return await handleExistingHTTPSessionRequest(request)
         default:
@@ -4580,7 +4666,10 @@ actor ServerNetworkManager {
 
     private func authenticateNetworkMCPBearerToken(authorizationHeader: String?) -> MCPRemoteBearerAuthenticationResult {
         #if DEBUG
-            if let debugToken = debugNetworkMCPBearerTokenOverride {
+            if debugNetworkMCPBearerTokenOverrideIsActive {
+                guard let debugToken = debugNetworkMCPBearerTokenOverride else {
+                    return .rejected(.tokenUnavailable)
+                }
                 guard let authorizationHeader else {
                     return .rejected(.missingAuthorizationHeader)
                 }
@@ -4618,6 +4707,7 @@ actor ServerNetworkManager {
     private func handleHTTPPost(
         _ request: MCPNetworkHTTPRequest,
         tokenFingerprint: String,
+        defaultWindowID: Int?,
         lifecycleGeneration expectedLifecycleGeneration: UInt64
     ) async -> MCPNetworkHTTPResponse {
         if request.header(MCPNetworkHTTPHeader.sessionID) != nil {
@@ -4663,6 +4753,7 @@ actor ServerNetworkManager {
             sourceAddress: request.remoteAddress,
             clientName: request.header("User-Agent"),
             tokenFingerprint: tokenFingerprint,
+            defaultWindowID: defaultWindowID,
             manager: manager
         )
         startMCPServerForHTTPConnection(
@@ -4701,6 +4792,7 @@ actor ServerNetworkManager {
         sourceAddress: String,
         clientName: String?,
         tokenFingerprint: String,
+        defaultWindowID: Int?,
         manager: MCPHTTPConnectionManager
     ) {
         guard isCurrentLifecycle(expectedLifecycleGeneration) else { return }
@@ -4721,6 +4813,9 @@ actor ServerNetworkManager {
         pendingConnections[connectionID] = clientName ?? "Remote MCP client"
         if connectionStats[connectionID] == nil {
             connectionStats[connectionID] = ConnectionStats(createdAt: Date(), totalToolCalls: 0, lastToolCallAt: nil)
+        }
+        if let defaultWindowID {
+            setRemoteDefaultWindowForConnection(connectionID, windowID: defaultWindowID)
         }
         emitDashboardUpdate()
     }
@@ -10756,10 +10851,15 @@ actor ServerNetworkManager {
         reason: String
     ) async throws -> Int? {
         guard remoteHTTPConnections.contains(connectionID) else { return nil }
-        let resolver = MCPRemoteDefaultTargetResolver(windowOpener: { target in
-            await Self.openRemoteDefaultTargetWindow(target)
-        })
-        let resolution = try await resolver.resolve(requestedWindowID: requestedWindowID)
+        if let selectedWindowID = selectedWindow(for: connectionID),
+           requestedWindowID == nil || requestedWindowID == selectedWindowID
+        {
+            return selectedWindowID
+        }
+        let resolution = try await resolveRemoteDefaultTargetForNetworkMCPAdmission(
+            requestedWindowID: requestedWindowID,
+            reason: reason
+        )
         setRemoteDefaultWindowForConnection(connectionID, windowID: resolution.windowID)
         connectionLog("Network MCP remote default target resolved for \(reason): connection=\(connectionID) window=\(resolution.windowID) workspace=\(resolution.workspaceName)")
         return resolution.windowID
