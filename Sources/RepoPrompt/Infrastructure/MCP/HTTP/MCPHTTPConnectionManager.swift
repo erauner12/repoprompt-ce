@@ -40,6 +40,9 @@ actor MCPHTTPConnectionManager: MCPServerConnection {
     private var lastActivityAt = Date()
     private var isClosing = false
     private var handshakeComplete = false
+    private var standaloneGETStreamGeneration = 0
+    private var standaloneGETStreamDetachedByAdapter = false
+    private var lastStandaloneGETSSEEventID: String?
 
     init(
         connectionID: UUID,
@@ -138,12 +141,90 @@ actor MCPHTTPConnectionManager: MCPServerConnection {
     }
 
     func handle(_ request: MCPNetworkHTTPRequest) async -> MCPNetworkHTTPResponse {
-        let response = await handle(request.sdkHTTPRequest())
-        return MCPNetworkHTTPResponse.fromSDK(response)
+        lastActivityAt = Date()
+        var response = await MCPNetworkHTTPResponse.fromSDK(transport.handleRequest(request.sdkHTTPRequest()))
+        if shouldRetryStaleStandaloneGET(response, for: request), let lastEventID = lastStandaloneGETSSEEventID {
+            var resumeRequest = request
+            resumeRequest.headers["Last-Event-ID"] = lastEventID
+            let resumeResponse = await MCPNetworkHTTPResponse.fromSDK(transport.handleRequest(resumeRequest.sdkHTTPRequest()))
+            if resumeResponse.statusCode != 409 {
+                response = resumeResponse
+            }
+        }
+        return wrapStandaloneGETStreamIfNeeded(response, for: request)
     }
 
     private func markHandshakeComplete() {
         handshakeComplete = true
+    }
+
+    private func shouldRetryStaleStandaloneGET(_ response: MCPNetworkHTTPResponse, for request: MCPNetworkHTTPRequest) -> Bool {
+        guard request.method.uppercased() == "GET",
+              request.header("Last-Event-ID") == nil,
+              response.statusCode == 409,
+              standaloneGETStreamDetachedByAdapter,
+              lastStandaloneGETSSEEventID != nil
+        else { return false }
+        return true
+    }
+
+    private func wrapStandaloneGETStreamIfNeeded(
+        _ response: MCPNetworkHTTPResponse,
+        for request: MCPNetworkHTTPRequest
+    ) -> MCPNetworkHTTPResponse {
+        guard request.method.uppercased() == "GET",
+              response.statusCode == 200,
+              case let .stream(stream, _) = response.body
+        else { return response }
+
+        standaloneGETStreamGeneration &+= 1
+        let generation = standaloneGETStreamGeneration
+        standaloneGETStreamDetachedByAdapter = false
+
+        let wrappedStream = AsyncThrowingStream<Data, Error> { [weak self] continuation in
+            let task = Task { [weak self] in
+                do {
+                    for try await chunk in stream {
+                        await self?.recordStandaloneGETSSEEventIDs(in: chunk, generation: generation)
+                        continuation.yield(chunk)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
+            }
+        }
+
+        return MCPNetworkHTTPResponse(
+            statusCode: response.statusCode,
+            headers: response.headers,
+            body: .stream(wrappedStream, onTermination: { [weak self] in
+                Task { await self?.markStandaloneGETStreamDetached(generation: generation) }
+            })
+        )
+    }
+
+    private func recordStandaloneGETSSEEventIDs(in chunk: Data, generation: Int) {
+        guard generation == standaloneGETStreamGeneration,
+              let text = String(data: chunk, encoding: .utf8)
+        else { return }
+
+        for line in text.split(whereSeparator: \.isNewline) {
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("id:") else { continue }
+            let id = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            if !id.isEmpty {
+                lastStandaloneGETSSEEventID = String(id)
+            }
+        }
+    }
+
+    private func markStandaloneGETStreamDetached(generation: Int) {
+        guard generation == standaloneGETStreamGeneration else { return }
+        standaloneGETStreamDetachedByAdapter = true
     }
 
     private func updateState(_ newState: ConnectionStateSnapshot) {

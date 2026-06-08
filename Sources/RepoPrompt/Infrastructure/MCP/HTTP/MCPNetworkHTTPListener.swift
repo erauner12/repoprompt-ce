@@ -22,6 +22,7 @@ actor MCPNetworkHTTPListener {
     private let logger: Logger
     private var group: MultiThreadedEventLoopGroup?
     private var channel: Channel?
+    private var childChannelRegistry: MCPNetworkHTTPChildChannelRegistry?
 
     init(configuration: Configuration, logger: Logger? = nil, requestHandler: @escaping RequestHandler) {
         self.configuration = configuration
@@ -32,16 +33,20 @@ actor MCPNetworkHTTPListener {
     func start() async throws {
         guard channel == nil else { return }
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let childChannelRegistry = MCPNetworkHTTPChildChannelRegistry()
         self.group = group
+        self.childChannelRegistry = childChannelRegistry
 
         let bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 128)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { [requestHandler, logger] channel in
-                channel.pipeline.configureHTTPServerPipeline().flatMap {
+            .childChannelInitializer { [requestHandler, logger, childChannelRegistry] channel in
+                childChannelRegistry.register(channel)
+                return channel.pipeline.configureHTTPServerPipeline().flatMap {
                     channel.pipeline.addHandler(MCPNetworkHTTPChannelHandler(
                         requestHandler: requestHandler,
-                        logger: logger
+                        logger: logger,
+                        childChannelRegistry: childChannelRegistry
                     ))
                 }
             }
@@ -53,7 +58,9 @@ actor MCPNetworkHTTPListener {
             channel = try await bootstrap.bind(host: configuration.bindAddress, port: configuration.port).get()
             logger.notice("Network MCP HTTP listener bound to \(configuration.bindAddress):\(configuration.port)")
         } catch {
+            self.childChannelRegistry = nil
             self.group = nil
+            try? await childChannelRegistry.closeAll()
             try? await group.shutdownGracefully()
             throw error
         }
@@ -62,11 +69,16 @@ actor MCPNetworkHTTPListener {
     func stop() async {
         let channel = channel
         let group = group
+        let childChannelRegistry = childChannelRegistry
         self.channel = nil
         self.group = nil
+        self.childChannelRegistry = nil
 
         if let channel {
             try? await channel.close().get()
+        }
+        if let childChannelRegistry {
+            try? await childChannelRegistry.closeAll()
         }
         if let group {
             try? await group.shutdownGracefully()
@@ -78,12 +90,41 @@ actor MCPNetworkHTTPListener {
     }
 }
 
+private final class MCPNetworkHTTPChildChannelRegistry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var channels: [ObjectIdentifier: Channel] = [:]
+
+    func register(_ channel: Channel) {
+        lock.lock()
+        channels[ObjectIdentifier(channel as AnyObject)] = channel
+        lock.unlock()
+    }
+
+    func remove(_ channel: Channel) {
+        lock.lock()
+        channels.removeValue(forKey: ObjectIdentifier(channel as AnyObject))
+        lock.unlock()
+    }
+
+    func closeAll() async throws {
+        let snapshot: [Channel]
+        lock.lock()
+        snapshot = Array(channels.values)
+        lock.unlock()
+
+        for channel in snapshot {
+            try? await channel.close().get()
+        }
+    }
+}
+
 private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
 
     private let requestHandler: MCPNetworkHTTPListener.RequestHandler
     private let logger: Logger
+    private let childChannelRegistry: MCPNetworkHTTPChildChannelRegistry
     private var currentHead: HTTPRequestHead?
     private var bodyBuffer = ByteBuffer()
     private let maxBodyBytes = 8 * 1024 * 1024
@@ -92,13 +133,19 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
     private var requestInFlight = false
     private var closeAfterInFlightRequest = false
     private var activeStreamTask: Task<Void, Never>?
+    private var activeStreamTerminationHandler: (@Sendable () -> Void)?
     private var activeStreamTaskID = 0
     private var closingForActiveStreamRequest = false
     private var bodyTooLarge = false
 
-    init(requestHandler: @escaping MCPNetworkHTTPListener.RequestHandler, logger: Logger) {
+    init(
+        requestHandler: @escaping MCPNetworkHTTPListener.RequestHandler,
+        logger: Logger,
+        childChannelRegistry: MCPNetworkHTTPChildChannelRegistry
+    ) {
         self.requestHandler = requestHandler
         self.logger = logger
+        self.childChannelRegistry = childChannelRegistry
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -168,15 +215,17 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
     func channelInactive(context: ChannelHandlerContext) {
         closingForActiveStreamRequest = false
         closeAfterInFlightRequest = false
+        childChannelRegistry.remove(context.channel)
         cancelActiveRequestTask()
-        cancelActiveStreamTask()
+        cancelActiveStreamTask(notifyTermination: true)
         context.fireChannelInactive()
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
         logger.warning("Network MCP HTTP channel error: \(String(describing: error))")
         cancelActiveRequestTask()
-        cancelActiveStreamTask()
+        cancelActiveStreamTask(notifyTermination: true)
+        childChannelRegistry.remove(context.channel)
         context.close(promise: nil)
     }
 
@@ -220,8 +269,8 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
         switch response.body {
         case .none, .data:
             writeFiniteResponse(response, requestID: requestID, context: context)
-        case let .stream(stream):
-            writeStreamingResponse(response, stream: stream, requestID: requestID, context: context)
+        case let .stream(stream, onTermination):
+            writeStreamingResponse(response, stream: stream, onTermination: onTermination, requestID: requestID, context: context)
         }
     }
 
@@ -259,10 +308,12 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
     private func writeStreamingResponse(
         _ response: MCPNetworkHTTPResponse,
         stream: AsyncThrowingStream<Data, Error>,
+        onTermination: (@Sendable () -> Void)?,
         requestID: Int?,
         context: ChannelHandlerContext
     ) {
-        cancelActiveStreamTask()
+        cancelActiveStreamTask(notifyTermination: true)
+        activeStreamTerminationHandler = onTermination
         activeStreamTaskID += 1
         let taskID = activeStreamTaskID
 
@@ -278,7 +329,7 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
         context.writeAndFlush(wrapOutboundOut(.head(HTTPResponseHead(version: .http1_1, status: status, headers: headers))))
             .whenFailure { [weak self] error in
                 self?.logger.warning("Network MCP HTTP stream head write failed: \(String(describing: error))")
-                self?.cancelActiveStreamTask()
+                self?.cancelActiveStreamTask(notifyTermination: true)
             }
 
         activeStreamTask = Task { [weak self, weak context] in
@@ -315,7 +366,7 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
                         continuation.resume(returning: true)
                     case let .failure(error):
                         self.logger.warning("Network MCP HTTP stream write failed: \(String(describing: error))")
-                        self.cancelActiveStreamTask()
+                        self.cancelActiveStreamTask(notifyTermination: true)
                         continuation.resume(returning: false)
                     }
                 }
@@ -333,6 +384,7 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
                 context.writeAndFlush(wrapOutboundOut(.end(nil))).whenComplete { _ in
                     if self.activeStreamTaskID == taskID {
                         self.activeStreamTask = nil
+                        self.activeStreamTerminationHandler = nil
                     }
                     if let requestID {
                         self.completeRequest(requestID: requestID, context: context)
@@ -352,6 +404,7 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
                 }
                 logger.warning("Network MCP HTTP stream failed: \(String(describing: error))")
                 activeStreamTask = nil
+                notifyActiveStreamTermination()
                 context.close().whenComplete { _ in
                     continuation.resume()
                 }
@@ -375,10 +428,21 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
         requestInFlight = false
     }
 
-    private func cancelActiveStreamTask() {
+    private func cancelActiveStreamTask(notifyTermination: Bool) {
         activeStreamTask?.cancel()
         activeStreamTask = nil
         activeStreamTaskID += 1
+        if notifyTermination {
+            notifyActiveStreamTermination()
+        } else {
+            activeStreamTerminationHandler = nil
+        }
+    }
+
+    private func notifyActiveStreamTermination() {
+        let handler = activeStreamTerminationHandler
+        activeStreamTerminationHandler = nil
+        handler?()
     }
 }
 

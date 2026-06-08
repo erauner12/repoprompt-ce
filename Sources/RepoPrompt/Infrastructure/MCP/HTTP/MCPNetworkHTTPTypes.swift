@@ -48,7 +48,7 @@ struct MCPNetworkHTTPResponse {
     enum Body {
         case none
         case data(Data)
-        case stream(AsyncThrowingStream<Data, Swift.Error>)
+        case stream(AsyncThrowingStream<Data, Swift.Error>, onTermination: (@Sendable () -> Void)? = nil)
     }
 
     var statusCode: Int
