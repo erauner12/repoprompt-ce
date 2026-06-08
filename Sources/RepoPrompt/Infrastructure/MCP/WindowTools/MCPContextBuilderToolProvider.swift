@@ -106,10 +106,12 @@ private struct ContextBuilderExecutionOptions {
 final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
     let group: MCPWindowToolGroup = .contextBuilder
 
-    private nonisolated static let businessArgumentKeys: Set<String> = [
-        "instructions",
-        "response_type",
-        "export_response"
+    private nonisolated static let removedResumableArgumentKeys: Set<String> = [
+        "op",
+        "job_id",
+        "timeout",
+        "server_instance_id",
+        "client_request_id"
     ]
 
     private let runtime: MCPWindowToolRuntime
@@ -181,9 +183,9 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
     }
 
     private nonisolated static func parseExecutionOptions(args: [String: Value]) throws -> ContextBuilderExecutionOptions {
-        let unsupportedArgs = Set(args.keys).subtracting(businessArgumentKeys).sorted()
-        guard unsupportedArgs.isEmpty else {
-            throw MCPError.invalidParams("Unsupported args for context_builder: \(unsupportedArgs.joined(separator: ", "))")
+        let removedResumableArgs = Set(args.keys).intersection(removedResumableArgumentKeys).sorted()
+        guard removedResumableArgs.isEmpty else {
+            throw MCPError.invalidParams("Unsupported args for context_builder: \(removedResumableArgs.joined(separator: ", "))")
         }
 
         let instructions = args["instructions"]?.stringValue ?? ""
