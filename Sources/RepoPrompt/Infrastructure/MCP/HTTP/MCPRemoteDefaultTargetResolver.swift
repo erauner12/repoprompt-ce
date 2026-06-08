@@ -27,6 +27,8 @@ struct MCPRemoteDefaultTargetResolution: Equatable {
     var workspaceID: UUID
     var workspaceName: String
     var rootPaths: [String]
+    /// Configured tab/context ID proved by the matched candidate, for downstream remote routing.
+    var contextID: UUID?
     var didOpenWindow: Bool
 }
 
@@ -116,14 +118,14 @@ struct MCPRemoteDefaultTargetResolver {
                     guidance: guidance(for: target)
                 )
             }
-            return resolution(from: match, didOpenWindow: false)
+            return resolution(from: match, target: target, didOpenWindow: false)
         }
 
         if let match = matches.first {
             if target.workspaceID == nil, matches.count > 1 {
                 throw MCPRemoteDefaultTargetResolutionError.staleDefaultTarget(guidance: guidance(for: target))
             }
-            return resolution(from: match, didOpenWindow: false)
+            return resolution(from: match, target: target, didOpenWindow: false)
         }
 
         if hasStaleCandidate(candidates, target: target) {
@@ -141,7 +143,7 @@ struct MCPRemoteDefaultTargetResolver {
         guard let opened = await windowOpener(target), matchesTarget(opened, target: target) else {
             throw MCPRemoteDefaultTargetResolutionError.openFailed(guidance: guidance(for: target))
         }
-        return resolution(from: opened, didOpenWindow: true)
+        return resolution(from: opened, target: target, didOpenWindow: true)
     }
 
     private func validateConfiguredTarget(_ target: NetworkMCPDefaultTargetMetadata) throws {
@@ -188,7 +190,6 @@ struct MCPRemoteDefaultTargetResolver {
 
         if let contextIDString = target.contextID,
            let contextID = UUID(uuidString: contextIDString),
-           !candidate.contextIDs.isEmpty,
            !candidate.contextIDs.contains(contextID)
         {
             return false
@@ -199,6 +200,7 @@ struct MCPRemoteDefaultTargetResolver {
 
     private func resolution(
         from candidate: MCPRemoteTargetWindowCandidate,
+        target: NetworkMCPDefaultTargetMetadata,
         didOpenWindow: Bool
     ) -> MCPRemoteDefaultTargetResolution {
         MCPRemoteDefaultTargetResolution(
@@ -206,6 +208,7 @@ struct MCPRemoteDefaultTargetResolver {
             workspaceID: candidate.workspaceID,
             workspaceName: candidate.workspaceName,
             rootPaths: WorkspaceRootSetKey(paths: candidate.rootPaths).normalizedPaths,
+            contextID: target.contextID.flatMap(UUID.init(uuidString:)),
             didOpenWindow: didOpenWindow
         )
     }
