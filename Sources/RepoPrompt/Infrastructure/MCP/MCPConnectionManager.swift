@@ -684,12 +684,20 @@ actor ServerNetworkManager {
     private var lifecycleGeneration: UInt64 = 0
     private var isEnabledState: Bool = true
 
-    // Network MCP HTTP listener
+    /// Network MCP HTTP listener
+    private struct HTTPListenerStartState {
+        let token: UUID
+        let lifecycleGeneration: UInt64
+        let configuration: MCPNetworkHTTPListener.Configuration
+        let listener: MCPNetworkHTTPListener
+    }
+
     private var httpListener: MCPNetworkHTTPListener?
     private var httpListenerLifecycleGeneration: UInt64?
     private var httpListenerBindAddress: String?
     private var httpListenerPort: Int?
     private var httpListenerLastErrorDescription: String?
+    private var httpListenerStartState: HTTPListenerStartState?
     private var httpSessionsByID: [String: UUID] = [:]
     private var httpApprovedTokenFingerprintBySessionID: [String: String] = [:]
     private var httpConnectionsByConnectionID: [UUID: MCPHTTPConnectionManager] = [:]
@@ -697,6 +705,7 @@ actor ServerNetworkManager {
     private let remoteBearerTokenStore = MCPRemoteBearerTokenStore()
     #if DEBUG
         private var debugNetworkMCPBearerTokenOverride: String?
+        private var debugNetworkMCPSettingsSnapshotOverride: NetworkMCPSettingsSnapshot?
     #endif
     typealias RemoteClientApprovalHandler = @Sendable (MCPRemoteClientApprovalRequest) async -> MCPRemoteClientApprovalDecision
     private var remoteClientApprovalHandler: RemoteClientApprovalHandler?
@@ -726,6 +735,15 @@ actor ServerNetworkManager {
         return MCPFilesystemConstants.bootstrapSocketURL()
     }
 
+    private func networkMCPSettingsSnapshot() async -> NetworkMCPSettingsSnapshot {
+        #if DEBUG
+            if let debugNetworkMCPSettingsSnapshotOverride {
+                return debugNetworkMCPSettingsSnapshotOverride
+            }
+        #endif
+        return await MainActor.run { GlobalSettingsStore.shared.networkMCPSettingsSnapshot() }
+    }
+
     #if DEBUG
         enum DebugBootstrapSocketURLOverrideError: Error, Equatable {
             case managerNotFullyStopped
@@ -737,6 +755,7 @@ actor ServerNetworkManager {
 
         enum DebugLifecycleFenceCheckpoint: Hashable {
             case listenerPublishedBeforeStartInvocation
+            case httpListenerCreatedBeforeStartInvocation
             case listenerStopReturnedBeforeConditionalClear
             case restartTaskBeforePerform
         }
@@ -812,6 +831,22 @@ actor ServerNetworkManager {
             bootstrapSocketServer.map(ObjectIdentifier.init)
         }
 
+        func debugHTTPListenerIdentityForLifecycleFenceTest() -> ObjectIdentifier? {
+            httpListener.map(ObjectIdentifier.init)
+        }
+
+        func debugHTTPListenerStartStateForLifecycleFenceTest() -> Bool {
+            httpListenerStartState != nil
+        }
+
+        func debugHTTPListenerLifecycleGenerationForLifecycleFenceTest() -> UInt64? {
+            httpListenerLifecycleGeneration
+        }
+
+        func debugSetNetworkMCPSettingsSnapshotOverride(_ snapshot: NetworkMCPSettingsSnapshot?) {
+            debugNetworkMCPSettingsSnapshotOverride = snapshot
+        }
+
         func debugBootstrapRestartTaskCompletionCountForLifecycleFenceTest() -> Int {
             debugBootstrapRestartTaskCompletionCount
         }
@@ -856,6 +891,11 @@ actor ServerNetworkManager {
                   bootstrapSocketServerLifecycleGeneration == nil,
                   bootstrapSocketTask == nil,
                   maintenanceTask == nil,
+                  httpListener == nil,
+                  httpListenerLifecycleGeneration == nil,
+                  httpListenerBindAddress == nil,
+                  httpListenerPort == nil,
+                  httpListenerStartState == nil,
                   !bootstrapStartInProgress,
                   bootstrapStartLifecycleGeneration == nil,
                   !bootstrapRestartInProgress,
@@ -3341,7 +3381,7 @@ actor ServerNetworkManager {
     }
 
     func networkHTTPListenerStatus() async -> NetworkMCPHTTPListenerStatusSnapshot {
-        let settings = await MainActor.run { GlobalSettingsStore.shared.networkMCPSettingsSnapshot() }
+        let settings = await networkMCPSettingsSnapshot()
         return NetworkMCPHTTPListenerStatusSnapshot(
             enabled: settings.enabled,
             isListening: httpListener != nil && httpListenerLifecycleGeneration == lifecycleGeneration,
@@ -4243,8 +4283,19 @@ actor ServerNetworkManager {
 
     private func startHTTPListenerIfConfigured(lifecycleGeneration expectedLifecycleGeneration: UInt64) async {
         guard isCurrentLifecycle(expectedLifecycleGeneration) else { return }
-        let settings = await MainActor.run { GlobalSettingsStore.shared.networkMCPSettingsSnapshot() }
+        let settings = await networkMCPSettingsSnapshot()
+        guard isCurrentLifecycle(expectedLifecycleGeneration) else { return }
+        let configuration = MCPNetworkHTTPListener.Configuration(
+            bindAddress: settings.bindAddress,
+            port: settings.port
+        )
         guard settings.enabled else {
+            let pendingListener = httpListenerStartState?.lifecycleGeneration == expectedLifecycleGeneration
+                ? httpListenerStartState?.listener
+                : nil
+            if pendingListener != nil {
+                httpListenerStartState = nil
+            }
             if let listener = httpListener {
                 httpListener = nil
                 httpListenerLifecycleGeneration = nil
@@ -4252,11 +4303,12 @@ actor ServerNetworkManager {
                 httpListenerPort = nil
                 await listener.stop()
             }
+            await pendingListener?.stop()
             httpListenerLastErrorDescription = nil
             return
         }
         if let listener = httpListener,
-           httpListenerBindAddress != settings.bindAddress || httpListenerPort != settings.port
+           httpListenerBindAddress != configuration.bindAddress || httpListenerPort != configuration.port
         {
             httpListener = nil
             httpListenerLifecycleGeneration = nil
@@ -4265,32 +4317,92 @@ actor ServerNetworkManager {
             await listener.stop()
         }
         guard httpListener == nil else { return }
+        guard httpListenerStartState == nil else { return }
 
-        let configuration = MCPNetworkHTTPListener.Configuration(
-            bindAddress: settings.bindAddress,
-            port: settings.port
-        )
+        let startToken = UUID()
         let listener = MCPNetworkHTTPListener(configuration: configuration, logger: log) { [weak self] request in
             guard let self else {
                 return .error(statusCode: 503, message: "Server unavailable", code: -32003)
             }
             return await handleNetworkHTTPRequest(request, lifecycleGeneration: expectedLifecycleGeneration)
         }
-        httpListener = listener
-        httpListenerLifecycleGeneration = expectedLifecycleGeneration
-        httpListenerBindAddress = settings.bindAddress
-        httpListenerPort = settings.port
+        httpListenerStartState = HTTPListenerStartState(
+            token: startToken,
+            lifecycleGeneration: expectedLifecycleGeneration,
+            configuration: configuration,
+            listener: listener
+        )
+        #if DEBUG
+            await debugSuspendLifecycleFenceCheckpointIfNeeded(.httpListenerCreatedBeforeStartInvocation)
+        #endif
+        guard httpListenerStartState?.token == startToken,
+              isCurrentLifecycle(expectedLifecycleGeneration)
+        else {
+            await listener.stop()
+            scheduleHTTPListenerStartForCurrentLifecycleIfNeeded()
+            return
+        }
         do {
             try await listener.start()
+            let latestSettings = await networkMCPSettingsSnapshot()
+            let latestConfiguration = MCPNetworkHTTPListener.Configuration(
+                bindAddress: latestSettings.bindAddress,
+                port: latestSettings.port
+            )
+            guard httpListenerStartState?.token == startToken,
+                  isCurrentLifecycle(expectedLifecycleGeneration),
+                  latestSettings.enabled,
+                  latestConfiguration == configuration,
+                  httpListener == nil
+            else {
+                if httpListenerStartState?.token == startToken {
+                    httpListenerStartState = nil
+                }
+                await listener.stop()
+                scheduleHTTPListenerStartForCurrentLifecycleIfNeeded()
+                return
+            }
+            httpListener = listener
+            httpListenerLifecycleGeneration = expectedLifecycleGeneration
+            httpListenerBindAddress = configuration.bindAddress
+            httpListenerPort = configuration.port
+            httpListenerStartState = nil
             httpListenerLastErrorDescription = nil
         } catch {
-            guard httpListener === listener else { return }
-            httpListener = nil
-            httpListenerLifecycleGeneration = nil
-            httpListenerBindAddress = nil
-            httpListenerPort = nil
+            if httpListenerStartState?.token == startToken {
+                httpListenerStartState = nil
+            }
+            guard isCurrentLifecycle(expectedLifecycleGeneration) else {
+                scheduleHTTPListenerStartForCurrentLifecycleIfNeeded()
+                return
+            }
+            let latestSettings = await networkMCPSettingsSnapshot()
+            guard isCurrentLifecycle(expectedLifecycleGeneration) else {
+                scheduleHTTPListenerStartForCurrentLifecycleIfNeeded()
+                return
+            }
+            let latestConfiguration = MCPNetworkHTTPListener.Configuration(
+                bindAddress: latestSettings.bindAddress,
+                port: latestSettings.port
+            )
+            guard latestSettings.enabled, latestConfiguration == configuration else {
+                scheduleHTTPListenerStartForCurrentLifecycleIfNeeded()
+                return
+            }
             httpListenerLastErrorDescription = String(describing: error)
             log.error("Failed to start Network MCP HTTP listener: \(String(describing: error))")
+        }
+    }
+
+    private func scheduleHTTPListenerStartForCurrentLifecycleIfNeeded() {
+        let replacementLifecycleGeneration = lifecycleGeneration
+        guard isCurrentLifecycle(replacementLifecycleGeneration),
+              httpListener == nil,
+              httpListenerStartState == nil
+        else { return }
+
+        Task { [weak self] in
+            await self?.startHTTPListenerIfConfigured(lifecycleGeneration: replacementLifecycleGeneration)
         }
     }
 
@@ -4357,6 +4469,9 @@ actor ServerNetworkManager {
                 guard MCPNetworkHTTPInitializeClassifier.isSingleInitializeRequest(request.body) else {
                     return .error(statusCode: 400, message: "Initial POST /mcp must be a single initialize request", code: -32600)
                 }
+                if let validationFailure = prevalidateSessionlessInitializeRequestBeforeApproval(request) {
+                    return validationFailure
+                }
             case "GET", "DELETE":
                 return .error(statusCode: 400, message: "Missing MCP-Session-Id header", code: -32600)
             default:
@@ -4421,6 +4536,46 @@ actor ServerNetworkManager {
             await removeConnection(connectionID)
         }
         return .error(statusCode: 503, message: "RepoPrompt MCP server is disabled", code: -32003)
+    }
+
+    private func prevalidateSessionlessInitializeRequestBeforeApproval(_ request: MCPNetworkHTTPRequest) -> MCPNetworkHTTPResponse? {
+        guard acceptsEventStream(request.header("Accept")) else {
+            return .error(
+                statusCode: 406,
+                message: "Initial POST /mcp requires an Accept header containing text/event-stream",
+                code: -32600
+            )
+        }
+        guard hasJSONContentType(request.header(MCPNetworkHTTPHeader.contentType)) else {
+            return .error(
+                statusCode: 415,
+                message: "Initial POST /mcp requires Content-Type application/json",
+                code: -32600
+            )
+        }
+        return nil
+    }
+
+    private func acceptsEventStream(_ value: String?) -> Bool {
+        headerMediaTypes(value).contains("text/event-stream")
+    }
+
+    private func hasJSONContentType(_ value: String?) -> Bool {
+        headerMediaTypes(value).contains("application/json")
+    }
+
+    private func headerMediaTypes(_ value: String?) -> Set<String> {
+        guard let value else { return [] }
+        return Set(
+            value
+                .split(separator: ",")
+                .map { part in
+                    part.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)[0]
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .lowercased()
+                }
+                .filter { !$0.isEmpty }
+        )
     }
 
     private func authenticateNetworkMCPBearerToken(authorizationHeader: String?) -> MCPRemoteBearerAuthenticationResult {
@@ -5586,6 +5741,9 @@ actor ServerNetworkManager {
         let httpListenerToStop = httpListenerLifecycleGeneration == stoppedLifecycleGeneration
             ? httpListener
             : nil
+        let startingHTTPListenerToStop = httpListenerStartState?.lifecycleGeneration == stoppedLifecycleGeneration
+            ? httpListenerStartState?.listener
+            : nil
         let connectionsToStop = connections.compactMap { connectionID, connectionManager -> (UUID, any MCPServerConnection)? in
             guard connectionLifecycleGenerationByID[connectionID] == stoppedLifecycleGeneration else { return nil }
             return (connectionID, connectionManager)
@@ -5619,6 +5777,9 @@ actor ServerNetworkManager {
         }
         bootstrapSocketTask?.cancel()
         bootstrapSocketTask = nil
+        if httpListenerStartState?.lifecycleGeneration == stoppedLifecycleGeneration {
+            httpListenerStartState = nil
+        }
         httpListener = nil
         httpListenerLifecycleGeneration = nil
         httpListenerBindAddress = nil
@@ -5699,6 +5860,7 @@ actor ServerNetworkManager {
 
         await stopBootstrapSocketServer(server: listenerToStop, lifecycleGeneration: stoppedLifecycleGeneration)
         await httpListenerToStop?.stop()
+        await startingHTTPListenerToStop?.stop()
 
         // The registry detach above was synchronous; stale resumptions below only stop the
         // captured manager objects and never mutate a replacement lifecycle's registries.

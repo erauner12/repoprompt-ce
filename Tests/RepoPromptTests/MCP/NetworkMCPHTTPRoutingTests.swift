@@ -85,9 +85,13 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
         #endif
     }
 
-    func testInvalidInitializeHeadersDoNotRetainGhostSession() async throws {
+    func testInvalidInitializeHeadersDoNotRetainGhostSessionOrPromptForApproval() async throws {
         #if DEBUG
-            try await withRoutingManager { manager, token in
+            let promptCounter = PromptCounter()
+            try await withRoutingManager(approvalHandler: { _ in
+                await promptCounter.increment()
+                return .allow(alwaysAllow: false)
+            }) { manager, token in
                 let response = await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
                     post(
                         body: initializeBody(),
@@ -97,8 +101,11 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
                 )
 
                 XCTAssertGreaterThanOrEqual(response.statusCode, 400)
+                XCTAssertTrue(try errorMessage(response).contains("Accept header"))
                 let sessionCount = await manager.debugNetworkMCPHTTPSessionCount()
                 XCTAssertEqual(sessionCount, 0)
+                let promptCount = await promptCounter.value
+                XCTAssertEqual(promptCount, 0)
             }
         #else
             throw XCTSkip("Network MCP routing seams are DEBUG-only")
