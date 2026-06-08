@@ -88,6 +88,14 @@ final class NetworkMCPConfigExportTests: XCTestCase {
         XCTAssertTrue(instructions.contains("export_response: true"), instructions)
     }
 
+    func testIPv6LoopbackBindExportsBracketedLoopbackHost() {
+        let export = MCPConfigExportService.streamableHTTPRemoteConfig(
+            settings: NetworkMCPSettingsSnapshot(bindAddress: "::1", port: 4150)
+        )
+
+        XCTAssertEqual(export.endpointURL, "http://[::1]:4150/mcp")
+    }
+
     func testIPv6HostOverrideIsBracketed() {
         let export = MCPConfigExportService.streamableHTTPRemoteConfig(
             settings: NetworkMCPSettingsSnapshot(bindAddress: "::1", port: 4150),

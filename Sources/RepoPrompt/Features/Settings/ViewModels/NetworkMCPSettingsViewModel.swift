@@ -2,6 +2,14 @@ import AppKit
 import Darwin
 import Foundation
 
+protocol NetworkMCPListenerManaging: Sendable {
+    func networkHTTPListenerStatus() async -> NetworkMCPHTTPListenerStatusSnapshot
+    func refreshHTTPListenerConfiguration() async
+    func ensureRunningAndRefreshHTTPListenerConfiguration() async
+}
+
+extension ServerNetworkManager: NetworkMCPListenerManaging {}
+
 @MainActor
 final class NetworkMCPSettingsViewModel: ObservableObject {
     @Published private(set) var snapshot: NetworkMCPSettingsSnapshot
@@ -15,12 +23,12 @@ final class NetworkMCPSettingsViewModel: ObservableObject {
 
     private let settingsStore: GlobalSettingsStore
     private let tokenStore: MCPRemoteBearerTokenStore
-    private let networkManager: ServerNetworkManager
+    private let networkManager: any NetworkMCPListenerManaging
 
     init(
         settingsStore: GlobalSettingsStore = .shared,
         tokenStore: MCPRemoteBearerTokenStore = MCPRemoteBearerTokenStore(),
-        networkManager: ServerNetworkManager = .shared
+        networkManager: any NetworkMCPListenerManaging = ServerNetworkManager.shared
     ) {
         self.settingsStore = settingsStore
         self.tokenStore = tokenStore
@@ -46,11 +54,11 @@ final class NetworkMCPSettingsViewModel: ObservableObject {
     }
 
     var isNonLoopbackBind: Bool {
-        !MCPRemoteClientAddress(snapshot.bindAddress).isLoopback
+        !MCPRemoteClientAddress(bindAddressText).isLoopback
     }
 
     var endpointPreview: String {
-        MCPConfigExportService.streamableHTTPRemoteConfig(settings: snapshot).endpointURL
+        MCPConfigExportService.streamableHTTPRemoteConfig(settings: draftEndpointSnapshot).endpointURL
     }
 
     var targetSummary: String {
@@ -82,11 +90,10 @@ final class NetworkMCPSettingsViewModel: ObservableObject {
 
     func saveEndpointSettings() async {
         do {
-            try settingsStore.setNetworkMCPBindAddress(bindAddressText)
             guard let port = Int(portText.trimmingCharacters(in: .whitespacesAndNewlines)) else {
                 throw NetworkMCPSettingsError.invalidPort(-1)
             }
-            try settingsStore.setNetworkMCPPort(port)
+            try settingsStore.setNetworkMCPEndpoint(bindAddress: bindAddressText, port: port)
             await networkManager.refreshHTTPListenerConfiguration()
             await refresh()
             showFeedback("Network MCP endpoint saved")
@@ -109,7 +116,11 @@ final class NetworkMCPSettingsViewModel: ObservableObject {
                 enabled,
                 secureTokenFingerprint: secureTokenFingerprint
             )
-            await networkManager.refreshHTTPListenerConfiguration()
+            if enabled {
+                await networkManager.ensureRunningAndRefreshHTTPListenerConfiguration()
+            } else {
+                await networkManager.refreshHTTPListenerConfiguration()
+            }
             await refresh()
             showFeedback(enabled ? "Network MCP enabled" : "Network MCP disabled")
         } catch {
@@ -199,13 +210,13 @@ final class NetworkMCPSettingsViewModel: ObservableObject {
         let remaining = snapshot.trustedClients.filter { $0.id != policy.id }
         settingsStore.setNetworkMCPTrustedClients(remaining)
         await refresh()
-        showFeedback("Trusted LAN client revoked")
+        showFeedback("Trusted LAN client revoked for future connections")
     }
 
     func revokeAllTrustedClients() async {
         settingsStore.setNetworkMCPTrustedClients([])
         await refresh()
-        showFeedback("Trusted LAN clients revoked")
+        showFeedback("Trusted LAN clients revoked for future connections")
     }
 
     func copyOpenClawConfig() {
@@ -226,6 +237,15 @@ final class NetworkMCPSettingsViewModel: ObservableObject {
     func copySetupNotes() {
         copyToPasteboard(MCPConfigExportService.streamableHTTPRemoteConfig(settings: snapshot).setupNotes)
         showFeedback("Setup notes copied")
+    }
+
+    private var draftEndpointSnapshot: NetworkMCPSettingsSnapshot {
+        var draft = snapshot
+        draft.bindAddress = bindAddressText
+        if let port = Int(portText.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            draft.port = port
+        }
+        return draft
     }
 
     private func saveNewToken(label: String, feedback: String) {
