@@ -597,7 +597,6 @@ actor ServerNetworkManager {
     private var httpListenerLastErrorDescription: String?
     private var httpSessionsByID: [String: UUID] = [:]
     private var httpApprovedTokenFingerprintBySessionID: [String: String] = [:]
-    private var httpApprovedSourceHostBySessionID: [String: String] = [:]
     private var httpConnectionsByConnectionID: [UUID: MCPHTTPConnectionManager] = [:]
     private var remoteHTTPConnections: Set<UUID> = []
     private let remoteBearerTokenStore = MCPRemoteBearerTokenStore()
@@ -3003,8 +3002,7 @@ actor ServerNetworkManager {
         if let sessionID = request.header(MCPNetworkHTTPHeader.sessionID) {
             guard let connectionID = httpSessionsByID[sessionID],
                   httpConnectionsByConnectionID[connectionID] != nil,
-                  let approvedFingerprint = httpApprovedTokenFingerprintBySessionID[sessionID],
-                  let approvedSourceHost = httpApprovedSourceHostBySessionID[sessionID]
+                  let approvedFingerprint = httpApprovedTokenFingerprintBySessionID[sessionID]
             else {
                 return .error(statusCode: 404, message: "Invalid or expired MCP-Session-Id", code: -32600)
             }
@@ -3017,10 +3015,8 @@ actor ServerNetworkManager {
                 await removeConnection(connectionID)
                 return .error(statusCode: 403, message: "Remote MCP source is not private/LAN/link-local: \(sourceAddress.normalizedHost)", code: -32001)
             }
-            guard sourceAddress.normalizedHost == approvedSourceHost else {
-                await removeConnection(connectionID)
-                return .error(statusCode: 403, message: "Network MCP session source address changed", code: -32001)
-            }
+            // Existing Network MCP sessions intentionally allow LAN/private/link-local source roaming
+            // for Kubernetes, NAT, proxy, and pod-IP changes. Public/non-LAN sources still fail closed.
         } else {
             switch method {
             case "POST":
@@ -3223,7 +3219,6 @@ actor ServerNetworkManager {
         connectionLifecycleGenerationByID[connectionID] = expectedLifecycleGeneration
         httpSessionsByID[sessionID] = connectionID
         httpApprovedTokenFingerprintBySessionID[sessionID] = tokenFingerprint
-        httpApprovedSourceHostBySessionID[sessionID] = MCPRemoteClientAddress(sourceAddress).normalizedHost
         httpConnectionsByConnectionID[connectionID] = manager
         remoteHTTPConnections.insert(connectionID)
         capabilityTokenByConnection[connectionID] = sessionID
@@ -3924,7 +3919,6 @@ actor ServerNetworkManager {
         httpListenerLastErrorDescription = nil
         httpSessionsByID.removeAll()
         httpApprovedTokenFingerprintBySessionID.removeAll()
-        httpApprovedSourceHostBySessionID.removeAll()
         httpConnectionsByConnectionID.removeAll()
         remoteHTTPConnections.removeAll()
         maintenanceTask?.cancel()
@@ -4016,7 +4010,6 @@ actor ServerNetworkManager {
         connectionStats.removeAll()
         httpSessionsByID.removeAll()
         httpApprovedTokenFingerprintBySessionID.removeAll()
-        httpApprovedSourceHostBySessionID.removeAll()
         httpConnectionsByConnectionID.removeAll()
         remoteHTTPConnections.removeAll()
     }
@@ -4344,7 +4337,6 @@ actor ServerNetworkManager {
         if remoteHTTPConnections.contains(id), let sessionToken {
             httpSessionsByID.removeValue(forKey: sessionToken)
             httpApprovedTokenFingerprintBySessionID.removeValue(forKey: sessionToken)
-            httpApprovedSourceHostBySessionID.removeValue(forKey: sessionToken)
         }
         httpConnectionsByConnectionID.removeValue(forKey: id)
         remoteHTTPConnections.remove(id)

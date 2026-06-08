@@ -219,7 +219,7 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
         #endif
     }
 
-    func testExistingSessionFromDifferentSourceFailsClosedAndRemovesSession() async throws {
+    func testExistingSessionFromDifferentPrivateSourceRoutesToSDKSSEStream() async throws {
         #if DEBUG
             try await withRoutingManager { manager, token in
                 let initializeResponse = await initialize(manager: manager, token: token)
@@ -228,13 +228,41 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
                 XCTAssertEqual(initialSessionCount, 1)
 
                 let response = await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
-                    get(sessionID: sessionID, token: token, remoteAddress: "127.0.0.2:54321")
+                    get(sessionID: sessionID, token: token, remoteAddress: "10.42.0.17:54321")
+                )
+
+                XCTAssertEqual(response.statusCode, 200)
+                XCTAssertEqual(response.headers[MCPNetworkHTTPHeader.sessionID], sessionID)
+                XCTAssertEqual(header(response, "Content-Type"), "text/event-stream")
+                let sessionCountAfterRoam = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(sessionCountAfterRoam, 1)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
+    func testExistingSessionFromPublicSourceFailsClosedAndRemovesSession() async throws {
+        #if DEBUG
+            try await withRoutingManager { manager, token in
+                let initializeResponse = await initialize(manager: manager, token: token)
+                let sessionID = try XCTUnwrap(initializeResponse.headers[MCPNetworkHTTPHeader.sessionID])
+                let initialSessionCount = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(initialSessionCount, 1)
+
+                let response = await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
+                    get(sessionID: sessionID, token: token, remoteAddress: "8.8.8.8:54321")
                 )
 
                 XCTAssertEqual(response.statusCode, 403)
-                XCTAssertTrue(try errorMessage(response).contains("source address changed"))
-                let sessionCountAfterMismatch = await manager.debugNetworkMCPHTTPSessionCount()
-                XCTAssertEqual(sessionCountAfterMismatch, 0)
+                XCTAssertTrue(try errorMessage(response).contains("Remote MCP source is not private/LAN/link-local"))
+                let sessionCountAfterPublicSource = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(sessionCountAfterPublicSource, 0)
+
+                let staleResponse = await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
+                    get(sessionID: sessionID, token: token)
+                )
+                XCTAssertEqual(staleResponse.statusCode, 404)
             }
         #else
             throw XCTSkip("Network MCP routing seams are DEBUG-only")
