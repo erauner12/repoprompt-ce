@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct MCPApprovalPresentation: Equatable {
@@ -197,6 +198,78 @@ struct MCPRemoteClientAddress: Equatable {
     }
 }
 
+enum MCPRemoteTrustedClientPolicyStorage {
+    static let maxClientDisplayNameUTF8Bytes = 256
+    static let maxNormalizedClientIDUTF8Bytes = 256
+
+    private static let identityHashHexLength = 32
+    private static let identityHashSeparator = "#"
+
+    static func clientDisplayName(_ value: String?) -> String? {
+        guard let value else { return nil }
+        return boundedPlainText(value.trimmingCharacters(in: .whitespacesAndNewlines), maxUTF8Bytes: maxClientDisplayNameUTF8Bytes)
+    }
+
+    static func normalizedClientID(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.utf8.count > maxNormalizedClientIDUTF8Bytes else { return trimmed }
+
+        let hash = String(sha256Hex(trimmed).prefix(identityHashHexLength))
+        let prefixMaxBytes = maxNormalizedClientIDUTF8Bytes - identityHashSeparator.utf8.count - hash.utf8.count
+        let prefix = utf8Prefix(trimmed, maxBytes: max(0, prefixMaxBytes))
+        return "\(prefix)\(identityHashSeparator)\(hash)"
+    }
+
+    static func policyMatches(_ policy: NetworkMCPTrustedClientPolicy, request: MCPRemoteClientApprovalRequest) -> Bool {
+        let requestStorageKey = normalizedClientID(request.normalizedClientID)
+        return MCPClientIdentity.matches(policy.normalizedClientID, request.normalizedClientID)
+            || MCPClientIdentity.matches(policy.normalizedClientID, requestStorageKey)
+    }
+
+    static func normalizedForStorage(_ policy: NetworkMCPTrustedClientPolicy) -> NetworkMCPTrustedClientPolicy? {
+        var policy = policy
+        policy.clientDisplayName = clientDisplayName(policy.clientDisplayName)
+        policy.normalizedClientID = normalizedClientID(policy.normalizedClientID)
+        guard !policy.normalizedClientID.isEmpty else { return nil }
+        return policy
+    }
+
+    private static func boundedPlainText(_ value: String, maxUTF8Bytes: Int) -> String? {
+        guard !value.isEmpty else { return nil }
+        guard value.utf8.count > maxUTF8Bytes else { return value }
+        let prefix = utf8Prefix(value, maxBytes: maxUTF8Bytes)
+        return prefix.isEmpty ? nil : prefix
+    }
+
+    private static func utf8Prefix(_ value: String, maxBytes: Int) -> String {
+        guard maxBytes > 0 else { return "" }
+        var scalars = String.UnicodeScalarView()
+        var usedBytes = 0
+        for scalar in value.unicodeScalars {
+            let scalarBytes = utf8ByteCount(scalar)
+            guard usedBytes + scalarBytes <= maxBytes else { break }
+            scalars.append(scalar)
+            usedBytes += scalarBytes
+        }
+        return String(scalars)
+    }
+
+    private static func utf8ByteCount(_ scalar: Unicode.Scalar) -> Int {
+        switch scalar.value {
+        case ...0x7F: 1
+        case ...0x7FF: 2
+        case ...0xFFFF: 3
+        default: 4
+        }
+    }
+
+    private static func sha256Hex(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8)).map { byte in
+            String(format: "%02x", byte)
+        }.joined()
+    }
+}
+
 enum MCPRemoteClientApprovalFailure: Error, Equatable {
     case nonLANSourceAddress(String)
 }
@@ -347,7 +420,7 @@ final class MCPRemoteClientApprovalManager {
         guard request.hasStableClientIdentity else { return nil }
         return settingsStore.networkMCPSettingsSnapshot().trustedClients.first { policy in
             policy.tokenFingerprint == request.tokenFingerprint
-                && MCPClientIdentity.matches(policy.normalizedClientID, request.normalizedClientID)
+                && MCPRemoteTrustedClientPolicyStorage.policyMatches(policy, request: request)
         }
     }
 
@@ -357,10 +430,10 @@ final class MCPRemoteClientApprovalManager {
     ) -> NetworkMCPTrustedClientPolicy {
         let timestamp = now()
         var policies = settingsStore.networkMCPSettingsSnapshot().trustedClients
-        let storageKey = request.normalizedClientID
+        let storageKey = MCPRemoteTrustedClientPolicyStorage.normalizedClientID(request.normalizedClientID)
         let policy = NetworkMCPTrustedClientPolicy(
             id: idGenerator(),
-            clientDisplayName: request.displayName,
+            clientDisplayName: MCPRemoteTrustedClientPolicyStorage.clientDisplayName(request.displayName),
             normalizedClientID: storageKey,
             tokenFingerprint: request.tokenFingerprint,
             lastAddress: lastAddress,
@@ -369,7 +442,7 @@ final class MCPRemoteClientApprovalManager {
         )
         policies.removeAll {
             $0.tokenFingerprint == request.tokenFingerprint
-                && MCPClientIdentity.matches($0.normalizedClientID, storageKey)
+                && MCPRemoteTrustedClientPolicyStorage.policyMatches($0, request: request)
         }
         policies.append(policy)
         settingsStore.setNetworkMCPTrustedClients(policies)
@@ -381,6 +454,9 @@ final class MCPRemoteClientApprovalManager {
         guard let index = policies.firstIndex(where: { $0.id == policy.id }) else { return }
         policies[index].lastAddress = lastAddress
         policies[index].lastUsedAt = now()
+        if let normalizedPolicy = MCPRemoteTrustedClientPolicyStorage.normalizedForStorage(policies[index]) {
+            policies[index] = normalizedPolicy
+        }
         settingsStore.setNetworkMCPTrustedClients(policies)
     }
 }

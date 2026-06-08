@@ -72,6 +72,191 @@ final class NetworkMCPRemoteApprovalTests: XCTestCase {
         XCTAssertEqual(store.networkMCPSettingsSnapshot().trustedClients, [trustedPolicy])
     }
 
+    func testAlwaysAllowBoundsPersistedLongTrustedClientFieldsAndMatchesAgain() async throws {
+        let store = try makeStore()
+        let longDisplayName = String(repeating: "OpenClaw Device ", count: 40)
+        let request = MCPRemoteClientApprovalRequest(
+            clientDisplayName: " \(longDisplayName) ",
+            sourceAddress: "192.168.1.44:61234",
+            tokenFingerprint: "sha256:token-long"
+        )
+        XCTAssertGreaterThan(request.displayName.utf8.count, MCPRemoteTrustedClientPolicyStorage.maxClientDisplayNameUTF8Bytes)
+        XCTAssertGreaterThan(request.normalizedClientID.utf8.count, MCPRemoteTrustedClientPolicyStorage.maxNormalizedClientIDUTF8Bytes)
+
+        var promptCount = 0
+        let manager = MCPRemoteClientApprovalManager(settingsStore: store) { _ in
+            promptCount += 1
+            return .allow(alwaysAllow: true)
+        }
+
+        let firstResult = await manager.evaluate(request)
+
+        guard case let .approved(alwaysAllow, trustedPolicy?) = firstResult else {
+            return XCTFail("Expected trusted approval, got \(firstResult)")
+        }
+        XCTAssertTrue(alwaysAllow)
+        XCTAssertEqual(promptCount, 1)
+        XCTAssertLessThanOrEqual(
+            trustedPolicy.clientDisplayName?.utf8.count ?? 0,
+            MCPRemoteTrustedClientPolicyStorage.maxClientDisplayNameUTF8Bytes
+        )
+        XCTAssertLessThanOrEqual(
+            trustedPolicy.normalizedClientID.utf8.count,
+            MCPRemoteTrustedClientPolicyStorage.maxNormalizedClientIDUTF8Bytes
+        )
+        XCTAssertEqual(
+            trustedPolicy.normalizedClientID,
+            MCPRemoteTrustedClientPolicyStorage.normalizedClientID(request.normalizedClientID)
+        )
+        XCTAssertTrue(trustedPolicy.normalizedClientID.contains("#"))
+
+        let secondManager = MCPRemoteClientApprovalManager(settingsStore: store) { _ in
+            promptCount += 1
+            return .deny
+        }
+        let secondResult = await secondManager.evaluate(request)
+
+        guard case let .approved(secondAlwaysAllow, secondTrustedPolicy?) = secondResult else {
+            return XCTFail("Expected stored trusted approval, got \(secondResult)")
+        }
+        XCTAssertFalse(secondAlwaysAllow)
+        XCTAssertEqual(secondTrustedPolicy.id, trustedPolicy.id)
+        XCTAssertEqual(secondTrustedPolicy.normalizedClientID, trustedPolicy.normalizedClientID)
+        XCTAssertEqual(promptCount, 1)
+        XCTAssertEqual(store.networkMCPSettingsSnapshot().trustedClients.count, 1)
+    }
+
+    func testAlwaysAllowBoundsCombiningMarkTrustedClientFieldsByUTF8Bytes() async throws {
+        let store = try makeStore()
+        let deceptiveSingleGrapheme = "A" + String(repeating: "\u{0301}", count: 600)
+        let request = MCPRemoteClientApprovalRequest(
+            clientDisplayName: deceptiveSingleGrapheme,
+            sourceAddress: "192.168.1.44:61234",
+            tokenFingerprint: "sha256:token-combining"
+        )
+        XCTAssertLessThan(request.displayName.count, 10)
+        XCTAssertGreaterThan(request.displayName.utf8.count, MCPRemoteTrustedClientPolicyStorage.maxClientDisplayNameUTF8Bytes)
+        XCTAssertGreaterThan(request.normalizedClientID.utf8.count, MCPRemoteTrustedClientPolicyStorage.maxNormalizedClientIDUTF8Bytes)
+
+        let manager = MCPRemoteClientApprovalManager(settingsStore: store) { _ in
+            .allow(alwaysAllow: true)
+        }
+
+        let result = await manager.evaluate(request)
+
+        guard case let .approved(alwaysAllow, trustedPolicy?) = result else {
+            return XCTFail("Expected trusted approval, got \(result)")
+        }
+        XCTAssertTrue(alwaysAllow)
+        XCTAssertLessThanOrEqual(
+            trustedPolicy.clientDisplayName?.utf8.count ?? 0,
+            MCPRemoteTrustedClientPolicyStorage.maxClientDisplayNameUTF8Bytes
+        )
+        XCTAssertLessThanOrEqual(
+            trustedPolicy.normalizedClientID.utf8.count,
+            MCPRemoteTrustedClientPolicyStorage.maxNormalizedClientIDUTF8Bytes
+        )
+        XCTAssertTrue(trustedPolicy.normalizedClientID.contains("#"))
+    }
+
+    func testOverlongTrustedClientIDsUseHashSuffixToAvoidPrefixCollisions() async throws {
+        let store = try makeStore()
+        let commonPrefix = String(repeating: "same-client-prefix-", count: 20)
+        let firstRequest = MCPRemoteClientApprovalRequest(
+            clientDisplayName: "\(commonPrefix)alpha",
+            sourceAddress: "192.168.1.44:61234",
+            tokenFingerprint: "sha256:token-long"
+        )
+        let secondRequest = MCPRemoteClientApprovalRequest(
+            clientDisplayName: "\(commonPrefix)bravo",
+            sourceAddress: "192.168.1.45:61234",
+            tokenFingerprint: "sha256:token-long"
+        )
+        XCTAssertEqual(
+            String(firstRequest.normalizedClientID.prefix(200)),
+            String(secondRequest.normalizedClientID.prefix(200))
+        )
+
+        var promptedClientIDs: [String] = []
+        let manager = MCPRemoteClientApprovalManager(settingsStore: store) { request in
+            promptedClientIDs.append(request.normalizedClientID)
+            return .allow(alwaysAllow: true)
+        }
+
+        _ = await manager.evaluate(firstRequest)
+        _ = await manager.evaluate(secondRequest)
+
+        let policies = store.networkMCPSettingsSnapshot().trustedClients
+        XCTAssertEqual(promptedClientIDs, [firstRequest.normalizedClientID, secondRequest.normalizedClientID])
+        XCTAssertEqual(policies.count, 2)
+        XCTAssertNotEqual(policies[0].normalizedClientID, policies[1].normalizedClientID)
+        XCTAssertLessThanOrEqual(
+            policies[0].normalizedClientID.utf8.count,
+            MCPRemoteTrustedClientPolicyStorage.maxNormalizedClientIDUTF8Bytes
+        )
+        XCTAssertLessThanOrEqual(
+            policies[1].normalizedClientID.utf8.count,
+            MCPRemoteTrustedClientPolicyStorage.maxNormalizedClientIDUTF8Bytes
+        )
+        XCTAssertTrue(policies[0].normalizedClientID.contains("#"))
+        XCTAssertTrue(policies[1].normalizedClientID.contains("#"))
+    }
+
+    func testLegacyOverlongTrustedPolicyMatchesAndMigratesOnTouch() async throws {
+        let lastUsedAt = Date(timeIntervalSince1970: 2000)
+        let store = try makeStore()
+        let longDisplayName = String(repeating: "Legacy Client ", count: 40)
+        let request = MCPRemoteClientApprovalRequest(
+            clientDisplayName: longDisplayName,
+            sourceAddress: "192.168.1.44:61234",
+            tokenFingerprint: "sha256:token-legacy"
+        )
+        let legacyPolicy = NetworkMCPTrustedClientPolicy(
+            clientDisplayName: longDisplayName,
+            normalizedClientID: request.normalizedClientID,
+            tokenFingerprint: "sha256:token-legacy",
+            lastAddress: "192.168.1.20",
+            createdAt: Date(timeIntervalSince1970: 1000),
+            lastUsedAt: Date(timeIntervalSince1970: 1000)
+        )
+        store.setNetworkMCPTrustedClients([legacyPolicy])
+        XCTAssertGreaterThan(
+            store.networkMCPSettingsSnapshot().trustedClients[0].normalizedClientID.utf8.count,
+            MCPRemoteTrustedClientPolicyStorage.maxNormalizedClientIDUTF8Bytes
+        )
+
+        var promptCount = 0
+        let manager = MCPRemoteClientApprovalManager(settingsStore: store, now: { lastUsedAt }) { _ in
+            promptCount += 1
+            return .deny
+        }
+
+        let result = await manager.evaluate(request)
+
+        guard case let .approved(alwaysAllow, matchedPolicy?) = result else {
+            return XCTFail("Expected legacy trusted approval, got \(result)")
+        }
+        XCTAssertFalse(alwaysAllow)
+        XCTAssertEqual(matchedPolicy.id, legacyPolicy.id)
+        XCTAssertEqual(promptCount, 0)
+        let migrated = try XCTUnwrap(store.networkMCPSettingsSnapshot().trustedClients.first)
+        XCTAssertEqual(migrated.id, legacyPolicy.id)
+        XCTAssertEqual(migrated.lastAddress, "192.168.1.44")
+        XCTAssertEqual(migrated.lastUsedAt, lastUsedAt)
+        XCTAssertLessThanOrEqual(
+            migrated.clientDisplayName?.utf8.count ?? 0,
+            MCPRemoteTrustedClientPolicyStorage.maxClientDisplayNameUTF8Bytes
+        )
+        XCTAssertLessThanOrEqual(
+            migrated.normalizedClientID.utf8.count,
+            MCPRemoteTrustedClientPolicyStorage.maxNormalizedClientIDUTF8Bytes
+        )
+        XCTAssertEqual(
+            migrated.normalizedClientID,
+            MCPRemoteTrustedClientPolicyStorage.normalizedClientID(request.normalizedClientID)
+        )
+    }
+
     func testTrustedPolicyRequiresMatchingTokenFingerprint() async throws {
         let store = try makeStore()
         store.setNetworkMCPTrustedClients([
