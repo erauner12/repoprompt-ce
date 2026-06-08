@@ -138,6 +138,7 @@ enum NetworkMCPSettingsError: Error, Equatable {
     case invalidBindAddress(String)
     case invalidPort(Int)
     case missingDefaultTarget
+    case underspecifiedDefaultTarget
     case missingTokenMetadata
     case missingSecureTokenMaterial
     case secureTokenMetadataMismatch
@@ -157,7 +158,29 @@ final class NetworkMCPSettingsFacade {
     }
 
     func settingsSnapshot() -> NetworkMCPSettingsSnapshot {
-        settingsStore.networkMCPSettingsSnapshot()
+        var snapshot = settingsStore.networkMCPSettingsSnapshot()
+        guard snapshot.enabled else { return snapshot }
+
+        let secureTokenFingerprint: String?
+        do {
+            secureTokenFingerprint = if let token = try tokenStore.loadPrimaryToken(
+                accessMode: .nonInteractive(reason: .networkMCPAuthentication)
+            ) {
+                MCPRemoteBearerTokenStore.fingerprint(for: token)
+            } else {
+                nil
+            }
+        } catch {
+            secureTokenFingerprint = nil
+        }
+
+        guard let expectedFingerprint = snapshot.token?.fingerprint,
+              secureTokenFingerprint == expectedFingerprint
+        else {
+            snapshot.enabled = false
+            return snapshot
+        }
+        return snapshot
     }
 
     func setEnabled(_ enabled: Bool, commit: Bool = true) throws {

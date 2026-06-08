@@ -226,9 +226,10 @@ final class SettingsJSONOnlyPersistenceTests: XCTestCase {
 
         try store.setNetworkMCPBindAddress(" 0.0.0.0 ")
         try store.setNetworkMCPPort(4151)
+        let contextID = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-0000000000c1"))
         store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(
             workspaceID: workspaceID,
-            contextID: " ctx-1 ",
+            contextID: " \(contextID.uuidString) ",
             displayName: " Workspace ",
             rootPaths: [" /repo ", ""],
             openIfNeeded: true,
@@ -256,7 +257,7 @@ final class SettingsJSONOnlyPersistenceTests: XCTestCase {
         XCTAssertEqual(reloaded.bindAddress, "0.0.0.0")
         XCTAssertEqual(reloaded.port, 4151)
         XCTAssertEqual(reloaded.defaultTarget?.workspaceID, workspaceID)
-        XCTAssertEqual(reloaded.defaultTarget?.contextID, "ctx-1")
+        XCTAssertEqual(reloaded.defaultTarget?.contextID, contextID.uuidString)
         XCTAssertEqual(reloaded.defaultTarget?.displayName, "Workspace")
         XCTAssertEqual(reloaded.defaultTarget?.rootPaths, ["/repo"])
         XCTAssertEqual(reloaded.token, tokenMetadata)
@@ -296,6 +297,14 @@ final class SettingsJSONOnlyPersistenceTests: XCTestCase {
 
         store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(contextID: "ctx", rootPaths: ["/repo"]))
         XCTAssertThrowsError(try store.setNetworkMCPEnabled(true, secureTokenFingerprint: nil)) { error in
+            XCTAssertEqual(error as? NetworkMCPSettingsError, .underspecifiedDefaultTarget)
+        }
+
+        store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(
+            contextID: "00000000-0000-0000-0000-0000000000c2",
+            rootPaths: ["/repo"]
+        ))
+        XCTAssertThrowsError(try store.setNetworkMCPEnabled(true, secureTokenFingerprint: nil)) { error in
             XCTAssertEqual(error as? NetworkMCPSettingsError, .missingTokenMetadata)
         }
 
@@ -329,21 +338,63 @@ final class SettingsJSONOnlyPersistenceTests: XCTestCase {
         let tokenStore = MCPRemoteBearerTokenStore(secureStrings: secureStrings)
         let facade = NetworkMCPSettingsFacade(settingsStore: store, tokenStore: tokenStore)
 
-        store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(contextID: "ctx", rootPaths: ["/repo"]))
+        store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(
+            contextID: "00000000-0000-0000-0000-0000000000c3",
+            rootPaths: ["/repo"]
+        ))
         let originalMetadata = try tokenStore.savePrimaryToken("original-token")
         store.setNetworkMCPTokenMetadata(originalMetadata)
+        try store.setNetworkMCPEnabled(true, secureTokenFingerprint: originalMetadata.fingerprint)
+        XCTAssertTrue(store.networkMCPSettingsSnapshot().enabled)
+        XCTAssertTrue(facade.settingsSnapshot().enabled)
+
         try tokenStore.savePrimaryToken("rotated-token")
+        XCTAssertFalse(facade.settingsSnapshot().enabled)
+        XCTAssertTrue(store.networkMCPSettingsSnapshot().enabled)
 
         XCTAssertThrowsError(try facade.setEnabled(true)) { error in
             XCTAssertEqual(error as? NetworkMCPSettingsError, .secureTokenMetadataMismatch)
         }
-        XCTAssertFalse(store.networkMCPSettingsSnapshot().enabled)
+        XCTAssertTrue(store.networkMCPSettingsSnapshot().enabled)
 
         try tokenStore.deletePrimaryToken()
+        XCTAssertFalse(facade.settingsSnapshot().enabled)
         XCTAssertThrowsError(try facade.setEnabled(true)) { error in
             XCTAssertEqual(error as? NetworkMCPSettingsError, .missingSecureTokenMaterial)
         }
-        XCTAssertFalse(store.networkMCPSettingsSnapshot().enabled)
+        XCTAssertTrue(store.networkMCPSettingsSnapshot().enabled)
+    }
+
+    func testNetworkMCPSettingsSnapshotDisablesMalformedDefaultTargetEvenWithTokenMetadata() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fileURL = temp.appendingPathComponent("Settings/globalSettings.json")
+        let fileStore = GlobalSettingsFileStore(fileURL: fileURL)
+        try fileStore.save(GlobalSettingsDocument(
+            scalarPreferences: GlobalScalarPreferences(
+                mcp: GlobalScalarPreferences.MCPSettings(networkHTTP: NetworkMCPSettings(
+                    enabled: true,
+                    defaultTarget: NetworkMCPDefaultTargetMetadata(
+                        contextID: "not-a-uuid",
+                        rootPaths: ["/repo"]
+                    ),
+                    token: NetworkMCPBearerTokenMetadata(
+                        label: "OpenClaw",
+                        fingerprint: "sha256:feedfacecafebeef",
+                        createdAt: Date(timeIntervalSince1970: 1800)
+                    )
+                ))
+            )
+        ))
+
+        let snapshot = try GlobalSettingsStore(
+            defaults: XCTUnwrap(UserDefaults(suiteName: "SettingsJSONOnlyPersistenceTests.\(UUID().uuidString)")),
+            fileStore: fileStore
+        ).networkMCPSettingsSnapshot()
+
+        XCTAssertFalse(snapshot.enabled)
+        XCTAssertEqual(snapshot.defaultTarget?.contextID, "not-a-uuid")
+        XCTAssertEqual(snapshot.token?.fingerprint, "sha256:feedfacecafebeef")
     }
 
     func testNetworkMCPSettingsSnapshotNormalizesMalformedPersistedValues() throws {
@@ -391,7 +442,7 @@ final class SettingsJSONOnlyPersistenceTests: XCTestCase {
             fileStore: fileStore
         ).networkMCPSettingsSnapshot()
 
-        XCTAssertTrue(snapshot.enabled)
+        XCTAssertFalse(snapshot.enabled)
         XCTAssertEqual(snapshot.bindAddress, NetworkMCPSettings.defaultBindAddress)
         XCTAssertEqual(snapshot.port, NetworkMCPSettings.defaultPort)
         XCTAssertEqual(snapshot.defaultTarget?.contextID, nil)
