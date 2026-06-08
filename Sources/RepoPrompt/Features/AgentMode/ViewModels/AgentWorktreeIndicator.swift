@@ -19,6 +19,8 @@ struct AgentWorktreeIndicator: Equatable, Identifiable {
     let worktreeRootPath: String
     let worktreeName: String?
     let branch: String?
+    /// Source-aware clean identity copied from sidebar row context menus.
+    let copyIdentity: CopyIdentity?
     /// Resolved, non-empty display label for the worktree.
     let label: String
     /// Validated `#RRGGBB` color hex for the worktree's visual identity.
@@ -37,6 +39,16 @@ struct AgentWorktreeIndicator: Equatable, Identifiable {
 }
 
 extension AgentWorktreeIndicator {
+    struct CopyIdentity: Equatable {
+        enum Source: Equatable {
+            case worktreeName
+            case branch
+        }
+
+        let value: String
+        let source: Source
+    }
+
     /// Pure constructor combining a persisted binding summary with its resolved
     /// global visual identity. Kept side-effect-free so it is directly testable.
     static func make(
@@ -53,6 +65,7 @@ extension AgentWorktreeIndicator {
             worktreeRootPath: summary.worktreeRootPath,
             worktreeName: summary.worktreeName,
             branch: summary.branch,
+            copyIdentity: copyIdentity(for: summary),
             label: resolvedLabel(for: summary, resolvedIdentity: resolvedIdentity),
             colorHex: resolvedColorHex(for: summary, resolvedIdentity: resolvedIdentity),
             iconName: resolvedIdentity.iconName,
@@ -87,6 +100,25 @@ extension AgentWorktreeIndicator {
         return scalars.dropFirst().allSatisfy { scalar in
             (48 ... 57).contains(scalar.value) || (65 ... 70).contains(scalar.value)
         }
+    }
+
+    private static func copyIdentity(for summary: AgentSessionWorktreeBindingSummary) -> CopyIdentity? {
+        if let worktreeName = trimmedNonEmpty(summary.worktreeName) {
+            return CopyIdentity(value: worktreeName, source: .worktreeName)
+        }
+        if let branch = trimmedNonEmpty(summary.branch) {
+            return CopyIdentity(value: branch, source: .branch)
+        }
+        return nil
+    }
+
+    private static func trimmedNonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty
+        else {
+            return nil
+        }
+        return trimmed
     }
 
     private static func resolvedLabel(
