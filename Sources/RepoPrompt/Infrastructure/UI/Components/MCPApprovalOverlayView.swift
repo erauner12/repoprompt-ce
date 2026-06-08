@@ -318,12 +318,21 @@ struct MCPApprovalOverlayView: View {
         }
         .ignoresSafeArea()
         .onAppear {
+            resetAlwaysAllowForCurrentPresentation()
             withAnimation(.easeInOut(duration: 0.3)) {
                 isAnimating = true
             }
             // Start pulse animation
             withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
                 pulseScale = 1.08
+            }
+        }
+        .onChange(of: approvalStateIdentity) { _, _ in
+            resetAlwaysAllowForCurrentPresentation()
+        }
+        .onChange(of: canPersistTrust) { _, canPersistTrust in
+            if !canPersistTrust {
+                alwaysAllow = false
             }
         }
     }
@@ -583,6 +592,20 @@ struct MCPApprovalOverlayView: View {
 
     private var trustPersistenceDescription: String? {
         presentation?.trustPersistenceDescription
+    }
+
+    private var approvalStateIdentity: String {
+        [
+            clientID,
+            String(describing: presentation?.transport),
+            presentation?.remoteAddress ?? "",
+            presentation?.tokenFingerprint ?? "",
+            String(canPersistTrust)
+        ].joined(separator: "|")
+    }
+
+    private func resetAlwaysAllowForCurrentPresentation() {
+        alwaysAllow = canPersistTrust && presentation?.transport != .remoteHTTP
     }
 
     private var alwaysAllowToggle: some View {
