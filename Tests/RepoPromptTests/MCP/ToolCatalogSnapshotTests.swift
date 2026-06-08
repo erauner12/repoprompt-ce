@@ -137,6 +137,23 @@ final class ToolCatalogSnapshotTests: XCTestCase {
 
         do {
             _ = try await contextBuilder([
+                "context_id": .string(UUID().uuidString),
+                "_tabID": .string(UUID().uuidString),
+                "_windowID": .int(window.windowID),
+                "_rawJSON": .bool(true),
+                "export_response": .bool(true)
+            ])
+            XCTFail("context_builder should keep the synchronous validation path")
+        } catch {
+            XCTAssertTrue(
+                error.localizedDescription.contains("export_response requires a response_type"),
+                "Routing metadata should be allowed through parseExecutionOptions: \(error.localizedDescription)"
+            )
+            XCTAssertFalse(error.localizedDescription.contains("Unsupported args"), error.localizedDescription)
+        }
+
+        do {
+            _ = try await contextBuilder([
                 "op": .string("poll"),
                 "job_id": .string(UUID().uuidString),
                 "client_request_id": .string(UUID().uuidString),
