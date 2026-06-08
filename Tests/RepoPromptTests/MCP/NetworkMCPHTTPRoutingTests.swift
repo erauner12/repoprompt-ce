@@ -290,9 +290,195 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
                     get(sessionID: sessionID, token: rotatedToken)
                 )
 
-                XCTAssertEqual(response.statusCode, 403)
+                XCTAssertEqual(response.statusCode, 503)
                 let sessionCountAfterMismatch = await manager.debugNetworkMCPHTTPSessionCount()
                 XCTAssertEqual(sessionCountAfterMismatch, 0)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
+    func testStaleTokenMetadataFailsBeforeApprovalResolverAndSessionRegistration() async throws {
+        #if DEBUG
+            let promptCounter = PromptCounter()
+            let resolverCounter = PromptCounter()
+            try await withRoutingManager(approvalHandler: { _ in
+                await promptCounter.increment()
+                return .allow(alwaysAllow: false)
+            }, defaultTargetResolutionHandler: { _, _ in
+                await resolverCounter.increment()
+                return Self.defaultNetworkMCPResolution()
+            }) { manager, token in
+                await manager.debugSetNetworkMCPSettingsSnapshotOverride(
+                    Self.settingsSnapshot(expectedTokenFingerprint: MCPRemoteBearerTokenStore.fingerprint(for: "stale-token"))
+                )
+
+                let response = await initialize(manager: manager, token: token)
+
+                XCTAssertEqual(response.statusCode, 503)
+                XCTAssertTrue(try errorMessage(response).contains("secure bearer-token material"))
+                let promptCount = await promptCounter.value
+                let resolverCount = await resolverCounter.value
+                let sessionCount = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(promptCount, 0)
+                XCTAssertEqual(resolverCount, 0)
+                XCTAssertEqual(sessionCount, 0)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
+    func testDeletedSecureTokenFailsBeforeApprovalResolverAndSessionRegistration() async throws {
+        #if DEBUG
+            let promptCounter = PromptCounter()
+            let resolverCounter = PromptCounter()
+            try await withRoutingManager(approvalHandler: { _ in
+                await promptCounter.increment()
+                return .allow(alwaysAllow: false)
+            }, defaultTargetResolutionHandler: { _, _ in
+                await resolverCounter.increment()
+                return Self.defaultNetworkMCPResolution()
+            }) { manager, token in
+                await manager.debugSetNetworkMCPBearerTokenOverride(nil)
+
+                let response = await initialize(manager: manager, token: token)
+
+                XCTAssertEqual(response.statusCode, 503)
+                XCTAssertTrue(try errorMessage(response).contains("no Network MCP bearer token is configured"))
+                let promptCount = await promptCounter.value
+                let resolverCount = await resolverCounter.value
+                let sessionCount = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(promptCount, 0)
+                XCTAssertEqual(resolverCount, 0)
+                XCTAssertEqual(sessionCount, 0)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
+    func testRotatedSecureTokenFailsBeforeApprovalResolverAndSessionRegistrationWhenMetadataIsStale() async throws {
+        #if DEBUG
+            let promptCounter = PromptCounter()
+            let resolverCounter = PromptCounter()
+            try await withRoutingManager(approvalHandler: { _ in
+                await promptCounter.increment()
+                return .allow(alwaysAllow: false)
+            }, defaultTargetResolutionHandler: { _, _ in
+                await resolverCounter.increment()
+                return Self.defaultNetworkMCPResolution()
+            }) { manager, token in
+                let rotatedToken = "rotated-token-\(UUID().uuidString)"
+                await manager.debugSetNetworkMCPBearerTokenOverride(rotatedToken)
+                await manager.debugSetNetworkMCPSettingsSnapshotOverride(
+                    Self.settingsSnapshot(expectedTokenFingerprint: MCPRemoteBearerTokenStore.fingerprint(for: token))
+                )
+
+                let response = await initialize(manager: manager, token: rotatedToken)
+
+                XCTAssertEqual(response.statusCode, 503)
+                XCTAssertTrue(try errorMessage(response).contains("secure bearer-token material"))
+                let promptCount = await promptCounter.value
+                let resolverCount = await resolverCounter.value
+                let sessionCount = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(promptCount, 0)
+                XCTAssertEqual(resolverCount, 0)
+                XCTAssertEqual(sessionCount, 0)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
+    func testInvalidBearerTokenFailsBeforeApprovalResolverAndRegistration() async throws {
+        #if DEBUG
+            let events = EventRecorder()
+            try await withRoutingManager(approvalHandler: { _ in
+                await events.append("approval")
+                return .allow(alwaysAllow: false)
+            }, defaultTargetResolutionHandler: { _, _ in
+                await events.append("resolver")
+                return Self.defaultNetworkMCPResolution()
+            }) { manager, _ in
+                let response = await initialize(manager: manager, token: "wrong-token")
+
+                XCTAssertEqual(response.statusCode, 401)
+                let recordedEvents = await events.values
+                let sessionCount = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(recordedEvents, [])
+                XCTAssertEqual(sessionCount, 0)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
+    func testApprovalDenialFailsBeforeDefaultTargetResolutionAndRegistration() async throws {
+        #if DEBUG
+            let events = EventRecorder()
+            try await withRoutingManager(approvalHandler: { _ in
+                await events.append("approval")
+                return .deny
+            }, defaultTargetResolutionHandler: { _, _ in
+                await events.append("resolver")
+                return Self.defaultNetworkMCPResolution()
+            }) { manager, token in
+                let response = await initialize(manager: manager, token: token, remoteAddress: "192.168.1.44:54321")
+
+                XCTAssertEqual(response.statusCode, 403)
+                let recordedEvents = await events.values
+                let sessionCount = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(recordedEvents, ["approval"])
+                XCTAssertEqual(sessionCount, 0)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
+    func testDefaultTargetResolutionFailureFailsBeforeRegistration() async throws {
+        #if DEBUG
+            let events = EventRecorder()
+            try await withRoutingManager(approvalHandler: { _ in
+                await events.append("approval")
+                return .allow(alwaysAllow: false)
+            }, defaultTargetResolutionHandler: { _, _ in
+                await events.append("resolver")
+                throw MCPRemoteDefaultTargetResolutionError.missingDefaultTarget
+            }) { manager, token in
+                let response = await initialize(manager: manager, token: token, remoteAddress: "192.168.1.44:54321")
+
+                XCTAssertEqual(response.statusCode, 403)
+                XCTAssertTrue(try errorMessage(response).contains("default workspace target"))
+                let recordedEvents = await events.values
+                let sessionCount = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(recordedEvents, ["approval", "resolver"])
+                XCTAssertEqual(sessionCount, 0)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
+    func testSessionlessInitializeAdmissionOrdersApprovalBeforeDefaultResolutionBeforeRegistration() async throws {
+        #if DEBUG
+            let events = EventRecorder()
+            try await withRoutingManager(approvalHandler: { _ in
+                await events.append("approval")
+                return .allow(alwaysAllow: false)
+            }, defaultTargetResolutionHandler: { _, _ in
+                await events.append("resolver")
+                return Self.defaultNetworkMCPResolution()
+            }) { manager, token in
+                let response = await initialize(manager: manager, token: token, remoteAddress: "192.168.1.44:54321")
+
+                XCTAssertEqual(response.statusCode, 200, diagnostic(response))
+                let recordedEvents = await events.values
+                let sessionCount = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(recordedEvents, ["approval", "resolver"])
+                XCTAssertEqual(sessionCount, 1)
             }
         #else
             throw XCTSkip("Network MCP routing seams are DEBUG-only")
@@ -312,13 +498,32 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
             }
         }
 
+        private actor EventRecorder {
+            private var recordedValues: [String] = []
+
+            func append(_ value: String) {
+                recordedValues.append(value)
+            }
+
+            var values: [String] {
+                recordedValues
+            }
+        }
+
         private func withRoutingManager(
             approvalHandler: @escaping ServerNetworkManager.RemoteClientApprovalHandler = { _ in .allow(alwaysAllow: false) },
+            defaultTargetResolutionHandler: (@Sendable (Int?, String) async throws -> MCPRemoteDefaultTargetResolution)? = nil,
             operation: (ServerNetworkManager, String) async throws -> Void
         ) async throws {
             let manager = ServerNetworkManager()
             let token = "network-routing-token-\(UUID().uuidString)"
             await manager.debugSetNetworkMCPBearerTokenOverride(token)
+            await manager.debugSetNetworkMCPSettingsSnapshotOverride(
+                Self.settingsSnapshot(expectedTokenFingerprint: MCPRemoteBearerTokenStore.fingerprint(for: token))
+            )
+            await manager.debugSetNetworkMCPDefaultTargetResolutionHandler(defaultTargetResolutionHandler ?? { _, _ in
+                Self.defaultNetworkMCPResolution()
+            })
             await manager.setRemoteClientApprovalHandler(approvalHandler)
             do {
                 try await operation(manager, token)
@@ -329,9 +534,43 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
             }
         }
 
-        private func initialize(manager: ServerNetworkManager, token: String) async -> MCPNetworkHTTPResponse {
+        private static func settingsSnapshot(expectedTokenFingerprint: String) -> NetworkMCPSettingsSnapshot {
+            NetworkMCPSettingsSnapshot(
+                enabled: true,
+                bindAddress: "127.0.0.1",
+                port: 4150,
+                defaultTarget: NetworkMCPDefaultTargetMetadata(
+                    workspaceID: UUID(uuidString: "00000000-0000-0000-0000-000000000111"),
+                    displayName: "Network Routing Test",
+                    rootPaths: ["/tmp/network-routing-test"],
+                    openIfNeeded: false
+                ),
+                token: NetworkMCPBearerTokenMetadata(
+                    label: "Network Routing Test",
+                    fingerprint: expectedTokenFingerprint,
+                    createdAt: Date(timeIntervalSince1970: 1800)
+                )
+            )
+        }
+
+        private static func defaultNetworkMCPResolution() -> MCPRemoteDefaultTargetResolution {
+            MCPRemoteDefaultTargetResolution(
+                windowID: 99,
+                workspaceID: UUID(uuidString: "00000000-0000-0000-0000-000000000111")!,
+                workspaceName: "Network Routing Test",
+                rootPaths: ["/tmp/network-routing-test"],
+                contextID: nil,
+                didOpenWindow: false
+            )
+        }
+
+        private func initialize(
+            manager: ServerNetworkManager,
+            token: String,
+            remoteAddress: String = "127.0.0.1:54321"
+        ) async -> MCPNetworkHTTPResponse {
             await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
-                post(body: initializeBody(), token: token)
+                post(body: initializeBody(), token: token, remoteAddress: remoteAddress)
             )
         }
     #endif
@@ -340,7 +579,8 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
         body: Data,
         token: String,
         headers headerOverrides: [String: String] = [:],
-        duplicateHeaderNames: Set<String> = []
+        duplicateHeaderNames: Set<String> = [],
+        remoteAddress: String = "127.0.0.1:54321"
     ) -> MCPNetworkHTTPRequest {
         var headers = [
             MCPNetworkHTTPHeader.authorization: "Bearer \(token)",
@@ -356,7 +596,7 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
             path: "/mcp",
             headers: headers,
             body: body,
-            remoteAddress: "127.0.0.1:54321",
+            remoteAddress: remoteAddress,
             duplicateHeaderNames: duplicateHeaderNames
         )
     }
