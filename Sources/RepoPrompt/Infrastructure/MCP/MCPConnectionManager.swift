@@ -2167,6 +2167,15 @@ actor ServerNetworkManager {
         emitDashboardUpdate()
     }
 
+    func ensureRunningAndRefreshHTTPListenerConfiguration() async {
+        if !isRunningState {
+            await start()
+        } else {
+            await startHTTPListenerIfConfigured(lifecycleGeneration: lifecycleGeneration)
+            emitDashboardUpdate()
+        }
+    }
+
     func networkHTTPListenerStatus() async -> NetworkMCPHTTPListenerStatusSnapshot {
         let settings = await effectiveNetworkMCPSettingsSnapshot()
         return NetworkMCPHTTPListenerStatusSnapshot(

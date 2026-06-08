@@ -12,19 +12,25 @@ struct MCPApprovalPresentation: Equatable {
     var remoteAddress: String?
     var tokenFingerprint: String?
     var warning: String?
+    var canPersistTrust: Bool
+    var trustPersistenceDescription: String?
 
     init(
         clientID: String,
         transport: Transport = .localMCP,
         remoteAddress: String? = nil,
         tokenFingerprint: String? = nil,
-        warning: String? = nil
+        warning: String? = nil,
+        canPersistTrust: Bool = true,
+        trustPersistenceDescription: String? = nil
     ) {
         self.clientID = clientID
         self.transport = transport
         self.remoteAddress = remoteAddress
         self.tokenFingerprint = tokenFingerprint
         self.warning = warning
+        self.canPersistTrust = canPersistTrust
+        self.trustPersistenceDescription = trustPersistenceDescription
     }
 
     static func local(clientID: String) -> MCPApprovalPresentation {
@@ -65,12 +71,17 @@ struct MCPRemoteClientApprovalRequest: Equatable {
     }
 
     var presentation: MCPApprovalPresentation {
-        MCPApprovalPresentation(
+        let trustDescription = hasStableClientIdentity
+            ? "Future trust is based on the client-provided identity plus this bearer-token fingerprint."
+            : "Future trust is unavailable because this client did not provide a stable identity."
+        return MCPApprovalPresentation(
             clientID: displayName,
             transport: .remoteHTTP,
             remoteAddress: MCPRemoteClientAddress(sourceAddress).normalizedHost,
             tokenFingerprint: tokenFingerprint,
-            warning: "Only approve remote MCP clients you recognize on your local network. Do not expose this endpoint to the public internet."
+            warning: "Only approve remote MCP clients you recognize on your local network. Trust uses client-provided identity plus bearer-token fingerprint and may be unavailable for anonymous clients. Do not expose this endpoint to the public internet.",
+            canPersistTrust: hasStableClientIdentity,
+            trustPersistenceDescription: trustDescription
         )
     }
 
