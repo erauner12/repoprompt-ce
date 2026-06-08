@@ -98,12 +98,16 @@ final class NetworkMCPSettingsViewModel: ObservableObject {
 
     func setEnabled(_ enabled: Bool) async {
         do {
-            let secureTokenAvailable = enabled
-                ? try tokenStore.hasPrimaryToken(accessMode: .nonInteractive(reason: .networkMCPAuthentication))
-                : false
+            let secureTokenFingerprint = if enabled,
+                                            let token = try tokenStore.loadPrimaryToken(accessMode: .nonInteractive(reason: .networkMCPAuthentication))
+            {
+                MCPRemoteBearerTokenStore.fingerprint(for: token)
+            } else {
+                String?.none
+            }
             try settingsStore.setNetworkMCPEnabled(
                 enabled,
-                secureTokenMaterialAvailable: secureTokenAvailable
+                secureTokenFingerprint: secureTokenFingerprint
             )
             await networkManager.refreshHTTPListenerConfiguration()
             await refresh()
@@ -146,7 +150,7 @@ final class NetworkMCPSettingsViewModel: ObservableObject {
 
     func clearDefaultTarget() async {
         if snapshot.enabled {
-            try? settingsStore.setNetworkMCPEnabled(false, secureTokenMaterialAvailable: false)
+            try? settingsStore.setNetworkMCPEnabled(false, secureTokenFingerprint: nil)
         }
         settingsStore.setNetworkMCPDefaultTarget(nil)
         await networkManager.refreshHTTPListenerConfiguration()
@@ -265,6 +269,8 @@ final class NetworkMCPSettingsViewModel: ObservableObject {
             "Generate a bearer token before enabling Network MCP."
         case NetworkMCPSettingsError.missingSecureTokenMaterial:
             "Secure token material is unavailable; regenerate the token."
+        case NetworkMCPSettingsError.secureTokenMetadataMismatch:
+            "Secure token metadata is stale; regenerate the token."
         case let NetworkMCPSettingsError.invalidBindAddress(value):
             "Invalid bind address: \(value)"
         case let NetworkMCPSettingsError.invalidPort(port):
