@@ -8161,15 +8161,9 @@ actor ServerNetworkManager {
     private static func openRemoteDefaultTargetWindow(
         _ target: NetworkMCPDefaultTargetMetadata
     ) async -> MCPRemoteTargetWindowCandidate? {
-        let targetRoots = WorkspaceRootSetKey(paths: target.rootPaths)
-        guard !targetRoots.isEmpty else { return nil }
+        guard target.workspaceID != nil || !WorkspaceRootSetKey(paths: target.rootPaths).isEmpty else { return nil }
 
         let windowStates = WindowStatesManager.shared
-        if let existingWorkspaceManager = windowStates.allWindows.first?.workspaceManager,
-           workspaceMatchingRemoteDefaultTarget(target, in: existingWorkspaceManager.workspaces) == nil
-        {
-            return nil
-        }
 
         do {
             let newWindow = try await windowStates.openNewMainWindow(
@@ -8221,16 +8215,14 @@ actor ServerNetworkManager {
         _ target: NetworkMCPDefaultTargetMetadata,
         in workspaces: [WorkspaceModel]
     ) -> WorkspaceModel? {
-        let targetRoots = WorkspaceRootSetKey(paths: target.rootPaths)
-        guard !targetRoots.isEmpty else { return nil }
-
         if let workspaceID = target.workspaceID {
             return workspaces.first { workspace in
-                workspace.id == workspaceID
-                    && !workspace.isSystemWorkspace
-                    && WorkspaceRootSetKey(paths: workspace.repoPaths) == targetRoots
+                workspace.id == workspaceID && !workspace.isSystemWorkspace
             }
         }
+
+        let targetRoots = WorkspaceRootSetKey(paths: target.rootPaths)
+        guard !targetRoots.isEmpty else { return nil }
 
         let matches = WorkspaceManagerViewModel.exactWorkspaceMatches(
             forNormalizedWorkingDirs: targetRoots.normalizedPaths,
