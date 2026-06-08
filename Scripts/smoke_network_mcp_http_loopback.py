@@ -4,8 +4,10 @@
 Environment:
   REPOPROMPT_MCP_HTTP_URL                         default: http://127.0.0.1:4150/mcp
   REPOPROMPT_MCP_TOKEN                            required
+  REPOPROMPT_MCP_PROTOCOL_VERSION                 default: 2025-11-25
   REPOPROMPT_MCP_SMOKE_CONTEXT_BUILDER            set to 1 to run optional context_builder call
   REPOPROMPT_MCP_SMOKE_CONTEXT_BUILDER_TIMEOUT_SECONDS default: 300
+  REPOPROMPT_MCP_SMOKE_CONTEXT_BUILDER_TOLERATE_INCOMPLETE set to 1 to warn instead of fail on incomplete context_builder status
 """
 
 from __future__ import annotations
@@ -17,11 +19,11 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:4150/mcp"
-PROTOCOL_VERSION = "2025-11-25"
+DEFAULT_PROTOCOL_VERSION = "2025-11-25"
 
 
 class SmokeError(RuntimeError):
@@ -37,7 +39,7 @@ class HTTPResult:
     def text(self) -> str:
         return self.body.decode("utf-8", errors="replace")
 
-    def json(self) -> dict[str, Any]:
+    def json(self) -> Dict[str, Any]:
         try:
             payload = json.loads(self.body.decode("utf-8"))
         except json.JSONDecodeError as exc:
@@ -46,18 +48,27 @@ class HTTPResult:
             raise SmokeError(f"response JSON was not an object: {payload!r}")
         return payload
 
+    def jsonrpc_payloads(self) -> List[Dict[str, Any]]:
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type == "application/json":
+            return [self.json()]
+        if content_type == "text/event-stream":
+            return parse_sse_json_payloads(self.text())
+        raise SmokeError(f"response Content-Type was not JSON or SSE: {self.headers.get('Content-Type', '<missing>')}")
+
 
 @dataclass
 class SmokeClient:
     endpoint: str
     token: str
-    session_id: str | None = None
+    session_id: Optional[str] = None
     session_closed: bool = False
 
-    def post_json(self, payload: dict[str, Any], *, timeout: float | None = None) -> HTTPResult:
+    def post_json(self, payload: Dict[str, Any], *, timeout: Optional[float] = None) -> HTTPResult:
         headers = {
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
         }
         if self.session_id:
             headers["MCP-Session-Id"] = self.session_id
@@ -81,9 +92,9 @@ class SmokeClient:
         self,
         method: str,
         *,
-        headers: dict[str, str],
-        body: bytes | None,
-        timeout: float | None,
+        headers: Dict[str, str],
+        body: Optional[bytes],
+        timeout: Optional[float],
     ) -> HTTPResult:
         request = urllib.request.Request(
             self.endpoint,
@@ -114,18 +125,52 @@ class SmokeClient:
             pass
 
 
-def jsonrpc_request(request_id: int, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-    payload: dict[str, Any] = {"jsonrpc": "2.0", "id": request_id, "method": method}
+def jsonrpc_request(request_id: int, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"jsonrpc": "2.0", "id": request_id, "method": method}
     if params is not None:
         payload["params"] = params
     return payload
 
 
-def jsonrpc_notification(method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-    payload: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+def jsonrpc_notification(method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"jsonrpc": "2.0", "method": method}
     if params is not None:
         payload["params"] = params
     return payload
+
+
+def parse_sse_json_payloads(text: str) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    data_lines: List[str] = []
+
+    def flush_event() -> None:
+        if not data_lines:
+            return
+        data = "\n".join(data_lines)
+        data_lines.clear()
+        if data == "[DONE]":
+            return
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError as exc:
+            raise SmokeError(f"SSE data frame was not valid JSON: {data}") from exc
+        if not isinstance(payload, dict):
+            raise SmokeError(f"SSE JSON payload was not an object: {payload!r}")
+        payloads.append(payload)
+
+    for line in text.splitlines():
+        if line == "":
+            flush_event()
+        elif line.startswith("data:"):
+            value = line[5:]
+            if value.startswith(" "):
+                value = value[1:]
+            data_lines.append(value)
+    flush_event()
+
+    if not payloads:
+        raise SmokeError(f"SSE response did not contain JSON data frames: {text}")
+    return payloads
 
 
 def require_status(result: HTTPResult, expected: int, label: str) -> None:
@@ -133,23 +178,23 @@ def require_status(result: HTTPResult, expected: int, label: str) -> None:
         raise SmokeError(f"{label} returned HTTP {result.status}: {result.text()}")
 
 
-def require_jsonrpc_result(result: HTTPResult, request_id: int, label: str) -> dict[str, Any]:
-    payload = result.json()
-    if payload.get("id") != request_id or "result" not in payload:
-        raise SmokeError(f"{label} did not return a JSON-RPC result: {payload!r}")
-    jsonrpc_result = payload["result"]
-    if not isinstance(jsonrpc_result, dict):
-        raise SmokeError(f"{label} JSON-RPC result was not an object: {payload!r}")
-    return jsonrpc_result
+def require_jsonrpc_result(result: HTTPResult, request_id: int, label: str) -> Dict[str, Any]:
+    for payload in result.jsonrpc_payloads():
+        if payload.get("id") == request_id and "result" in payload:
+            jsonrpc_result = payload["result"]
+            if not isinstance(jsonrpc_result, dict):
+                raise SmokeError(f"{label} JSON-RPC result was not an object: {payload!r}")
+            return jsonrpc_result
+    raise SmokeError(f"{label} did not return a JSON-RPC result for id={request_id}: {result.text()}")
 
 
-def initialize(client: SmokeClient) -> None:
+def initialize(client: SmokeClient, protocol_version: str) -> None:
     result = client.post_json(
         jsonrpc_request(
             1,
             "initialize",
             {
-                "protocolVersion": PROTOCOL_VERSION,
+                "protocolVersion": protocol_version,
                 "clientInfo": {
                     "name": "RepoPrompt Network MCP loopback smoke",
                     "version": "1.0",
@@ -212,8 +257,16 @@ def run_context_builder(client: SmokeClient, timeout_seconds: float) -> None:
         raise SmokeError(f"context_builder did not return raw JSON result content: {payload!r}") from exc
 
     status = tool_result.get("status")
-    if status not in ("completed", "cancelled") and not str(status).startswith("failed:"):
-        raise SmokeError(f"context_builder returned unexpected status: {tool_result!r}")
+    tolerate_incomplete = os.environ.get("REPOPROMPT_MCP_SMOKE_CONTEXT_BUILDER_TOLERATE_INCOMPLETE", "0") == "1"
+    if status != "completed":
+        if not tolerate_incomplete:
+            raise SmokeError(f"context_builder did not complete successfully: {tool_result!r}")
+        print(
+            "WARNING: context_builder did not complete successfully; continuing because "
+            "REPOPROMPT_MCP_SMOKE_CONTEXT_BUILDER_TOLERATE_INCOMPLETE=1 "
+            f"(status={status})",
+            file=sys.stderr,
+        )
     if not tool_result.get("context_id"):
         raise SmokeError(f"context_builder result did not include context_id: {tool_result!r}")
     print(
@@ -236,12 +289,13 @@ def parse_timeout_seconds(value: str) -> float:
 def run() -> None:
     endpoint = os.environ.get("REPOPROMPT_MCP_HTTP_URL", DEFAULT_ENDPOINT)
     token = os.environ.get("REPOPROMPT_MCP_TOKEN", "")
+    protocol_version = os.environ.get("REPOPROMPT_MCP_PROTOCOL_VERSION", DEFAULT_PROTOCOL_VERSION)
     if not token:
         raise SmokeError("Set REPOPROMPT_MCP_TOKEN to a Network MCP bearer token copied from RepoPrompt Settings")
 
     client = SmokeClient(endpoint=endpoint, token=token)
     try:
-        initialize(client)
+        initialize(client, protocol_version)
         send_initialized(client)
         list_tools(client)
 
