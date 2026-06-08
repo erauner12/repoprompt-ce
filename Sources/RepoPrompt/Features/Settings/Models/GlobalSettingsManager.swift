@@ -787,12 +787,18 @@ class GlobalSettingsStore: ObservableObject {
 
     func networkMCPSettingsSnapshot() -> NetworkMCPSettingsSnapshot {
         let settings = scalarPreferences.mcp?.networkHTTP
+        let defaultTarget = normalizedNetworkMCPDefaultTarget(settings?.defaultTarget)
+        let token = normalizedNetworkMCPTokenMetadata(settings?.token)
+        let configuredEnabled = settings?.enabled ?? NetworkMCPSettings.defaultEnabled
+        let effectiveEnabled = configuredEnabled
+            && isUsableNetworkMCPDefaultTarget(defaultTarget)
+            && token != nil
         return NetworkMCPSettingsSnapshot(
-            enabled: settings?.enabled ?? NetworkMCPSettings.defaultEnabled,
+            enabled: effectiveEnabled,
             bindAddress: normalizedNetworkMCPBindAddress(settings?.bindAddress) ?? NetworkMCPSettings.defaultBindAddress,
             port: normalizedNetworkMCPPort(settings?.port) ?? NetworkMCPSettings.defaultPort,
-            defaultTarget: normalizedNetworkMCPDefaultTarget(settings?.defaultTarget),
-            token: normalizedNetworkMCPTokenMetadata(settings?.token),
+            defaultTarget: defaultTarget,
+            token: token,
             trustedClients: normalizedNetworkMCPTrustedClients(settings?.trustedClients ?? [])
         )
     }
@@ -845,8 +851,11 @@ class GlobalSettingsStore: ObservableObject {
     ) throws {
         if enabled {
             let snapshot = networkMCPSettingsSnapshot()
-            guard snapshot.defaultTarget != nil else {
+            guard let target = snapshot.defaultTarget else {
                 throw NetworkMCPSettingsError.missingDefaultTarget
+            }
+            guard isUsableNetworkMCPDefaultTarget(target) else {
+                throw NetworkMCPSettingsError.underspecifiedDefaultTarget
             }
             guard let token = snapshot.token else {
                 throw NetworkMCPSettingsError.missingTokenMetadata
@@ -911,6 +920,17 @@ class GlobalSettingsStore: ObservableObject {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         return target
+    }
+
+    private func isUsableNetworkMCPDefaultTarget(_ target: NetworkMCPDefaultTargetMetadata?) -> Bool {
+        guard let target else { return false }
+        guard target.workspaceID != nil || !target.rootPaths.isEmpty else {
+            return false
+        }
+        if let contextID = target.contextID, UUID(uuidString: contextID) == nil {
+            return false
+        }
+        return true
     }
 
     private func normalizedNetworkMCPTokenMetadata(

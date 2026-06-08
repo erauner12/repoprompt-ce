@@ -37,6 +37,7 @@ final class NetworkMCPRemoteDefaultTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(resolved.windowID, 6)
         XCTAssertEqual(resolved.rootPaths, ["/tmp/project-current"])
+        XCTAssertNil(resolved.contextID)
     }
 
     func testFailsClosedWhenDefaultTargetContextIDIsMalformed() async {
@@ -214,6 +215,33 @@ final class NetworkMCPRemoteDefaultTargetResolverTests: XCTestCase {
         XCTAssertEqual(openCount, 0)
     }
 
+    func testOpenIfNeededStillRequiresConfiguredContextProofFromOpenedWindow() async {
+        let workspaceID = UUID()
+        let expectedContextID = UUID()
+        var openCount = 0
+        let resolver = makeResolver(
+            target: NetworkMCPDefaultTargetMetadata(
+                workspaceID: workspaceID,
+                contextID: expectedContextID.uuidString,
+                rootPaths: ["/tmp/project"],
+                openIfNeeded: true
+            ),
+            windows: []
+        ) { _ in
+            openCount += 1
+            return self.candidate(windowID: 11, workspaceID: workspaceID, roots: ["/tmp/project"])
+        }
+
+        await assertThrowsAsync({
+            _ = try await resolver.resolve()
+        }) { error in
+            guard case .openFailed = error as? MCPRemoteDefaultTargetResolutionError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+        XCTAssertEqual(openCount, 1)
+    }
+
     func testContextIDMetadataIsValidatedWhenCandidatesExposeTabIDs() async {
         let workspaceID = UUID()
         let expectedContextID = UUID()
@@ -233,6 +261,48 @@ final class NetworkMCPRemoteDefaultTargetResolverTests: XCTestCase {
                 return XCTFail("Unexpected error: \(error)")
             }
         }
+    }
+
+    func testContextIDTargetRequiresCandidateProofEvenWhenCandidateExposesNoTabIDs() async {
+        let workspaceID = UUID()
+        let expectedContextID = UUID()
+        let resolver = makeResolver(
+            target: NetworkMCPDefaultTargetMetadata(
+                workspaceID: workspaceID,
+                contextID: expectedContextID.uuidString,
+                rootPaths: ["/tmp/project"]
+            ),
+            windows: [candidate(windowID: 4, workspaceID: workspaceID, roots: ["/tmp/project"])]
+        )
+
+        await assertThrowsAsync({
+            _ = try await resolver.resolve()
+        }) { error in
+            guard case .staleDefaultTarget = error as? MCPRemoteDefaultTargetResolutionError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testContextIDTargetResolvesOnlyCandidateWithMatchingContextProof() async throws {
+        let workspaceID = UUID()
+        let expectedContextID = UUID()
+        let resolver = makeResolver(
+            target: NetworkMCPDefaultTargetMetadata(
+                workspaceID: workspaceID,
+                contextID: expectedContextID.uuidString,
+                rootPaths: ["/tmp/project"]
+            ),
+            windows: [
+                candidate(windowID: 2, workspaceID: workspaceID, roots: ["/tmp/project"]),
+                candidate(windowID: 4, workspaceID: workspaceID, roots: ["/tmp/project"], contextIDs: [expectedContextID])
+            ]
+        )
+
+        let resolved = try await resolver.resolve()
+
+        XCTAssertEqual(resolved.windowID, 4)
+        XCTAssertEqual(resolved.contextID, expectedContextID)
     }
 
     private func assertThrowsAsync(
