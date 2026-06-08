@@ -249,7 +249,7 @@ final class SettingsJSONOnlyPersistenceTests: XCTestCase {
                 createdAt: Date(timeIntervalSince1970: 2001)
             )
         ])
-        try store.setNetworkMCPEnabled(true, secureTokenMaterialAvailable: true)
+        try store.setNetworkMCPEnabled(true, secureTokenFingerprint: tokenMetadata.fingerprint)
 
         let reloaded = GlobalSettingsStore(defaults: defaults, fileStore: fileStore).networkMCPSettingsSnapshot()
         XCTAssertTrue(reloaded.enabled)
@@ -290,12 +290,12 @@ final class SettingsJSONOnlyPersistenceTests: XCTestCase {
         XCTAssertThrowsError(try store.setNetworkMCPPort(1023)) { error in
             XCTAssertEqual(error as? NetworkMCPSettingsError, .invalidPort(1023))
         }
-        XCTAssertThrowsError(try store.setNetworkMCPEnabled(true, secureTokenMaterialAvailable: false)) { error in
+        XCTAssertThrowsError(try store.setNetworkMCPEnabled(true, secureTokenFingerprint: nil)) { error in
             XCTAssertEqual(error as? NetworkMCPSettingsError, .missingDefaultTarget)
         }
 
         store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(contextID: "ctx", rootPaths: ["/repo"]))
-        XCTAssertThrowsError(try store.setNetworkMCPEnabled(true, secureTokenMaterialAvailable: false)) { error in
+        XCTAssertThrowsError(try store.setNetworkMCPEnabled(true, secureTokenFingerprint: nil)) { error in
             XCTAssertEqual(error as? NetworkMCPSettingsError, .missingTokenMetadata)
         }
 
@@ -304,14 +304,105 @@ final class SettingsJSONOnlyPersistenceTests: XCTestCase {
             fingerprint: "sha256:feedfacecafebeef",
             createdAt: Date(timeIntervalSince1970: 1800)
         ))
-        XCTAssertThrowsError(try store.setNetworkMCPEnabled(true, secureTokenMaterialAvailable: false)) { error in
+        XCTAssertThrowsError(try store.setNetworkMCPEnabled(true, secureTokenFingerprint: nil)) { error in
             XCTAssertEqual(error as? NetworkMCPSettingsError, .missingSecureTokenMaterial)
         }
+        XCTAssertThrowsError(try store.setNetworkMCPEnabled(true, secureTokenFingerprint: "sha256:stale")) { error in
+            XCTAssertEqual(error as? NetworkMCPSettingsError, .secureTokenMetadataMismatch)
+        }
 
-        try store.setNetworkMCPEnabled(true, secureTokenMaterialAvailable: true)
+        try store.setNetworkMCPEnabled(true, secureTokenFingerprint: "sha256:feedfacecafebeef")
         XCTAssertTrue(store.networkMCPSettingsSnapshot().enabled)
-        try store.setNetworkMCPEnabled(false, secureTokenMaterialAvailable: false)
+        try store.setNetworkMCPEnabled(false, secureTokenFingerprint: nil)
         XCTAssertFalse(store.networkMCPSettingsSnapshot().enabled)
+    }
+
+    func testNetworkMCPSettingsFacadeRejectsStaleOrDeletedSecureTokenMaterial() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fileURL = temp.appendingPathComponent("Settings/globalSettings.json")
+        let store = try GlobalSettingsStore(
+            defaults: XCTUnwrap(UserDefaults(suiteName: "SettingsJSONOnlyPersistenceTests.\(UUID().uuidString)")),
+            fileStore: GlobalSettingsFileStore(fileURL: fileURL)
+        )
+        let secureStrings = FakeNetworkMCPSettingsSecurePlainStringStore()
+        let tokenStore = MCPRemoteBearerTokenStore(secureStrings: secureStrings)
+        let facade = NetworkMCPSettingsFacade(settingsStore: store, tokenStore: tokenStore)
+
+        store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(contextID: "ctx", rootPaths: ["/repo"]))
+        let originalMetadata = try tokenStore.savePrimaryToken("original-token")
+        store.setNetworkMCPTokenMetadata(originalMetadata)
+        try tokenStore.savePrimaryToken("rotated-token")
+
+        XCTAssertThrowsError(try facade.setEnabled(true)) { error in
+            XCTAssertEqual(error as? NetworkMCPSettingsError, .secureTokenMetadataMismatch)
+        }
+        XCTAssertFalse(store.networkMCPSettingsSnapshot().enabled)
+
+        try tokenStore.deletePrimaryToken()
+        XCTAssertThrowsError(try facade.setEnabled(true)) { error in
+            XCTAssertEqual(error as? NetworkMCPSettingsError, .missingSecureTokenMaterial)
+        }
+        XCTAssertFalse(store.networkMCPSettingsSnapshot().enabled)
+    }
+
+    func testNetworkMCPSettingsSnapshotNormalizesMalformedPersistedValues() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fileURL = temp.appendingPathComponent("Settings/globalSettings.json")
+        let fileStore = GlobalSettingsFileStore(fileURL: fileURL)
+        try fileStore.save(GlobalSettingsDocument(
+            scalarPreferences: GlobalScalarPreferences(
+                mcp: GlobalScalarPreferences.MCPSettings(networkHTTP: NetworkMCPSettings(
+                    enabled: true,
+                    bindAddress: "localhost",
+                    port: 80,
+                    defaultTarget: NetworkMCPDefaultTargetMetadata(
+                        contextID: " ",
+                        displayName: " Workspace ",
+                        rootPaths: [" ", " /repo "]
+                    ),
+                    token: NetworkMCPBearerTokenMetadata(
+                        label: " ",
+                        fingerprint: " ",
+                        createdAt: Date(timeIntervalSince1970: 1800)
+                    ),
+                    trustedClients: [
+                        NetworkMCPTrustedClientPolicy(
+                            clientDisplayName: " Laptop ",
+                            normalizedClientID: " ",
+                            tokenFingerprint: "sha256:token",
+                            createdAt: Date(timeIntervalSince1970: 1800)
+                        ),
+                        NetworkMCPTrustedClientPolicy(
+                            clientDisplayName: " Laptop ",
+                            normalizedClientID: " openclaw ",
+                            tokenFingerprint: " sha256:token ",
+                            lastAddress: " 192.168.1.5 ",
+                            createdAt: Date(timeIntervalSince1970: 1800)
+                        )
+                    ]
+                ))
+            )
+        ))
+
+        let snapshot = try GlobalSettingsStore(
+            defaults: XCTUnwrap(UserDefaults(suiteName: "SettingsJSONOnlyPersistenceTests.\(UUID().uuidString)")),
+            fileStore: fileStore
+        ).networkMCPSettingsSnapshot()
+
+        XCTAssertTrue(snapshot.enabled)
+        XCTAssertEqual(snapshot.bindAddress, NetworkMCPSettings.defaultBindAddress)
+        XCTAssertEqual(snapshot.port, NetworkMCPSettings.defaultPort)
+        XCTAssertEqual(snapshot.defaultTarget?.contextID, nil)
+        XCTAssertEqual(snapshot.defaultTarget?.displayName, "Workspace")
+        XCTAssertEqual(snapshot.defaultTarget?.rootPaths, ["/repo"])
+        XCTAssertNil(snapshot.token)
+        XCTAssertEqual(snapshot.trustedClients.count, 1)
+        XCTAssertEqual(snapshot.trustedClients.first?.clientDisplayName, "Laptop")
+        XCTAssertEqual(snapshot.trustedClients.first?.normalizedClientID, "openclaw")
+        XCTAssertEqual(snapshot.trustedClients.first?.tokenFingerprint, "sha256:token")
+        XCTAssertEqual(snapshot.trustedClients.first?.lastAddress, "192.168.1.5")
     }
 
     func testNetworkMCPPreviousSchemaDecodesWithDefaultsAndMigratesOnSave() throws {
@@ -484,5 +575,22 @@ final class SettingsJSONOnlyPersistenceTests: XCTestCase {
             .appendingPathComponent("SettingsJSONOnlyPersistenceTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+}
+
+private final class FakeNetworkMCPSettingsSecurePlainStringStore: SecurePlainStringStoring {
+    let persistsValuesAcrossLaunches = true
+    var plainValues: [String: String] = [:]
+
+    func getPlainValue(for key: String, accessMode _: KeychainAccessMode) throws -> String? {
+        plainValues[key]
+    }
+
+    func savePlainValue(_ value: String, for key: String, accessMode _: KeychainAccessMode) throws {
+        plainValues[key] = value
+    }
+
+    func deletePlainValue(for key: String, accessMode _: KeychainAccessMode) throws {
+        plainValues.removeValue(forKey: key)
     }
 }
