@@ -182,6 +182,53 @@ final class NetworkMCPHTTPListenerStreamingTests: XCTestCase {
         }
     }
 
+    func testStopClosesAcceptedStreamingChildChannelAndTerminatesStream() async throws {
+        let terminationProbe = StreamTerminationProbe()
+        let continuationHolder = StreamContinuationHolder()
+        let listener = MCPNetworkHTTPListener(configuration: .init(bindAddress: "127.0.0.1", port: 0)) { _ in
+            MCPNetworkHTTPResponse(statusCode: 200, headers: [
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive"
+            ], body: .stream(AsyncThrowingStream { continuation in
+                continuation.yield(Data(":ready\n\n".utf8))
+                Task { await continuationHolder.install(continuation) }
+            }, onTermination: {
+                Task { await terminationProbe.markTerminated() }
+            }))
+        }
+
+        try await listener.start()
+        guard let port = await listener.boundPort() else {
+            await listener.stop()
+            XCTFail("Expected listener to expose bound ephemeral port")
+            return
+        }
+
+        let socket = try RawTCPSocket(port: port)
+        do {
+            try socket.sendHTTPRequest(path: "/mcp")
+            var raw = Data()
+            try socket.receive(into: &raw) { data in
+                data.headerBodySplit != nil
+            }
+            let response = try RawHTTPResponse(raw)
+            XCTAssertEqual(response.statusLine, "HTTP/1.1 200 OK")
+            XCTAssertEqual(response.header("transfer-encoding"), "chunked")
+
+            await listener.stop()
+
+            try socket.receiveUntilEOF(into: &raw)
+            let terminated = await terminationProbe.waitUntilTerminated()
+            XCTAssertTrue(terminated, "Expected listener stop to terminate the active SSE stream")
+            await continuationHolder.finish()
+        } catch {
+            await listener.stop()
+            await continuationHolder.finish()
+            throw error
+        }
+    }
+
     private enum ListenerResponse {
         case finite(headers: [String: String], body: Data)
         case streaming(headers: [String: String], chunks: [Data])
@@ -201,6 +248,36 @@ final class NetworkMCPHTTPListenerStreamingTests: XCTestCase {
 
         var value: Int {
             count
+        }
+    }
+
+    private actor StreamTerminationProbe {
+        private var terminated = false
+
+        func markTerminated() {
+            terminated = true
+        }
+
+        func waitUntilTerminated(timeout: TimeInterval = 2) async -> Bool {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                if terminated { return true }
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+            return terminated
+        }
+    }
+
+    private actor StreamContinuationHolder {
+        private var continuation: AsyncThrowingStream<Data, Error>.Continuation?
+
+        func install(_ continuation: AsyncThrowingStream<Data, Error>.Continuation) {
+            self.continuation = continuation
+        }
+
+        func finish() {
+            continuation?.finish()
+            continuation = nil
         }
     }
 

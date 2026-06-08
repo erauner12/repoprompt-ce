@@ -153,6 +153,61 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
         #endif
     }
 
+    func testConcurrentStandaloneGetStillReturnsSDK409() async throws {
+        #if DEBUG
+            try await withRoutingManager { manager, token in
+                let initializeResponse = await initialize(manager: manager, token: token)
+                let sessionID = try XCTUnwrap(initializeResponse.headers[MCPNetworkHTTPHeader.sessionID])
+
+                let firstGET = await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
+                    get(sessionID: sessionID, token: token)
+                )
+                XCTAssertEqual(firstGET.statusCode, 200, diagnostic(firstGET))
+                _ = try await firstStreamChunk(firstGET)
+
+                let concurrentGET = await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
+                    get(sessionID: sessionID, token: token)
+                )
+
+                XCTAssertEqual(concurrentGET.statusCode, 409, diagnostic(concurrentGET))
+                XCTAssertTrue(try errorMessage(concurrentGET).contains("Only one SSE stream is allowed"))
+                notifyStreamTerminated(firstGET)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
+    func testStandaloneGetReconnectAfterAdapterObservedDisconnectAvoidsStaleSDK409() async throws {
+        #if DEBUG
+            try await withRoutingManager { manager, token in
+                let initializeResponse = await initialize(manager: manager, token: token)
+                let sessionID = try XCTUnwrap(initializeResponse.headers[MCPNetworkHTTPHeader.sessionID])
+
+                let firstGET = await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
+                    get(sessionID: sessionID, token: token)
+                )
+                XCTAssertEqual(firstGET.statusCode, 200, diagnostic(firstGET))
+                _ = try await firstStreamChunk(firstGET)
+                notifyStreamTerminated(firstGET)
+
+                let reconnectedGET = try await waitForReconnectedGET(manager: manager, sessionID: sessionID, token: token)
+
+                XCTAssertEqual(reconnectedGET.statusCode, 200, diagnostic(reconnectedGET))
+                XCTAssertEqual(reconnectedGET.headers[MCPNetworkHTTPHeader.sessionID], sessionID)
+                XCTAssertEqual(header(reconnectedGET, "Content-Type"), "text/event-stream")
+                if case .stream = reconnectedGET.body {
+                    // The adapter retried the stale SDK 409 as a resumable GET only after observing the prior stream terminate.
+                } else {
+                    XCTFail("Expected stale-disconnect recovery to return a replacement SDK SSE stream")
+                }
+                notifyStreamTerminated(reconnectedGET)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
     func testDeleteSuccessRemovesRepoPromptSessionMaps() async throws {
         #if DEBUG
             try await withRoutingManager { manager, token in
@@ -572,6 +627,42 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
             await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
                 post(body: initializeBody(), token: token, remoteAddress: remoteAddress)
             )
+        }
+
+        private func firstStreamChunk(_ response: MCPNetworkHTTPResponse) async throws -> Data {
+            guard case let .stream(stream, _) = response.body else {
+                XCTFail("Expected stream response body")
+                return Data()
+            }
+            var iterator = stream.makeAsyncIterator()
+            let chunk = try await iterator.next()
+            return try XCTUnwrap(chunk)
+        }
+
+        private func notifyStreamTerminated(_ response: MCPNetworkHTTPResponse) {
+            guard case let .stream(_, onTermination) = response.body else { return }
+            onTermination?()
+        }
+
+        private func waitForReconnectedGET(
+            manager: ServerNetworkManager,
+            sessionID: String,
+            token: String,
+            timeout: TimeInterval = 2
+        ) async throws -> MCPNetworkHTTPResponse {
+            let deadline = Date().addingTimeInterval(timeout)
+            var lastResponse: MCPNetworkHTTPResponse?
+            while Date() < deadline {
+                let response = await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
+                    get(sessionID: sessionID, token: token)
+                )
+                if response.statusCode != 409 {
+                    return response
+                }
+                lastResponse = response
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            return try XCTUnwrap(lastResponse)
         }
     #endif
 
