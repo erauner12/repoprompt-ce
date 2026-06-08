@@ -71,6 +71,65 @@ final class NetworkMCPHTTPListenerStreamingTests: XCTestCase {
         }
     }
 
+    func testOversizedBodyReturns413WithoutCallingRequestHandler() async throws {
+        let counter = HandlerCallCounter()
+        let oversizedBody = Data(repeating: 0x61, count: (8 * 1024 * 1024) + 1)
+
+        try await withListener(requestHandler: { _ in
+            await counter.increment()
+            return MCPNetworkHTTPResponse(statusCode: 200)
+        }) { port in
+            let socket = try RawTCPSocket(port: port)
+            try socket.sendHTTPPost(path: "/mcp", headers: [("Content-Type", "application/json")], body: oversizedBody)
+
+            var raw = Data()
+            try socket.receive(into: &raw) { data in
+                guard let response = try? RawHTTPResponse(data),
+                      let contentLength = response.contentLength
+                else { return false }
+                return response.body.count >= contentLength
+            }
+            let response = try RawHTTPResponse(raw)
+
+            XCTAssertEqual(response.statusLine, "HTTP/1.1 413 Payload Too Large")
+            let callCount = await counter.value
+            XCTAssertEqual(callCount, 0)
+        }
+    }
+
+    func testDuplicateSensitiveHeaderReturns400WithoutCallingRequestHandler() async throws {
+        let counter = HandlerCallCounter()
+
+        try await withListener(requestHandler: { _ in
+            await counter.increment()
+            return MCPNetworkHTTPResponse(statusCode: 200)
+        }) { port in
+            let socket = try RawTCPSocket(port: port)
+            try socket.sendHTTPPost(
+                path: "/mcp",
+                headers: [
+                    ("Authorization", "Bearer one"),
+                    ("Authorization", "Bearer two"),
+                    ("Content-Type", "application/json")
+                ],
+                body: Data("{}".utf8)
+            )
+
+            var raw = Data()
+            try socket.receive(into: &raw) { data in
+                guard let response = try? RawHTTPResponse(data),
+                      let contentLength = response.contentLength
+                else { return false }
+                return response.body.count >= contentLength
+            }
+            let response = try RawHTTPResponse(raw)
+
+            XCTAssertEqual(response.statusLine, "HTTP/1.1 400 Bad Request")
+            let callCount = await counter.value
+            XCTAssertEqual(callCount, 0)
+        }
+    }
+
     func testStreamErrorClosesChannelCleanlyAfterLastWrittenChunk() async throws {
         let chunk = Data("data: before-error\n\n".utf8)
 
@@ -99,11 +158,23 @@ final class NetworkMCPHTTPListenerStreamingTests: XCTestCase {
         case streamFailed
     }
 
+    private actor HandlerCallCounter {
+        private var count = 0
+
+        func increment() {
+            count += 1
+        }
+
+        var value: Int {
+            count
+        }
+    }
+
     private func withListener(
         response: ListenerResponse,
         run: (Int) async throws -> Void
     ) async throws {
-        let listener = MCPNetworkHTTPListener(configuration: .init(bindAddress: "127.0.0.1", port: 0)) { _ in
+        try await withListener(requestHandler: { _ in
             switch response {
             case let .finite(headers, body):
                 MCPNetworkHTTPResponse(statusCode: 200, headers: headers, body: .data(body))
@@ -128,7 +199,14 @@ final class NetworkMCPHTTPListenerStreamingTests: XCTestCase {
                     }
                 }))
             }
-        }
+        }, run: run)
+    }
+
+    private func withListener(
+        requestHandler: @escaping MCPNetworkHTTPListener.RequestHandler,
+        run: (Int) async throws -> Void
+    ) async throws {
+        let listener = MCPNetworkHTTPListener(configuration: .init(bindAddress: "127.0.0.1", port: 0), requestHandler: requestHandler)
         try await listener.start()
         guard let port = await listener.boundPort() else {
             await listener.stop()
@@ -186,6 +264,16 @@ private final class RawTCPSocket {
     func sendHTTPRequest(path: String) throws {
         let request = "GET \(path) HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n"
         try sendAll(Data(request.utf8))
+    }
+
+    func sendHTTPPost(path: String, headers: [(String, String)], body: Data) throws {
+        var request = "POST \(path) HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: \(body.count)\r\n"
+        for (name, value) in headers {
+            request += "\(name): \(value)\r\n"
+        }
+        request += "\r\n"
+        try sendAll(Data(request.utf8))
+        try sendAll(body)
     }
 
     func receive(into data: inout Data, until isComplete: (Data) -> Bool) throws {

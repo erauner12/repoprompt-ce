@@ -597,6 +597,7 @@ actor ServerNetworkManager {
     private var httpListenerLastErrorDescription: String?
     private var httpSessionsByID: [String: UUID] = [:]
     private var httpApprovedTokenFingerprintBySessionID: [String: String] = [:]
+    private var httpApprovedSourceHostBySessionID: [String: String] = [:]
     private var httpConnectionsByConnectionID: [UUID: MCPHTTPConnectionManager] = [:]
     private var remoteHTTPConnections: Set<UUID> = []
     private let remoteBearerTokenStore = MCPRemoteBearerTokenStore()
@@ -2970,6 +2971,12 @@ actor ServerNetworkManager {
         guard request.path == "/mcp" else {
             return .error(statusCode: 404, message: "Not Found", code: -32600)
         }
+        if let rejectedDuplicateHeader = rejectDuplicateSensitiveNetworkHTTPHeader(request) {
+            return rejectedDuplicateHeader
+        }
+        guard isEnabledState else {
+            return await rejectNetworkHTTPRequestBecauseDisabled(request)
+        }
 
         let authResult = authenticateNetworkMCPBearerToken(
             authorizationHeader: request.header(MCPNetworkHTTPHeader.authorization)
@@ -2996,7 +3003,8 @@ actor ServerNetworkManager {
         if let sessionID = request.header(MCPNetworkHTTPHeader.sessionID) {
             guard let connectionID = httpSessionsByID[sessionID],
                   httpConnectionsByConnectionID[connectionID] != nil,
-                  let approvedFingerprint = httpApprovedTokenFingerprintBySessionID[sessionID]
+                  let approvedFingerprint = httpApprovedTokenFingerprintBySessionID[sessionID],
+                  let approvedSourceHost = httpApprovedSourceHostBySessionID[sessionID]
             else {
                 return .error(statusCode: 404, message: "Invalid or expired MCP-Session-Id", code: -32600)
             }
@@ -3008,6 +3016,10 @@ actor ServerNetworkManager {
             guard sourceAddress.isPrivateLANOrLinkLocal else {
                 await removeConnection(connectionID)
                 return .error(statusCode: 403, message: "Remote MCP source is not private/LAN/link-local: \(sourceAddress.normalizedHost)", code: -32001)
+            }
+            guard sourceAddress.normalizedHost == approvedSourceHost else {
+                await removeConnection(connectionID)
+                return .error(statusCode: 403, message: "Network MCP session source address changed", code: -32001)
             }
         } else {
             switch method {
@@ -3056,6 +3068,29 @@ actor ServerNetworkManager {
                 extraHeaders: [MCPNetworkHTTPHeader.allow: "GET, POST, DELETE"]
             )
         }
+    }
+
+    private func rejectDuplicateSensitiveNetworkHTTPHeader(_ request: MCPNetworkHTTPRequest) -> MCPNetworkHTTPResponse? {
+        let sensitiveHeaders = [
+            MCPNetworkHTTPHeader.authorization,
+            MCPNetworkHTTPHeader.sessionID
+        ]
+        let duplicated = sensitiveHeaders.filter { request.hasDuplicateHeader($0) }
+        guard !duplicated.isEmpty else { return nil }
+        return .error(
+            statusCode: 400,
+            message: "Duplicate security-sensitive HTTP header: \(duplicated.joined(separator: ", "))",
+            code: -32600
+        )
+    }
+
+    private func rejectNetworkHTTPRequestBecauseDisabled(_ request: MCPNetworkHTTPRequest) async -> MCPNetworkHTTPResponse {
+        if let sessionID = request.header(MCPNetworkHTTPHeader.sessionID),
+           let connectionID = httpSessionsByID[sessionID]
+        {
+            await removeConnection(connectionID)
+        }
+        return .error(statusCode: 503, message: "RepoPrompt MCP server is disabled", code: -32003)
     }
 
     private func authenticateNetworkMCPBearerToken(authorizationHeader: String?) -> MCPRemoteBearerAuthenticationResult {
@@ -3151,7 +3186,11 @@ actor ServerNetworkManager {
             sessionID: sessionID,
             manager: manager
         )
-        return await manager.handle(request)
+        let response = await manager.handle(request)
+        if response.statusCode >= 400 {
+            await removeConnection(connectionID)
+        }
+        return response
     }
 
     private func handleExistingHTTPSessionRequest(_ request: MCPNetworkHTTPRequest) async -> MCPNetworkHTTPResponse {
@@ -3184,6 +3223,7 @@ actor ServerNetworkManager {
         connectionLifecycleGenerationByID[connectionID] = expectedLifecycleGeneration
         httpSessionsByID[sessionID] = connectionID
         httpApprovedTokenFingerprintBySessionID[sessionID] = tokenFingerprint
+        httpApprovedSourceHostBySessionID[sessionID] = MCPRemoteClientAddress(sourceAddress).normalizedHost
         httpConnectionsByConnectionID[connectionID] = manager
         remoteHTTPConnections.insert(connectionID)
         capabilityTokenByConnection[connectionID] = sessionID
@@ -3884,6 +3924,7 @@ actor ServerNetworkManager {
         httpListenerLastErrorDescription = nil
         httpSessionsByID.removeAll()
         httpApprovedTokenFingerprintBySessionID.removeAll()
+        httpApprovedSourceHostBySessionID.removeAll()
         httpConnectionsByConnectionID.removeAll()
         remoteHTTPConnections.removeAll()
         maintenanceTask?.cancel()
@@ -3975,6 +4016,7 @@ actor ServerNetworkManager {
         connectionStats.removeAll()
         httpSessionsByID.removeAll()
         httpApprovedTokenFingerprintBySessionID.removeAll()
+        httpApprovedSourceHostBySessionID.removeAll()
         httpConnectionsByConnectionID.removeAll()
         remoteHTTPConnections.removeAll()
     }
@@ -4302,6 +4344,7 @@ actor ServerNetworkManager {
         if remoteHTTPConnections.contains(id), let sessionToken {
             httpSessionsByID.removeValue(forKey: sessionToken)
             httpApprovedTokenFingerprintBySessionID.removeValue(forKey: sessionToken)
+            httpApprovedSourceHostBySessionID.removeValue(forKey: sessionToken)
         }
         httpConnectionsByConnectionID.removeValue(forKey: id)
         remoteHTTPConnections.remove(id)
