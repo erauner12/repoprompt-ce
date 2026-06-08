@@ -120,6 +120,9 @@ struct MCPRemoteDefaultTargetResolver {
         }
 
         if let match = matches.first {
+            if target.workspaceID == nil, matches.count > 1 {
+                throw MCPRemoteDefaultTargetResolutionError.staleDefaultTarget(guidance: guidance(for: target))
+            }
             return resolution(from: match, didOpenWindow: false)
         }
 
@@ -142,7 +145,7 @@ struct MCPRemoteDefaultTargetResolver {
     }
 
     private func validateConfiguredTarget(_ target: NetworkMCPDefaultTargetMetadata) throws {
-        guard !WorkspaceRootSetKey(paths: target.rootPaths).isEmpty else {
+        guard target.workspaceID != nil || !WorkspaceRootSetKey(paths: target.rootPaths).isEmpty else {
             throw MCPRemoteDefaultTargetResolutionError.underspecifiedDefaultTarget
         }
         if let contextID = target.contextID,
@@ -172,13 +175,15 @@ struct MCPRemoteDefaultTargetResolver {
         _ candidate: MCPRemoteTargetWindowCandidate,
         target: NetworkMCPDefaultTargetMetadata
     ) -> Bool {
-        if let workspaceID = target.workspaceID, candidate.workspaceID != workspaceID {
-            return false
-        }
-
-        let targetRoots = WorkspaceRootSetKey(paths: target.rootPaths)
-        if !targetRoots.isEmpty {
-            guard WorkspaceRootSetKey(paths: candidate.rootPaths) == targetRoots else { return false }
+        if let workspaceID = target.workspaceID {
+            guard candidate.workspaceID == workspaceID else { return false }
+        } else {
+            let targetRoots = WorkspaceRootSetKey(paths: target.rootPaths)
+            guard !targetRoots.isEmpty,
+                  WorkspaceRootSetKey(paths: candidate.rootPaths) == targetRoots
+            else {
+                return false
+            }
         }
 
         if let contextIDString = target.contextID,
