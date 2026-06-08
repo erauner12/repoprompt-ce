@@ -183,7 +183,7 @@ final class NetworkMCPSettingsViewModel: ObservableObject {
         do {
             try tokenStore.deletePrimaryToken(accessMode: .interactive)
             if snapshot.enabled {
-                try settingsStore.setNetworkMCPEnabled(false, secureTokenMaterialAvailable: false)
+                try settingsStore.setNetworkMCPEnabled(false, secureTokenFingerprint: nil)
             }
             settingsStore.setNetworkMCPTokenMetadata(nil)
             settingsStore.setNetworkMCPTrustedClients([])
