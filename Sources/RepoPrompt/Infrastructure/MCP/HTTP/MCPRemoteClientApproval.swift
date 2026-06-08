@@ -341,6 +341,8 @@ final class MCPRemoteClientApprovalManager {
         processNextQueuedApprovalIfNeeded()
     }
 
+    /// Trusted-client policy is convenience trust keyed by bearer-token fingerprint plus
+    /// client-controlled display/user-agent identity; it is not cryptographic client authentication.
     private func matchingTrustedPolicy(for request: MCPRemoteClientApprovalRequest) -> NetworkMCPTrustedClientPolicy? {
         guard request.hasStableClientIdentity else { return nil }
         return settingsStore.networkMCPSettingsSnapshot().trustedClients.first { policy in
