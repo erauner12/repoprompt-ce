@@ -90,6 +90,7 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
     private var activeStreamTask: Task<Void, Never>?
     private var activeStreamTaskID = 0
     private var closingForActiveStreamRequest = false
+    private var bodyTooLarge = false
 
     init(requestHandler: @escaping MCPNetworkHTTPListener.RequestHandler, logger: Logger) {
         self.requestHandler = requestHandler
@@ -111,13 +112,31 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
             }
             currentHead = head
             bodyBuffer.clear()
+            bodyTooLarge = false
         case var .body(part):
+            guard !bodyTooLarge else { return }
             if bodyBuffer.readableBytes + part.readableBytes <= maxBodyBytes {
                 bodyBuffer.writeBuffer(&part)
+            } else {
+                bodyTooLarge = true
+                bodyBuffer.clear()
             }
         case .end:
             guard let head = currentHead else {
                 writeResponse(.error(statusCode: 400, message: "Missing HTTP request head"), context: context)
+                return
+            }
+            guard !bodyTooLarge else {
+                currentHead = nil
+                bodyBuffer.clear()
+                bodyTooLarge = false
+                writeResponse(.error(statusCode: 413, message: "HTTP request body exceeds maximum size"), context: context)
+                return
+            }
+            guard !head.hasDuplicateSensitiveMCPHeaders else {
+                currentHead = nil
+                bodyBuffer.clear()
+                writeResponse(.error(statusCode: 400, message: "Duplicate security-sensitive HTTP header"), context: context)
                 return
             }
             let body = Data(bodyBuffer.readBytes(length: bodyBuffer.readableBytes) ?? [])
@@ -147,7 +166,13 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
 
     private func makeRequest(head: HTTPRequestHead, body: Data, context: ChannelHandlerContext) -> MCPNetworkHTTPRequest {
         var headers: [String: String] = [:]
+        var seenHeaderNames: Set<String> = []
+        var duplicateHeaderNames: Set<String> = []
         for header in head.headers {
+            let lowercasedName = header.name.lowercased()
+            if !seenHeaderNames.insert(lowercasedName).inserted {
+                duplicateHeaderNames.insert(lowercasedName)
+            }
             headers[header.name] = header.value
         }
         let path = head.uri.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? head.uri
@@ -156,7 +181,8 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
             path: path,
             headers: headers,
             body: body,
-            remoteAddress: context.channel.remoteAddress?.ipAddress ?? context.channel.remoteAddress?.description ?? "unknown"
+            remoteAddress: context.channel.remoteAddress?.ipAddress ?? context.channel.remoteAddress?.description ?? "unknown",
+            duplicateHeaderNames: duplicateHeaderNames
         )
     }
 
@@ -297,6 +323,16 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
         activeStreamTask?.cancel()
         activeStreamTask = nil
         activeStreamTaskID += 1
+    }
+}
+
+private extension HTTPRequestHead {
+    var hasDuplicateSensitiveMCPHeaders: Bool {
+        hasDuplicateHeader(MCPNetworkHTTPHeader.authorization) || hasDuplicateHeader(MCPNetworkHTTPHeader.sessionID)
+    }
+
+    func hasDuplicateHeader(_ name: String) -> Bool {
+        headers[name].count > 1
     }
 }
 

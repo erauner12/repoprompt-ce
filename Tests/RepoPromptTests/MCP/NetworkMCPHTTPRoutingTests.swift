@@ -47,6 +47,81 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
         #endif
     }
 
+    func testDisabledSessionlessInitializeFailsClosedWithoutCreatingSession() async throws {
+        #if DEBUG
+            try await withRoutingManager { manager, token in
+                await manager.setEnabled(false)
+
+                let response = await initialize(manager: manager, token: token)
+
+                XCTAssertEqual(response.statusCode, 503)
+                XCTAssertTrue(try errorMessage(response).contains("MCP server is disabled"))
+                let sessionCount = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(sessionCount, 0)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
+    func testDisabledExistingSessionRequestFailsClosedAndRemovesSession() async throws {
+        #if DEBUG
+            try await withRoutingManager { manager, token in
+                let initializeResponse = await initialize(manager: manager, token: token)
+                let sessionID = try XCTUnwrap(initializeResponse.headers[MCPNetworkHTTPHeader.sessionID])
+
+                await manager.setEnabled(false)
+                let response = await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
+                    get(sessionID: sessionID, token: token)
+                )
+
+                XCTAssertEqual(response.statusCode, 503)
+                XCTAssertTrue(try errorMessage(response).contains("MCP server is disabled"))
+                let sessionCount = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(sessionCount, 0)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
+    func testInvalidInitializeHeadersDoNotRetainGhostSession() async throws {
+        #if DEBUG
+            try await withRoutingManager { manager, token in
+                let response = await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
+                    post(
+                        body: initializeBody(),
+                        token: token,
+                        headers: ["Accept": "application/json"]
+                    )
+                )
+
+                XCTAssertGreaterThanOrEqual(response.statusCode, 400)
+                let sessionCount = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(sessionCount, 0)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
+    func testDuplicateSensitiveInitializeHeaderFailsClosedWithoutCreatingSession() async throws {
+        #if DEBUG
+            try await withRoutingManager { manager, token in
+                let response = await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
+                    post(body: initializeBody(), token: token, duplicateHeaderNames: [MCPNetworkHTTPHeader.authorization.lowercased()])
+                )
+
+                XCTAssertEqual(response.statusCode, 400)
+                XCTAssertTrue(try errorMessage(response).contains("Duplicate security-sensitive HTTP header"))
+                let sessionCount = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(sessionCount, 0)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
     func testValidExistingSessionGetRoutesToSDKSSEStreamInsteadOf405() async throws {
         #if DEBUG
             try await withRoutingManager { manager, token in
@@ -144,6 +219,28 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
         #endif
     }
 
+    func testExistingSessionFromDifferentSourceFailsClosedAndRemovesSession() async throws {
+        #if DEBUG
+            try await withRoutingManager { manager, token in
+                let initializeResponse = await initialize(manager: manager, token: token)
+                let sessionID = try XCTUnwrap(initializeResponse.headers[MCPNetworkHTTPHeader.sessionID])
+                let initialSessionCount = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(initialSessionCount, 1)
+
+                let response = await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
+                    get(sessionID: sessionID, token: token, remoteAddress: "127.0.0.2:54321")
+                )
+
+                XCTAssertEqual(response.statusCode, 403)
+                XCTAssertTrue(try errorMessage(response).contains("source address changed"))
+                let sessionCountAfterMismatch = await manager.debugNetworkMCPHTTPSessionCount()
+                XCTAssertEqual(sessionCountAfterMismatch, 0)
+            }
+        #else
+            throw XCTSkip("Network MCP routing seams are DEBUG-only")
+        #endif
+    }
+
     func testExistingSessionTokenFingerprintMismatchRemovesSession() async throws {
         #if DEBUG
             try await withRoutingManager { manager, token in
@@ -199,36 +296,37 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
 
         private func initialize(manager: ServerNetworkManager, token: String) async -> MCPNetworkHTTPResponse {
             await manager.debugHandleNetworkHTTPRequestForNetworkMCPRoutingTest(
-                post(body: jsonData([
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": [
-                        "protocolVersion": Version.latest,
-                        "capabilities": [:],
-                        "clientInfo": ["name": "NetworkRoutingTest", "version": "1.0"]
-                    ]
-                ]), token: token)
+                post(body: initializeBody(), token: token)
             )
         }
     #endif
 
-    private func post(body: Data, token: String) -> MCPNetworkHTTPRequest {
-        MCPNetworkHTTPRequest(
+    private func post(
+        body: Data,
+        token: String,
+        headers headerOverrides: [String: String] = [:],
+        duplicateHeaderNames: Set<String> = []
+    ) -> MCPNetworkHTTPRequest {
+        var headers = [
+            MCPNetworkHTTPHeader.authorization: "Bearer \(token)",
+            MCPNetworkHTTPHeader.contentType: "application/json",
+            "Accept": "application/json, text/event-stream",
+            "User-Agent": "NetworkRoutingTest/1.0"
+        ]
+        for (key, value) in headerOverrides {
+            headers[key] = value
+        }
+        return MCPNetworkHTTPRequest(
             method: "POST",
             path: "/mcp",
-            headers: [
-                MCPNetworkHTTPHeader.authorization: "Bearer \(token)",
-                MCPNetworkHTTPHeader.contentType: "application/json",
-                "Accept": "application/json, text/event-stream",
-                "User-Agent": "NetworkRoutingTest/1.0"
-            ],
+            headers: headers,
             body: body,
-            remoteAddress: "127.0.0.1:54321"
+            remoteAddress: "127.0.0.1:54321",
+            duplicateHeaderNames: duplicateHeaderNames
         )
     }
 
-    private func get(sessionID: String, token: String) -> MCPNetworkHTTPRequest {
+    private func get(sessionID: String, token: String, remoteAddress: String = "127.0.0.1:54321") -> MCPNetworkHTTPRequest {
         MCPNetworkHTTPRequest(
             method: "GET",
             path: "/mcp",
@@ -238,7 +336,7 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
                 "Accept": "text/event-stream",
                 "User-Agent": "NetworkRoutingTest/1.0"
             ],
-            remoteAddress: "127.0.0.1:54321"
+            remoteAddress: remoteAddress
         )
     }
 
@@ -269,6 +367,19 @@ final class NetworkMCPHTTPRoutingTests: XCTestCase {
             headers: headers,
             remoteAddress: "127.0.0.1:54321"
         )
+    }
+
+    private func initializeBody() -> Data {
+        jsonData([
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": [
+                "protocolVersion": Version.latest,
+                "capabilities": [:],
+                "clientInfo": ["name": "NetworkRoutingTest", "version": "1.0"]
+            ]
+        ])
     }
 
     private func jsonData(_ object: Any) -> Data {
