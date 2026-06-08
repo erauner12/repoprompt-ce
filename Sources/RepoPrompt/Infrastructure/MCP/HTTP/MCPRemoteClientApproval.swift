@@ -59,6 +59,10 @@ struct MCPRemoteClientApprovalRequest: Equatable {
             ?? "Remote MCP client"
     }
 
+    var hasStableClientIdentity: Bool {
+        Self.stableClientID(clientDisplayName: clientDisplayName, userAgent: userAgent) != nil
+    }
+
     var presentation: MCPApprovalPresentation {
         MCPApprovalPresentation(
             clientID: displayName,
@@ -70,13 +74,17 @@ struct MCPRemoteClientApprovalRequest: Equatable {
     }
 
     static func normalizedClientID(clientDisplayName: String?, userAgent: String?) -> String {
+        stableClientID(clientDisplayName: clientDisplayName, userAgent: userAgent) ?? "remote-mcp-client"
+    }
+
+    static func stableClientID(clientDisplayName: String?, userAgent: String?) -> String? {
         if let key = MCPClientIdentity.storageKey(clientDisplayName) {
             return key
         }
         if let key = MCPClientIdentity.storageKey(userAgent) {
             return key
         }
-        return "remote-mcp-client"
+        return nil
     }
 
     private func normalizedNonEmpty(_ value: String?) -> String? {
@@ -203,25 +211,33 @@ enum MCPRemoteClientApprovalResult: Equatable {
 final class MCPRemoteClientApprovalManager {
     typealias UserApprovalHandler = (MCPRemoteClientApprovalRequest) async -> MCPRemoteClientApprovalDecision
 
+    private struct QueuedApprovalRequest {
+        var id: UUID
+        var request: MCPRemoteClientApprovalRequest
+        var continuation: CheckedContinuation<MCPRemoteClientApprovalDecision, Never>
+    }
+
     private let settingsStore: GlobalSettingsStore
     private let now: () -> Date
     private let idGenerator: () -> UUID
+    private let approvalTimeoutNanoseconds: UInt64?
     private let userApprovalHandler: UserApprovalHandler
-    private var activeApprovalRequest: MCPRemoteClientApprovalRequest?
-    private var queuedApprovalRequests: [(
-        request: MCPRemoteClientApprovalRequest,
-        continuation: CheckedContinuation<MCPRemoteClientApprovalDecision, Never>
-    )] = []
+    private var activeApprovalRequest: QueuedApprovalRequest?
+    private var activeApprovalTask: Task<Void, Never>?
+    private var activeApprovalTimeoutTask: Task<Void, Never>?
+    private var queuedApprovalRequests: [QueuedApprovalRequest] = []
 
     convenience init(
         now: @escaping () -> Date = Date.init,
         idGenerator: @escaping () -> UUID = UUID.init,
+        approvalTimeoutNanoseconds: UInt64? = 60_000_000_000,
         userApprovalHandler: @escaping UserApprovalHandler
     ) {
         self.init(
             settingsStore: GlobalSettingsStore.shared,
             now: now,
             idGenerator: idGenerator,
+            approvalTimeoutNanoseconds: approvalTimeoutNanoseconds,
             userApprovalHandler: userApprovalHandler
         )
     }
@@ -230,11 +246,13 @@ final class MCPRemoteClientApprovalManager {
         settingsStore: GlobalSettingsStore,
         now: @escaping () -> Date = Date.init,
         idGenerator: @escaping () -> UUID = UUID.init,
+        approvalTimeoutNanoseconds: UInt64? = 60_000_000_000,
         userApprovalHandler: @escaping UserApprovalHandler
     ) {
         self.settingsStore = settingsStore
         self.now = now
         self.idGenerator = idGenerator
+        self.approvalTimeoutNanoseconds = approvalTimeoutNanoseconds
         self.userApprovalHandler = userApprovalHandler
     }
 
@@ -257,7 +275,7 @@ final class MCPRemoteClientApprovalManager {
         case .deny:
             return .denied
         case let .allow(alwaysAllow):
-            if alwaysAllow {
+            if alwaysAllow, request.hasStableClientIdentity {
                 let policy = persistTrustedPolicy(for: request, lastAddress: address.normalizedHost)
                 return .approved(alwaysAllow: true, trustedPolicy: policy)
             }
@@ -268,26 +286,64 @@ final class MCPRemoteClientApprovalManager {
     private func queuedUserApprovalDecision(
         for request: MCPRemoteClientApprovalRequest
     ) async -> MCPRemoteClientApprovalDecision {
-        await withCheckedContinuation { continuation in
-            queuedApprovalRequests.append((request, continuation))
-            processNextQueuedApprovalIfNeeded()
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                queuedApprovalRequests.append(QueuedApprovalRequest(
+                    id: id,
+                    request: request,
+                    continuation: continuation
+                ))
+                processNextQueuedApprovalIfNeeded()
+            }
+        } onCancel: {
+            Task { @MainActor in
+                self.cancelQueuedApproval(id: id)
+            }
         }
     }
 
     private func processNextQueuedApprovalIfNeeded() {
         guard activeApprovalRequest == nil, !queuedApprovalRequests.isEmpty else { return }
         let next = queuedApprovalRequests.removeFirst()
-        activeApprovalRequest = next.request
-        Task { @MainActor in
+        activeApprovalRequest = next
+        activeApprovalTask = Task { @MainActor in
             let decision = await userApprovalHandler(next.request)
-            next.continuation.resume(returning: decision)
-            activeApprovalRequest = nil
-            processNextQueuedApprovalIfNeeded()
+            completeActiveApproval(id: next.id, decision: decision)
+        }
+        if let approvalTimeoutNanoseconds {
+            activeApprovalTimeoutTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: approvalTimeoutNanoseconds)
+                completeActiveApproval(id: next.id, decision: .deny)
+            }
         }
     }
 
+    private func cancelQueuedApproval(id: UUID) {
+        if let index = queuedApprovalRequests.firstIndex(where: { $0.id == id }) {
+            let queued = queuedApprovalRequests.remove(at: index)
+            queued.continuation.resume(returning: .deny)
+            return
+        }
+        if activeApprovalRequest?.id == id {
+            completeActiveApproval(id: id, decision: .deny)
+        }
+    }
+
+    private func completeActiveApproval(id: UUID, decision: MCPRemoteClientApprovalDecision) {
+        guard let active = activeApprovalRequest, active.id == id else { return }
+        activeApprovalTask?.cancel()
+        activeApprovalTimeoutTask?.cancel()
+        activeApprovalTask = nil
+        activeApprovalTimeoutTask = nil
+        activeApprovalRequest = nil
+        active.continuation.resume(returning: decision)
+        processNextQueuedApprovalIfNeeded()
+    }
+
     private func matchingTrustedPolicy(for request: MCPRemoteClientApprovalRequest) -> NetworkMCPTrustedClientPolicy? {
-        settingsStore.networkMCPSettingsSnapshot().trustedClients.first { policy in
+        guard request.hasStableClientIdentity else { return nil }
+        return settingsStore.networkMCPSettingsSnapshot().trustedClients.first { policy in
             policy.tokenFingerprint == request.tokenFingerprint
                 && MCPClientIdentity.matches(policy.normalizedClientID, request.normalizedClientID)
         }

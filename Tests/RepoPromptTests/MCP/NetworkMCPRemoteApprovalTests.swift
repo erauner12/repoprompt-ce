@@ -178,6 +178,120 @@ final class NetworkMCPRemoteApprovalTests: XCTestCase {
         XCTAssertEqual(secondResult, .denied)
     }
 
+    func testCancelledApprovalDoesNotBlockLaterApproval() async throws {
+        let store = try makeStore()
+        var promptedClients: [String] = []
+        let manager = MCPRemoteClientApprovalManager(settingsStore: store) { request in
+            promptedClients.append(request.displayName)
+            if request.displayName == "First" {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                return .deny
+            }
+            return .allow(alwaysAllow: false)
+        }
+
+        let firstTask = Task { @MainActor in
+            await manager.evaluate(.init(
+                clientDisplayName: "First",
+                sourceAddress: "192.168.1.10",
+                tokenFingerprint: "sha256:first"
+            ))
+        }
+        await waitUntil { promptedClients == ["First"] }
+
+        firstTask.cancel()
+        let firstResult = await firstTask.value
+        XCTAssertEqual(firstResult, .denied)
+
+        let secondResult = await manager.evaluate(.init(
+            clientDisplayName: "Second",
+            sourceAddress: "192.168.1.11",
+            tokenFingerprint: "sha256:second"
+        ))
+        XCTAssertEqual(secondResult, .approved(alwaysAllow: false, trustedPolicy: nil))
+        await waitUntil { promptedClients == ["First", "Second"] }
+    }
+
+    func testTimedOutApprovalFailsClosedAndDoesNotBlockLaterApproval() async throws {
+        let store = try makeStore()
+        var promptedClients: [String] = []
+        let manager = MCPRemoteClientApprovalManager(
+            settingsStore: store,
+            approvalTimeoutNanoseconds: 20_000_000
+        ) { request in
+            promptedClients.append(request.displayName)
+            if request.displayName == "First" {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                return .allow(alwaysAllow: true)
+            }
+            return .allow(alwaysAllow: false)
+        }
+
+        let firstResult = await manager.evaluate(.init(
+            clientDisplayName: "First",
+            sourceAddress: "192.168.1.10",
+            tokenFingerprint: "sha256:first"
+        ))
+        XCTAssertEqual(firstResult, .denied)
+
+        let secondResult = await manager.evaluate(.init(
+            clientDisplayName: "Second",
+            sourceAddress: "192.168.1.11",
+            tokenFingerprint: "sha256:second"
+        ))
+        XCTAssertEqual(secondResult, .approved(alwaysAllow: false, trustedPolicy: nil))
+        XCTAssertEqual(promptedClients, ["First", "Second"])
+    }
+
+    func testAnonymousAlwaysAllowDoesNotPersistTrustedPolicyAndPromptsEveryTime() async throws {
+        let store = try makeStore()
+        var promptCount = 0
+        let manager = MCPRemoteClientApprovalManager(settingsStore: store) { _ in
+            promptCount += 1
+            return .allow(alwaysAllow: true)
+        }
+
+        let request = MCPRemoteClientApprovalRequest(
+            sourceAddress: "192.168.1.10",
+            tokenFingerprint: "sha256:token"
+        )
+        XCTAssertEqual(request.normalizedClientID, "remote-mcp-client")
+        XCTAssertFalse(request.hasStableClientIdentity)
+
+        let firstResult = await manager.evaluate(request)
+        let secondResult = await manager.evaluate(request)
+
+        XCTAssertEqual(firstResult, .approved(alwaysAllow: false, trustedPolicy: nil))
+        XCTAssertEqual(secondResult, .approved(alwaysAllow: false, trustedPolicy: nil))
+        XCTAssertEqual(promptCount, 2)
+        XCTAssertTrue(store.networkMCPSettingsSnapshot().trustedClients.isEmpty)
+    }
+
+    func testExistingFallbackTrustedPolicyDoesNotAuthorizeAnonymousClient() async throws {
+        let store = try makeStore()
+        store.setNetworkMCPTrustedClients([
+            NetworkMCPTrustedClientPolicy(
+                clientDisplayName: "Remote MCP client",
+                normalizedClientID: "remote-mcp-client",
+                tokenFingerprint: "sha256:token",
+                createdAt: Date(timeIntervalSince1970: 100)
+            )
+        ])
+        var promptCount = 0
+        let manager = MCPRemoteClientApprovalManager(settingsStore: store) { _ in
+            promptCount += 1
+            return .deny
+        }
+
+        let result = await manager.evaluate(.init(
+            sourceAddress: "192.168.1.10",
+            tokenFingerprint: "sha256:token"
+        ))
+
+        XCTAssertEqual(result, .denied)
+        XCTAssertEqual(promptCount, 1)
+    }
+
     func testAddressClassifierHandlesLANLoopbackAndPublicAddresses() {
         XCTAssertTrue(MCPRemoteClientAddress("localhost").isLoopback)
         XCTAssertTrue(MCPRemoteClientAddress("[::1]:4150").isLoopback)

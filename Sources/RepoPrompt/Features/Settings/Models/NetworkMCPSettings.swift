@@ -79,6 +79,8 @@ struct NetworkMCPBearerTokenMetadata: Codable, Equatable {
     }
 }
 
+/// Convenience trust policy keyed by bearer-token fingerprint plus client-controlled display/user-agent identity.
+/// This is not a cryptographic client identity; bearer authentication remains the security boundary.
 struct NetworkMCPTrustedClientPolicy: Codable, Equatable, Identifiable {
     var id: UUID
     var clientDisplayName: String?
@@ -138,6 +140,7 @@ enum NetworkMCPSettingsError: Error, Equatable {
     case missingDefaultTarget
     case missingTokenMetadata
     case missingSecureTokenMaterial
+    case secureTokenMetadataMismatch
 }
 
 @MainActor
@@ -158,16 +161,16 @@ final class NetworkMCPSettingsFacade {
     }
 
     func setEnabled(_ enabled: Bool, commit: Bool = true) throws {
-        let secureTokenAvailable = if enabled {
-            try tokenStore.hasPrimaryToken(
-                accessMode: .nonInteractive(reason: .networkMCPAuthentication)
-            )
+        let secureTokenFingerprint = if enabled,
+                                        let token = try tokenStore.loadPrimaryToken(accessMode: .nonInteractive(reason: .networkMCPAuthentication))
+        {
+            MCPRemoteBearerTokenStore.fingerprint(for: token)
         } else {
-            false
+            String?.none
         }
         try settingsStore.setNetworkMCPEnabled(
             enabled,
-            secureTokenMaterialAvailable: secureTokenAvailable,
+            secureTokenFingerprint: secureTokenFingerprint,
             commit: commit
         )
     }
