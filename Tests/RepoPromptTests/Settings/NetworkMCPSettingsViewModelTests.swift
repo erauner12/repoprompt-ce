@@ -23,6 +23,32 @@ final class NetworkMCPSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(refreshCount, 0)
     }
 
+    func testSetEnabledTrueEnsuresListenerRunningInsteadOfPlainRefresh() async throws {
+        let store = makeSettingsStore()
+        let secureStore = FakeNetworkMCPSecurePlainStringStore()
+        let tokenStore = MCPRemoteBearerTokenStore(secureStrings: secureStore)
+        let token = "network-mcp-test-token"
+        let metadata = try tokenStore.savePrimaryToken(token, accessMode: .nonInteractive(reason: .networkMCPAuthentication))
+        store.setNetworkMCPTokenMetadata(metadata)
+        store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(displayName: "Test", rootPaths: ["/repo"]))
+        let listener = FakeNetworkMCPListenerManager()
+        let viewModel = NetworkMCPSettingsViewModel(
+            settingsStore: store,
+            tokenStore: tokenStore,
+            networkManager: listener
+        )
+
+        await viewModel.setEnabled(true)
+
+        let snapshot = store.networkMCPSettingsSnapshot()
+        XCTAssertTrue(snapshot.enabled)
+        XCTAssertEqual(viewModel.feedbackMessage, "Network MCP enabled")
+        let refreshCount = await listener.getRefreshCount()
+        let ensureRunningAndRefreshCount = await listener.getEnsureRunningAndRefreshCount()
+        XCTAssertEqual(refreshCount, 0)
+        XCTAssertEqual(ensureRunningAndRefreshCount, 1)
+    }
+
     private func makeSettingsStore() -> GlobalSettingsStore {
         let suiteName = "NetworkMCPSettingsViewModelTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -55,11 +81,32 @@ private actor FakeNetworkMCPListenerManager: NetworkMCPListenerManaging {
         refreshCount
     }
 
+    func getEnsureRunningAndRefreshCount() -> Int {
+        ensureRunningAndRefreshCount
+    }
+
     func refreshHTTPListenerConfiguration() async {
         refreshCount += 1
     }
 
     func ensureRunningAndRefreshHTTPListenerConfiguration() async {
         ensureRunningAndRefreshCount += 1
+    }
+}
+
+private final class FakeNetworkMCPSecurePlainStringStore: SecurePlainStringStoring {
+    let persistsValuesAcrossLaunches = true
+    private var plainValues: [String: String] = [:]
+
+    func getPlainValue(for key: String, accessMode _: KeychainAccessMode) throws -> String? {
+        plainValues[key]
+    }
+
+    func savePlainValue(_ value: String, for key: String, accessMode _: KeychainAccessMode) throws {
+        plainValues[key] = value
+    }
+
+    func deletePlainValue(for key: String, accessMode _: KeychainAccessMode) throws {
+        plainValues.removeValue(forKey: key)
     }
 }
