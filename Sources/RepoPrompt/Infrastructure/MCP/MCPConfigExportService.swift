@@ -164,8 +164,10 @@ actor MCPConfigExportService {
         switch trimmed {
         case "0.0.0.0", "::":
             return "<your-mac-lan-ip>"
-        case "127.0.0.1", "::1":
+        case "127.0.0.1":
             return "127.0.0.1"
+        case "::1":
+            return "[::1]"
         default:
             if trimmed.contains(":"), !trimmed.hasPrefix("[") {
                 return "[\(trimmed)]"

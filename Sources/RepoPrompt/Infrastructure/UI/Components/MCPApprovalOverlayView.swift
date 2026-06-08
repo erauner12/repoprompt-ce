@@ -131,6 +131,14 @@ struct MCPInlineApprovalActionsView: View {
         }
     }
 
+    private var canPersistTrust: Bool {
+        presentation?.canPersistTrust ?? true
+    }
+
+    private var trustPersistenceDescription: String? {
+        presentation?.trustPersistenceDescription
+    }
+
     private var remoteDetails: [(label: String, value: String)]? {
         guard isRemoteApproval else { return nil }
         var details: [(String, String)] = []
@@ -153,13 +161,21 @@ struct MCPInlineApprovalActionsView: View {
     }
 
     private var remoteActionButtons: some View {
-        HStack(spacing: 8) {
-            denyButton
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                denyButton
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
 
-            allowOnceButton(isPrimary: true)
-            alwaysAllowButton(isPrimary: false)
+                allowOnceButton(isPrimary: true)
+                alwaysAllowButton(isPrimary: false)
+            }
+            if let trustPersistenceDescription {
+                Text(trustPersistenceDescription)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .font(.caption.weight(.medium))
     }
@@ -200,10 +216,10 @@ struct MCPInlineApprovalActionsView: View {
         Button {
             resolve(allow: true, alwaysAllow: true)
         } label: {
-            inlineActionLabel("Always Allow")
+            inlineActionLabel(isRemoteApproval ? "Trust Future" : "Always Allow")
         }
         .buttonStyle(isPrimary ? .primaryMCPInline : .secondaryMCPInline)
-        .disabled(isResolving)
+        .disabled(isResolving || !canPersistTrust)
     }
 
     private func inlineActionLabel(_ title: String) -> some View {
@@ -214,9 +230,10 @@ struct MCPInlineApprovalActionsView: View {
 
     private func resolve(allow: Bool, alwaysAllow: Bool) {
         guard !isResolving else { return }
+        let resolvedAlwaysAllow = alwaysAllow && canPersistTrust
         isResolving = true
         Task {
-            await server.resolveApproval(allow: allow, alwaysAllow: alwaysAllow)
+            await server.resolveApproval(allow: allow, alwaysAllow: resolvedAlwaysAllow)
             await MainActor.run { isResolving = false }
         }
     }
@@ -560,18 +577,27 @@ struct MCPApprovalOverlayView: View {
         }
     }
 
+    private var canPersistTrust: Bool {
+        presentation?.canPersistTrust ?? true
+    }
+
+    private var trustPersistenceDescription: String? {
+        presentation?.trustPersistenceDescription
+    }
+
     private var alwaysAllowToggle: some View {
         HStack(spacing: 12) {
             Toggle("", isOn: $alwaysAllow)
                 .toggleStyle(SwitchToggleStyle(tint: .accentColor))
                 .labelsHidden()
+                .disabled(!canPersistTrust)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(presentation?.transport == .remoteHTTP ? "Always allow this remote client" : "Always allow this client")
+                Text(presentation?.transport == .remoteHTTP ? "Trust this remote client for future connections" : "Always allow this client")
                     .font(.subheadline.weight(.medium))
                     .foregroundColor(.primary)
 
-                Text(presentation?.transport == .remoteHTTP ? "Trust this client for this token fingerprint" : "Skip approval for future connections")
+                Text(trustPersistenceDescription ?? "Skip approval for future connections")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -579,6 +605,11 @@ struct MCPApprovalOverlayView: View {
             Spacer()
         }
         .padding(.horizontal, 4)
+    }
+
+    private var allowButtonTitle: String {
+        guard alwaysAllow && canPersistTrust else { return "Allow Once" }
+        return presentation?.transport == .remoteHTTP ? "Trust Future" : "Always Allow"
     }
 
     // MARK: - Actions Section
@@ -603,7 +634,7 @@ struct MCPApprovalOverlayView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark")
                         .font(.system(size: 12, weight: .semibold))
-                    Text(alwaysAllow ? "Always Allow" : "Allow Once")
+                    Text(allowButtonTitle)
                         .font(.subheadline.weight(.medium))
                 }
                 .frame(maxWidth: .infinity)
@@ -623,7 +654,7 @@ struct MCPApprovalOverlayView: View {
         }
         // Small delay for animation
         try? await Task.sleep(nanoseconds: 150_000_000)
-        await server.resolveApproval(allow: true, alwaysAllow: alwaysAllow)
+        await server.resolveApproval(allow: true, alwaysAllow: alwaysAllow && canPersistTrust)
     }
 
     private func deny() async {
