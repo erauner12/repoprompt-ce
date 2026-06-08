@@ -737,10 +737,12 @@ final class MCPSocketDescriptorHardeningTests: XCTestCase {
             defer { fixture.removeOwnedDirectory() }
             let manager = ServerNetworkManager()
             try await manager.debugInstallBootstrapSocketURLOverride(fixture.socketURL)
+            await manager.debugSetNetworkMCPSettingsSnapshotOverride(NetworkMCPSettingsSnapshot(enabled: false))
 
             func stopAndRestoreManager() async throws {
                 await manager.debugResumeAllLifecycleFenceCheckpoints()
                 await manager.stop()
+                await manager.debugSetNetworkMCPSettingsSnapshotOverride(nil)
                 try await manager.debugRestoreBootstrapSocketURLOverride(expected: fixture.socketURL)
             }
 

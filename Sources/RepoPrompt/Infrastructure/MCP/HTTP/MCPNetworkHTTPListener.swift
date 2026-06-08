@@ -87,6 +87,10 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
     private var currentHead: HTTPRequestHead?
     private var bodyBuffer = ByteBuffer()
     private let maxBodyBytes = 8 * 1024 * 1024
+    private var activeRequestTask: Task<Void, Never>?
+    private var activeRequestID = 0
+    private var requestInFlight = false
+    private var closeAfterInFlightRequest = false
     private var activeStreamTask: Task<Void, Never>?
     private var activeStreamTaskID = 0
     private var closingForActiveStreamRequest = false
@@ -98,7 +102,7 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        if closingForActiveStreamRequest {
+        if closingForActiveStreamRequest || closeAfterInFlightRequest {
             return
         }
 
@@ -108,6 +112,14 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
                 logger.warning("Network MCP HTTP channel received another request while a stream response is active; closing channel")
                 closingForActiveStreamRequest = true
                 context.close(promise: nil)
+                return
+            }
+            guard !requestInFlight else {
+                logger.warning("Network MCP HTTP channel received a pipelined request while a response is in flight; closing after current response")
+                closeAfterInFlightRequest = true
+                currentHead = nil
+                bodyBuffer.clear()
+                bodyTooLarge = false
                 return
             }
             currentHead = head
@@ -143,10 +155,11 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
             currentHead = nil
             bodyBuffer.clear()
             let request = makeRequest(head: head, body: body, context: context)
-            Task { [requestHandler] in
+            let requestID = beginRequest()
+            activeRequestTask = Task { [requestHandler] in
                 let response = await requestHandler(request)
                 context.eventLoop.execute { [weak self] in
-                    self?.writeResponse(response, context: context)
+                    self?.writeResponse(response, requestID: requestID, context: context)
                 }
             }
         }
@@ -154,12 +167,15 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
 
     func channelInactive(context: ChannelHandlerContext) {
         closingForActiveStreamRequest = false
+        closeAfterInFlightRequest = false
+        cancelActiveRequestTask()
         cancelActiveStreamTask()
         context.fireChannelInactive()
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
         logger.warning("Network MCP HTTP channel error: \(String(describing: error))")
+        cancelActiveRequestTask()
         cancelActiveStreamTask()
         context.close(promise: nil)
     }
@@ -186,16 +202,30 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
         )
     }
 
+    private func beginRequest() -> Int {
+        requestInFlight = true
+        activeRequestID += 1
+        return activeRequestID
+    }
+
     private func writeResponse(_ response: MCPNetworkHTTPResponse, context: ChannelHandlerContext) {
+        writeResponse(response, requestID: nil, context: context)
+    }
+
+    private func writeResponse(_ response: MCPNetworkHTTPResponse, requestID: Int?, context: ChannelHandlerContext) {
+        if let requestID {
+            guard activeRequestID == requestID, requestInFlight, context.channel.isActive else { return }
+        }
+
         switch response.body {
         case .none, .data:
-            writeFiniteResponse(response, context: context)
+            writeFiniteResponse(response, requestID: requestID, context: context)
         case let .stream(stream):
-            writeStreamingResponse(response, stream: stream, context: context)
+            writeStreamingResponse(response, stream: stream, requestID: requestID, context: context)
         }
     }
 
-    private func writeFiniteResponse(_ response: MCPNetworkHTTPResponse, context: ChannelHandlerContext) {
+    private func writeFiniteResponse(_ response: MCPNetworkHTTPResponse, requestID: Int?, context: ChannelHandlerContext) {
         var headers = HTTPHeaders()
         for (name, value) in response.headers {
             headers.replaceOrAdd(name: name, value: value)
@@ -206,7 +236,9 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
         } else {
             headers.replaceOrAdd(name: "Content-Length", value: "0")
         }
-        if headers["Connection"].isEmpty {
+        if closeAfterInFlightRequest {
+            headers.replaceOrAdd(name: "Connection", value: "close")
+        } else if headers["Connection"].isEmpty {
             headers.replaceOrAdd(name: "Connection", value: "keep-alive")
         }
 
@@ -217,12 +249,17 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
             buffer.writeBytes(finiteBody)
             context.write(wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
         }
-        context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
+        context.writeAndFlush(wrapOutboundOut(.end(nil))).whenComplete { [weak self] _ in
+            if let requestID {
+                self?.completeRequest(requestID: requestID, context: context)
+            }
+        }
     }
 
     private func writeStreamingResponse(
         _ response: MCPNetworkHTTPResponse,
         stream: AsyncThrowingStream<Data, Error>,
+        requestID: Int?,
         context: ChannelHandlerContext
     ) {
         cancelActiveStreamTask()
@@ -253,7 +290,7 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
                     guard writeSucceeded else { return }
                 }
                 guard !Task.isCancelled, let self, let context else { return }
-                await finishStream(taskID: taskID, context: context)
+                await finishStream(taskID: taskID, requestID: requestID, context: context)
             } catch is CancellationError {
                 // Channel teardown owns cancellation; do not write after cancellation.
             } catch {
@@ -286,7 +323,7 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
         }
     }
 
-    private func finishStream(taskID: Int, context: ChannelHandlerContext) async {
+    private func finishStream(taskID: Int, requestID: Int?, context: ChannelHandlerContext) async {
         await withCheckedContinuation { continuation in
             context.eventLoop.execute { [weak self, weak context] in
                 guard let self, let context, activeStreamTaskID == taskID, context.channel.isActive else {
@@ -296,6 +333,9 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
                 context.writeAndFlush(wrapOutboundOut(.end(nil))).whenComplete { _ in
                     if self.activeStreamTaskID == taskID {
                         self.activeStreamTask = nil
+                    }
+                    if let requestID {
+                        self.completeRequest(requestID: requestID, context: context)
                     }
                     continuation.resume()
                 }
@@ -317,6 +357,22 @@ private final class MCPNetworkHTTPChannelHandler: ChannelInboundHandler, @unchec
                 }
             }
         }
+    }
+
+    private func completeRequest(requestID: Int, context: ChannelHandlerContext) {
+        guard activeRequestID == requestID else { return }
+        activeRequestTask = nil
+        requestInFlight = false
+        if closeAfterInFlightRequest {
+            context.close(promise: nil)
+        }
+    }
+
+    private func cancelActiveRequestTask() {
+        activeRequestTask?.cancel()
+        activeRequestTask = nil
+        activeRequestID += 1
+        requestInFlight = false
     }
 
     private func cancelActiveStreamTask() {
