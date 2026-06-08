@@ -9,12 +9,19 @@ final class NetworkMCPHTTPLifecycleTests: XCTestCase {
             defer { fixture.removeOwnedDirectory() }
 
             let manager = ServerNetworkManager()
+            let bearerToken = "network-mcp-lifecycle-token"
             let settings = NetworkMCPSettingsSnapshot(
                 enabled: true,
                 bindAddress: "127.0.0.1",
-                port: 0
+                port: 0,
+                token: NetworkMCPBearerTokenMetadata(
+                    label: "Lifecycle test",
+                    fingerprint: MCPRemoteBearerTokenStore.fingerprint(for: bearerToken),
+                    createdAt: Date(timeIntervalSince1970: 1800)
+                )
             )
             try await manager.debugInstallBootstrapSocketURLOverride(fixture.socketURL)
+            await manager.debugSetNetworkMCPBearerTokenOverride(bearerToken)
             await manager.debugSetNetworkMCPSettingsSnapshotOverride(settings)
             do {
                 await manager.debugSuspendNextLifecycleFenceCheckpoint(.httpListenerCreatedBeforeStartInvocation)
@@ -55,11 +62,13 @@ final class NetworkMCPHTTPLifecycleTests: XCTestCase {
 
                 await manager.stop()
                 await manager.debugSetNetworkMCPSettingsSnapshotOverride(nil)
+                await manager.debugSetNetworkMCPBearerTokenOverride(nil)
                 try await manager.debugRestoreBootstrapSocketURLOverride(expected: fixture.socketURL)
             } catch {
                 await manager.debugResumeAllLifecycleFenceCheckpoints()
                 await manager.stop()
                 await manager.debugSetNetworkMCPSettingsSnapshotOverride(nil)
+                await manager.debugSetNetworkMCPBearerTokenOverride(nil)
                 try? await manager.debugRestoreBootstrapSocketURLOverride(expected: fixture.socketURL)
                 throw error
             }
