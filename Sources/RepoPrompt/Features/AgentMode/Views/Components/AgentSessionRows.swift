@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Agent Session Row
@@ -129,6 +130,20 @@ struct AgentSessionRow: View {
         "Stash chat for later"
     }
 
+    private var worktreeCopyIdentity: AgentWorktreeIndicator.CopyIdentity? {
+        worktree?.copyIdentity
+    }
+
+    private var worktreeCopyActionLabel: String? {
+        guard let worktreeCopyIdentity else { return nil }
+        return switch worktreeCopyIdentity.source {
+        case .worktreeName:
+            "Copy Worktree Name"
+        case .branch:
+            "Copy Branch"
+        }
+    }
+
     private var dismissAttentionActionLabel: String {
         "Dismiss status badge"
     }
@@ -144,6 +159,12 @@ struct AgentSessionRow: View {
 
     private func requestDeleteConfirmation() {
         showDeleteConfirmation = true
+    }
+
+    private func copyWorktreeIdentityToPasteboard() {
+        guard let worktreeCopyIdentity else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(worktreeCopyIdentity.value, forType: .string)
     }
 
     var body: some View {
@@ -269,6 +290,10 @@ struct AgentSessionRow: View {
             Button(renameActionLabel, action: beginRename)
 
             Button(stashActionLabel, action: onStash)
+
+            if let worktreeCopyActionLabel {
+                Button(worktreeCopyActionLabel, action: copyWorktreeIdentityToPasteboard)
+            }
 
             if attentionRunState != nil, let onDismissAttention {
                 Button(dismissAttentionActionLabel, action: onDismissAttention)
