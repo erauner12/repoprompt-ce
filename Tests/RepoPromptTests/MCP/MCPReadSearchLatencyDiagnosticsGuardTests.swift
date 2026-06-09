@@ -19,152 +19,91 @@
             XCTAssertTrue(diagnostics.contains("mcp_read_search_capture_snapshot"))
             XCTAssertTrue(diagnostics.contains("mcp_read_search_admission_snapshot"))
             XCTAssertTrue(diagnostics.contains("mcp_read_search_admission_configure"))
-            XCTAssertTrue(diagnostics.contains("mcp_read_search_content_fetch_admission_snapshot"))
-            XCTAssertTrue(diagnostics.contains("mcp_read_search_content_fetch_admission_configure"))
+            XCTAssertTrue(diagnostics.contains("mcp_read_search_content_read_scheduler_snapshot"))
 
             let sibling = try source("Sources/RepoPrompt/Features/Diagnostics/MCP/MCPConnectionManager+DebugDiagnosticsReadSearchLatency.swift")
             XCTAssertTrue(sibling.contains("#if DEBUG"))
             XCTAssertTrue(sibling.contains("100 ... 100_000"))
-            XCTAssertTrue(sibling.contains("1 ... 4"))
-            XCTAssertTrue(sibling.contains("1 ... 128"))
-            XCTAssertTrue(sibling.contains("0 ... 256"))
-            XCTAssertTrue(sibling.contains("0 ... 1024"))
             XCTAssertTrue(sibling.contains("100 ... 60000"))
+            XCTAssertTrue(sibling.contains("0 ... 60000"))
             XCTAssertTrue(sibling.contains("overload_count"))
             XCTAssertTrue(sibling.contains("wait_expiry_count"))
-            XCTAssertTrue(sibling.contains("global_active_count"))
-            XCTAssertTrue(sibling.contains("global_queued_count"))
-            XCTAssertTrue(sibling.contains("lane_loads"))
-            XCTAssertTrue(sibling.contains("store_active_count"))
-            XCTAssertTrue(sibling.contains("store_queued_count"))
-            XCTAssertTrue(sibling.contains("fair_share_per_store"))
-            XCTAssertTrue(sibling.contains("max_burst_per_store"))
-            XCTAssertTrue(sibling.contains("queued_search_count"))
-            XCTAssertTrue(sibling.contains("maxBurstPerStore >= fairSharePerStore"))
+            XCTAssertTrue(sibling.contains("active_count"))
+            XCTAssertTrue(sibling.contains("queued_count"))
+            XCTAssertTrue(sibling.contains("window_count"))
+            XCTAssertTrue(sibling.contains("\"lanes\""))
+            XCTAssertTrue(sibling.contains("maximum_active_count"))
+            XCTAssertTrue(sibling.contains("maximum_queued_count"))
+            XCTAssertTrue(sibling.contains("max_queued_waiters"))
+            XCTAssertTrue(sibling.contains("active_permit_count"))
+            XCTAssertTrue(sibling.contains("queued_waiter_count"))
+            XCTAssertTrue(sibling.contains("owner_lane_count"))
+            XCTAssertTrue(sibling.contains("cancellation_count"))
+            XCTAssertTrue(sibling.contains("interactive_grant_count"))
+            XCTAssertTrue(sibling.contains("bulk_grant_count"))
         }
 
-        func testAdmissionDebugDiagnosticsConfigureSnapshotAndRejectOutOfRangeStressValues() async throws {
-            try await StoreBackedWorkspaceSearchSharedAdmissionTestLease.shared.withLease {
-                let coordinator = StoreBackedWorkspaceSearchAdmissionCoordinator.shared
-                let baseline = await coordinator.snapshotForDebug().configuration
-                do {
-                    let manager = ServerNetworkManager.shared
-                    let connectionID = UUID()
-                    let configured = await manager.handleDebugDiagnosticsTool(
-                        connectionID: connectionID,
-                        arguments: [
-                            "op": .string("mcp_read_search_admission_configure"),
-                            "per_store_capacity": .int(4),
-                            "global_capacity": .int(128),
-                            "max_queued_per_store": .int(256),
-                            "max_queued_global": .int(1024),
-                            "max_queue_wait_ms": .int(60000)
-                        ]
-                    )
-                    let configuredPayload = try debugDiagnosticsPayload(configured)
-                    XCTAssertEqual(configuredPayload["ok"] as? Bool, true)
-                    let admission = try XCTUnwrap(configuredPayload["admission"] as? [String: Any])
-                    let configuration = try XCTUnwrap(admission["configuration"] as? [String: Any])
-                    XCTAssertEqual((configuration["per_store_capacity"] as? NSNumber)?.intValue, 4)
-                    XCTAssertEqual((configuration["global_capacity"] as? NSNumber)?.intValue, 128)
-                    XCTAssertEqual((configuration["max_queued_per_store"] as? NSNumber)?.intValue, 256)
-                    XCTAssertEqual((configuration["max_queued_global"] as? NSNumber)?.intValue, 1024)
-                    XCTAssertEqual((configuration["max_queue_wait_ms"] as? NSNumber)?.intValue, 60000)
-                    XCTAssertEqual(admission["idle"] as? Bool, true)
-                    XCTAssertEqual((admission["global_active_count"] as? NSNumber)?.intValue, 0)
-                    XCTAssertEqual((admission["global_queued_count"] as? NSNumber)?.intValue, 0)
-                    XCTAssertEqual((admission["lane_loads"] as? [[String: Any]])?.count, 0)
+        func testPerStoreAdmissionDebugConfigurationIsFixedCapacityIdleOnlyAndBounded() async {
+            let store = WorkspaceFileContextStore()
+            let baseline = await store.searchLaneSnapshotForTesting()
+            XCTAssertEqual(baseline.activePermitCount, 0)
+            XCTAssertEqual(baseline.waiterCount, 0)
 
-                    let invalid = await manager.handleDebugDiagnosticsTool(
-                        connectionID: connectionID,
-                        arguments: [
-                            "op": .string("mcp_read_search_admission_configure"),
-                            "per_store_capacity": .int(4),
-                            "global_capacity": .int(129),
-                            "max_queued_per_store": .int(256),
-                            "max_queued_global": .int(1024),
-                            "max_queue_wait_ms": .int(60000)
-                        ]
-                    )
-                    let invalidPayload = try debugDiagnosticsPayload(invalid)
-                    XCTAssertEqual(invalidPayload["ok"] as? Bool, false)
-                    XCTAssertEqual(invalidPayload["code"] as? String, "invalid_params")
-                    let unchanged = await coordinator.snapshotForDebug()
-                    XCTAssertEqual(unchanged.configuration.globalCapacity, 128)
+            let replacement = StoreBackedWorkspaceSearchLane.Configuration(
+                maxQueueWait: .seconds(60),
+                retryAfterMilliseconds: 60000
+            )
+            guard case let .applied(configured) = await store.configureSearchLaneForTesting(replacement) else {
+                return XCTFail("Idle per-store lane should accept bounded DEBUG configuration")
+            }
+            XCTAssertEqual(configured.configuration.maxQueueWaitMilliseconds, 60000)
+            XCTAssertEqual(configured.configuration.retryAfterMilliseconds, 60000)
+            XCTAssertTrue(configured.isIdle)
 
-                    let snapshot = await manager.handleDebugDiagnosticsTool(
-                        connectionID: connectionID,
-                        arguments: ["op": .string("mcp_read_search_admission_snapshot")]
-                    )
-                    XCTAssertEqual(try debugDiagnosticsPayload(snapshot)["ok"] as? Bool, true)
-                    await restoreAdmissionDebugConfiguration(baseline, coordinator: coordinator)
-                } catch {
-                    await restoreAdmissionDebugConfiguration(baseline, coordinator: coordinator)
-                    throw error
-                }
+            let sibling = try? source("Sources/RepoPrompt/Features/Diagnostics/MCP/MCPConnectionManager+DebugDiagnosticsReadSearchLatency.swift")
+            XCTAssertTrue(sibling?.contains("\"active_capacity\": 1") == true)
+            XCTAssertTrue(sibling?.contains("\"max_queued\": 1") == true)
+            XCTAssertTrue(sibling?.contains("range: 100 ... 60000") == true)
+            XCTAssertTrue(sibling?.contains("range: 0 ... 60000") == true)
+            XCTAssertFalse(sibling?.contains("global_capacity") == true)
+        }
+
+        func testSearchLaneInvalidWindowErrorsRetainRequestedOperation() async throws {
+            let manager = ServerNetworkManager.shared
+            for operation in [
+                "mcp_read_search_admission_snapshot",
+                "mcp_read_search_admission_configure"
+            ] {
+                let result = await manager.handleDebugDiagnosticsTool(
+                    connectionID: UUID(),
+                    arguments: [
+                        "op": .string(operation),
+                        "window_id": .int(0)
+                    ]
+                )
+                let payload = try debugDiagnosticsPayload(result)
+                XCTAssertEqual(payload["ok"] as? Bool, false)
+                XCTAssertEqual(payload["op"] as? String, operation)
+                XCTAssertEqual(payload["code"] as? String, "invalid_params")
             }
         }
 
-        func testContentFetchAdmissionDebugDiagnosticsConfigureSnapshotAndRejectInvalidRelationship() async throws {
-            try await StoreBackedWorkspaceSearchSharedAdmissionTestLease.shared.withLease {
-                let coordinator = StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator.shared
-                let baseline = await coordinator.snapshotForDebug().configuration
-                do {
-                    let manager = ServerNetworkManager.shared
-                    let connectionID = UUID()
-                    let configured = await manager.handleDebugDiagnosticsTool(
-                        connectionID: connectionID,
-                        arguments: [
-                            "op": .string("mcp_read_search_content_fetch_admission_configure"),
-                            "fair_share_per_store": .int(2),
-                            "max_burst_per_store": .int(4),
-                            "global_capacity": .int(32),
-                            "max_queued_per_store": .int(128),
-                            "max_queued_global": .int(512),
-                            "max_queue_wait_ms": .int(8000)
-                        ]
-                    )
-                    let configuredPayload = try debugDiagnosticsPayload(configured)
-                    XCTAssertEqual(configuredPayload["ok"] as? Bool, true)
-                    let admission = try XCTUnwrap(configuredPayload["admission"] as? [String: Any])
-                    let configuration = try XCTUnwrap(admission["configuration"] as? [String: Any])
-                    XCTAssertEqual((configuration["fair_share_per_store"] as? NSNumber)?.intValue, 2)
-                    XCTAssertEqual((configuration["max_burst_per_store"] as? NSNumber)?.intValue, 4)
-                    XCTAssertEqual((configuration["global_capacity"] as? NSNumber)?.intValue, 32)
-                    XCTAssertEqual((configuration["max_queued_per_store"] as? NSNumber)?.intValue, 128)
-                    XCTAssertEqual((configuration["max_queued_global"] as? NSNumber)?.intValue, 512)
-                    XCTAssertEqual((configuration["max_queue_wait_ms"] as? NSNumber)?.intValue, 8000)
-                    XCTAssertEqual((admission["lane_loads"] as? [[String: Any]])?.count, 0)
-
-                    let invalid = await manager.handleDebugDiagnosticsTool(
-                        connectionID: connectionID,
-                        arguments: [
-                            "op": .string("mcp_read_search_content_fetch_admission_configure"),
-                            "fair_share_per_store": .int(4),
-                            "max_burst_per_store": .int(2),
-                            "global_capacity": .int(32),
-                            "max_queued_per_store": .int(128),
-                            "max_queued_global": .int(512),
-                            "max_queue_wait_ms": .int(8000)
-                        ]
-                    )
-                    let invalidPayload = try debugDiagnosticsPayload(invalid)
-                    XCTAssertEqual(invalidPayload["ok"] as? Bool, false)
-                    XCTAssertEqual(invalidPayload["code"] as? String, "invalid_params")
-                    let unchanged = await coordinator.snapshotForDebug()
-                    XCTAssertEqual(unchanged.configuration.maxBurstPerStore, 4)
-
-                    let snapshot = await manager.handleDebugDiagnosticsTool(
-                        connectionID: connectionID,
-                        arguments: ["op": .string("mcp_read_search_content_fetch_admission_snapshot")]
-                    )
-                    XCTAssertEqual(try debugDiagnosticsPayload(snapshot)["ok"] as? Bool, true)
-                    await restoreContentFetchAdmissionDebugConfiguration(baseline, coordinator: coordinator)
-                } catch {
-                    await restoreContentFetchAdmissionDebugConfiguration(baseline, coordinator: coordinator)
-                    throw error
-                }
-            }
+        func testContentReadSchedulerDebugDiagnosticsExposeAggregateSnapshot() async throws {
+            let manager = ServerNetworkManager.shared
+            let result = await manager.handleDebugDiagnosticsTool(
+                connectionID: UUID(),
+                arguments: ["op": .string("mcp_read_search_content_read_scheduler_snapshot")]
+            )
+            let payload = try debugDiagnosticsPayload(result)
+            XCTAssertEqual(payload["ok"] as? Bool, true)
+            let scheduler = try XCTUnwrap(payload["scheduler"] as? [String: Any])
+            XCTAssertEqual((scheduler["capacity"] as? NSNumber)?.intValue, FileSystemService.contentReadWorkerLimitForTesting)
+            XCTAssertEqual((scheduler["max_queued_waiters"] as? NSNumber)?.intValue, 512)
+            XCTAssertNotNil(scheduler["active_permit_count"])
+            XCTAssertNotNil(scheduler["queued_waiter_count"])
+            XCTAssertNotNil(scheduler["owner_lane_count"])
+            XCTAssertNotNil(scheduler["grant_count"])
+            XCTAssertNotNil(scheduler["overload_count"])
         }
 
         func testExpectedAttributionStagesRemainPresent() throws {
@@ -268,8 +207,6 @@
                 "EditFlow.Search.AutoSelect.Mutation",
                 "EditFlow.Search.BroadAdmissionWait",
                 "EditFlow.Search.BroadAdmissionLeaseHold",
-                "EditFlow.Search.ContentFetchAdmissionWait",
-                "EditFlow.Search.ContentFetchLeaseHold",
                 "EditFlow.Search.IngressFreshnessWait",
                 "EditFlow.Search.ContentFreshnessValidation",
                 "EditFlow.Search.ContentFreshnessValidation.StoreActorBody",
@@ -390,7 +327,7 @@
                     "EditFlowPerf.Lifecycle.Search.providerAutoSelectionReturned"
                 ]
             )
-            for outcome in ["skippedBackpressure", "skippedPatternError", "skippedCountOnly"] {
+            for outcome in ["skippedWorktreeScopeUnavailable", "skippedBackpressure", "skippedPatternError", "skippedCountOnly"] {
                 XCTAssertTrue(execute.contains("EditFlowPerf.Dimensions(outcome: \"\(outcome)\""), "Missing search auto-selection reply outcome: \(outcome)")
             }
 
@@ -1441,7 +1378,15 @@
             XCTAssertTrue(store.contains("case .sessionBoundWorkspace:\n            scopedSnapshotGeneration(scope: .allLoaded)"))
             XCTAssertTrue(store.contains("private func clearSearchCatalogSnapshotCache() {\n        searchCatalogSnapshotsByScope.removeAll(keepingCapacity: true)\n    }"))
             XCTAssertTrue(store.contains("rootStatesByID[originalRootID] = state\n            clearSearchCatalogSnapshotCache()\n            indexed.append(fullPath)"))
-            XCTAssertTrue(store.contains("guard !statesToUnload.isEmpty else { return }\n        clearSearchCatalogSnapshotCache()\n        #if DEBUG"))
+            assertSourceOrder(
+                in: store,
+                hooks: [
+                    "guard !statesToUnload.isEmpty else { return }",
+                    "clearSearchCatalogSnapshotCache()",
+                    "await searchDecodedContentCache.invalidate(rootID: entry.rootID)",
+                    "#if DEBUG"
+                ]
+            )
             XCTAssertTrue(store.contains("bumpCatalogGenerations(affectedRootKinds: affectedRootKinds)\n        clearSearchCatalogSnapshotCache()\n        invalidatePathMatchCache()"))
             XCTAssertTrue(store.contains("#endif\n        invalidatePathMatchCache()\n        finishRootUnload(for: unloadingPaths)"))
             XCTAssertTrue(store.contains("cacheHit: true"))
@@ -1584,6 +1529,7 @@
                 "FileSystem.ContentReadWorkerPermitWaitBegan",
                 "FileSystem.ContentReadWorkerPermitAcquired",
                 "FileSystem.ContentReadWorkerPermitCancelled",
+                "FileSystem.ContentReadWorkerOverloaded",
                 "FileSystem.ContentReadWorkerReturned",
                 "FileSystem.ContentLoadReturned",
                 "Search.BroadAdmissionWaitBegan",
@@ -1592,12 +1538,6 @@
                 "Search.BroadAdmissionPermitReleased",
                 "Search.BroadAdmissionOverloaded",
                 "Search.BroadAdmissionWaitExpired",
-                "Search.ContentFetchWaitBegan",
-                "Search.ContentFetchPermitAcquired",
-                "Search.ContentFetchPermitCancelled",
-                "Search.ContentFetchPermitReleased",
-                "Search.ContentFetchOverloaded",
-                "Search.ContentFetchWaitExpired",
                 "Search.ContentFreshnessStoreEntered",
                 "Search.ContentFreshnessStoreReturned",
                 "Search.ContentFreshnessRootEntered",
@@ -1843,6 +1783,11 @@
             XCTAssertTrue(contentLoading.contains("EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerPermitWaitBegan"))
             XCTAssertTrue(contentLoading.contains("EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerPermitAcquired"))
             XCTAssertTrue(contentLoading.contains("EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerPermitCancelled"))
+            XCTAssertTrue(contentLoading.contains("EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerOverloaded"))
+            XCTAssertTrue(contentLoading.contains("maxQueuedWaiterCount: 512"))
+            XCTAssertTrue(contentLoading.contains("ownerID: request.schedulerOwnerID"))
+            XCTAssertTrue(contentLoading.contains("agePromotionNanoseconds"))
+            XCTAssertTrue(contentLoading.contains("maxConsecutiveInteractiveGrants"))
             XCTAssertTrue(contentLoading.contains("EditFlowPerf.Stage.FileSystem.contentReadWorkerBody"))
             XCTAssertTrue(contentLoading.contains("workloadClass: request.workloadClass"))
             XCTAssertTrue(contentLoading.contains("contentSource: \"disk\""))
@@ -1852,14 +1797,15 @@
                 in: contentLoading,
                 hooks: [
                     "let permitWaitState = EditFlowPerf.begin(",
-                    "let acquisition = try await acquire(",
+                    "let acquisition: PermitAcquisition",
+                    "acquisition = try await acquire(",
                     "EditFlowPerf.end(\n                EditFlowPerf.Stage.FileSystem.contentReadWorkerPermitWait",
-                    "defer { release() }",
+                    "defer { release(acquisition) }",
                     "return try await body()"
                 ]
             )
 
-            let coordinator = try source("Sources/RepoPrompt/Features/Search/StoreBackedWorkspaceSearchAdmissionCoordinator.swift")
+            let coordinator = try source("Sources/RepoPrompt/Features/Search/StoreBackedWorkspaceSearchLane.swift")
             XCTAssertTrue(coordinator.contains("EditFlowPerf.Stage.Search.broadAdmissionWait"))
             XCTAssertTrue(coordinator.contains("EditFlowPerf.Lifecycle.Search.broadAdmissionWaitBegan"))
             XCTAssertTrue(coordinator.contains("EditFlowPerf.Lifecycle.Search.broadAdmissionPermitAcquired"))
@@ -1868,10 +1814,10 @@
             XCTAssertTrue(coordinator.contains("EditFlowPerf.Lifecycle.Search.broadAdmissionOverloaded"))
             XCTAssertTrue(coordinator.contains("EditFlowPerf.Lifecycle.Search.broadAdmissionWaitExpired"))
             XCTAssertTrue(coordinator.contains("EditFlowPerf.Stage.Search.broadAdmissionLeaseHold"))
-            XCTAssertTrue(coordinator.contains("storeCapacity: configuration.perStoreCapacity"))
-            XCTAssertTrue(coordinator.contains("globalCapacity: configuration.globalCapacity"))
-            XCTAssertTrue(coordinator.contains("storeQueueDepth: metrics.storeQueueDepth"))
-            XCTAssertTrue(coordinator.contains("globalQueueDepth: metrics.globalQueueDepth"))
+            XCTAssertTrue(coordinator.contains("storeCapacity: 1"))
+            XCTAssertTrue(coordinator.contains("globalCapacity: 0"))
+            XCTAssertTrue(coordinator.contains("storeQueueDepth: metrics.queueDepth"))
+            XCTAssertTrue(coordinator.contains("globalQueueDepth: 0"))
             XCTAssertTrue(coordinator.contains("queueAgeBucket: queueAgeBucket"))
             XCTAssertFalse(coordinator.contains("EditFlowPerf.Dimensions(path:"))
             assertSourceOrder(
@@ -1883,32 +1829,7 @@
                     "defer {",
                     "EditFlowPerf.Stage.Search.broadAdmissionLeaseHold",
                     "release(acquisition)",
-                    "return try await operation()"
-                ]
-            )
-
-            let contentFetchCoordinator = try source("Sources/RepoPrompt/Features/Search/StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator.swift")
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Stage.Search.contentFetchAdmissionWait"))
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Stage.Search.contentFetchLeaseHold"))
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Lifecycle.Search.contentFetchWaitBegan"))
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Lifecycle.Search.contentFetchPermitAcquired"))
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Lifecycle.Search.contentFetchPermitCancelled"))
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Lifecycle.Search.contentFetchPermitReleased"))
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Lifecycle.Search.contentFetchOverloaded"))
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Lifecycle.Search.contentFetchWaitExpired"))
-            XCTAssertTrue(contentFetchCoordinator.contains("admissionClass: \"contentFetch\""))
-            XCTAssertFalse(contentFetchCoordinator.contains("EditFlowPerf.Dimensions(path:"))
-            XCTAssertFalse(contentFetchCoordinator.contains("ObjectIdentifier(store).debugDescription"))
-            assertSourceOrder(
-                in: contentFetchCoordinator,
-                hooks: [
-                    "let waitState = EditFlowPerf.begin(",
-                    "acquisition = try await acquire(",
-                    "let leaseHoldState = EditFlowPerf.begin(",
-                    "defer {",
-                    "EditFlowPerf.Stage.Search.contentFetchLeaseHold",
-                    "release(acquisition)",
-                    "return try await operation()"
+                    "return try await operation(fileSearchActor)"
                 ]
             )
         }
@@ -2031,6 +1952,8 @@
                 "EditFlowPerf.Stage.Search.resultConstruction",
                 "admittedFileCount:",
                 "scannedFileCount:",
+                "batchSize:",
+                "workerCount:",
                 "matchedFileCount:",
                 "contentMatchCount:",
                 "pathMatchCount:",
@@ -2044,6 +1967,8 @@
             assertSourceOrder(
                 in: searchMatch,
                 hooks: [
+                    "} catch let error as ContentReadSchedulerError {",
+                    "StoreBackedWorkspaceSearchAdmissionError.contentReadQueueFull(",
                     "} catch let error as StoreBackedWorkspaceSearchAdmissionError {",
                     "throw error",
                     "} catch is CancellationError {",
@@ -2056,40 +1981,37 @@
         }
 
         func testAdmissionDebugControlsRemainIdleOnlyAggregateBoundedAndPrivacySafe() throws {
-            let coordinator = try source("Sources/RepoPrompt/Features/Search/StoreBackedWorkspaceSearchAdmissionCoordinator.swift")
-            XCTAssertTrue(coordinator.contains("snapshotForDebug"))
-            XCTAssertTrue(coordinator.contains("configureForDebug"))
-            XCTAssertTrue(coordinator.contains("resetDebugConfiguration"))
-            XCTAssertTrue(coordinator.contains("globalActiveCount == 0"))
-            XCTAssertTrue(coordinator.contains("globalQueuedCount == 0"))
-            XCTAssertTrue(coordinator.contains("lanes.isEmpty"))
-            XCTAssertTrue(coordinator.contains("aggregate counters only"))
+            let coordinator = try source("Sources/RepoPrompt/Features/Search/StoreBackedWorkspaceSearchLane.swift")
+            XCTAssertTrue(coordinator.contains("snapshotForTesting"))
+            XCTAssertTrue(coordinator.contains("configureForTesting"))
+            XCTAssertTrue(coordinator.contains("resetConfigurationForTesting"))
+            XCTAssertTrue(coordinator.contains("activeLeaseID == nil, waiterState == nil"))
             XCTAssertTrue(coordinator.contains("let enqueuedAt = clock.now()"))
-            XCTAssertFalse(coordinator.contains("await self.enqueueWaiter"))
-            XCTAssertFalse(coordinator.contains("pendingWaiterIDs"))
-            XCTAssertFalse(coordinator.contains("ObjectIdentifier(store).debugDescription"))
+            XCTAssertTrue(coordinator.contains("maximumActivePermitCount"))
+            XCTAssertTrue(coordinator.contains("maximumWaiterCount"))
+            XCTAssertFalse(coordinator.contains("static let shared"))
+            XCTAssertFalse(coordinator.contains("ObjectIdentifier"))
 
             let sibling = try source("Sources/RepoPrompt/Features/Diagnostics/MCP/MCPConnectionManager+DebugDiagnosticsReadSearchLatency.swift")
-            XCTAssertTrue(sibling.contains("\"overload_count\": overloadCount"))
-            XCTAssertTrue(sibling.contains("\"wait_expiry_count\": waitExpiryCount"))
-            XCTAssertTrue(sibling.contains("\"queued_cancellation_count\": queuedCancellationCount"))
-            XCTAssertTrue(sibling.contains("\"lane_loads\": laneLoads.map"))
-            XCTAssertTrue(sibling.contains("\"store_active_count\": laneLoad.activeCount"))
-            XCTAssertTrue(sibling.contains("\"store_queued_count\": laneLoad.queuedCount"))
+            XCTAssertTrue(sibling.contains("\"overload_count\": entries.reduce"))
+            XCTAssertTrue(sibling.contains("\"wait_expiry_count\": entries.reduce"))
+            XCTAssertTrue(sibling.contains("\"queued_cancellation_count\": entries.reduce"))
+            XCTAssertTrue(sibling.contains("\"lanes\": entries.map"))
+            XCTAssertTrue(sibling.contains("\"active_count\": entry.snapshot.activePermitCount"))
+            XCTAssertTrue(sibling.contains("\"queued_count\": entry.snapshot.waiterCount"))
             XCTAssertFalse(sibling.contains("store_identifier"))
             XCTAssertFalse(sibling.contains("workspace_name"))
 
-            let contentFetchCoordinator = try source("Sources/RepoPrompt/Features/Search/StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator.swift")
-            XCTAssertTrue(contentFetchCoordinator.contains("snapshotForDebug"))
-            XCTAssertTrue(contentFetchCoordinator.contains("configureForDebug"))
-            XCTAssertTrue(contentFetchCoordinator.contains("resetDebugConfiguration"))
-            XCTAssertTrue(contentFetchCoordinator.contains("globalActiveCount == 0"))
-            XCTAssertTrue(contentFetchCoordinator.contains("globalQueuedCount == 0"))
-            XCTAssertTrue(contentFetchCoordinator.contains("lanes.isEmpty"))
-            XCTAssertTrue(contentFetchCoordinator.contains("Aggregate-only snapshots"))
-            XCTAssertTrue(contentFetchCoordinator.contains("queuedSearchCount"))
-            XCTAssertFalse(contentFetchCoordinator.contains("ObjectIdentifier(store).debugDescription"))
-            XCTAssertTrue(sibling.contains("\"queued_search_count\": laneLoad.queuedSearchCount"))
+            let contentLoading = try source("Sources/RepoPrompt/Infrastructure/FileSystem/FileSystemService+ContentLoading.swift")
+            XCTAssertTrue(contentLoading.contains("struct Snapshot: Equatable"))
+            XCTAssertTrue(contentLoading.contains("activePermitCount == 0 && queuedWaiterCount == 0 && ownerLaneCount == 0"))
+            XCTAssertTrue(contentLoading.contains("maxQueuedWaiterCount: 512"))
+            XCTAssertTrue(contentLoading.contains("ContentReadSchedulerError.queueFull"))
+            XCTAssertFalse(contentLoading.contains("ObjectIdentifier"))
+            XCTAssertTrue(sibling.contains("\"active_permit_count\": activePermitCount"))
+            XCTAssertTrue(sibling.contains("\"queued_waiter_count\": queuedWaiterCount"))
+            XCTAssertTrue(sibling.contains("\"owner_lane_count\": ownerLaneCount"))
+            XCTAssertTrue(sibling.contains("\"grant_count\": grantCount"))
         }
 
         func testLifecycleSourceOrderCoversDispatchRunToolAndIngressBoundaries() throws {
@@ -2200,7 +2122,7 @@
                 in: search,
                 hooks: [
                     "_ = await store.awaitAppliedIngress(rootScope: rootScope)",
-                    "let snapshot = await store.searchCatalogSnapshot(rootScope: rootScope)"
+                    "switch await store.searchCatalogAccess(rootScope: rootScope)"
                 ]
             )
             let workspaceFiles = try source("Sources/RepoPrompt/Features/WorkspaceFiles/ViewModels/WorkspaceFilesViewModel.swift")
@@ -2259,36 +2181,6 @@
                 }
                 searchStart = match.upperBound
             }
-        }
-
-        private func restoreAdmissionDebugConfiguration(
-            _ configuration: StoreBackedWorkspaceSearchAdmissionCoordinator.Configuration,
-            coordinator: StoreBackedWorkspaceSearchAdmissionCoordinator
-        ) async {
-            for _ in 0 ..< 10000 {
-                switch await coordinator.configureForDebug(configuration) {
-                case .applied:
-                    return
-                case .busy:
-                    await Task.yield()
-                }
-            }
-            XCTFail("Admission coordinator should restore DEBUG baseline after diagnostics test")
-        }
-
-        private func restoreContentFetchAdmissionDebugConfiguration(
-            _ configuration: StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator.Configuration,
-            coordinator: StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator
-        ) async {
-            for _ in 0 ..< 10000 {
-                switch await coordinator.configureForDebug(configuration) {
-                case .applied:
-                    return
-                case .busy:
-                    await Task.yield()
-                }
-            }
-            XCTFail("Content-fetch admission coordinator should restore DEBUG baseline after diagnostics test")
         }
 
         private func startedCapture(label: String, maxSamples: Int) -> EditFlowPerf.DebugCaptureSnapshot {

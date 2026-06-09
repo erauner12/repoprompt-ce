@@ -183,8 +183,8 @@ final class StoreBackedWorkspaceSearchTests: XCTestCase {
     }
 
     #if DEBUG
-        func testSameStoreBroadContentSearchesOverlapToCapacityAndQueueThirdWhilePreservingResults() async throws {
-            let root = try makeTemporaryRoot(name: "BroadAdmissionCapacityTwo")
+        func testSameStoreBroadLaneRunsOneQueuesOneAndRejectsThirdWhilePreservingResults() async throws {
+            let root = try makeTemporaryRoot(name: "BroadLaneOneActiveOneQueued")
             let alphaURL = root.appendingPathComponent("A.swift")
             let betaURL = root.appendingPathComponent("B.swift")
             let gammaURL = root.appendingPathComponent("C.swift")
@@ -193,62 +193,52 @@ final class StoreBackedWorkspaceSearchTests: XCTestCase {
             try write("let gammaNeedle = true\n", to: gammaURL)
             let store = WorkspaceFileContextStore()
             _ = try await store.loadRoot(path: root.path)
-            let coordinator = StoreBackedWorkspaceSearchAdmissionCoordinator()
             let gate = AsyncGate()
-            await coordinator.setPermitAcquiredHandlerForTesting { _ in
+            await store.setSearchLanePermitAcquiredHandlerForTesting {
                 await gate.markStartedAndWaitForRelease()
             }
 
-            let first = Task {
-                try await self.searchContent(pattern: "alphaNeedle", store: store, coordinator: coordinator)
+            let first = Task { try await self.searchContent(pattern: "alphaNeedle", store: store) }
+            await assertAsyncTrue(gate.waitUntilStartedCount(1))
+            let second = Task { try await self.searchContent(pattern: "betaNeedle", store: store) }
+            await assertAsyncTrue(waitForAdmissionWaiterCount(1, store: store))
+            let third = Task { try await self.searchContent(pattern: "gammaNeedle", store: store) }
+            do {
+                _ = try await third.value
+                XCTFail("Expected third broad search to be rejected")
+            } catch let error as StoreBackedWorkspaceSearchAdmissionError {
+                XCTAssertEqual(error, .queueFull(scope: .perStore, retryAfterMilliseconds: 1000))
             }
-            let second = Task {
-                try await self.searchContent(pattern: "betaNeedle", store: store, coordinator: coordinator)
-            }
-            await assertAsyncTrue(gate.waitUntilStartedCount(2))
-            let third = Task {
-                try await self.searchContent(pattern: "gammaNeedle", store: store, coordinator: coordinator)
-            }
-            await assertAsyncTrue(waitForAdmissionWaiterCount(1, store: store, coordinator: coordinator))
-            let heldSnapshot = await coordinator.snapshot(for: store)
-            XCTAssertEqual(heldSnapshot.activePermitCount, 2)
-            XCTAssertEqual(heldSnapshot.waiterCount, 1)
 
+            let heldSnapshot = await store.searchLaneSnapshotForTesting()
+            XCTAssertEqual(heldSnapshot.activePermitCount, 1)
+            XCTAssertEqual(heldSnapshot.waiterCount, 1)
             await gate.release()
-            let firstResult = try await first.value
-            let secondResult = try await second.value
-            let thirdResult = try await third.value
-            XCTAssertEqual(firstResult.matches?.map(\.filePath), [alphaURL.path])
-            XCTAssertEqual(secondResult.matches?.map(\.filePath), [betaURL.path])
-            XCTAssertEqual(thirdResult.matches?.map(\.filePath), [gammaURL.path])
-            let finalSnapshot = await coordinator.snapshot(for: store)
-            XCTAssertFalse(finalSnapshot.hasActivePermit)
-            XCTAssertEqual(finalSnapshot.waiterCount, 0)
+
+            let firstPaths = try await first.value.matches?.map(\.filePath)
+            let secondPaths = try await second.value.matches?.map(\.filePath)
+            XCTAssertEqual(firstPaths, [alphaURL.path])
+            XCTAssertEqual(secondPaths, [betaURL.path])
+            let finalSnapshot = await store.searchLaneSnapshotForTesting()
+            XCTAssertTrue(finalSnapshot.isIdle)
+            XCTAssertEqual(finalSnapshot.maximumActivePermitCount, 1)
+            XCTAssertEqual(finalSnapshot.maximumWaiterCount, 1)
         }
 
         func testQueuedBroadContentSearchCancellationRemovesWaiterAndDoesNotLeakLane() async throws {
-            let root = try makeTemporaryRoot(name: "BroadAdmissionCancellation")
+            let root = try makeTemporaryRoot(name: "BroadLaneCancellation")
             try write("let holdNeedle = true\nlet laterNeedle = true\n", to: root.appendingPathComponent("A.swift"))
             let store = WorkspaceFileContextStore()
             _ = try await store.loadRoot(path: root.path)
-            let coordinator = StoreBackedWorkspaceSearchAdmissionCoordinator()
             let gate = AsyncGate()
-            await coordinator.setPermitAcquiredHandlerForTesting { _ in
+            await store.setSearchLanePermitAcquiredHandlerForTesting {
                 await gate.markStartedAndWaitForRelease()
             }
 
-            let first = Task {
-                try await self.searchContent(pattern: "holdNeedle", store: store, coordinator: coordinator)
-            }
-            let second = Task {
-                try await self.searchContent(pattern: "holdNeedle", store: store, coordinator: coordinator)
-            }
-            await assertAsyncTrue(gate.waitUntilStartedCount(2))
-            let cancelled = Task {
-                try await self.searchContent(pattern: "cancelledNeedle", store: store, coordinator: coordinator)
-            }
-            let queuedBeforeCancellation = await waitForAdmissionWaiterCount(1, store: store, coordinator: coordinator)
-            XCTAssertTrue(queuedBeforeCancellation)
+            let first = Task { try await self.searchContent(pattern: "holdNeedle", store: store) }
+            await assertAsyncTrue(gate.waitUntilStartedCount(1))
+            let cancelled = Task { try await self.searchContent(pattern: "cancelledNeedle", store: store) }
+            await assertAsyncTrue(waitForAdmissionWaiterCount(1, store: store))
             cancelled.cancel()
             do {
                 _ = try await cancelled.value
@@ -256,27 +246,22 @@ final class StoreBackedWorkspaceSearchTests: XCTestCase {
             } catch is CancellationError {
                 // Expected.
             }
-            let removedAfterCancellation = await waitForAdmissionWaiterCount(0, store: store, coordinator: coordinator)
-            XCTAssertTrue(removedAfterCancellation)
-            let later = Task {
-                try await self.searchContent(pattern: "laterNeedle", store: store, coordinator: coordinator)
-            }
-            let liveFollowerQueued = await waitForAdmissionWaiterCount(1, store: store, coordinator: coordinator)
-            XCTAssertTrue(liveFollowerQueued)
+            await assertAsyncTrue(waitForAdmissionWaiterCount(0, store: store))
+            let later = Task { try await self.searchContent(pattern: "laterNeedle", store: store) }
+            await assertAsyncTrue(waitForAdmissionWaiterCount(1, store: store))
 
             await gate.release()
             _ = try await first.value
-            _ = try await second.value
-            let laterResult = try await later.value
-            XCTAssertEqual(laterResult.matches?.count, 1)
-            let finalSnapshot = await coordinator.snapshot(for: store)
-            XCTAssertFalse(finalSnapshot.hasActivePermit)
-            XCTAssertEqual(finalSnapshot.waiterCount, 0)
+            let laterMatchCount = try await later.value.matches?.count
+            XCTAssertEqual(laterMatchCount, 1)
+            let finalSnapshot = await store.searchLaneSnapshotForTesting()
+            XCTAssertTrue(finalSnapshot.isIdle)
+            XCTAssertEqual(finalSnapshot.queuedCancellationCount, 1)
         }
 
-        func testPathScopedContentAndDifferentStoreSearchesBypassHeldBroadAdmission() async throws {
-            let rootA = try makeTemporaryRoot(name: "BroadAdmissionBypassA")
-            let rootB = try makeTemporaryRoot(name: "BroadAdmissionBypassB")
+        func testPathScopedContentAndDifferentStoreSearchesBypassHeldBroadLane() async throws {
+            let rootA = try makeTemporaryRoot(name: "BroadLaneBypassA")
+            let rootB = try makeTemporaryRoot(name: "BroadLaneBypassB")
             let fileA = rootA.appendingPathComponent("A.swift")
             let fileB = rootB.appendingPathComponent("B.swift")
             try write("let holdNeedle = true\nlet scopedNeedle = true\n", to: fileA)
@@ -285,274 +270,274 @@ final class StoreBackedWorkspaceSearchTests: XCTestCase {
             let storeB = WorkspaceFileContextStore()
             _ = try await storeA.loadRoot(path: rootA.path)
             _ = try await storeB.loadRoot(path: rootB.path)
-            let coordinator = StoreBackedWorkspaceSearchAdmissionCoordinator()
             let gate = AsyncGate()
-            await coordinator.setPermitAcquiredHandlerForTesting { store in
-                guard ObjectIdentifier(store) == ObjectIdentifier(storeA) else { return }
+            await storeA.setSearchLanePermitAcquiredHandlerForTesting {
                 await gate.markStartedAndWaitForRelease()
             }
 
-            let held = Task {
-                try await self.searchContent(pattern: "holdNeedle", store: storeA, coordinator: coordinator)
-            }
-            let heldStarted = await gate.waitUntilStartedWithinTimeout()
-            XCTAssertTrue(heldStarted)
+            let held = Task { try await self.searchContent(pattern: "holdNeedle", store: storeA) }
+            await assertAsyncTrue(gate.waitUntilStartedWithinTimeout())
 
-            let pathSignal = AsyncSignal()
-            let pathTask = Task {
-                let result = try await self.searchPaths(pattern: "*.swift", store: storeA, coordinator: coordinator)
-                await pathSignal.mark()
-                return result
-            }
-            let scopedSignal = AsyncSignal()
-            let scopedTask = Task {
-                let result = try await self.searchContent(pattern: "scopedNeedle", paths: [fileA.path], store: storeA, coordinator: coordinator)
-                await scopedSignal.mark()
-                return result
-            }
-            let peerSignal = AsyncSignal()
-            let peerTask = Task {
-                let result = try await self.searchContent(pattern: "peerNeedle", store: storeB, coordinator: coordinator)
-                await peerSignal.mark()
-                return result
-            }
+            async let pathResult = searchPaths(pattern: "*.swift", store: storeA)
+            async let scopedResult = searchContent(pattern: "scopedNeedle", paths: [fileA.path], store: storeA)
+            async let peerResult = searchContent(pattern: "peerNeedle", store: storeB)
+            let bypassResults = try await (pathResult, scopedResult, peerResult)
+            XCTAssertEqual(bypassResults.0.paths, [fileA.path])
+            XCTAssertEqual(bypassResults.1.matches?.map(\.filePath), [fileA.path])
+            XCTAssertEqual(bypassResults.2.matches?.map(\.filePath), [fileB.path])
 
-            let pathCompletedBeforeRelease = await pathSignal.waitUntilMarked()
-            let scopedCompletedBeforeRelease = await scopedSignal.waitUntilMarked()
-            let peerCompletedBeforeRelease = await peerSignal.waitUntilMarked()
-            XCTAssertTrue(pathCompletedBeforeRelease)
-            XCTAssertTrue(scopedCompletedBeforeRelease)
-            XCTAssertTrue(peerCompletedBeforeRelease)
             await gate.release()
-            let pathResult = try await pathTask.value
-            let scopedResult = try await scopedTask.value
-            let peerResult = try await peerTask.value
-            XCTAssertEqual(pathResult.paths, [fileA.path])
-            XCTAssertEqual(scopedResult.matches?.map(\.filePath), [fileA.path])
-            XCTAssertEqual(peerResult.matches?.map(\.filePath), [fileB.path])
             _ = try await held.value
+            let storeASnapshot = await storeA.searchLaneSnapshotForTesting()
+            let storeBSnapshot = await storeB.searchLaneSnapshotForTesting()
+            XCTAssertTrue(storeASnapshot.isIdle)
+            XCTAssertTrue(storeBSnapshot.isIdle)
         }
 
-        func testContentFetchIngressAppliesToScopedAndBroadContentButPathAndExactReadsBypass() async throws {
-            let root = try makeTemporaryRoot(name: "ContentFetchIngressScope")
-            let fileURL = root.appendingPathComponent("A.swift")
-            try write("let ingressNeedle = true\n", to: fileURL)
-            let store = WorkspaceFileContextStore()
-            let rootRecord = try await store.loadRoot(path: root.path)
-            let broadCoordinator = StoreBackedWorkspaceSearchAdmissionCoordinator()
-            let contentFetchCoordinator = StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator(configuration: .init(
-                fairSharePerStore: 1,
-                maxBurstPerStore: 1,
-                globalCapacity: 1,
-                maxQueuedPerStore: 4,
-                maxQueuedGlobally: 4,
-                maxQueueWait: .seconds(8)
-            ))
-            let broadCounter = AsyncCounter()
-            let contentFetchGate = AsyncGate()
-            await broadCoordinator.setPermitAcquiredHandlerForTesting { _ in
-                _ = await broadCounter.incrementAndValue()
-            }
-            await contentFetchCoordinator.setPermitAcquiredHandlerForTesting { _, _ in
-                await contentFetchGate.markStartedAndWaitForRelease()
-            }
+        func testOrderedBatchWindowAdvancesOnlyWithTheDrainFrontier() {
+            var window = OrderedSearchBatchWindow(batchCount: 8, maxEnqueueLead: 3)
 
-            let broad = Task {
-                try await self.searchContent(
-                    pattern: "ingressNeedle",
-                    store: store,
-                    coordinator: broadCoordinator,
-                    contentFetchCoordinator: contentFetchCoordinator
-                )
-            }
-            let broadFetchStarted = await contentFetchGate.waitUntilStartedWithinTimeout()
-            XCTAssertTrue(broadFetchStarted)
-            let broadAdmissionStarted = await broadCounter.waitUntilValue(atLeast: 1)
-            XCTAssertTrue(broadAdmissionStarted)
+            XCTAssertEqual(window.takeNextBatchToEnqueue(), 0)
+            XCTAssertEqual(window.takeNextBatchToEnqueue(), 1)
+            XCTAssertEqual(window.takeNextBatchToEnqueue(), 2)
+            XCTAssertNil(window.takeNextBatchToEnqueue())
+            XCTAssertEqual(window.enqueueLead, 3)
 
-            let pathResult = try await searchPaths(
-                pattern: "*.swift",
-                store: store,
-                coordinator: broadCoordinator,
-                contentFetchCoordinator: contentFetchCoordinator
-            )
-            XCTAssertEqual(pathResult.paths, [fileURL.path])
-            let heldAfterPath = await contentFetchCoordinator.snapshot(for: store)
-            XCTAssertEqual(heldAfterPath.activePermitCount, 1)
-            XCTAssertEqual(heldAfterPath.waiterCount, 0)
+            window.advanceDrainFrontier()
+            XCTAssertEqual(window.takeNextBatchToEnqueue(), 3)
+            XCTAssertNil(window.takeNextBatchToEnqueue())
+            XCTAssertEqual(window.enqueueLead, 3)
 
-            let exact = try await store.readContent(
-                rootID: rootRecord.id,
-                relativePath: "A.swift",
-                workloadClass: .interactiveRead
-            )
-            XCTAssertEqual(exact, "let ingressNeedle = true\n")
-            let heldAfterExactRead = await contentFetchCoordinator.snapshot(for: store)
-            XCTAssertEqual(heldAfterExactRead.waiterCount, 0)
-
-            let scoped = Task {
-                try await self.searchContent(
-                    pattern: "ingressNeedle",
-                    paths: [fileURL.path],
-                    store: store,
-                    coordinator: broadCoordinator,
-                    contentFetchCoordinator: contentFetchCoordinator
-                )
-            }
-            let scopedQueued = await waitForContentFetchWaiterCount(1, store: store, coordinator: contentFetchCoordinator)
-            XCTAssertTrue(scopedQueued)
-            let broadAdmissionCount = await broadCounter.currentValue()
-            XCTAssertEqual(broadAdmissionCount, 1, "Explicitly scoped content search must bypass broad admission.")
-
-            await contentFetchGate.release()
-            let broadResult = try await broad.value
-            let scopedResult = try await scoped.value
-            XCTAssertEqual(broadResult.matches?.map(\.filePath), [fileURL.path])
-            XCTAssertEqual(scopedResult.matches?.map(\.filePath), [fileURL.path])
-            let finalSnapshot = await contentFetchCoordinator.snapshot()
-            XCTAssertEqual(finalSnapshot, .init(activePermitCount: 0, waiterCount: 0, laneCount: 0))
+            window.advanceDrainFrontier()
+            window.advanceDrainFrontier()
+            XCTAssertEqual(window.takeNextBatchToEnqueue(), 4)
+            XCTAssertEqual(window.takeNextBatchToEnqueue(), 5)
+            XCTAssertNil(window.takeNextBatchToEnqueue())
+            XCTAssertEqual(window.enqueueLead, 3)
         }
 
-        func testContentFetchBackpressureFailsCountOnlySearchInsteadOfReturningPartialCount() async throws {
-            let root = try makeTemporaryRoot(name: "ContentFetchCountOnlyBackpressure")
-            let fileURL = root.appendingPathComponent("A.swift")
-            try write("needle\nneedle\n", to: fileURL)
-            let store = WorkspaceFileContextStore()
-            _ = try await store.loadRoot(path: root.path)
-            let broadCoordinator = StoreBackedWorkspaceSearchAdmissionCoordinator()
-            let contentFetchCoordinator = StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator(configuration: .init(
-                fairSharePerStore: 1,
-                maxBurstPerStore: 1,
-                globalCapacity: 1,
-                maxQueuedPerStore: 0,
-                maxQueuedGlobally: 0,
-                maxQueueWait: .seconds(8)
-            ))
-            let gate = AsyncGate()
-            await contentFetchCoordinator.setPermitAcquiredHandlerForTesting { _, _ in
-                await gate.markStartedAndWaitForRelease()
-            }
+        func testContentScanBatchSizingUsesStableWorkerPolicy() {
+            let cases: [(workerCount: Int, fileCount: Int, expectedBatchSize: Int)] = [
+                (1, 0, 0),
+                (1, 1, 1),
+                (1, 24, 2),
+                (1, 96, 3),
+                (1, 384, 4),
+                (1, 632, 4),
+                (1, Int.max, 4),
+                (8, 24, 2),
+                (8, 96, 2),
+                (8, 384, 4),
+                (8, 632, 4),
+                (14, 96, 2),
+                (14, 384, 4),
+                (14, 632, 4),
+                (64, 384, 2),
+                (64, 632, 2),
+                (64, 4096, 4),
+                (Int.max, Int.max, 2)
+            ]
 
-            let held = Task {
-                try await self.searchContent(
-                    pattern: "needle",
-                    store: store,
-                    coordinator: broadCoordinator,
-                    contentFetchCoordinator: contentFetchCoordinator
+            for testCase in cases {
+                XCTAssertEqual(
+                    FileSearchActor.contentScanBatchSize(
+                        fileCount: testCase.fileCount,
+                        workerCount: testCase.workerCount
+                    ),
+                    testCase.expectedBatchSize,
+                    "workers=\(testCase.workerCount), files=\(testCase.fileCount)"
                 )
             }
-            let heldStarted = await gate.waitUntilStartedWithinTimeout()
-            XCTAssertTrue(heldStarted)
-
-            do {
-                _ = try await searchContent(
-                    pattern: "needle",
-                    paths: [fileURL.path],
-                    countOnly: true,
-                    store: store,
-                    coordinator: broadCoordinator,
-                    contentFetchCoordinator: contentFetchCoordinator
-                )
-                XCTFail("Expected content-fetch backpressure instead of a partial countOnly result")
-            } catch let error as StoreBackedWorkspaceSearchAdmissionError {
-                XCTAssertEqual(error, .contentFetchQueueFull(scope: .perStore, retryAfterMilliseconds: 1000))
-            }
-
-            await gate.release()
-            let heldResult = try await held.value
-            XCTAssertEqual(heldResult.totalCount, nil)
-            let finalSnapshot = await contentFetchCoordinator.snapshot()
-            XCTAssertEqual(finalSnapshot.laneCount, 0)
         }
 
-        func testCappedMultiBatchSearchCancelsQueuedContentFetchesAndDrainsCoordinator() async throws {
-            let root = try makeTemporaryRoot(name: "ContentFetchCappedMultiBatch")
-            let fileCount = 48
-            let expectedURL = root.appendingPathComponent("A00.swift")
-            for index in 0 ..< fileCount {
-                let url = root.appendingPathComponent(String(format: "A%02d.swift", index))
-                try write(index == 0 ? "needle\n" : "no-match\n", to: url)
-            }
-            let store = WorkspaceFileContextStore()
-            _ = try await store.loadRoot(path: root.path)
-            let broadCoordinator = StoreBackedWorkspaceSearchAdmissionCoordinator()
-            let contentFetchCoordinator = StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator(configuration: .init(
-                fairSharePerStore: 1,
-                maxBurstPerStore: 1,
-                globalCapacity: 1,
-                maxQueuedPerStore: 64,
-                maxQueuedGlobally: 64,
-                maxQueueWait: .seconds(8)
-            ))
-            let gate = AsyncGate()
-            await contentFetchCoordinator.setPermitAcquiredHandlerForTesting { _, _ in
-                await gate.markStartedAndWaitForRelease()
-            }
+        #if DEBUG
+            func testAdaptiveContentBatchingBoundsCappedScanWindow() async throws {
+                let workerCount = max(4, ProcessInfo.processInfo.activeProcessorCount)
+                let (scaledFileCount, overflowed) = workerCount.multipliedReportingOverflow(by: 8)
+                XCTAssertFalse(overflowed)
+                let fileCount = scaledFileCount + 1
+                let root = try makeTemporaryRoot(name: "AdaptiveContentBatches")
+                for index in (0 ..< fileCount).reversed() {
+                    try write(
+                        "needle\nneedle\n",
+                        to: root.appendingPathComponent(String(format: "File-%06d.swift", index))
+                    )
+                }
+                let store = WorkspaceFileContextStore()
+                _ = try await store.loadRoot(path: root.path)
+                _ = startedCapture(label: "adaptive-content-batch-window", maxSamples: 10000)
 
-            let capped = Task {
-                try await self.searchContent(
+                let result = try await searchContent(
                     pattern: "needle",
                     maxMatches: 1,
-                    store: store,
-                    coordinator: broadCoordinator,
-                    contentFetchCoordinator: contentFetchCoordinator
+                    store: store
                 )
-            }
-            let queuedFetchesObserved = await waitForContentFetchPressure(
-                active: 1,
-                queuedAtLeast: 2,
-                store: store,
-                coordinator: contentFetchCoordinator
-            )
-            XCTAssertTrue(queuedFetchesObserved)
+                let capture = EditFlowPerf.debugCaptureSnapshot(finish: true)
+                let resolvedBatchSize = FileSearchActor.contentScanBatchSize(
+                    fileCount: fileCount,
+                    workerCount: workerCount
+                )
+                let adaptiveScannedWindow = min(fileCount, workerCount * resolvedBatchSize)
+                let formerFixedScannedWindow = min(fileCount, workerCount * 16)
+                XCTAssertLessThan(adaptiveScannedWindow, formerFixedScannedWindow)
+                XCTAssertEqual(
+                    result.matches?.map(\.filePath),
+                    [root.appendingPathComponent("File-000000.swift").path]
+                )
+                XCTAssertEqual(result.matches?.map(\.lineNumber), [0])
 
-            await gate.release()
-            let result = try await capped.value
-            XCTAssertEqual(result.matches?.map(\.filePath), [expectedURL.path])
-            let drained = await contentFetchCoordinator.snapshot()
-            XCTAssertEqual(drained, .init(activePermitCount: 0, waiterCount: 0, laneCount: 0))
+                let totalRows = capture.stages.filter {
+                    $0.stageName == String(describing: EditFlowPerf.Stage.Search.contentScanTotal)
+                        && $0.sanitizedDimensions.contains("outcome=capped")
+                }
+                XCTAssertEqual(totalRows.count, 1)
+                let totalRow = try XCTUnwrap(totalRows.first)
+                XCTAssertEqual(dimensionInt("batchSize", in: totalRow.sanitizedDimensions), resolvedBatchSize)
+                XCTAssertEqual(dimensionInt("workerCount", in: totalRow.sanitizedDimensions), workerCount)
+
+                let batchRows = capture.stages.filter {
+                    $0.stageName == String(describing: EditFlowPerf.Stage.Search.contentBatch)
+                }
+                let enqueuedBatchCount = batchRows.reduce(0) { $0 + $1.sampleCount }
+                let scannedFileCount = try batchRows.reduce(into: 0) { count, row in
+                    let batchScannedFileCount = try XCTUnwrap(
+                        dimensionInt("scannedFileCount", in: row.sanitizedDimensions)
+                    )
+                    count += batchScannedFileCount * row.sampleCount
+                }
+                XCTAssertLessThanOrEqual(enqueuedBatchCount, workerCount)
+                XCTAssertLessThanOrEqual(scannedFileCount, adaptiveScannedWindow)
+                XCTAssertTrue(batchRows.allSatisfy {
+                    dimensionInt("batchSize", in: $0.sanitizedDimensions) == resolvedBatchSize
+                        && dimensionInt("workerCount", in: $0.sanitizedDimensions) == workerCount
+                })
+            }
+        #endif
+
+        func testMultiBatchPathSearchReturnsDeterministicCappedPrefix() async throws {
+            let root = try makeTemporaryRoot(name: "OrderedPathBatches")
+            let fileCount = 300
+            for index in (0 ..< fileCount).reversed() {
+                try write("path", to: root.appendingPathComponent(String(format: "File-%03d.swift", index)))
+            }
+            let store = WorkspaceFileContextStore()
+            _ = try await store.loadRoot(path: root.path)
+
+            let result = try await StoreBackedWorkspaceSearch.search(
+                pattern: "*.swift",
+                mode: .path,
+                isRegex: false,
+                caseInsensitive: true,
+                maxPaths: 25,
+                maxMatches: 25,
+                rootScope: .visibleWorkspace,
+                store: store,
+                workspaceManager: nil
+            )
+            let expected = (0 ..< 25).map {
+                root.appendingPathComponent(String(format: "File-%03d.swift", $0)).path
+            }
+            XCTAssertEqual(result.paths, expected)
         }
 
-        func testQueuedBroadContentSearchPreservesCappedOrderingAndCountOnlyCompleteness() async throws {
-            let root = try makeTemporaryRoot(name: "BroadAdmissionCorrectness")
+        func testMultiBatchContentSearchPreservesCappedOrderAndExhaustiveCountOnly() async throws {
+            let root = try makeTemporaryRoot(name: "OrderedContentBatches")
+            let fileCount = 80
+            for index in (0 ..< fileCount).reversed() {
+                try write("needle\nneedle\n", to: root.appendingPathComponent(String(format: "File-%03d.swift", index)))
+            }
+            let store = WorkspaceFileContextStore()
+            _ = try await store.loadRoot(path: root.path)
+            let capped = try await searchContent(
+                pattern: "needle",
+                maxMatches: 5,
+                store: store
+            )
+            let repeatedCapped = try await searchContent(
+                pattern: "needle",
+                maxMatches: 5,
+                store: store
+            )
+            let countOnly = try await searchContent(
+                pattern: "needle",
+                countOnly: true,
+                store: store
+            )
+
+            let expectedPaths = [0, 0, 1, 1, 2].map {
+                root.appendingPathComponent(String(format: "File-%03d.swift", $0)).path
+            }
+            XCTAssertEqual(capped.matches?.map(\.filePath), expectedPaths)
+            XCTAssertEqual(capped.matches?.map(\.lineNumber), [0, 1, 0, 1, 0])
+            XCTAssertEqual(repeatedCapped.matches, capped.matches)
+            XCTAssertEqual(countOnly.totalCount, fileCount * 2)
+            XCTAssertEqual(countOnly.contentFileCount, fileCount)
+            XCTAssertEqual(countOnly.searchedFileCount, fileCount)
+            XCTAssertTrue((countOnly.matches ?? []).isEmpty)
+        }
+
+        func testCancelledScopedContentSearchDrainsCacheFlight() async throws {
+            let root = try makeTemporaryRoot(name: "CancelledContentSearch")
+            let fileURL = root.appendingPathComponent("A.swift")
+            try write("needle\n", to: fileURL)
+            let store = WorkspaceFileContextStore()
+            let rootRecord = try await store.loadRoot(path: root.path)
+            let gate = AsyncGate()
+            try await store.setSearchContentReadChunkHandlerForTesting(rootID: rootRecord.id) { path in
+                guard path == "A.swift" else { return }
+                await gate.markStartedAndWaitForRelease()
+            }
+
+            let task = Task {
+                try await self.searchContent(
+                    pattern: "needle",
+                    paths: [fileURL.path],
+                    store: store
+                )
+            }
+            let started = await gate.waitUntilStartedWithinTimeout()
+            XCTAssertTrue(started)
+            task.cancel()
+            await gate.release()
+            do {
+                _ = try await task.value
+                XCTFail("Expected search cancellation")
+            } catch is CancellationError {
+                // Expected.
+            }
+
+            let cache = await waitForCacheIdle(store: store)
+            XCTAssertEqual(cache.entryCount, 0)
+            XCTAssertEqual(cache.activeFlightCount, 0)
+            XCTAssertEqual(cache.waiterCount, 0)
+            try await store.setSearchContentReadChunkHandlerForTesting(rootID: rootRecord.id, nil)
+        }
+
+        func testQueuedBroadContentSearchPreservesExhaustiveCountOnlyCompleteness() async throws {
+            let root = try makeTemporaryRoot(name: "BroadLaneCorrectness")
             try write("needle\nneedle\n", to: root.appendingPathComponent("A.swift"))
             try write("needle\nneedle\n", to: root.appendingPathComponent("B.swift"))
             let store = WorkspaceFileContextStore()
             _ = try await store.loadRoot(path: root.path)
-            let baselineCoordinator = StoreBackedWorkspaceSearchAdmissionCoordinator()
-            let baselineCapped = try await searchContent(pattern: "needle", maxMatches: 2, store: store, coordinator: baselineCoordinator)
-            let baselineCountOnly = try await searchContent(pattern: "needle", countOnly: true, store: store, coordinator: baselineCoordinator)
+            let baseline = try await searchContent(pattern: "needle", countOnly: true, store: store)
 
-            let coordinator = StoreBackedWorkspaceSearchAdmissionCoordinator()
             let gate = AsyncGate()
-            await coordinator.setPermitAcquiredHandlerForTesting { _ in
+            await store.setSearchLanePermitAcquiredHandlerForTesting {
                 await gate.markStartedAndWaitForRelease()
             }
-            let firstHeld = Task {
-                try await self.searchContent(pattern: "holdNeedle", store: store, coordinator: coordinator)
-            }
-            let secondHeld = Task {
-                try await self.searchContent(pattern: "holdNeedle", store: store, coordinator: coordinator)
-            }
-            await assertAsyncTrue(gate.waitUntilStartedCount(2))
-            let capped = Task {
-                try await self.searchContent(pattern: "needle", maxMatches: 2, store: store, coordinator: coordinator)
-            }
-            let countOnly = Task {
-                try await self.searchContent(pattern: "needle", countOnly: true, store: store, coordinator: coordinator)
-            }
-            let bothQueuedBehindHeldSearch = await waitForAdmissionWaiterCount(2, store: store, coordinator: coordinator)
-            XCTAssertTrue(bothQueuedBehindHeldSearch)
+            let held = Task { try await self.searchContent(pattern: "holdNeedle", store: store) }
+            await assertAsyncTrue(gate.waitUntilStartedCount(1))
+            let queued = Task { try await self.searchContent(pattern: "needle", countOnly: true, store: store) }
+            await assertAsyncTrue(waitForAdmissionWaiterCount(1, store: store))
             await gate.release()
 
-            _ = try await firstHeld.value
-            _ = try await secondHeld.value
-            let queuedCapped = try await capped.value
-            let queuedCountOnly = try await countOnly.value
-            XCTAssertEqual(queuedCapped.matches, baselineCapped.matches)
-            XCTAssertEqual(queuedCountOnly.totalCount, baselineCountOnly.totalCount)
-            XCTAssertEqual(queuedCountOnly.contentFileCount, baselineCountOnly.contentFileCount)
-            XCTAssertEqual(queuedCountOnly.searchedFileCount, baselineCountOnly.searchedFileCount)
+            _ = try await held.value
+            let result = try await queued.value
+            XCTAssertEqual(result.totalCount, baseline.totalCount)
+            XCTAssertEqual(result.contentFileCount, baseline.contentFileCount)
+            XCTAssertEqual(result.searchedFileCount, baseline.searchedFileCount)
+            let laneSnapshot = await store.searchLaneSnapshotForTesting()
+            XCTAssertTrue(laneSnapshot.isIdle)
         }
 
         func testStoreBackedSearchContentWorkerPermitTelemetryInheritsOriginatingCorrelation() async throws {
@@ -591,13 +576,11 @@ final class StoreBackedWorkspaceSearchTests: XCTestCase {
             XCTAssertTrue(saturated)
             _ = startedCapture(label: "store-backed-search-worker-correlation", maxSamples: 100)
             let correlation = try XCTUnwrap(EditFlowPerf.makeLifecycleCorrelationIfActive())
-            let coordinator = StoreBackedWorkspaceSearchAdmissionCoordinator()
             let searchTask = Task {
                 try await EditFlowPerf.$currentLifecycleCorrelation.withValue(correlation) {
                     try await self.searchContent(
                         pattern: "inheritedCorrelationNeedle",
-                        store: store,
-                        coordinator: coordinator
+                        store: store
                     )
                 }
             }
@@ -627,30 +610,173 @@ final class StoreBackedWorkspaceSearchTests: XCTestCase {
             await holdingService.setContentReadChunkHandlerForTesting(nil)
         }
 
-        func testStoreBackedSearchAwaitsScopedFreshnessBeforeCatalogSnapshot() async throws {
+        func testStoreBackedSearchUsesRevisionLineIndexIdentityAndWarmContentSnapshot() async throws {
+            let root = try makeTemporaryRoot(name: "StoreBackedRevisionIdentity")
+            try write("let revisionIdentityToken = true\n", to: root.appendingPathComponent("A.swift"))
+            let store = WorkspaceFileContextStore()
+            _ = try await store.loadRoot(path: root.path)
+            _ = startedCapture(label: "store-backed-revision-identity", maxSamples: 200)
+            let cold = try await searchContent(
+                pattern: "revisionIdentityToken",
+                store: store
+            )
+            let warm = try await searchContent(
+                pattern: "revisionIdentityToken",
+                store: store
+            )
+            let capture = EditFlowPerf.debugCaptureSnapshot(finish: true)
+            let lineIndexRows = capture.stages.filter {
+                $0.stageName == String(describing: EditFlowPerf.Stage.Search.lineIndexLookup)
+            }
+            let cache = await store.searchDecodedContentCacheSnapshotForTesting()
+
+            XCTAssertEqual(cold.matches?.count, 1)
+            XCTAssertEqual(warm.matches, cold.matches)
+            XCTAssertFalse(lineIndexRows.isEmpty)
+            XCTAssertTrue(lineIndexRows.allSatisfy { $0.sanitizedDimensions.contains("scanKind=revision") })
+            XCTAssertTrue(lineIndexRows.allSatisfy { !$0.sanitizedDimensions.contains("hash-fallback") })
+            XCTAssertEqual(
+                capture.stages
+                    .filter { $0.stageName == String(describing: EditFlowPerf.Stage.FileSystem.contentReadWorkerPermitWait) }
+                    .reduce(0) { $0 + $1.sampleCount },
+                1,
+                "The warm decoded-content hit must not enter filesystem read admission"
+            )
+            XCTAssertEqual(
+                capture.stages
+                    .filter { $0.stageName == String(describing: EditFlowPerf.Stage.FileSystem.contentReadWorkerBody) }
+                    .reduce(0) { $0 + $1.sampleCount },
+                1,
+                "Only the cold miss should execute a disk-read worker body"
+            )
+            XCTAssertEqual(cache.loadCount, 1)
+            XCTAssertGreaterThanOrEqual(cache.hitCount, 1)
+            XCTAssertEqual(cache.latestRevision, 1)
+        }
+
+        func testStoreBackedSearchAwaitsScopedFreshnessBeforeBroadPermitAndCatalogSnapshot() async throws {
             let root = try makeTemporaryRoot(name: "ScopedSearchFreshness")
             let addedURL = root.appendingPathComponent("Added.swift")
             let store = WorkspaceFileContextStore()
             let record = try await store.loadRoot(path: root.path)
             try await store.startWatchingRoot(id: record.id)
             let sinkGate = AsyncGate()
+            let permitSignal = AsyncSignal()
             await store.setWatcherSinkWillApplyHandler { observedRootID in
                 guard observedRootID == record.id else { return }
                 await sinkGate.markStartedAndWaitForRelease()
             }
+            await store.setSearchLanePermitAcquiredHandlerForTesting {
+                await permitSignal.mark()
+            }
 
-            try write("added", to: addedURL)
+            try write("freshNeedle", to: addedURL)
             try await store.publishSyntheticFileSystemDeltasForTesting(rootID: record.id, deltas: [.fileAdded("Added.swift")])
             await sinkGate.waitUntilStarted()
             let searchTask = Task {
-                try await self.searchSwiftFiles(paths: [], store: store)
+                try await self.searchContent(pattern: "freshNeedle", store: store)
             }
-            await sinkGate.release()
-            let result = try await searchTask.value
+            let permitMarkedEarly = await permitSignal.waitUntilMarked(timeoutNanoseconds: 50_000_000)
+            XCTAssertFalse(permitMarkedEarly)
+            let preAdmissionLaneSnapshot = await store.searchLaneSnapshotForTesting()
+            XCTAssertTrue(preAdmissionLaneSnapshot.isIdle)
 
-            XCTAssertTrue(result.paths?.contains(addedURL.path) == true)
+            await sinkGate.release()
+            await assertAsyncTrue(permitSignal.waitUntilMarked())
+            let result = try await searchTask.value
+            XCTAssertEqual(result.matches?.map(\.filePath), [addedURL.path])
+            let laneSnapshot = await store.searchLaneSnapshotForTesting()
+            XCTAssertTrue(laneSnapshot.isIdle)
             await store.setWatcherSinkWillApplyHandler(nil)
+            await store.setSearchLanePermitAcquiredHandlerForTesting(nil)
             await store.stopWatchingRoot(id: record.id)
+        }
+
+        func testMissingSessionWorktreeScopeThrowsTypedUnavailableErrorBeforeAdmission() async throws {
+            let logicalRoot = try makeTemporaryRoot(name: "UnavailableWorktreeLogical")
+            try write("let baseNeedle = true\n", to: logicalRoot.appendingPathComponent("A.swift"))
+            let missingPhysicalRoot = logicalRoot
+                .deletingLastPathComponent()
+                .appendingPathComponent("Missing-\(UUID().uuidString)")
+            let store = WorkspaceFileContextStore()
+            _ = try await store.loadRoot(path: logicalRoot.path)
+            let permitSignal = AsyncSignal()
+            await store.setSearchLanePermitAcquiredHandlerForTesting {
+                await permitSignal.mark()
+            }
+            let scope = WorkspaceLookupRootScope.sessionBoundWorkspace(
+                logicalRootPaths: [logicalRoot.standardizedFileURL.path],
+                physicalRootPaths: [missingPhysicalRoot.standardizedFileURL.path]
+            )
+
+            do {
+                _ = try await StoreBackedWorkspaceSearch.search(
+                    pattern: "baseNeedle",
+                    mode: .content,
+                    rootScope: scope,
+                    store: store,
+                    workspaceManager: nil
+                )
+                XCTFail("Expected unavailable session worktree error")
+            } catch let error as StoreBackedWorkspaceSearchError {
+                XCTAssertEqual(
+                    error,
+                    .worktreeScopeUnavailable(missingPhysicalRootPaths: [missingPhysicalRoot.standardizedFileURL.path])
+                )
+            }
+
+            let permitMarkedEarly = await permitSignal.waitUntilMarked(timeoutNanoseconds: 50_000_000)
+            XCTAssertFalse(permitMarkedEarly)
+            let laneSnapshot = await store.searchLaneSnapshotForTesting()
+            XCTAssertTrue(laneSnapshot.isIdle)
+        }
+
+        func testQueuedSessionWorktreeSearchRechecksAvailabilityAfterAdmission() async throws {
+            let logicalRoot = try makeTemporaryRoot(name: "QueuedUnavailableWorktreeLogical")
+            let physicalRoot = try makeTemporaryRoot(name: "QueuedUnavailableWorktreePhysical")
+            try write("let baseNeedle = true\n", to: logicalRoot.appendingPathComponent("Base.swift"))
+            try write("let worktreeNeedle = true\n", to: physicalRoot.appendingPathComponent("Worktree.swift"))
+            let store = WorkspaceFileContextStore()
+            _ = try await store.loadRoot(path: logicalRoot.path)
+            let physicalRecord = try await store.loadRoot(path: physicalRoot.path, kind: .sessionWorktree)
+            let gate = AsyncGate()
+            await store.setSearchLanePermitAcquiredHandlerForTesting {
+                await gate.markStartedAndWaitForRelease()
+            }
+
+            let held = Task { try await self.searchContent(pattern: "baseNeedle", store: store) }
+            await assertAsyncTrue(gate.waitUntilStartedCount(1))
+            let scope = WorkspaceLookupRootScope.sessionBoundWorkspace(
+                logicalRootPaths: [logicalRoot.standardizedFileURL.path],
+                physicalRootPaths: [physicalRoot.standardizedFileURL.path]
+            )
+            let queued = Task {
+                try await StoreBackedWorkspaceSearch.search(
+                    pattern: "worktreeNeedle",
+                    mode: .content,
+                    rootScope: scope,
+                    store: store,
+                    workspaceManager: nil
+                )
+            }
+            await assertAsyncTrue(waitForAdmissionWaiterCount(1, store: store))
+
+            await store.unloadRoot(id: physicalRecord.id)
+            await gate.release()
+            _ = try await held.value
+            do {
+                _ = try await queued.value
+                XCTFail("Expected queued search to observe the unloaded session worktree")
+            } catch let error as StoreBackedWorkspaceSearchError {
+                XCTAssertEqual(
+                    error,
+                    .worktreeScopeUnavailable(missingPhysicalRootPaths: [physicalRoot.standardizedFileURL.path])
+                )
+            }
+
+            await store.setSearchLanePermitAcquiredHandlerForTesting(nil)
+            let laneSnapshot = await store.searchLaneSnapshotForTesting()
+            XCTAssertTrue(laneSnapshot.isIdle)
         }
     #endif
 
@@ -685,9 +811,7 @@ final class StoreBackedWorkspaceSearchTests: XCTestCase {
 
     private func searchPaths(
         pattern: String,
-        store: WorkspaceFileContextStore,
-        coordinator: StoreBackedWorkspaceSearchAdmissionCoordinator,
-        contentFetchCoordinator: StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator = .shared
+        store: WorkspaceFileContextStore
     ) async throws -> SearchResults {
         try await StoreBackedWorkspaceSearch.search(
             pattern: pattern,
@@ -697,9 +821,7 @@ final class StoreBackedWorkspaceSearchTests: XCTestCase {
             maxPaths: 100,
             rootScope: .visibleWorkspace,
             store: store,
-            workspaceManager: nil,
-            admissionCoordinator: coordinator,
-            contentFetchCoordinator: contentFetchCoordinator
+            workspaceManager: nil
         )
     }
 
@@ -708,23 +830,20 @@ final class StoreBackedWorkspaceSearchTests: XCTestCase {
         paths: [String]? = nil,
         maxMatches: Int = 100,
         countOnly: Bool = false,
-        store: WorkspaceFileContextStore,
-        coordinator: StoreBackedWorkspaceSearchAdmissionCoordinator,
-        contentFetchCoordinator: StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator = .shared
+        store: WorkspaceFileContextStore
     ) async throws -> SearchResults {
         try await StoreBackedWorkspaceSearch.search(
             pattern: pattern,
             mode: .content,
             isRegex: false,
             caseInsensitive: false,
+            maxPaths: maxMatches,
             maxMatches: maxMatches,
             paths: paths,
             countOnly: countOnly,
             rootScope: .visibleWorkspace,
             store: store,
-            workspaceManager: nil,
-            admissionCoordinator: coordinator,
-            contentFetchCoordinator: contentFetchCoordinator
+            workspaceManager: nil
         )
     }
 
@@ -741,52 +860,32 @@ final class StoreBackedWorkspaceSearchTests: XCTestCase {
         private func waitForAdmissionWaiterCount(
             _ expectedCount: Int,
             store: WorkspaceFileContextStore,
-            coordinator: StoreBackedWorkspaceSearchAdmissionCoordinator,
             timeoutNanoseconds: UInt64 = 1_000_000_000
         ) async -> Bool {
             let interval: UInt64 = 10_000_000
             var waited: UInt64 = 0
-            while await coordinator.snapshot(for: store).waiterCount != expectedCount, waited < timeoutNanoseconds {
+            while await store.searchLaneSnapshotForTesting().waiterCount != expectedCount, waited < timeoutNanoseconds {
                 try? await Task.sleep(nanoseconds: interval)
                 waited += interval
             }
-            return await coordinator.snapshot(for: store).waiterCount == expectedCount
+            return await store.searchLaneSnapshotForTesting().waiterCount == expectedCount
         }
 
-        private func waitForContentFetchWaiterCount(
-            _ expectedCount: Int,
+        private func waitForCacheIdle(
             store: WorkspaceFileContextStore,
-            coordinator: StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator,
             timeoutNanoseconds: UInt64 = 1_000_000_000
-        ) async -> Bool {
-            let interval: UInt64 = 10_000_000
-            var waited: UInt64 = 0
-            while await coordinator.snapshot(for: store).waiterCount != expectedCount, waited < timeoutNanoseconds {
-                try? await Task.sleep(nanoseconds: interval)
-                waited += interval
-            }
-            return await coordinator.snapshot(for: store).waiterCount == expectedCount
-        }
-
-        private func waitForContentFetchPressure(
-            active expectedActiveCount: Int,
-            queuedAtLeast minimumWaiterCount: Int,
-            store: WorkspaceFileContextStore,
-            coordinator: StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator,
-            timeoutNanoseconds: UInt64 = 1_000_000_000
-        ) async -> Bool {
+        ) async -> WorkspaceSearchDecodedContentCache.Snapshot {
             let interval: UInt64 = 10_000_000
             var waited: UInt64 = 0
             while waited < timeoutNanoseconds {
-                let snapshot = await coordinator.snapshot(for: store)
-                if snapshot.activePermitCount == expectedActiveCount, snapshot.waiterCount >= minimumWaiterCount {
-                    return true
+                let snapshot = await store.searchDecodedContentCacheSnapshotForTesting()
+                if snapshot.activeFlightCount == 0, snapshot.waiterCount == 0 {
+                    return snapshot
                 }
                 try? await Task.sleep(nanoseconds: interval)
                 waited += interval
             }
-            let snapshot = await coordinator.snapshot(for: store)
-            return snapshot.activePermitCount == expectedActiveCount && snapshot.waiterCount >= minimumWaiterCount
+            return await store.searchDecodedContentCacheSnapshotForTesting()
         }
 
         private func waitForLifecycleEvent(
@@ -807,6 +906,14 @@ final class StoreBackedWorkspaceSearchTests: XCTestCase {
                 waited += interval
             }
             return false
+        }
+
+        private func dimensionInt(_ key: String, in dimensions: String) -> Int? {
+            let prefix = "\(key)="
+            guard let component = dimensions.split(separator: " ").first(where: { $0.hasPrefix(prefix) }) else {
+                return nil
+            }
+            return Int(component.dropFirst(prefix.count))
         }
 
         private func startedCapture(label: String, maxSamples: Int) -> EditFlowPerf.DebugCaptureSnapshot {

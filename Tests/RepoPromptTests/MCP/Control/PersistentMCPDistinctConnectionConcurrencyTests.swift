@@ -24,6 +24,27 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
         #endif
     }
 
+    func testK12WarmBroadAndScopedSearchesShareOneWindowStoreAndReuseConnections() async throws {
+        #if DEBUG
+            try await MCPSharedServerTestLease.shared.withLease { lease in
+                let fixture = try await PersistentMCPTestFixture.make(
+                    lease: lease,
+                    contextASearchFileCount: 12
+                )
+                do {
+                    try await runK12SharedWindowSearchCheckpoint(fixture: fixture)
+                    await fixture.cleanup()
+                    try await fixture.assertCleanedUp()
+                } catch {
+                    await fixture.cleanup()
+                    throw error
+                }
+            }
+        #else
+            throw XCTSkip("Distinct MCP connection socketpair integration requires DEBUG diagnostics helpers.")
+        #endif
+    }
+
     func testClearPersistedRoutingSessionHiddenDispatchIsExactAndRestoresState() async throws {
         #if DEBUG
             let networkManager = ServerNetworkManager.shared
@@ -57,6 +78,245 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
 
 #if DEBUG
     private extension PersistentMCPDistinctConnectionConcurrencyTests {
+        func runK12SharedWindowSearchCheckpoint(fixture: PersistentMCPTestFixture) async throws {
+            let primary = try fixture.endpointA()
+            var endpoints = [primary]
+            for index in 1 ..< 12 {
+                try await endpoints.append(fixture.makeAdditionalEndpoint(label: "shared-search-\(index)"))
+            }
+            for endpoint in endpoints {
+                try await Self.bind(endpoint, to: fixture.contextA.tabID)
+            }
+
+            let searchFiles = fixture.contextA.searchFileURLs
+            XCTAssertEqual(searchFiles.count, 12)
+            let store = fixture.contextA.window.workspaceFileContextStore
+            let warmResponse = try await primary.callTool(
+                name: MCPWindowToolName.search,
+                arguments: Self.sharedWindowBroadSearchArguments(countOnly: true)
+            )
+            let warmText = try Self.toolText(from: warmResponse)
+            Self.assertHealthySearchText(warmText)
+            let cacheAfterWarm = await store.searchDecodedContentCacheSnapshotForTesting()
+            XCTAssertEqual(cacheAfterWarm.loadCount, searchFiles.count)
+            XCTAssertEqual(cacheAfterWarm.acceptedLoadCount, searchFiles.count)
+            XCTAssertEqual(cacheAfterWarm.activeFlightCount, 0)
+            XCTAssertEqual(cacheAfterWarm.waiterCount, 0)
+
+            var baselineSnapshots: [UUID: PersistentMCPTestEndpointSnapshot] = [:]
+            for endpoint in endpoints {
+                let snapshot = await fixture.snapshot(endpoint, context: fixture.contextA)
+                Self.assertStableSnapshot(snapshot, endpoint: endpoint, context: fixture.contextA)
+                baselineSnapshots[endpoint.connectionID] = snapshot
+            }
+            let gate = SearchAdmissionGate {}
+            await store.setSearchLanePermitAcquiredHandlerForTesting {
+                await gate.markStartedAndWaitForRelease()
+            }
+            let broadTask = Task {
+                try await primary.callTool(
+                    name: MCPWindowToolName.search,
+                    arguments: Self.sharedWindowBroadSearchArguments(countOnly: false)
+                )
+            }
+            var scopedTasks: [Task<(URL, PersistentMCPTestRPCResponse), Error>] = []
+            do {
+                let broadStarted = await gate.waitUntilStarted()
+                XCTAssertTrue(broadStarted)
+                scopedTasks = zip(endpoints.dropFirst(), searchFiles.dropFirst()).map { endpoint, fileURL in
+                    Task {
+                        let response = try await endpoint.callTool(
+                            name: MCPWindowToolName.search,
+                            arguments: Self.sharedWindowScopedSearchArguments(path: fileURL.path)
+                        )
+                        return (fileURL, response)
+                    }
+                }
+                for task in scopedTasks {
+                    let (fileURL, response) = try await task.value
+                    let text = try Self.toolText(from: response)
+                    Self.assertHealthySearchText(text)
+                    XCTAssertTrue(text.contains(fileURL.lastPathComponent), text)
+                    for otherFileURL in searchFiles where otherFileURL != fileURL {
+                        XCTAssertFalse(text.contains(otherFileURL.lastPathComponent), text)
+                    }
+                    XCTAssertFalse(text.contains(fixture.contextB.fileURL.lastPathComponent), text)
+                }
+
+                await gate.release()
+                let broadResponse = try await broadTask.value
+                let broadText = try Self.toolText(from: broadResponse)
+                Self.assertHealthySearchText(broadText)
+                for fileURL in searchFiles {
+                    XCTAssertTrue(broadText.contains(fileURL.lastPathComponent), broadText)
+                }
+            } catch {
+                broadTask.cancel()
+                scopedTasks.forEach { $0.cancel() }
+                await gate.release()
+                _ = try? await broadTask.value
+                for task in scopedTasks {
+                    _ = try? await task.value
+                }
+                await store.setSearchLanePermitAcquiredHandlerForTesting(nil)
+                throw error
+            }
+            await store.setSearchLanePermitAcquiredHandlerForTesting(nil)
+
+            try await runK12UnscopedBroadBurstCheckpoint(
+                endpoints: endpoints,
+                searchFiles: searchFiles,
+                store: store
+            )
+
+            for endpoint in endpoints {
+                _ = try await endpoint.client.request(method: "tools/list", params: [:])
+            }
+            let primaryRead = try await primary.callTool(
+                name: MCPWindowToolName.readFile,
+                arguments: ["path": searchFiles[0].path]
+            )
+            try Self.assertReadResult(
+                primaryRead,
+                contains: PersistentMCPTestFixture.sharedSearchToken,
+                excludes: fixture.contextB.sentinel
+            )
+            let peerRead = try await endpoints[1].callTool(
+                name: MCPWindowToolName.readFile,
+                arguments: ["path": searchFiles[1].path]
+            )
+            try Self.assertReadResult(
+                peerRead,
+                contains: PersistentMCPTestFixture.sharedSearchToken,
+                excludes: fixture.contextB.sentinel
+            )
+
+            let finalCache = await store.searchDecodedContentCacheSnapshotForTesting()
+            let finalLane = await store.searchLaneSnapshotForTesting()
+            let finalReadLimiter = await Self.waitForContentReadLimiterIdle()
+            XCTAssertEqual(finalCache.loadCount, cacheAfterWarm.loadCount)
+            XCTAssertEqual(finalCache.acceptedLoadCount, cacheAfterWarm.acceptedLoadCount)
+            XCTAssertGreaterThan(finalCache.hitCount, cacheAfterWarm.hitCount)
+            XCTAssertEqual(finalCache.activeFlightCount, 0)
+            XCTAssertEqual(finalCache.waiterCount, 0)
+            XCTAssertTrue(finalLane.isIdle)
+            XCTAssertTrue(finalReadLimiter.isIdle)
+
+            for endpoint in endpoints {
+                let finalSnapshot = await fixture.snapshot(endpoint, context: fixture.contextA)
+                let baselineSnapshot = try XCTUnwrap(baselineSnapshots[endpoint.connectionID])
+                XCTAssertEqual(finalSnapshot, baselineSnapshot)
+                let hasInFlightCalls = await fixture.networkManager.hasInFlightCalls(for: endpoint.connectionID)
+                let limiter = await fixture.networkManager.connectionLimiterSnapshotForTesting(
+                    connectionID: endpoint.connectionID
+                )
+                XCTAssertFalse(hasInFlightCalls)
+                XCTAssertEqual(limiter?.permits, 1)
+                XCTAssertEqual(limiter?.waiterCount, 0)
+                XCTAssertEqual(limiter?.inFlight, 0)
+            }
+        }
+
+        func runK12UnscopedBroadBurstCheckpoint(
+            endpoints: [PersistentMCPTestEndpoint],
+            searchFiles: [URL],
+            store: WorkspaceFileContextStore
+        ) async throws {
+            XCTAssertEqual(endpoints.count, 12)
+            let baselineConfiguration = await store.searchLaneSnapshotForTesting().configuration
+            let burstConfiguration = StoreBackedWorkspaceSearchLane.Configuration(
+                maxQueueWait: .seconds(8),
+                retryAfterMilliseconds: 1000
+            )
+            guard case .applied = await store.configureSearchLaneForTesting(burstConfiguration) else {
+                XCTFail("Shared-window broad-search lane must be idle before the K12 burst")
+                return
+            }
+
+            let gate = SearchAdmissionGate {}
+            await store.setSearchLanePermitAcquiredHandlerForTesting {
+                await gate.markStartedAndWaitForRelease()
+            }
+            let active = Task {
+                try await endpoints[0].callTool(
+                    name: MCPWindowToolName.search,
+                    arguments: Self.sharedWindowBroadSearchArguments(countOnly: false)
+                )
+            }
+            var queued: Task<PersistentMCPTestRPCResponse, Error>?
+            var excess: [Task<PersistentMCPTestRPCResponse, Error>] = []
+            do {
+                guard await gate.waitUntilStarted() else {
+                    XCTFail("The first K12 broad search did not acquire the shared lane")
+                    throw ClientFixtureError.broadSearchDidNotStart
+                }
+                queued = Task {
+                    try await endpoints[1].callTool(
+                        name: MCPWindowToolName.search,
+                        arguments: Self.sharedWindowBroadSearchArguments(countOnly: false)
+                    )
+                }
+                await Self.waitForSearchLaneWaiter(store: store, expectedCount: 1)
+                let saturated = await store.searchLaneSnapshotForTesting()
+                XCTAssertEqual(saturated.activePermitCount, 1)
+                XCTAssertEqual(saturated.waiterCount, 1)
+                XCTAssertEqual(saturated.maximumActivePermitCount, 1)
+                XCTAssertEqual(saturated.maximumWaiterCount, 1)
+
+                excess = endpoints.dropFirst(2).map { endpoint in
+                    Task {
+                        try await endpoint.callTool(
+                            name: MCPWindowToolName.search,
+                            arguments: Self.sharedWindowBroadSearchArguments(countOnly: false)
+                        )
+                    }
+                }
+                for task in excess {
+                    try await Self.assertSearchBackpressureResult(task.value)
+                }
+                let overloaded = await store.searchLaneSnapshotForTesting()
+                XCTAssertEqual(overloaded.activePermitCount, 1)
+                XCTAssertEqual(overloaded.waiterCount, 1)
+                XCTAssertEqual(overloaded.overloadCount, endpoints.count - 2)
+
+                await gate.release()
+                let activeResponse = try await active.value
+                let queuedResponse = try await XCTUnwrap(queued).value
+                try Self.assertSharedWindowBroadSearchResult(activeResponse, searchFiles: searchFiles)
+                try Self.assertSharedWindowBroadSearchResult(queuedResponse, searchFiles: searchFiles)
+                await store.setSearchLanePermitAcquiredHandlerForTesting(nil)
+
+                for endpoint in endpoints.dropFirst(2) {
+                    let retry = try await endpoint.callTool(
+                        name: MCPWindowToolName.search,
+                        arguments: Self.sharedWindowBroadSearchArguments(countOnly: false)
+                    )
+                    try Self.assertSharedWindowBroadSearchResult(retry, searchFiles: searchFiles)
+                }
+                let settled = await store.searchLaneSnapshotForTesting()
+                XCTAssertTrue(settled.isIdle)
+                XCTAssertEqual(settled.maximumActivePermitCount, 1)
+                XCTAssertEqual(settled.maximumWaiterCount, 1)
+                XCTAssertEqual(settled.overloadCount, endpoints.count - 2)
+                XCTAssertEqual(settled.grantCount, endpoints.count)
+                await restoreBroadSearchAdmissionConfiguration(baselineConfiguration, store: store)
+            } catch {
+                active.cancel()
+                queued?.cancel()
+                excess.forEach { $0.cancel() }
+                await gate.release()
+                _ = try? await active.value
+                if let queued {
+                    _ = try? await queued.value
+                }
+                for task in excess {
+                    _ = try? await task.value
+                }
+                await restoreBroadSearchAdmissionConfiguration(baselineConfiguration, store: store)
+                throw error
+            }
+        }
+
         func runCheckpoint(fixture: PersistentMCPTestFixture) async throws {
             let endpointA = try fixture.endpointA()
             let endpointB = try fixture.endpointB()
@@ -166,12 +426,6 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
         }
 
         func runBroadSearchAdmissionCheckpoint(fixture: PersistentMCPTestFixture) async throws {
-            try await StoreBackedWorkspaceSearchSharedAdmissionTestLease.shared.withLease {
-                try await runSerializedBroadSearchAdmissionCheckpoint(fixture: fixture)
-            }
-        }
-
-        func runSerializedBroadSearchAdmissionCheckpoint(fixture: PersistentMCPTestFixture) async throws {
             let endpointA = try fixture.endpointA()
             let endpointAQueued = try fixture.endpointAQueuedSearch()
             let endpointAOverflow = try fixture.endpointAOverflowSearch()
@@ -182,42 +436,37 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
             try await Self.bind(endpointARead, to: fixture.contextA.tabID)
             fixture.assertStableBindings(includeAdditionalContextAEndpoints: true)
 
-            let coordinator = StoreBackedWorkspaceSearchAdmissionCoordinator.shared
-            let baselineConfiguration = await coordinator.snapshotForDebug().configuration
-            let liveSweepConfiguration = StoreBackedWorkspaceSearchAdmissionCoordinator.Configuration(
-                perStoreCapacity: 2,
-                globalCapacity: 3,
-                maxQueuedPerStore: 0,
-                maxQueuedGlobally: 0,
-                maxQueueWait: .seconds(8)
+            let heldStore = fixture.contextA.window.workspaceFileContextStore
+            let baselineConfiguration = await heldStore.searchLaneSnapshotForTesting().configuration
+            let liveSweepConfiguration = StoreBackedWorkspaceSearchLane.Configuration(
+                maxQueueWait: .seconds(8),
+                retryAfterMilliseconds: 1000
             )
-            guard case .applied = await coordinator.configureForDebug(liveSweepConfiguration) else {
-                XCTFail("Shared admission coordinator should be idle before retained MCP checkpoint")
+            guard case .applied = await heldStore.configureSearchLaneForTesting(liveSweepConfiguration) else {
+                XCTFail("Per-workspace search lane should be idle before retained MCP checkpoint")
                 return
             }
-            let heldStore = fixture.contextA.window.workspaceFileContextStore
-            let heldSearchStarted = expectation(description: "both broad searches acquired admission")
-            heldSearchStarted.expectedFulfillmentCount = 2
+            let heldSearchStarted = expectation(description: "first broad search acquired per-workspace admission")
             let gate = SearchAdmissionGate {
                 heldSearchStarted.fulfill()
             }
-            await coordinator.setPermitAcquiredHandlerForTesting { store in
-                guard ObjectIdentifier(store) == ObjectIdentifier(heldStore) else { return }
+            await heldStore.setSearchLanePermitAcquiredHandlerForTesting {
                 await gate.markStartedAndWaitForRelease()
             }
             do {
                 let firstHeldSearch = Task {
                     try await endpointA.callTool(name: MCPWindowToolName.search, arguments: Self.searchArguments)
                 }
+                await fulfillment(of: [heldSearchStarted], timeout: 1)
                 let secondHeldSearch = Task {
                     try await endpointAQueued.callTool(name: MCPWindowToolName.search, arguments: Self.searchArguments)
                 }
-                await fulfillment(of: [heldSearchStarted], timeout: 1)
+                await Self.waitForSearchLaneWaiter(store: heldStore, expectedCount: 1)
                 let heldSearchStartedCount = await gate.startedCountSnapshot()
-                XCTAssertEqual(heldSearchStartedCount, 2)
-                let heldSnapshot = await coordinator.snapshot(for: heldStore)
-                XCTAssertEqual(heldSnapshot.activePermitCount, 2)
-                XCTAssertEqual(heldSnapshot.waiterCount, 0)
+                XCTAssertEqual(heldSearchStartedCount, 1)
+                let heldSnapshot = await heldStore.searchLaneSnapshotForTesting()
+                XCTAssertEqual(heldSnapshot.activePermitCount, 1)
+                XCTAssertEqual(heldSnapshot.waiterCount, 1)
 
                 let overflow = try await endpointAOverflow.callTool(name: MCPWindowToolName.search, arguments: Self.searchArguments)
                 try Self.assertSearchBackpressureResult(overflow)
@@ -305,41 +554,34 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
 
                 let settledRetry = try await endpointAOverflow.callTool(name: MCPWindowToolName.search, arguments: Self.searchArguments)
                 try Self.assertSearchResult(settledRetry, contains: fixture.contextA.fileURL.lastPathComponent, excludes: fixture.contextB.fileURL.lastPathComponent)
-                let snapshot = await coordinator.snapshot(for: heldStore)
-                XCTAssertFalse(snapshot.hasActivePermit)
-                XCTAssertEqual(snapshot.waiterCount, 0)
-                await restoreBroadSearchAdmissionConfiguration(
-                    baselineConfiguration,
-                    coordinator: coordinator
-                )
+                let snapshot = await heldStore.searchLaneSnapshotForTesting()
+                XCTAssertTrue(snapshot.isIdle)
+                await restoreBroadSearchAdmissionConfiguration(baselineConfiguration, store: heldStore)
             } catch {
                 await gate.release()
                 _ = await fixture.networkManager.setConnectionLimiterStateObserverForTesting(
                     connectionID: endpointA.connectionID,
                     observer: nil
                 )
-                await restoreBroadSearchAdmissionConfiguration(
-                    baselineConfiguration,
-                    coordinator: coordinator
-                )
+                await restoreBroadSearchAdmissionConfiguration(baselineConfiguration, store: heldStore)
                 throw error
             }
         }
 
         func restoreBroadSearchAdmissionConfiguration(
-            _ configuration: StoreBackedWorkspaceSearchAdmissionCoordinator.Configuration,
-            coordinator: StoreBackedWorkspaceSearchAdmissionCoordinator
+            _ configuration: StoreBackedWorkspaceSearchLane.Configuration,
+            store: WorkspaceFileContextStore
         ) async {
-            await coordinator.setPermitAcquiredHandlerForTesting(nil)
+            await store.setSearchLanePermitAcquiredHandlerForTesting(nil)
             for _ in 0 ..< 10000 {
-                switch await coordinator.configureForDebug(configuration) {
+                switch await store.configureSearchLaneForTesting(configuration) {
                 case .applied:
                     return
                 case .busy:
                     await Task.yield()
                 }
             }
-            XCTFail("Shared admission coordinator should restore DEBUG baseline after retained MCP checkpoint")
+            XCTFail("Per-workspace search lane should restore its DEBUG baseline after retained MCP checkpoint")
         }
 
         func runExactRoutingSessionCleanupCheckpoint(
@@ -574,6 +816,29 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
             let serializedText: String
         }
 
+        static func sharedWindowBroadSearchArguments(countOnly: Bool) -> [String: Any] {
+            [
+                "pattern": PersistentMCPTestFixture.sharedSearchToken,
+                "mode": "content",
+                "regex": false,
+                "max_results": 100,
+                "count_only": countOnly,
+                "context_lines": 0
+            ]
+        }
+
+        static func sharedWindowScopedSearchArguments(path: String) -> [String: Any] {
+            [
+                "pattern": PersistentMCPTestFixture.sharedSearchToken,
+                "mode": "content",
+                "regex": false,
+                "filter": ["paths": [path]],
+                "max_results": 10,
+                "count_only": false,
+                "context_lines": 0
+            ]
+        }
+
         static let searchArguments: [String: Any] = [
             "pattern": PersistentMCPTestFixture.sharedSearchToken,
             "mode": "content",
@@ -701,15 +966,67 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
 
         static func assertSearchResult(_ response: PersistentMCPTestRPCResponse, contains expected: String, excludes peer: String) throws {
             let text = try toolText(from: response)
+            assertHealthySearchText(text)
             XCTAssertTrue(text.contains(expected), text)
             XCTAssertFalse(text.contains(peer), text)
+        }
+
+        static func assertHealthySearchText(_ text: String) {
+            XCTAssertFalse(text.contains("tool_execution_timeout"), text)
+            XCTAssertFalse(text.contains("tool_execution_cleanup_unresponsive"), text)
+            XCTAssertFalse(text.contains("Temporarily busy"), text)
+        }
+
+        static func assertSharedWindowBroadSearchResult(
+            _ response: PersistentMCPTestRPCResponse,
+            searchFiles: [URL]
+        ) throws {
+            let text = try toolText(from: response)
+            assertHealthySearchText(text)
+            for fileURL in searchFiles {
+                XCTAssertTrue(text.contains(fileURL.lastPathComponent), text)
+            }
+        }
+
+        static func waitForContentReadLimiterIdle(
+            timeout: Duration = .seconds(5)
+        ) async -> ContentReadAsyncLimiter.Snapshot {
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: timeout)
+            while clock.now < deadline {
+                let snapshot = await FileSystemService.contentReadWorkerLimiterSnapshotForTesting()
+                if snapshot.isIdle { return snapshot }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+            return await FileSystemService.contentReadWorkerLimiterSnapshotForTesting()
+        }
+
+        static func waitForSearchLaneWaiter(
+            store: WorkspaceFileContextStore,
+            expectedCount: Int,
+            timeoutNanoseconds: UInt64 = 1_000_000_000
+        ) async {
+            let interval: UInt64 = 5_000_000
+            var waited: UInt64 = 0
+            while waited < timeoutNanoseconds {
+                if await store.searchLaneSnapshotForTesting().waiterCount == expectedCount {
+                    return
+                }
+                try? await Task.sleep(nanoseconds: interval)
+                waited += interval
+            }
+            let finalCount = await store.searchLaneSnapshotForTesting().waiterCount
+            XCTAssertEqual(finalCount, expectedCount)
         }
 
         static func assertSearchBackpressureResult(_ response: PersistentMCPTestRPCResponse) throws {
             let text = try toolText(from: response)
             XCTAssertTrue(text.contains("Temporarily busy"), text)
+            XCTAssertTrue(text.contains("**Code**: search_backpressure"), text)
             XCTAssertTrue(text.contains("Retryable**: yes"), text)
             XCTAssertTrue(text.contains("filter.paths"), text)
+            XCTAssertFalse(text.contains("tool_execution_timeout"), text)
+            XCTAssertFalse(text.contains("tool_execution_cleanup_unresponsive"), text)
             XCTAssertFalse(text.contains("Complete (limit not reached)"), text)
         }
 
@@ -770,6 +1087,7 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
         private var queuedSearchPersistentMCPTestEndpoint: PersistentMCPTestEndpoint?
         private var overflowSearchPersistentMCPTestEndpoint: PersistentMCPTestEndpoint?
         private var exactReadPersistentMCPTestEndpoint: PersistentMCPTestEndpoint?
+        private var additionalPersistentMCPTestEndpoints: [PersistentMCPTestEndpoint] = []
         private var cleanedUp = false
 
         private init(
@@ -786,7 +1104,8 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
 
         static func make(
             lease: MCPSharedServerTestLease.Ownership,
-            contextBuilderProviderFactory: ContextBuilderAgentViewModel.ProviderFactory? = nil
+            contextBuilderProviderFactory: ContextBuilderAgentViewModel.ProviderFactory? = nil,
+            contextASearchFileCount: Int = 1
         ) async throws -> PersistentMCPTestFixture {
             _ = lease
             let rootURL = FileManager.default.temporaryDirectory
@@ -819,7 +1138,8 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
                     sentinel: "let distinctMCPConnectionSentinelA = \"sentinel-a\"",
                     tabID: UUID(),
                     window: windowA,
-                    label: "A"
+                    label: "A",
+                    searchFileCount: contextASearchFileCount
                 )
                 contextB = try await makeContext(
                     rootURL: rootURL.appendingPathComponent("context-b", isDirectory: true),
@@ -827,7 +1147,8 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
                     sentinel: "let distinctMCPConnectionSentinelB = \"sentinel-b\"",
                     tabID: UUID(),
                     window: windowB,
-                    label: "B"
+                    label: "B",
+                    searchFileCount: 1
                 )
                 let routing = try await ensureRoutingService()
                 ownedRoutingService = routing.owned ? routing.service : nil
@@ -879,8 +1200,18 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
             try XCTUnwrap(exactReadPersistentMCPTestEndpoint)
         }
 
+        func makeAdditionalEndpoint(label: String) async throws -> PersistentMCPTestEndpoint {
+            let endpoint = try await PersistentMCPTestEndpoint.make(
+                label: label,
+                networkManager: networkManager
+            )
+            additionalPersistentMCPTestEndpoints.append(endpoint)
+            return endpoint
+        }
+
         func endpoints() throws -> [PersistentMCPTestEndpoint] {
             try [endpointA(), endpointB(), endpointAQueuedSearch(), endpointAOverflowSearch(), endpointARead()]
+                + additionalPersistentMCPTestEndpoints
         }
 
         func snapshot(_ endpoint: PersistentMCPTestEndpoint, context: PersistentMCPTestContext) async -> PersistentMCPTestEndpointSnapshot {
@@ -921,7 +1252,14 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
         func cleanup() async {
             guard !cleanedUp else { return }
             cleanedUp = true
-            for endpoint in [firstPersistentMCPTestEndpoint, secondPersistentMCPTestEndpoint, queuedSearchPersistentMCPTestEndpoint, overflowSearchPersistentMCPTestEndpoint, exactReadPersistentMCPTestEndpoint].compactMap(\.self) {
+            let fixedEndpoints = [
+                firstPersistentMCPTestEndpoint,
+                secondPersistentMCPTestEndpoint,
+                queuedSearchPersistentMCPTestEndpoint,
+                overflowSearchPersistentMCPTestEndpoint,
+                exactReadPersistentMCPTestEndpoint
+            ].compactMap(\.self)
+            for endpoint in fixedEndpoints + additionalPersistentMCPTestEndpoints {
                 endpoint.client.close()
                 await endpoint.connectionManager.stop()
                 await networkManager.debugRemoveConnection(endpoint.connectionID)
@@ -985,11 +1323,27 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
             sentinel: String,
             tabID: UUID,
             window: WindowState,
-            label: String
+            label: String,
+            searchFileCount: Int
         ) async throws -> PersistentMCPTestContext {
-            let fileURL = rootURL.appendingPathComponent("Sources/\(fileName)")
-            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            precondition(searchFileCount > 0)
+            let sourceDirectory = rootURL.appendingPathComponent("Sources", isDirectory: true)
+            try FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+            let fileURL = sourceDirectory.appendingPathComponent(fileName)
+            var searchFileURLs = [fileURL]
             try "\(sentinel)\n// \(sharedSearchToken)\n".write(to: fileURL, atomically: true, encoding: .utf8)
+            for index in 1 ..< searchFileCount {
+                let additionalURL = sourceDirectory.appendingPathComponent(
+                    String(format: "DistinctConnection%@-%02d.swift", label, index)
+                )
+                try "let distinctMCPScopedFileIndex = \(index)\n// \(sharedSearchToken)\n".write(
+                    to: additionalURL,
+                    atomically: true,
+                    encoding: .utf8
+                )
+                searchFileURLs.append(additionalURL)
+            }
+            searchFileURLs.sort { $0.path < $1.path }
             var configuredWorkspace = WorkspaceModel(
                 name: "Distinct MCP Connection \(label)",
                 repoPaths: [rootURL.path]
@@ -1011,6 +1365,7 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
             return PersistentMCPTestContext(
                 rootURL: rootURL,
                 fileURL: fileURL,
+                searchFileURLs: searchFileURLs,
                 rootID: rootRecord.id,
                 window: window,
                 workspaceID: configuredWorkspace.id,
@@ -1049,6 +1404,7 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
     final class PersistentMCPTestContext {
         let rootURL: URL
         let fileURL: URL
+        let searchFileURLs: [URL]
         let rootID: UUID
         let window: WindowState
         let workspaceID: UUID
@@ -1059,6 +1415,7 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
         init(
             rootURL: URL,
             fileURL: URL,
+            searchFileURLs: [URL],
             rootID: UUID,
             window: WindowState,
             workspaceID: UUID,
@@ -1068,6 +1425,7 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
         ) {
             self.rootURL = rootURL
             self.fileURL = fileURL
+            self.searchFileURLs = searchFileURLs
             self.rootID = rootID
             self.window = window
             self.workspaceID = workspaceID
@@ -1501,7 +1859,7 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
 
         func markStartedAndWaitForRelease() async {
             startedCount += 1
-            if startedCount <= 2 {
+            if startedCount == 1 {
                 onStarted()
             }
             guard !released else { return }
@@ -1514,6 +1872,15 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
             startedCount
         }
 
+        func waitUntilStarted(timeout: Duration = .seconds(2)) async -> Bool {
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: timeout)
+            while startedCount == 0, clock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+            return startedCount > 0
+        }
+
         func release() {
             released = true
             releaseWaiters.forEach { $0.resume() }
@@ -1522,6 +1889,7 @@ final class PersistentMCPDistinctConnectionConcurrencyTests: XCTestCase {
     }
 
     private enum ClientFixtureError: Error {
+        case broadSearchDidNotStart
         case exactAbsoluteCatalogMiss
         case routingServiceUnavailable
         case toolReturnedError(String)

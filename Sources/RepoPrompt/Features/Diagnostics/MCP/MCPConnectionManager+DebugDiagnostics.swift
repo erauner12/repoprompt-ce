@@ -135,7 +135,7 @@ import MCP
                 return debugMCPToolDurationInventoryPayload(op: op)
             case "mcp_read_search_admission_snapshot":
                 #if DEBUG
-                    return await debugMCPReadSearchAdmissionSnapshotPayload(op: op)
+                    return await debugMCPReadSearchAdmissionSnapshotPayload(op: op, arguments: arguments)
                 #else
                     return debugDiagnosticsError(op: op, code: "unavailable", message: "`mcp_read_search_admission_snapshot` is only available in DEBUG builds.")
                 #endif
@@ -145,17 +145,11 @@ import MCP
                 #else
                     return debugDiagnosticsError(op: op, code: "unavailable", message: "`mcp_read_search_admission_configure` is only available in DEBUG builds.")
                 #endif
-            case "mcp_read_search_content_fetch_admission_snapshot":
+            case "mcp_read_search_content_read_scheduler_snapshot":
                 #if DEBUG
-                    return await debugMCPReadSearchContentFetchAdmissionSnapshotPayload(op: op)
+                    return await debugMCPReadSearchContentReadSchedulerSnapshotPayload(op: op)
                 #else
-                    return debugDiagnosticsError(op: op, code: "unavailable", message: "`mcp_read_search_content_fetch_admission_snapshot` is only available in DEBUG builds.")
-                #endif
-            case "mcp_read_search_content_fetch_admission_configure":
-                #if DEBUG
-                    return await debugMCPReadSearchContentFetchAdmissionConfigurePayload(op: op, arguments: arguments)
-                #else
-                    return debugDiagnosticsError(op: op, code: "unavailable", message: "`mcp_read_search_content_fetch_admission_configure` is only available in DEBUG builds.")
+                    return debugDiagnosticsError(op: op, code: "unavailable", message: "`mcp_read_search_content_read_scheduler_snapshot` is only available in DEBUG builds.")
                 #endif
             case "bootstrap_diagnostics":
                 return await debugBootstrapDiagnosticsPayload(op: op)

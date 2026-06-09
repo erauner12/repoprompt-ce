@@ -10588,6 +10588,25 @@ final class AgentModeViewModel: ObservableObject {
         )
     }
 
+    private static func shouldWakeParentAgentRunWaitersForActiveSubmit(
+        selectedAgent: AgentProviderKind,
+        codexCompactionInFlight: Bool
+    ) -> Bool {
+        selectedAgent != .codexExec || codexCompactionInFlight
+    }
+
+    #if DEBUG
+        static func test_shouldWakeParentAgentRunWaitersForActiveSubmit(
+            selectedAgent: AgentProviderKind,
+            codexCompactionInFlight: Bool
+        ) -> Bool {
+            shouldWakeParentAgentRunWaitersForActiveSubmit(
+                selectedAgent: selectedAgent,
+                codexCompactionInFlight: codexCompactionInFlight
+            )
+        }
+    #endif
+
     @discardableResult
     private func submitPreparedUserTurn(
         tabID: UUID,
@@ -10691,7 +10710,12 @@ final class AgentModeViewModel: ObservableObject {
            !session.isMCPInstructionDispatchInProgress
         {
             Self.steeringDebugLog("[AgentRunSteeringWake] manual active submit accepted tab=\(tabID) runState=\(session.runState.rawValue) agent=\(session.selectedAgent.displayName) runID=\(String(describing: session.runID)) hasMCPContext=\(session.mcpControlContext != nil)")
-            if let runID = session.runID {
+            if let runID = session.runID,
+               Self.shouldWakeParentAgentRunWaitersForActiveSubmit(
+                   selectedAgent: session.selectedAgent,
+                   codexCompactionInFlight: codexCompactionInFlight
+               )
+            {
                 Task { @MainActor [weak self] in
                     guard let self, let mcpServer else { return }
                     await mcpServer.wakeAgentRunWaitersOwnedByActiveRun(

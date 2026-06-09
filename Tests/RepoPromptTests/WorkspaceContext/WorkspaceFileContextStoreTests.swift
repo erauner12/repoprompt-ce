@@ -2475,6 +2475,370 @@ final class WorkspaceFileContextStoreTests: XCTestCase {
     }
 
     #if DEBUG
+        func testSearchDecodedContentCacheEnforcesEntryAndCostBounds() async throws {
+            let entryBounded = WorkspaceSearchDecodedContentCache(maxEntryCount: 2, maxEstimatedCost: 1000)
+            let fingerprint = FileContentFingerprint(
+                deviceID: 1,
+                fileNumber: 1,
+                byteSize: 1,
+                modificationSeconds: 1,
+                modificationNanoseconds: 0,
+                statusChangeSeconds: 1,
+                statusChangeNanoseconds: 0
+            )
+            func key(_ index: Int) -> WorkspaceSearchContentCacheKey {
+                WorkspaceSearchContentCacheKey(
+                    rootID: UUID(),
+                    fileID: UUID(),
+                    standardizedRelativePath: "\(index).txt"
+                )
+            }
+            func load(_ content: String) -> ValidatedFileContentSnapshot {
+                ValidatedFileContentSnapshot(
+                    content: content,
+                    detectedEncodingRawValue: String.Encoding.utf8.rawValue,
+                    modificationDate: fingerprint.modificationDate,
+                    fingerprint: fingerprint
+                )
+            }
+
+            let firstKey = key(1)
+            let secondKey = key(2)
+            let thirdKey = key(3)
+            _ = try await entryBounded.snapshot(for: firstKey, fingerprint: fingerprint, invalidationEpoch: 0) { load("one") }
+            _ = try await entryBounded.snapshot(for: secondKey, fingerprint: fingerprint, invalidationEpoch: 0) { load("two") }
+            _ = try await entryBounded.snapshot(for: firstKey, fingerprint: fingerprint, invalidationEpoch: 0) { load("one-again") }
+            _ = try await entryBounded.snapshot(for: thirdKey, fingerprint: fingerprint, invalidationEpoch: 0) { load("three") }
+            _ = try await entryBounded.snapshot(for: secondKey, fingerprint: fingerprint, invalidationEpoch: 0) { load("two-reloaded") }
+            let entrySnapshot = await entryBounded.snapshotForTesting()
+
+            XCTAssertEqual(entrySnapshot.entryCount, 2)
+            XCTAssertEqual(entrySnapshot.loadCount, 4)
+            XCTAssertEqual(entrySnapshot.hitCount, 1)
+
+            let costBounded = WorkspaceSearchDecodedContentCache(maxEntryCount: 2, maxEstimatedCost: 1)
+            let costKey = key(4)
+            let first = try await costBounded.snapshot(for: costKey, fingerprint: fingerprint, invalidationEpoch: 0) { load("oversized") }
+            let second = try await costBounded.snapshot(for: costKey, fingerprint: fingerprint, invalidationEpoch: 0) { load("oversized") }
+            let costSnapshot = await costBounded.snapshotForTesting()
+
+            XCTAssertNotEqual(first?.revision, second?.revision)
+            XCTAssertEqual(costSnapshot.entryCount, 0)
+            XCTAssertEqual(costSnapshot.loadCount, 2)
+        }
+
+        func testOlderSearchContentInvalidationDoesNotRejectNewerFlight() async throws {
+            let cache = WorkspaceSearchDecodedContentCache(maxEntryCount: 2, maxEstimatedCost: 1000)
+            let key = WorkspaceSearchContentCacheKey(
+                rootID: UUID(),
+                fileID: UUID(),
+                standardizedRelativePath: "A.swift"
+            )
+            let fingerprint = FileContentFingerprint(
+                deviceID: 1,
+                fileNumber: 1,
+                byteSize: 1,
+                modificationSeconds: 1,
+                modificationNanoseconds: 0,
+                statusChangeSeconds: 1,
+                statusChangeNanoseconds: 0
+            )
+            let gate = AsyncGate()
+            let load = Task {
+                try await cache.snapshot(for: key, fingerprint: fingerprint, invalidationEpoch: 2) {
+                    await gate.markStartedAndWaitForRelease()
+                    return ValidatedFileContentSnapshot(
+                        content: "new",
+                        detectedEncodingRawValue: String.Encoding.utf8.rawValue,
+                        modificationDate: fingerprint.modificationDate,
+                        fingerprint: fingerprint
+                    )
+                }
+            }
+            await gate.waitUntilStarted()
+
+            await cache.invalidate(key, through: 1)
+            await gate.release()
+            let value = try await load.value
+            let snapshot = await cache.snapshotForTesting()
+
+            XCTAssertEqual(value?.content, "new")
+            XCTAssertNotNil(value?.revision)
+            XCTAssertEqual(snapshot.entryCount, 1)
+            XCTAssertEqual(snapshot.acceptedLoadCount, 1)
+        }
+
+        func testSearchContentSnapshotWarmHitKeepsRevisionAndAvoidsSecondRead() async throws {
+            let root = try makeTemporaryRoot(name: "SearchContentWarmHit")
+            try write("let warmToken = true\n", to: root.appendingPathComponent("A.swift"))
+
+            let store = WorkspaceFileContextStore()
+            let rootRecord = try await store.loadRoot(path: root.path)
+            let loadedFile = await store.file(rootID: rootRecord.id, relativePath: "A.swift")
+            let file = try XCTUnwrap(loadedFile)
+            let readCounter = AsyncGate()
+            await readCounter.release()
+            try await store.setSearchContentReadChunkHandlerForTesting(rootID: rootRecord.id) { _ in
+                await readCounter.markStartedAndWaitForRelease()
+            }
+
+            let cold = try await store.searchContentSnapshot(for: file)
+            let readsAfterColdLoad = await readCounter.startCount()
+            let warm = try await store.searchContentSnapshot(for: file)
+            let readsAfterWarmLoad = await readCounter.startCount()
+            let cache = await store.searchDecodedContentCacheSnapshotForTesting()
+
+            XCTAssertTrue(cold.isFresh)
+            XCTAssertEqual(cold.content, "let warmToken = true\n")
+            XCTAssertNotNil(cold.contentRevision)
+            XCTAssertEqual(warm.contentRevision, cold.contentRevision)
+            XCTAssertEqual(readsAfterWarmLoad, readsAfterColdLoad)
+            XCTAssertEqual(cache.entryCount, 1)
+            XCTAssertEqual(cache.loadCount, 1)
+            XCTAssertEqual(cache.acceptedLoadCount, 1)
+            XCTAssertEqual(cache.hitCount, 1)
+        }
+
+        func testConcurrentSearchContentSnapshotMissesCoalesceToOneLoad() async throws {
+            let root = try makeTemporaryRoot(name: "SearchContentCoalescing")
+            try write("let coalescedToken = true\n", to: root.appendingPathComponent("A.swift"))
+
+            let store = WorkspaceFileContextStore()
+            let rootRecord = try await store.loadRoot(path: root.path)
+            let loadedFile = await store.file(rootID: rootRecord.id, relativePath: "A.swift")
+            let file = try XCTUnwrap(loadedFile)
+            let readGate = AsyncGate()
+            try await store.setSearchContentReadChunkHandlerForTesting(rootID: rootRecord.id) { _ in
+                await readGate.markStartedAndWaitForRelease()
+            }
+
+            let tasks = (0 ..< 12).map { _ in
+                Task { try await store.searchContentSnapshot(for: file) }
+            }
+            await readGate.waitUntilStarted()
+            let pressured = await waitForSearchContentCache(store: store) {
+                $0.activeFlightCount == 1 && $0.waiterCount == 12
+            }
+            XCTAssertEqual(pressured.loadCount, 1)
+            XCTAssertEqual(pressured.joinCount, 11)
+
+            await readGate.release()
+            var snapshots: [FileSearchContentSnapshot] = []
+            for task in tasks {
+                try await snapshots.append(task.value)
+            }
+            let revisions = Set(snapshots.compactMap(\.contentRevision))
+            let settled = await waitForSearchContentCache(store: store) {
+                $0.activeFlightCount == 0 && $0.entryCount == 1
+            }
+
+            XCTAssertEqual(revisions.count, 1)
+            XCTAssertTrue(snapshots.allSatisfy { $0.content == "let coalescedToken = true\n" && $0.isFresh })
+            XCTAssertEqual(settled.loadCount, 1)
+            XCTAssertEqual(settled.acceptedLoadCount, 1)
+        }
+
+        func testCancellingOneSearchContentSnapshotWaiterDoesNotPoisonSharedLoad() async throws {
+            let root = try makeTemporaryRoot(name: "SearchContentFollowerCancellation")
+            try write("let cancellationToken = true\n", to: root.appendingPathComponent("A.swift"))
+
+            let store = WorkspaceFileContextStore()
+            let rootRecord = try await store.loadRoot(path: root.path)
+            let loadedFile = await store.file(rootID: rootRecord.id, relativePath: "A.swift")
+            let file = try XCTUnwrap(loadedFile)
+            let readGate = AsyncGate()
+            try await store.setSearchContentReadChunkHandlerForTesting(rootID: rootRecord.id) { _ in
+                await readGate.markStartedAndWaitForRelease()
+            }
+
+            let leader = Task { try await store.searchContentSnapshot(for: file) }
+            await readGate.waitUntilStarted()
+            let follower = Task { try await store.searchContentSnapshot(for: file) }
+            _ = await waitForSearchContentCache(store: store) { $0.waiterCount == 2 }
+
+            follower.cancel()
+            do {
+                _ = try await follower.value
+                XCTFail("Expected follower cancellation")
+            } catch is CancellationError {
+                // Expected: the shared disk load remains owned by the leader.
+            }
+
+            let afterCancellation = await waitForSearchContentCache(store: store) {
+                $0.waiterCount == 1 && $0.cancellationCount == 1
+            }
+            XCTAssertEqual(afterCancellation.activeFlightCount, 1)
+            await readGate.release()
+            let leaderSnapshot = try await leader.value
+            let settled = await waitForSearchContentCache(store: store) {
+                $0.activeFlightCount == 0 && $0.entryCount == 1
+            }
+
+            XCTAssertTrue(leaderSnapshot.isFresh)
+            XCTAssertNotNil(leaderSnapshot.contentRevision)
+            XCTAssertEqual(settled.acceptedLoadCount, 1)
+        }
+
+        func testCancellingAllSearchContentSnapshotWaitersPublishesNothing() async throws {
+            let root = try makeTemporaryRoot(name: "SearchContentAllCancellation")
+            try write("let cancelledToken = true\n", to: root.appendingPathComponent("A.swift"))
+
+            let store = WorkspaceFileContextStore()
+            let rootRecord = try await store.loadRoot(path: root.path)
+            let loadedFile = await store.file(rootID: rootRecord.id, relativePath: "A.swift")
+            let file = try XCTUnwrap(loadedFile)
+            let readGate = AsyncGate()
+            try await store.setSearchContentReadChunkHandlerForTesting(rootID: rootRecord.id) { _ in
+                await readGate.markStartedAndWaitForRelease()
+            }
+
+            let first = Task { try await store.searchContentSnapshot(for: file) }
+            await readGate.waitUntilStarted()
+            let second = Task { try await store.searchContentSnapshot(for: file) }
+            _ = await waitForSearchContentCache(store: store) { $0.waiterCount == 2 }
+
+            first.cancel()
+            second.cancel()
+            for task in [first, second] {
+                do {
+                    _ = try await task.value
+                    XCTFail("Expected cancellation")
+                } catch is CancellationError {
+                    // Expected.
+                }
+            }
+            await readGate.release()
+            let settled = await waitForSearchContentCache(store: store) {
+                $0.activeFlightCount == 0 && $0.waiterCount == 0
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+            let final = await store.searchDecodedContentCacheSnapshotForTesting()
+
+            XCTAssertEqual(settled.entryCount, 0)
+            XCTAssertEqual(final.entryCount, 0)
+            XCTAssertEqual(final.acceptedLoadCount, 0)
+            XCTAssertEqual(final.cancellationCount, 2)
+        }
+
+        func testSearchContentSnapshotRejectsChangedDuringReadAndRetriesFreshBytes() async throws {
+            let root = try makeTemporaryRoot(name: "SearchContentChangedDuringRead")
+            let fileURL = root.appendingPathComponent("A.swift")
+            try write("let oldReadToken = true\n", to: fileURL)
+
+            let store = WorkspaceFileContextStore()
+            let rootRecord = try await store.loadRoot(path: root.path)
+            let loadedFile = await store.file(rootID: rootRecord.id, relativePath: "A.swift")
+            let file = try XCTUnwrap(loadedFile)
+            let rewriteCounter = AsyncGate()
+            await rewriteCounter.release()
+            try await store.setSearchContentReadChunkHandlerForTesting(rootID: rootRecord.id) { _ in
+                guard await rewriteCounter.startCount() == 0 else {
+                    await rewriteCounter.markStartedAndWaitForRelease()
+                    return
+                }
+                try? "let newReadToken = true\n".write(to: fileURL, atomically: true, encoding: .utf8)
+                await rewriteCounter.markStartedAndWaitForRelease()
+            }
+
+            let snapshot = try await store.searchContentSnapshot(for: file)
+            let cache = await store.searchDecodedContentCacheSnapshotForTesting()
+
+            XCTAssertTrue(snapshot.isFresh)
+            XCTAssertEqual(snapshot.content, "let newReadToken = true\n")
+            XCTAssertNotNil(snapshot.contentRevision)
+            XCTAssertEqual(cache.loadCount, 2)
+            XCTAssertEqual(cache.acceptedLoadCount, 1)
+        }
+
+        func testSearchContentSnapshotSameMtimeRewriteAndMutationInvalidationAdvanceRevision() async throws {
+            let root = try makeTemporaryRoot(name: "SearchContentInvalidation")
+            let fileURL = root.appendingPathComponent("A.swift")
+            let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
+            try write("old", to: fileURL)
+            try setDiskModificationDate(fixedDate, for: fileURL)
+
+            let store = WorkspaceFileContextStore()
+            let rootRecord = try await store.loadRoot(path: root.path)
+            let loadedFile = await store.file(rootID: rootRecord.id, relativePath: "A.swift")
+            let file = try XCTUnwrap(loadedFile)
+            let initial = try await store.searchContentSnapshot(for: file)
+
+            try write("new", to: fileURL)
+            try setDiskModificationDate(fixedDate, for: fileURL)
+            let sameMtimeRewrite = try await store.searchContentSnapshot(for: file)
+
+            _ = try await store.editFile(rootID: rootRecord.id, relativePath: "A.swift", newContent: "edit")
+            let directEdit = try await store.searchContentSnapshot(for: file)
+
+            try write("watch", to: fileURL)
+            await store.replayObservedFileSystemDeltas(
+                rootID: rootRecord.id,
+                deltas: [.fileModified("A.swift", fixedDate)]
+            )
+            let watcherEdit = try await store.searchContentSnapshot(for: file)
+
+            XCTAssertEqual(initial.content, "old")
+            XCTAssertEqual(sameMtimeRewrite.content, "new")
+            XCTAssertEqual(directEdit.content, "edit")
+            XCTAssertEqual(watcherEdit.content, "watch")
+            let revisions = try [initial, sameMtimeRewrite, directEdit, watcherEdit].map {
+                try XCTUnwrap($0.contentRevision)
+            }
+            XCTAssertEqual(Set(revisions).count, revisions.count)
+            XCTAssertEqual(revisions, revisions.sorted())
+        }
+
+        func testSearchContentSnapshotMoveDeleteAndFolderRemovalEvictOldIdentities() async throws {
+            let root = try makeTemporaryRoot(name: "SearchContentRemovalInvalidation")
+            try write("move", to: root.appendingPathComponent("A.swift"))
+            try write("nested", to: root.appendingPathComponent("Folder/B.swift"))
+
+            let store = WorkspaceFileContextStore()
+            let rootRecord = try await store.loadRoot(path: root.path)
+            let loadedA = await store.file(rootID: rootRecord.id, relativePath: "A.swift")
+            let loadedB = await store.file(rootID: rootRecord.id, relativePath: "Folder/B.swift")
+            let oldA = try XCTUnwrap(loadedA)
+            let oldB = try XCTUnwrap(loadedB)
+            _ = try await store.searchContentSnapshot(for: oldA)
+            _ = try await store.searchContentSnapshot(for: oldB)
+
+            try await store.moveFile(rootID: rootRecord.id, from: "A.swift", to: "Moved.swift")
+            let staleMovedIdentity = try await store.searchContentSnapshot(for: oldA)
+            let loadedMovedRecord = await store.file(rootID: rootRecord.id, relativePath: "Moved.swift")
+            let movedRecord = try XCTUnwrap(loadedMovedRecord)
+            let moved = try await store.searchContentSnapshot(for: movedRecord)
+            try await store.deleteFile(rootID: rootRecord.id, relativePath: "Moved.swift")
+
+            try FileManager.default.removeItem(at: root.appendingPathComponent("Folder"))
+            await store.replayObservedFileSystemDeltas(rootID: rootRecord.id, deltas: [.folderRemoved("Folder")])
+            let staleNestedIdentity = try await store.searchContentSnapshot(for: oldB)
+            let settled = await waitForSearchContentCache(store: store) { $0.entryCount == 0 }
+
+            XCTAssertFalse(staleMovedIdentity.isFresh)
+            XCTAssertTrue(moved.isFresh)
+            XCTAssertFalse(staleNestedIdentity.isFresh)
+            XCTAssertEqual(settled.entryCount, 0)
+        }
+
+        func testSearchContentSnapshotCacheClearAndRootUnloadEvictEntries() async throws {
+            let root = try makeTemporaryRoot(name: "SearchContentCacheClear")
+            try write("let clearToken = true\n", to: root.appendingPathComponent("A.swift"))
+
+            let store = WorkspaceFileContextStore()
+            let rootRecord = try await store.loadRoot(path: root.path)
+            let loadedFile = await store.file(rootID: rootRecord.id, relativePath: "A.swift")
+            let file = try XCTUnwrap(loadedFile)
+            let initial = try await store.searchContentSnapshot(for: file)
+            await store.clearSearchDecodedContentCache()
+            let afterClear = try await store.searchContentSnapshot(for: file)
+            await store.unloadRoot(id: rootRecord.id)
+            let afterUnload = await store.searchDecodedContentCacheSnapshotForTesting()
+
+            XCTAssertNotEqual(initial.contentRevision, afterClear.contentRevision)
+            XCTAssertEqual(afterUnload.entryCount, 0)
+            XCTAssertEqual(afterUnload.activeFlightCount, 0)
+        }
+
         func testInitialRootCodemapScansByRootIDSkipSamePathReloadedRoot() async throws {
             let root = try makeTemporaryRoot(name: "InitialScanRootIDGate")
             try write("struct A { func oldRoot() {} }\n", to: root.appendingPathComponent("A.swift"))
@@ -3030,6 +3394,26 @@ final class WorkspaceFileContextStoreTests: XCTestCase {
             func snapshot() -> [UInt64] {
                 sequences
             }
+        }
+
+        private func waitForSearchContentCache(
+            store: WorkspaceFileContextStore,
+            timeout: TimeInterval = 2,
+            file: StaticString = #filePath,
+            line: UInt = #line,
+            until predicate: (WorkspaceSearchDecodedContentCache.Snapshot) -> Bool
+        ) async -> WorkspaceSearchDecodedContentCache.Snapshot {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                let snapshot = await store.searchDecodedContentCacheSnapshotForTesting()
+                if predicate(snapshot) {
+                    return snapshot
+                }
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+            let final = await store.searchDecodedContentCacheSnapshotForTesting()
+            XCTFail("Timed out waiting for search content cache: \(final)", file: file, line: line)
+            return final
         }
 
         private actor AsyncGate {

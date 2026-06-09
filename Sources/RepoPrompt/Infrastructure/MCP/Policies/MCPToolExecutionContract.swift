@@ -61,7 +61,8 @@ enum MCPToolExecutionContractCatalog {
             MCPWindowToolName.askOracle,
             MCPWindowToolName.oracleSend,
             MCPWindowToolName.oracleChatLog,
-            MCPWindowToolName.contextBuilder
+            MCPWindowToolName.contextBuilder,
+            MCPWindowToolName.search
         ] {
             result[toolName] = .longSynchronousCancellable
         }

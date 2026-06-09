@@ -35,12 +35,6 @@ private enum ContentReadMode {
     case streamed
 }
 
-private struct ContentReadFingerprint: Equatable {
-    let fileSize: Int64
-    let modificationDate: Date?
-    let systemFileNumber: UInt64?
-}
-
 private struct ContentReadRequest {
     let cacheKey: String
     let relativePath: String
@@ -52,6 +46,7 @@ private struct ContentReadRequest {
     let fileSizeLimit: Int64
     let mode: ContentReadMode
     let workloadClass: ContentReadWorkloadClass
+    let schedulerOwnerID: UUID
     #if DEBUG
         let chunkReadHandler: (@Sendable (String) async -> Void)?
     #endif
@@ -68,7 +63,7 @@ private struct ContentReadResult {
     let content: String?
     let detectedEncodingRawValue: UInt?
     let modificationDate: Date?
-    let fingerprint: ContentReadFingerprint?
+    let fingerprint: FileContentFingerprint?
     let telemetryOutcome: ContentReadTelemetryOutcome
 
     var detectedEncoding: String.Encoding? {
@@ -79,8 +74,8 @@ private struct ContentReadResult {
 private struct ValidatedContentFile {
     let url: URL
     let fileSize: Int64
-    let modificationDate: Date?
-    let fingerprint: ContentReadFingerprint
+    let modificationDate: Date
+    let fingerprint: FileContentFingerprint
 }
 
 private enum BoundedDataReadResult {
@@ -88,36 +83,91 @@ private enum BoundedDataReadResult {
     case tooLarge(observedByteCount: Int64)
 }
 
-private actor ContentReadAsyncLimiter {
+actor ContentReadAsyncLimiter {
+    #if DEBUG
+        struct Snapshot: Equatable {
+            let capacity: Int
+            let maxQueuedWaiterCount: Int
+            let activePermitCount: Int
+            let queuedWaiterCount: Int
+            let ownerLaneCount: Int
+            let cancellationCount: Int
+            let grantCount: Int
+            let overloadCount: Int
+            let interactiveGrantCount: Int
+            let normalGrantCount: Int
+            let bulkGrantCount: Int
+
+            var isIdle: Bool {
+                activePermitCount == 0 && queuedWaiterCount == 0 && ownerLaneCount == 0
+            }
+        }
+    #endif
+
+    private enum PriorityClass: Int, CaseIterable {
+        case interactive
+        case normal
+        case bulk
+    }
+
     private struct PermitAcquisition {
+        let ownerID: UUID
         let waited: Bool
         let queueDepth: Int
         let waiterCount: Int
     }
 
-    private enum WaiterState {
-        case waiting(
-            continuation: CheckedContinuation<PermitAcquisition, Error>,
-            workloadClass: ContentReadWorkloadClass,
-            lifecycleCorrelation: EditFlowPerf.LifecycleCorrelation?
-        )
-        case cancelled
+    private struct WaiterState {
+        let continuation: CheckedContinuation<PermitAcquisition, Error>
+        let workloadClass: ContentReadWorkloadClass
+        let ownerID: UUID
+        let priorityClass: PriorityClass
+        let lifecycleCorrelation: EditFlowPerf.LifecycleCorrelation?
+        let enqueueOrdinal: UInt64
+        let enqueuedAtUptimeNanoseconds: UInt64
     }
 
     private let capacity: Int
+    private let maxQueuedWaiterCount: Int
+    private let retryAfterMilliseconds: Int
+    private let agePromotionNanoseconds: UInt64
+    private let maxConsecutiveInteractiveGrants: Int
     private var availablePermits: Int
-    private var waiterOrder: [UUID] = []
-    private var pendingWaiterIDs = Set<UUID>()
     private var waiterStates: [UUID: WaiterState] = [:]
+    private var activePermitCountsByOwner: [UUID: Int] = [:]
+    private var lastGrantOrdinalByOwner: [UUID: UInt64] = [:]
+    private var nextEnqueueOrdinal: UInt64 = 0
+    private var nextGrantOrdinal: UInt64 = 0
+    private var consecutiveInteractiveGrants = 0
+    private var cancellationCount = 0
+    private var grantCount = 0
+    private var overloadCount = 0
+    private var interactiveGrantCount = 0
+    private var normalGrantCount = 0
+    private var bulkGrantCount = 0
 
-    init(capacity: Int) {
+    init(
+        capacity: Int,
+        maxQueuedWaiterCount: Int = 512,
+        retryAfterMilliseconds: Int = 1000,
+        agePromotionNanoseconds: UInt64 = 1_000_000_000,
+        maxConsecutiveInteractiveGrants: Int = 4
+    ) {
         precondition(capacity > 0, "Content read limiter must have at least one permit")
+        precondition(maxQueuedWaiterCount >= 0)
+        precondition(retryAfterMilliseconds >= 0)
+        precondition(maxConsecutiveInteractiveGrants > 0)
         self.capacity = capacity
+        self.maxQueuedWaiterCount = maxQueuedWaiterCount
+        self.retryAfterMilliseconds = retryAfterMilliseconds
+        self.agePromotionNanoseconds = agePromotionNanoseconds
+        self.maxConsecutiveInteractiveGrants = maxConsecutiveInteractiveGrants
         availablePermits = capacity
     }
 
     func withPermit<T>(
         workloadClass: ContentReadWorkloadClass,
+        ownerID: UUID,
         _ body: @Sendable () async throws -> T
     ) async throws -> T {
         let lifecycleCorrelation = EditFlowPerf.currentLifecycleCorrelation
@@ -125,13 +175,15 @@ private actor ContentReadAsyncLimiter {
             EditFlowPerf.Stage.FileSystem.contentReadWorkerPermitWait,
             EditFlowPerf.Dimensions(
                 workloadClass: workloadClass.rawValue,
-                queueDepth: waiterOrder.count,
+                queueDepth: waiterStates.count,
                 waiterCount: waiterStates.count
             )
         )
+        let acquisition: PermitAcquisition
         do {
-            let acquisition = try await acquire(
+            acquisition = try await acquire(
                 workloadClass: workloadClass,
+                ownerID: ownerID,
                 lifecycleCorrelation: lifecycleCorrelation
             )
             EditFlowPerf.end(
@@ -151,43 +203,55 @@ private actor ContentReadAsyncLimiter {
                 EditFlowPerf.Dimensions(
                     outcome: error is CancellationError ? "cancelled" : "error",
                     workloadClass: workloadClass.rawValue,
-                    queueDepth: waiterOrder.count,
+                    queueDepth: waiterStates.count,
                     waiterCount: waiterStates.count
                 )
             )
             throw error
         }
-        defer { release() }
+        defer { release(acquisition) }
         try Task.checkCancellation()
         return try await body()
     }
 
     private func acquire(
         workloadClass: ContentReadWorkloadClass,
+        ownerID: UUID,
         lifecycleCorrelation: EditFlowPerf.LifecycleCorrelation?
     ) async throws -> PermitAcquisition {
         try Task.checkCancellation()
-        if availablePermits > 0 {
-            availablePermits -= 1
-            return PermitAcquisition(waited: false, queueDepth: waiterOrder.count, waiterCount: waiterStates.count)
+        scheduleAvailablePermits()
+        if availablePermits > 0, waiterStates.isEmpty {
+            return allocatePermit(
+                ownerID: ownerID,
+                priorityClass: Self.priorityClass(for: workloadClass),
+                waited: false
+            )
+        }
+        guard waiterStates.count < maxQueuedWaiterCount else {
+            overloadCount &+= 1
+            EditFlowPerf.lifecycleEvent(
+                EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerOverloaded,
+                correlation: lifecycleCorrelation,
+                EditFlowPerf.Dimensions(
+                    workloadClass: workloadClass.rawValue,
+                    queueDepth: waiterStates.count,
+                    waiterCount: waiterStates.count
+                )
+            )
+            throw ContentReadSchedulerError.queueFull(retryAfterMilliseconds: retryAfterMilliseconds)
         }
 
         let waiterID = UUID()
-        pendingWaiterIDs.insert(waiterID)
-        defer {
-            pendingWaiterIDs.remove(waiterID)
-            waiterStates.removeValue(forKey: waiterID)
-        }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                Task {
-                    await self.enqueueWaiter(
-                        id: waiterID,
-                        continuation: continuation,
-                        workloadClass: workloadClass,
-                        lifecycleCorrelation: lifecycleCorrelation
-                    )
-                }
+                enqueueWaiter(
+                    id: waiterID,
+                    continuation: continuation,
+                    workloadClass: workloadClass,
+                    ownerID: ownerID,
+                    lifecycleCorrelation: lifecycleCorrelation
+                )
             }
         } onCancel: {
             Task { await self.cancelWaiter(id: waiterID) }
@@ -198,111 +262,297 @@ private actor ContentReadAsyncLimiter {
         id: UUID,
         continuation: CheckedContinuation<PermitAcquisition, Error>,
         workloadClass: ContentReadWorkloadClass,
+        ownerID: UUID,
         lifecycleCorrelation: EditFlowPerf.LifecycleCorrelation?
     ) {
-        if case .cancelled? = waiterStates.removeValue(forKey: id) {
+        guard !Task.isCancelled else {
             continuation.resume(throwing: CancellationError())
             return
         }
-        if availablePermits > 0 {
-            availablePermits -= 1
-            continuation.resume(returning: PermitAcquisition(
-                waited: false,
-                queueDepth: waiterOrder.count,
-                waiterCount: waiterStates.count
+        guard waiterStates.count < maxQueuedWaiterCount else {
+            overloadCount &+= 1
+            EditFlowPerf.lifecycleEvent(
+                EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerOverloaded,
+                correlation: lifecycleCorrelation,
+                EditFlowPerf.Dimensions(
+                    workloadClass: workloadClass.rawValue,
+                    queueDepth: waiterStates.count,
+                    waiterCount: waiterStates.count
+                )
+            )
+            continuation.resume(throwing: ContentReadSchedulerError.queueFull(
+                retryAfterMilliseconds: retryAfterMilliseconds
             ))
             return
         }
-        waiterStates[id] = .waiting(
+        nextEnqueueOrdinal &+= 1
+        waiterStates[id] = WaiterState(
             continuation: continuation,
             workloadClass: workloadClass,
-            lifecycleCorrelation: lifecycleCorrelation
+            ownerID: ownerID,
+            priorityClass: Self.priorityClass(for: workloadClass),
+            lifecycleCorrelation: lifecycleCorrelation,
+            enqueueOrdinal: nextEnqueueOrdinal,
+            enqueuedAtUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds
         )
-        waiterOrder.append(id)
         EditFlowPerf.lifecycleEvent(
             EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerPermitWaitBegan,
             correlation: lifecycleCorrelation,
             EditFlowPerf.Dimensions(
                 workloadClass: workloadClass.rawValue,
-                queueDepth: waiterOrder.count,
+                queueDepth: waiterStates.count,
                 waiterCount: waiterStates.count
             )
         )
+        scheduleAvailablePermits()
     }
 
     private func cancelWaiter(id: UUID) {
-        if case let .waiting(continuation, workloadClass, lifecycleCorrelation)? = waiterStates.removeValue(forKey: id) {
-            waiterOrder.removeAll { $0 == id }
-            EditFlowPerf.lifecycleEvent(
-                EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerPermitCancelled,
-                correlation: lifecycleCorrelation,
-                EditFlowPerf.Dimensions(
-                    workloadClass: workloadClass.rawValue,
-                    queueDepth: waiterOrder.count,
-                    waiterCount: waiterStates.count
-                )
+        guard let state = waiterStates.removeValue(forKey: id) else { return }
+        cancellationCount &+= 1
+        cleanupOwnerIfIdle(state.ownerID)
+        EditFlowPerf.lifecycleEvent(
+            EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerPermitCancelled,
+            correlation: state.lifecycleCorrelation,
+            EditFlowPerf.Dimensions(
+                workloadClass: state.workloadClass.rawValue,
+                queueDepth: waiterStates.count,
+                waiterCount: waiterStates.count
             )
-            continuation.resume(throwing: CancellationError())
-        } else if pendingWaiterIDs.contains(id), waiterStates[id] == nil {
-            waiterStates[id] = .cancelled
-        }
+        )
+        state.continuation.resume(throwing: CancellationError())
+        scheduleAvailablePermits()
     }
 
-    #if DEBUG
-        func snapshotForTesting() -> (queueDepth: Int, waiterCount: Int, pendingWaiterCount: Int) {
-            (waiterOrder.count, waiterStates.count, pendingWaiterIDs.count)
-        }
-    #endif
-
-    private func release() {
-        while !waiterOrder.isEmpty {
-            let waiterID = waiterOrder.removeFirst()
-            guard let state = waiterStates.removeValue(forKey: waiterID) else { continue }
-            switch state {
-            case let .waiting(continuation, workloadClass, lifecycleCorrelation):
-                EditFlowPerf.lifecycleEvent(
-                    EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerPermitAcquired,
-                    correlation: lifecycleCorrelation,
-                    EditFlowPerf.Dimensions(
-                        workloadClass: workloadClass.rawValue,
-                        queueDepth: waiterOrder.count,
-                        waiterCount: waiterStates.count
-                    )
-                )
-                continuation.resume(returning: PermitAcquisition(
-                    waited: true,
-                    queueDepth: waiterOrder.count,
-                    waiterCount: waiterStates.count
-                ))
-                return
-            case .cancelled:
-                continue
+    private func release(_ acquisition: PermitAcquisition) {
+        if let activeCount = activePermitCountsByOwner[acquisition.ownerID] {
+            if activeCount <= 1 {
+                activePermitCountsByOwner.removeValue(forKey: acquisition.ownerID)
+            } else {
+                activePermitCountsByOwner[acquisition.ownerID] = activeCount - 1
             }
         }
         #if DEBUG
             assert(availablePermits < capacity, "Content read limiter over-release detected")
         #endif
         availablePermits = min(availablePermits + 1, capacity)
+        cleanupOwnerIfIdle(acquisition.ownerID)
+        scheduleAvailablePermits()
     }
+
+    private func scheduleAvailablePermits() {
+        while availablePermits > 0, let waiterID = nextWaiterID() {
+            guard let state = waiterStates.removeValue(forKey: waiterID) else { continue }
+            let acquisition = allocatePermit(
+                ownerID: state.ownerID,
+                priorityClass: state.priorityClass,
+                waited: true
+            )
+            EditFlowPerf.lifecycleEvent(
+                EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerPermitAcquired,
+                correlation: state.lifecycleCorrelation,
+                EditFlowPerf.Dimensions(
+                    workloadClass: state.workloadClass.rawValue,
+                    queueDepth: waiterStates.count,
+                    waiterCount: waiterStates.count
+                )
+            )
+            state.continuation.resume(returning: acquisition)
+        }
+    }
+
+    private func nextWaiterID() -> UUID? {
+        let now = DispatchTime.now().uptimeNanoseconds
+        if let aged = waiterStates.min(by: { lhs, rhs in
+            let lhsAged = elapsedNanoseconds(since: lhs.value.enqueuedAtUptimeNanoseconds, now: now) >= agePromotionNanoseconds
+            let rhsAged = elapsedNanoseconds(since: rhs.value.enqueuedAtUptimeNanoseconds, now: now) >= agePromotionNanoseconds
+            if lhsAged != rhsAged { return lhsAged && !rhsAged }
+            return lhs.value.enqueueOrdinal < rhs.value.enqueueOrdinal
+        }), elapsedNanoseconds(since: aged.value.enqueuedAtUptimeNanoseconds, now: now) >= agePromotionNanoseconds {
+            return aged.key
+        }
+
+        let hasInteractive = waiterStates.values.contains { $0.priorityClass == .interactive }
+        let hasNormal = waiterStates.values.contains { $0.priorityClass == .normal }
+        let hasBulk = waiterStates.values.contains { $0.priorityClass == .bulk }
+        let selectedPriority: PriorityClass
+        if hasInteractive,
+           consecutiveInteractiveGrants < maxConsecutiveInteractiveGrants || (!hasNormal && !hasBulk)
+        {
+            selectedPriority = .interactive
+        } else if hasNormal {
+            selectedPriority = .normal
+        } else if hasBulk {
+            selectedPriority = .bulk
+        } else if hasInteractive {
+            selectedPriority = .interactive
+        } else {
+            return nil
+        }
+        return nextWaiterID(priorityClass: selectedPriority)
+    }
+
+    private func nextWaiterID(priorityClass: PriorityClass) -> UUID? {
+        var firstByOwner: [UUID: (id: UUID, state: WaiterState)] = [:]
+        for (id, state) in waiterStates where state.priorityClass == priorityClass {
+            if let existing = firstByOwner[state.ownerID], existing.state.enqueueOrdinal <= state.enqueueOrdinal {
+                continue
+            }
+            firstByOwner[state.ownerID] = (id, state)
+        }
+        return firstByOwner.values.min { lhs, rhs in
+            let lhsGrant = lastGrantOrdinalByOwner[lhs.state.ownerID]
+            let rhsGrant = lastGrantOrdinalByOwner[rhs.state.ownerID]
+            switch (lhsGrant, rhsGrant) {
+            case (nil, nil):
+                return lhs.state.enqueueOrdinal < rhs.state.enqueueOrdinal
+            case (nil, _):
+                return true
+            case (_, nil):
+                return false
+            case let (lhsGrant?, rhsGrant?):
+                if lhsGrant != rhsGrant { return lhsGrant < rhsGrant }
+                return lhs.state.enqueueOrdinal < rhs.state.enqueueOrdinal
+            }
+        }?.id
+    }
+
+    private func allocatePermit(
+        ownerID: UUID,
+        priorityClass: PriorityClass,
+        waited: Bool
+    ) -> PermitAcquisition {
+        availablePermits -= 1
+        activePermitCountsByOwner[ownerID, default: 0] += 1
+        nextGrantOrdinal &+= 1
+        lastGrantOrdinalByOwner[ownerID] = nextGrantOrdinal
+        grantCount &+= 1
+        switch priorityClass {
+        case .interactive:
+            interactiveGrantCount &+= 1
+            consecutiveInteractiveGrants += 1
+        case .normal:
+            normalGrantCount &+= 1
+            consecutiveInteractiveGrants = 0
+        case .bulk:
+            bulkGrantCount &+= 1
+            consecutiveInteractiveGrants = 0
+        }
+        return PermitAcquisition(
+            ownerID: ownerID,
+            waited: waited,
+            queueDepth: waiterStates.count,
+            waiterCount: waiterStates.count
+        )
+    }
+
+    private func cleanupOwnerIfIdle(_ ownerID: UUID) {
+        guard activePermitCountsByOwner[ownerID] == nil,
+              !waiterStates.values.contains(where: { $0.ownerID == ownerID })
+        else { return }
+        lastGrantOrdinalByOwner.removeValue(forKey: ownerID)
+    }
+
+    private func elapsedNanoseconds(since start: UInt64, now: UInt64) -> UInt64 {
+        now >= start ? now - start : 0
+    }
+
+    private static func priorityClass(for workloadClass: ContentReadWorkloadClass) -> PriorityClass {
+        switch workloadClass {
+        case .interactiveRead:
+            .interactive
+        case .contentSearch, .unspecified:
+            .normal
+        case .codemap, .encodingDetection:
+            .bulk
+        }
+    }
+
+    #if DEBUG
+        func snapshotForTesting() -> Snapshot {
+            let queuedOwners = Set(waiterStates.values.map(\.ownerID))
+            let ownerLaneCount = queuedOwners.union(activePermitCountsByOwner.keys).count
+            return Snapshot(
+                capacity: capacity,
+                maxQueuedWaiterCount: maxQueuedWaiterCount,
+                activePermitCount: capacity - availablePermits,
+                queuedWaiterCount: waiterStates.count,
+                ownerLaneCount: ownerLaneCount,
+                cancellationCount: cancellationCount,
+                grantCount: grantCount,
+                overloadCount: overloadCount,
+                interactiveGrantCount: interactiveGrantCount,
+                normalGrantCount: normalGrantCount,
+                bulkGrantCount: bulkGrantCount
+            )
+        }
+    #endif
 }
 
 extension FileSystemService {
     private static let contentReadWorkerLimit = max(2, min(4, ProcessInfo.processInfo.activeProcessorCount))
-    private static let contentReadWorkerLimiter = ContentReadAsyncLimiter(capacity: contentReadWorkerLimit)
+    private static let contentReadWorkerLimiter = ContentReadAsyncLimiter(
+        capacity: contentReadWorkerLimit,
+        maxQueuedWaiterCount: 512
+    )
 
     #if DEBUG
         nonisolated static var contentReadWorkerLimitForTesting: Int {
             contentReadWorkerLimit
         }
 
-        nonisolated static func contentReadWorkerLimiterSnapshotForTesting() async -> (
-            queueDepth: Int,
-            waiterCount: Int,
-            pendingWaiterCount: Int
-        ) {
+        nonisolated static func contentReadWorkerLimiterSnapshotForTesting() async -> ContentReadAsyncLimiter.Snapshot {
             await contentReadWorkerLimiter.snapshotForTesting()
         }
     #endif
+
+    func contentFingerprint(ofRelativePath relativePath: String) async throws -> FileContentFingerprint {
+        let request = try makeContentReadRequest(
+            cacheKey: relativePath,
+            chunkSize: 1_048_576,
+            fileSizeLimit: 10_000_000,
+            mode: .automatic,
+            workloadClass: .contentSearch
+        )
+        return try await Task.detached(priority: Task.currentPriority) {
+            try Self.validateContentFileForReading(request).fingerprint
+        }.value
+    }
+
+    func loadValidatedContent(
+        ofRelativePath relativePath: String,
+        expectedFingerprint: FileContentFingerprint,
+        workloadClass: ContentReadWorkloadClass = .contentSearch,
+        schedulerOwnerID: UUID? = nil
+    ) async throws -> ValidatedFileContentSnapshot {
+        let request = try makeContentReadRequest(
+            cacheKey: relativePath,
+            chunkSize: 1_048_576,
+            fileSizeLimit: 10_000_000,
+            mode: .automatic,
+            workloadClass: workloadClass,
+            schedulerOwnerID: schedulerOwnerID
+        )
+        let result = try await performMeasuredContentReadOffActor(
+            request,
+            lifecycleCorrelation: EditFlowPerf.currentLifecycleCorrelation,
+            expectedFingerprint: expectedFingerprint,
+            requirePostReadValidation: true
+        )
+        try Task.checkCancellation()
+        guard let acceptedFingerprint = result.fingerprint,
+              acceptedFingerprint == expectedFingerprint
+        else {
+            throw FileContentValidationError.fingerprintChanged
+        }
+        commitContentReadResultIfCurrent(result, cacheKey: request.cacheKey)
+        return ValidatedFileContentSnapshot(
+            content: result.content,
+            detectedEncodingRawValue: result.detectedEncodingRawValue,
+            modificationDate: result.modificationDate ?? acceptedFingerprint.modificationDate,
+            fingerprint: acceptedFingerprint
+        )
+    }
 
     func loadContent(
         ofRelativePath relativePath: String,
@@ -546,7 +796,8 @@ extension FileSystemService {
         chunkSize: Int,
         fileSizeLimit: Int64,
         mode: ContentReadMode,
-        workloadClass: ContentReadWorkloadClass
+        workloadClass: ContentReadWorkloadClass,
+        schedulerOwnerID: UUID? = nil
     ) throws -> ContentReadRequest {
         let contentLoadState = EditFlowPerf.begin(EditFlowPerf.Stage.FileSystem.contentLoadActorBody)
         defer { EditFlowPerf.end(EditFlowPerf.Stage.FileSystem.contentLoadActorBody, contentLoadState) }
@@ -579,6 +830,7 @@ extension FileSystemService {
                 fileSizeLimit: fileSizeLimit,
                 mode: mode,
                 workloadClass: workloadClass,
+                schedulerOwnerID: schedulerOwnerID ?? diagnosticRootToken,
                 chunkReadHandler: contentReadChunkHandler
             )
         #else
@@ -592,14 +844,17 @@ extension FileSystemService {
                 chunkSize: chunkSize,
                 fileSizeLimit: fileSizeLimit,
                 mode: mode,
-                workloadClass: workloadClass
+                workloadClass: workloadClass,
+                schedulerOwnerID: schedulerOwnerID ?? diagnosticRootToken
             )
         #endif
     }
 
     private func performMeasuredContentReadOffActor(
         _ request: ContentReadRequest,
-        lifecycleCorrelation: EditFlowPerf.LifecycleCorrelation?
+        lifecycleCorrelation: EditFlowPerf.LifecycleCorrelation?,
+        expectedFingerprint: FileContentFingerprint? = nil,
+        requirePostReadValidation: Bool = false
     ) async throws -> ContentReadResult {
         EditFlowPerf.lifecycleEvent(
             EditFlowPerf.Lifecycle.FileSystem.contentReadOffActorScheduled,
@@ -611,7 +866,11 @@ extension FileSystemService {
             EditFlowPerf.Dimensions(workloadClass: request.workloadClass.rawValue, rootToken: diagnosticRootToken.uuidString)
         )
         do {
-            let result = try await Self.performContentReadOffActor(request)
+            let result = try await Self.performContentReadOffActor(
+                request,
+                expectedFingerprint: expectedFingerprint,
+                requirePostReadValidation: requirePostReadValidation
+            )
             EditFlowPerf.end(
                 EditFlowPerf.Stage.FileSystem.contentReadOffActorAwait,
                 offActorState,
@@ -654,17 +913,27 @@ extension FileSystemService {
         let contentLoadState = EditFlowPerf.begin(EditFlowPerf.Stage.FileSystem.contentLoadActorBody)
         defer { EditFlowPerf.end(EditFlowPerf.Stage.FileSystem.contentLoadActorBody, contentLoadState) }
 
-        guard let attributes = try? fm.attributesOfItem(atPath: result.absolutePath),
-              Self.contentReadFingerprint(from: attributes) == fingerprint
-        else { return }
+        guard (try? FileContentFingerprintReader.fingerprint(atPath: result.absolutePath)) == fingerprint else { return }
         encodingMap[cacheKey] = detectedEncoding
     }
 
-    private nonisolated static func performContentReadOffActor(_ request: ContentReadRequest) async throws -> ContentReadResult {
-        try await contentReadWorkerLimiter.withPermit(workloadClass: request.workloadClass) {
+    private nonisolated static func performContentReadOffActor(
+        _ request: ContentReadRequest,
+        expectedFingerprint: FileContentFingerprint? = nil,
+        requirePostReadValidation: Bool = false
+    ) async throws -> ContentReadResult {
+        let workerPriority = Task.currentPriority
+        return try await contentReadWorkerLimiter.withPermit(
+            workloadClass: request.workloadClass,
+            ownerID: request.schedulerOwnerID
+        ) {
             try await withThrowingTaskGroup(of: ContentReadResult.self) { group in
-                group.addTask(priority: .utility) {
-                    try await readContentFromDisk(request)
+                group.addTask(priority: workerPriority) {
+                    try await readContentFromDisk(
+                        request,
+                        expectedFingerprint: expectedFingerprint,
+                        requirePostReadValidation: requirePostReadValidation
+                    )
                 }
                 guard let result = try await group.next() else {
                     throw CancellationError()
@@ -675,7 +944,11 @@ extension FileSystemService {
         }
     }
 
-    private nonisolated static func readContentFromDisk(_ request: ContentReadRequest) async throws -> ContentReadResult {
+    private nonisolated static func readContentFromDisk(
+        _ request: ContentReadRequest,
+        expectedFingerprint: FileContentFingerprint? = nil,
+        requirePostReadValidation: Bool = false
+    ) async throws -> ContentReadResult {
         let workerBodyState = EditFlowPerf.begin(
             EditFlowPerf.Stage.FileSystem.contentReadWorkerBody,
             EditFlowPerf.Dimensions(
@@ -699,7 +972,7 @@ extension FileSystemService {
         }
 
         do {
-            if hasAlwaysBinaryExtension(request.relativePath) {
+            if hasAlwaysBinaryExtension(request.relativePath), !requirePostReadValidation {
                 workerBodyOutcome = ContentReadTelemetryOutcome.unavailable.rawValue
                 return ContentReadResult(
                     absolutePath: request.absolutePath,
@@ -713,12 +986,29 @@ extension FileSystemService {
 
             try Task.checkCancellation()
             let validated = try validateContentFileForReading(request)
+            if let expectedFingerprint, validated.fingerprint != expectedFingerprint {
+                throw FileContentValidationError.fingerprintChanged
+            }
             workerBodyFileBytes = telemetryFileBytes(validated.fileSize)
             let result: ContentReadResult = switch request.mode {
             case .automatic:
-                try await readAutomaticContent(request, validated: validated)
+                try await readAutomaticContent(
+                    request,
+                    validated: validated,
+                    requireStableIdentity: requirePostReadValidation
+                )
             case .streamed:
-                try await readStreamedContent(request, validated: validated)
+                try await readStreamedContent(
+                    request,
+                    validated: validated,
+                    requireStableIdentity: requirePostReadValidation
+                )
+            }
+            if requirePostReadValidation {
+                let postReadFingerprint = try FileContentFingerprintReader.fingerprint(atPath: request.absolutePath)
+                guard postReadFingerprint == validated.fingerprint else {
+                    throw FileContentValidationError.fingerprintChanged
+                }
             }
             workerBodyOutcome = result.telemetryOutcome.rawValue
             return result
@@ -734,44 +1024,73 @@ extension FileSystemService {
 
     private nonisolated static func readAutomaticContent(
         _ request: ContentReadRequest,
-        validated: ValidatedContentFile
+        validated: ValidatedContentFile,
+        requireStableIdentity: Bool
     ) async throws -> ContentReadResult {
+        let handle = try openValidatedContentHandle(
+            request,
+            validated: validated,
+            requireStableIdentity: requireStableIdentity
+        )
+        defer { try? handle.close() }
+
         let skipProbe = shouldSkipBinaryProbe(url: validated.url)
-        if !skipProbe, let handle = try? FileHandle(forReadingFrom: validated.url) {
-            defer { try? handle.close() }
+        if !skipProbe {
             try await runContentReadChunkHook(request)
             let probe = try handle.read(upToCount: 8192) ?? Data()
             try Task.checkCancellation()
             if isProbablyBinary(probe) {
-                return noEncodingContentReadResult(request, validated: validated, content: nil)
+                return try validateOpenContentHandle(
+                    handle,
+                    validated: validated,
+                    result: noEncodingContentReadResult(request, validated: validated, content: nil),
+                    required: requireStableIdentity
+                )
             }
+            try handle.seek(toOffset: 0)
         }
 
         if validated.fileSize < 2_000_000 {
             let data: Data
-            switch try await readBoundedData(request, url: validated.url) {
+            switch try await readBoundedData(request, handle: handle) {
             case let .data(readData):
                 data = readData
             case let .tooLarge(observedByteCount):
-                return oversizedContentReadResult(request, validated: validated, observedByteCount: observedByteCount)
+                return try validateOpenContentHandle(
+                    handle,
+                    validated: validated,
+                    result: oversizedContentReadResult(request, validated: validated, observedByteCount: observedByteCount),
+                    required: requireStableIdentity
+                )
             }
             let detected = try decodeSmallFileData(data)
             try Task.checkCancellation()
-            return ContentReadResult(
-                absolutePath: request.absolutePath,
-                content: detected.string,
-                detectedEncodingRawValue: detected.encoding.rawValue,
-                modificationDate: validated.modificationDate,
-                fingerprint: validated.fingerprint,
-                telemetryOutcome: .loaded
+            return try validateOpenContentHandle(
+                handle,
+                validated: validated,
+                result: ContentReadResult(
+                    absolutePath: request.absolutePath,
+                    content: detected.string,
+                    detectedEncodingRawValue: detected.encoding.rawValue,
+                    modificationDate: validated.modificationDate,
+                    fingerprint: validated.fingerprint,
+                    telemetryOutcome: .loaded
+                ),
+                required: requireStableIdentity
             )
         }
-        return try await readStreamedContent(request, validated: validated)
+        return try await readStreamedContent(
+            request,
+            validated: validated,
+            handle: handle,
+            requireStableIdentity: requireStableIdentity
+        )
     }
 
     private nonisolated static func readStreamedContent(
         _ request: ContentReadRequest,
-        validated: ValidatedContentFile
+        validated: ValidatedContentFile,
+        requireStableIdentity: Bool
     ) async throws -> ContentReadResult {
         if validated.fileSize > request.fileSizeLimit {
             return noEncodingContentReadResult(
@@ -782,10 +1101,27 @@ extension FileSystemService {
             )
         }
 
-        let skipProbe = shouldSkipBinaryProbe(url: validated.url)
-        let handle = try FileHandle(forReadingFrom: validated.url)
+        let handle = try openValidatedContentHandle(
+            request,
+            validated: validated,
+            requireStableIdentity: requireStableIdentity
+        )
         defer { try? handle.close() }
+        return try await readStreamedContent(
+            request,
+            validated: validated,
+            handle: handle,
+            requireStableIdentity: requireStableIdentity
+        )
+    }
 
+    private nonisolated static func readStreamedContent(
+        _ request: ContentReadRequest,
+        validated: ValidatedContentFile,
+        handle: FileHandle,
+        requireStableIdentity: Bool
+    ) async throws -> ContentReadResult {
+        let skipProbe = shouldSkipBinaryProbe(url: validated.url)
         var fullData = Data()
         fullData.reserveCapacity(Int(validated.fileSize))
         let detector = CharacterEncodingDetector()
@@ -794,10 +1130,20 @@ extension FileSystemService {
         let initialData = try handle.read(upToCount: request.chunkSize) ?? Data()
         try Task.checkCancellation()
         if !skipProbe, isProbablyBinary(initialData) {
-            return noEncodingContentReadResult(request, validated: validated, content: nil)
+            return try validateOpenContentHandle(
+                handle,
+                validated: validated,
+                result: noEncodingContentReadResult(request, validated: validated, content: nil),
+                required: requireStableIdentity
+            )
         }
         if Int64(initialData.count) > request.fileSizeLimit {
-            return oversizedContentReadResult(request, validated: validated, observedByteCount: Int64(initialData.count))
+            return try validateOpenContentHandle(
+                handle,
+                validated: validated,
+                result: oversizedContentReadResult(request, validated: validated, observedByteCount: Int64(initialData.count)),
+                required: requireStableIdentity
+            )
         }
         fullData.append(initialData)
         _ = detector.analyzeNextChunk(initialData)
@@ -809,7 +1155,12 @@ extension FileSystemService {
             if next.isEmpty { break }
             let observedByteCount = Int64(fullData.count) + Int64(next.count)
             if observedByteCount > request.fileSizeLimit {
-                return oversizedContentReadResult(request, validated: validated, observedByteCount: observedByteCount)
+                return try validateOpenContentHandle(
+                    handle,
+                    validated: validated,
+                    result: oversizedContentReadResult(request, validated: validated, observedByteCount: observedByteCount),
+                    required: requireStableIdentity
+                )
             }
             fullData.append(next)
             _ = detector.analyzeNextChunk(next)
@@ -827,13 +1178,18 @@ extension FileSystemService {
         } else {
             .utf8
         }
-        return ContentReadResult(
-            absolutePath: request.absolutePath,
-            content: String(data: fullData, encoding: encoding) ?? "[Binary data or unknown encoding]",
-            detectedEncodingRawValue: encoding.rawValue,
-            modificationDate: validated.modificationDate,
-            fingerprint: validated.fingerprint,
-            telemetryOutcome: .loaded
+        return try validateOpenContentHandle(
+            handle,
+            validated: validated,
+            result: ContentReadResult(
+                absolutePath: request.absolutePath,
+                content: String(data: fullData, encoding: encoding) ?? "[Binary data or unknown encoding]",
+                detectedEncodingRawValue: encoding.rawValue,
+                modificationDate: validated.modificationDate,
+                fingerprint: validated.fingerprint,
+                telemetryOutcome: .loaded
+            ),
+            required: requireStableIdentity
         )
     }
 
@@ -862,19 +1218,19 @@ extension FileSystemService {
         guard StandardizedPath.isDescendant(canonicalPath, of: request.canonicalRootPath) else {
             throw FileSystemError.invalidRelativePath
         }
-        let attributes = try FileManager.default.attributesOfItem(atPath: standardizedAbsolutePath)
-        let fingerprint = contentReadFingerprint(from: attributes)
+        let fingerprint = try FileContentFingerprintReader.fingerprint(atPath: standardizedAbsolutePath)
         return ValidatedContentFile(
             url: url,
-            fileSize: fingerprint.fileSize,
+            fileSize: fingerprint.byteSize,
             modificationDate: fingerprint.modificationDate,
             fingerprint: fingerprint
         )
     }
 
-    private nonisolated static func readBoundedData(_ request: ContentReadRequest, url: URL) async throws -> BoundedDataReadResult {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
+    private nonisolated static func readBoundedData(
+        _ request: ContentReadRequest,
+        handle: FileHandle
+    ) async throws -> BoundedDataReadResult {
         var data = Data()
         while true {
             try await runContentReadChunkHook(request)
@@ -888,6 +1244,39 @@ extension FileSystemService {
             data.append(next)
         }
         return .data(data)
+    }
+
+    private nonisolated static func openValidatedContentHandle(
+        _ request: ContentReadRequest,
+        validated: ValidatedContentFile,
+        requireStableIdentity: Bool
+    ) throws -> FileHandle {
+        let handle = try FileContentFingerprintReader.openReadOnlyFileHandle(atPath: request.absolutePath)
+        do {
+            if requireStableIdentity {
+                guard try FileContentFingerprintReader.fingerprint(fileDescriptor: handle.fileDescriptor) == validated.fingerprint else {
+                    throw FileContentValidationError.fingerprintChanged
+                }
+            }
+            return handle
+        } catch {
+            try? handle.close()
+            throw error
+        }
+    }
+
+    private nonisolated static func validateOpenContentHandle(
+        _ handle: FileHandle,
+        validated: ValidatedContentFile,
+        result: ContentReadResult,
+        required: Bool
+    ) throws -> ContentReadResult {
+        if required {
+            guard try FileContentFingerprintReader.fingerprint(fileDescriptor: handle.fileDescriptor) == validated.fingerprint else {
+                throw FileContentValidationError.fingerprintChanged
+            }
+        }
+        return result
     }
 
     private nonisolated static func oversizedContentReadResult(
@@ -939,14 +1328,6 @@ extension FileSystemService {
             }
         }
         return false
-    }
-
-    private nonisolated static func contentReadFingerprint(from attributes: [FileAttributeKey: Any]) -> ContentReadFingerprint {
-        ContentReadFingerprint(
-            fileSize: (attributes[.size] as? NSNumber)?.int64Value ?? 0,
-            modificationDate: attributes[.modificationDate] as? Date,
-            systemFileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value
-        )
     }
 
     private nonisolated static func decodeSmallFileData(_ data: Data) throws -> DetectedText {
@@ -1325,9 +1706,13 @@ extension FileSystemService {
     }
 
     private nonisolated static func performEncodingDetectionOffActor(_ request: ContentReadRequest) async throws -> String.Encoding {
-        try await contentReadWorkerLimiter.withPermit(workloadClass: request.workloadClass) {
+        let workerPriority = Task.currentPriority
+        return try await contentReadWorkerLimiter.withPermit(
+            workloadClass: request.workloadClass,
+            ownerID: request.schedulerOwnerID
+        ) {
             try await withThrowingTaskGroup(of: String.Encoding.self) { group in
-                group.addTask(priority: .utility) {
+                group.addTask(priority: workerPriority) {
                     let workerBodyState = EditFlowPerf.begin(
                         EditFlowPerf.Stage.FileSystem.contentReadWorkerBody,
                         EditFlowPerf.Dimensions(
@@ -1353,8 +1738,20 @@ extension FileSystemService {
                         try Task.checkCancellation()
                         let validated = try validateContentFileForReading(request)
                         workerBodyFileBytes = telemetryFileBytes(validated.fileSize)
-                        switch try await readBoundedData(request, url: validated.url) {
+                        let handle = try openValidatedContentHandle(
+                            request,
+                            validated: validated,
+                            requireStableIdentity: false
+                        )
+                        defer { try? handle.close() }
+                        switch try await readBoundedData(request, handle: handle) {
                         case let .data(data):
+                            _ = try validateOpenContentHandle(
+                                handle,
+                                validated: validated,
+                                result: noEncodingContentReadResult(request, validated: validated, content: nil),
+                                required: false
+                            )
                             workerBodyOutcome = "loaded"
                             return detectFileEncoding(in: data)
                         case .tooLarge:

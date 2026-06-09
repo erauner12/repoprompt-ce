@@ -51,6 +51,7 @@ enum EditFlowPerf {
         var appliedCount: Int?
         var chunkCount: Int?
         var taskCount: Int?
+        var workerCount: Int?
         var activeCount: Int?
         var storeCapacity: Int?
         var globalCapacity: Int?
@@ -130,6 +131,7 @@ enum EditFlowPerf {
             appliedCount: Int? = nil,
             chunkCount: Int? = nil,
             taskCount: Int? = nil,
+            workerCount: Int? = nil,
             activeCount: Int? = nil,
             storeCapacity: Int? = nil,
             globalCapacity: Int? = nil,
@@ -208,6 +210,7 @@ enum EditFlowPerf {
             self.appliedCount = Self.nonNegative(appliedCount)
             self.chunkCount = Self.nonNegative(chunkCount)
             self.taskCount = Self.nonNegative(taskCount)
+            self.workerCount = Self.nonNegative(workerCount)
             self.activeCount = Self.nonNegative(activeCount)
             self.storeCapacity = Self.nonNegative(storeCapacity)
             self.globalCapacity = Self.nonNegative(globalCapacity)
@@ -289,6 +292,7 @@ enum EditFlowPerf {
             append("appliedCount", appliedCount, to: &parts)
             append("chunkCount", chunkCount, to: &parts)
             append("taskCount", taskCount, to: &parts)
+            append("workerCount", workerCount, to: &parts)
             append("activeCount", activeCount, to: &parts)
             append("storeCapacity", storeCapacity, to: &parts)
             append("globalCapacity", globalCapacity, to: &parts)
@@ -476,8 +480,6 @@ enum EditFlowPerf {
         enum Search {
             static let broadAdmissionWait: StaticString = "EditFlow.Search.BroadAdmissionWait"
             static let broadAdmissionLeaseHold: StaticString = "EditFlow.Search.BroadAdmissionLeaseHold"
-            static let contentFetchAdmissionWait: StaticString = "EditFlow.Search.ContentFetchAdmissionWait"
-            static let contentFetchLeaseHold: StaticString = "EditFlow.Search.ContentFetchLeaseHold"
             static let ingressFreshnessWait: StaticString = "EditFlow.Search.IngressFreshnessWait"
             static let contentFreshnessValidation: StaticString = "EditFlow.Search.ContentFreshnessValidation"
             static let contentFreshnessValidationStoreActorBody: StaticString = "EditFlow.Search.ContentFreshnessValidation.StoreActorBody"
@@ -691,6 +693,7 @@ enum EditFlowPerf {
             static let contentReadWorkerPermitWaitBegan: StaticString = "FileSystem.ContentReadWorkerPermitWaitBegan"
             static let contentReadWorkerPermitAcquired: StaticString = "FileSystem.ContentReadWorkerPermitAcquired"
             static let contentReadWorkerPermitCancelled: StaticString = "FileSystem.ContentReadWorkerPermitCancelled"
+            static let contentReadWorkerOverloaded: StaticString = "FileSystem.ContentReadWorkerOverloaded"
         }
 
         enum Search {
@@ -704,12 +707,6 @@ enum EditFlowPerf {
             static let broadAdmissionPermitReleased: StaticString = "Search.BroadAdmissionPermitReleased"
             static let broadAdmissionOverloaded: StaticString = "Search.BroadAdmissionOverloaded"
             static let broadAdmissionWaitExpired: StaticString = "Search.BroadAdmissionWaitExpired"
-            static let contentFetchWaitBegan: StaticString = "Search.ContentFetchWaitBegan"
-            static let contentFetchPermitAcquired: StaticString = "Search.ContentFetchPermitAcquired"
-            static let contentFetchPermitCancelled: StaticString = "Search.ContentFetchPermitCancelled"
-            static let contentFetchPermitReleased: StaticString = "Search.ContentFetchPermitReleased"
-            static let contentFetchOverloaded: StaticString = "Search.ContentFetchOverloaded"
-            static let contentFetchWaitExpired: StaticString = "Search.ContentFetchWaitExpired"
             static let providerEntered: StaticString = "Search.ProviderEntered"
             static let providerWorkspaceSearchReturned: StaticString = "Search.ProviderWorkspaceSearchReturned"
             static let providerDTOReady: StaticString = "Search.ProviderDTOReady"

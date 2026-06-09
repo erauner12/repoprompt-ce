@@ -500,6 +500,15 @@ final class MCPFileToolProvider: MCPWindowToolProviding {
                 EditFlowPerf.Lifecycle.Search.providerWorkspaceSearchReturned,
                 EditFlowPerf.Dimensions(outcome: "completed", searchMode: mode.rawValue, countOnly: countOnly)
             )
+        } catch let error as StoreBackedWorkspaceSearchError {
+            EditFlowPerf.lifecycleEvent(
+                EditFlowPerf.Lifecycle.Search.providerWorkspaceSearchReturned,
+                EditFlowPerf.Dimensions(outcome: "worktreeScopeUnavailable", searchMode: mode.rawValue, countOnly: countOnly)
+            )
+            let reply = Self.searchWorktreeUnavailableDTO(for: error, worktreeScope: worktreeScope)
+            EditFlowPerf.lifecycleEvent(EditFlowPerf.Lifecycle.Search.providerDTOReady, EditFlowPerf.Dimensions(outcome: "worktreeScopeUnavailable"))
+            EditFlowPerf.lifecycleEvent(EditFlowPerf.Lifecycle.Search.providerAutoSelectionReturned, EditFlowPerf.Dimensions(outcome: "skippedWorktreeScopeUnavailable"))
+            return reply
         } catch let error as StoreBackedWorkspaceSearchAdmissionError {
             EditFlowPerf.lifecycleEvent(
                 EditFlowPerf.Lifecycle.Search.providerWorkspaceSearchReturned,
@@ -742,6 +751,28 @@ final class MCPFileToolProvider: MCPWindowToolProviding {
         }
         EditFlowPerf.lifecycleEvent(EditFlowPerf.Lifecycle.Search.providerAutoSelectionReturned)
         return reply
+    }
+
+    static func searchWorktreeUnavailableDTO(
+        for error: StoreBackedWorkspaceSearchError,
+        worktreeScope: ToolResultDTOs.WorktreeScopeDTO? = nil
+    ) -> ToolResultDTOs.SearchResultDTO {
+        ToolResultDTOs.SearchResultDTO(
+            totalMatches: 0,
+            totalFiles: 0,
+            contentMatches: 0,
+            pathMatches: 0,
+            limitHit: false,
+            perFileCounts: [],
+            pathMatchLines: [],
+            contentMatchGroups: [],
+            errorMessage: error.localizedDescription,
+            errorCode: "worktree_scope_unavailable",
+            retryable: true,
+            retryAfterMilliseconds: error.retryAfterMilliseconds,
+            suggestion: error.suggestion,
+            worktreeScope: worktreeScope
+        )
     }
 
     static func searchBackpressureDTO(

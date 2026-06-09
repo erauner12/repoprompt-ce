@@ -44,7 +44,6 @@ final class MCPToolExecutionContractTests: XCTestCase {
             MCPWindowToolName.getCodeStructure,
             MCPWindowToolName.getFileTree,
             MCPWindowToolName.readFile,
-            MCPWindowToolName.search,
             MCPWindowToolName.workspaceContext,
             MCPWindowToolName.prompt,
             MCPWindowToolName.agentManage,
@@ -61,8 +60,9 @@ final class MCPToolExecutionContractTests: XCTestCase {
         }
     }
 
-    func testOracleAndContextBuilderUseLongSynchronousExemption() {
+    func testSearchOracleAndContextBuilderUseLongSynchronousExemption() {
         XCTAssertEqual(names(for: .longSynchronousCancellable), [
+            MCPWindowToolName.search,
             MCPWindowToolName.oracleUtils,
             MCPWindowToolName.askOracle,
             MCPWindowToolName.oracleSend,

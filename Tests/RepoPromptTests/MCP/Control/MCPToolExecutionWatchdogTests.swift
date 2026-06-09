@@ -132,6 +132,31 @@ final class MCPToolExecutionWatchdogTests: XCTestCase {
         await gate.release()
     }
 
+    func testManualClockAdvancesElapsedTimeWithoutRegisteredSleepers() async throws {
+        let clock = ExecutionWatchdogManualClock()
+        try await clock.advanceWithoutSleepers(by: .seconds(31))
+        let elapsed = await clock.currentTime()
+        let sleeperCount = await clock.sleeperCount()
+        XCTAssertEqual(elapsed, .seconds(31))
+        XCTAssertEqual(sleeperCount, 0)
+    }
+
+    func testManualClockRejectsElapsedAdvanceWhileSleeperIsRegistered() async throws {
+        let clock = ExecutionWatchdogManualClock()
+        let sleeper = Task {
+            try await clock.sleep(for: .seconds(1))
+        }
+        try await clock.waitForSleeperCount(1)
+        do {
+            try await clock.advanceWithoutSleepers(by: .seconds(31))
+            XCTFail("Expected registered sleeper guard")
+        } catch {
+            // Expected.
+        }
+        sleeper.cancel()
+        _ = try? await sleeper.value
+    }
+
     func testExternalCancellationCancelsOwnedTasksAndPropagatesCancellation() async throws {
         let clock = ExecutionWatchdogManualClock()
         let gate = ExecutionWatchdogUncooperativeGate()
@@ -274,6 +299,16 @@ actor ExecutionWatchdogManualClock {
         }
     }
 
+    func advanceWithoutSleepers(by duration: Duration) throws {
+        guard duration > .zero else {
+            throw ManualClockError.nonPositiveAdvance(duration)
+        }
+        guard sleepers.isEmpty else {
+            throw ManualClockError.sleepersRegistered(sleepers.count)
+        }
+        elapsed += duration
+    }
+
     func advanceNext(expected: Duration) throws {
         guard let id = sleeperOrder.first else {
             throw ManualClockError.noSleeper
@@ -296,7 +331,9 @@ actor ExecutionWatchdogManualClock {
 
     private enum ManualClockError: Error {
         case noSleeper
+        case nonPositiveAdvance(Duration)
         case sleeperDidNotRegister(expected: Int, actual: Int)
+        case sleepersRegistered(Int)
         case unexpectedDuration(expected: Duration, actual: Duration)
     }
 }

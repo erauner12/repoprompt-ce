@@ -212,6 +212,130 @@ final class AgentRunSessionStoreRegistrationTests: XCTestCase {
         await AgentRunSessionStore.cleanup(registration: registration)
     }
 
+    func testDirectNoWaiterSteeringWakeIsEdgeTriggered() async throws {
+        let sessionID = UUID()
+        let registration = await AgentRunSessionStore.register(sessionID: sessionID)
+        let epoch = try await beginEpoch(
+            registration: registration,
+            activationID: UUID(),
+            expected: nil,
+            kind: .initial
+        )
+        let cursor = AgentRunSessionStore.WaitCursor(registration: registration, epoch: epoch)
+        let running = makeSnapshot(sessionID: sessionID, status: .running)
+        await AgentRunSessionStore.signalSnapshot(running, cursor: cursor)
+
+        await AgentRunSessionStore.wakeCurrentWaiters(
+            running,
+            cursor: cursor,
+            reason: .steeringRequested
+        )
+
+        let disposition = await AgentRunSessionStore.waitUntilInteresting(cursor: cursor, timeoutSeconds: 0)
+        XCTAssertEqual(disposition, .timedOut)
+        await AgentRunSessionStore.cleanup(registration: registration)
+    }
+
+    func testDuplicateDirectWakeCannotPoisonFreshWait() async throws {
+        let sessionID = UUID()
+        let registration = await AgentRunSessionStore.register(sessionID: sessionID)
+        let epoch = try await beginEpoch(
+            registration: registration,
+            activationID: UUID(),
+            expected: nil,
+            kind: .initial
+        )
+        let cursor = AgentRunSessionStore.WaitCursor(registration: registration, epoch: epoch)
+        let running = makeSnapshot(sessionID: sessionID, status: .running)
+        await AgentRunSessionStore.signalSnapshot(running, cursor: cursor)
+        let firstWait = Task {
+            await AgentRunSessionStore.waitUntilInteresting(cursor: cursor, timeoutSeconds: 1)
+        }
+        try await waitForWaiter(registration: registration)
+
+        await AgentRunSessionStore.wakeCurrentWaiters(
+            running,
+            cursor: cursor,
+            reason: .steeringRequested
+        )
+        let firstDisposition = await firstWait.value
+        XCTAssertEqual(firstDisposition, .noteworthySnapshot(running, .steeringRequested))
+
+        await AgentRunSessionStore.wakeCurrentWaiters(
+            running,
+            cursor: cursor,
+            reason: .steeringRequested
+        )
+        await AgentRunSessionStore.wakeCurrentWaiters(
+            running,
+            cursor: cursor,
+            reason: .steeringRequested
+        )
+
+        let freshDisposition = await AgentRunSessionStore.waitUntilInteresting(
+            cursor: cursor,
+            timeoutSeconds: 0
+        )
+        XCTAssertEqual(freshDisposition, .timedOut)
+        await AgentRunSessionStore.cleanup(registration: registration)
+    }
+
+    func testSignaledNoteworthySnapshotRemainsStickyForNextWaitOnly() async throws {
+        let sessionID = UUID()
+        let registration = await AgentRunSessionStore.register(sessionID: sessionID)
+        let epoch = try await beginEpoch(
+            registration: registration,
+            activationID: UUID(),
+            expected: nil,
+            kind: .initial
+        )
+        let cursor = AgentRunSessionStore.WaitCursor(registration: registration, epoch: epoch)
+        let running = makeSnapshot(sessionID: sessionID, status: .running)
+
+        await AgentRunSessionStore.signalSnapshotAndWakeWaiters(
+            running,
+            cursor: cursor,
+            reason: .instructionDelivered
+        )
+
+        let firstDisposition = await AgentRunSessionStore.waitUntilInteresting(
+            cursor: cursor,
+            timeoutSeconds: 0
+        )
+        let secondDisposition = await AgentRunSessionStore.waitUntilInteresting(
+            cursor: cursor,
+            timeoutSeconds: 0
+        )
+        XCTAssertEqual(firstDisposition, .noteworthySnapshot(running, .instructionDelivered))
+        XCTAssertEqual(secondDisposition, .timedOut)
+        await AgentRunSessionStore.cleanup(registration: registration)
+    }
+
+    func testActionablePublicationDominatesPendingSteeringWake() async throws {
+        let sessionID = UUID()
+        let registration = await AgentRunSessionStore.register(sessionID: sessionID)
+        let epoch = try await beginEpoch(
+            registration: registration,
+            activationID: UUID(),
+            expected: nil,
+            kind: .initial
+        )
+        let cursor = AgentRunSessionStore.WaitCursor(registration: registration, epoch: epoch)
+        let running = makeSnapshot(sessionID: sessionID, status: .running)
+        let actionable = makeSnapshot(sessionID: sessionID, status: .waitingForInput)
+
+        await AgentRunSessionStore.signalSnapshotAndWakeWaiters(
+            running,
+            cursor: cursor,
+            reason: .steeringRequested
+        )
+        await AgentRunSessionStore.signalSnapshot(actionable, cursor: cursor)
+
+        let disposition = await AgentRunSessionStore.waitUntilInteresting(cursor: cursor, timeoutSeconds: 0)
+        XCTAssertEqual(disposition, .snapshotReady(actionable))
+        await AgentRunSessionStore.cleanup(registration: registration)
+    }
+
     func testInteractionSnapshotWakesImmediatelyAndIsNotHiddenByEpochState() async throws {
         let sessionID = UUID()
         let registration = await AgentRunSessionStore.register(sessionID: sessionID)

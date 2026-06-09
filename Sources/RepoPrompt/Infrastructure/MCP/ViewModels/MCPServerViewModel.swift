@@ -1546,6 +1546,33 @@ final class MCPServerViewModel: ObservableObject {
         }
 
         @MainActor
+        func test_beginAgentRunWaitScope(
+            metadata: RequestMetadata,
+            sessionIDs: Set<UUID>,
+            timeoutSeconds: TimeInterval?
+        ) async -> UUID? {
+            await beginAgentRunWaitScope(
+                metadata: metadata,
+                sessionIDs: sessionIDs,
+                timeoutSeconds: timeoutSeconds
+            )
+        }
+
+        @MainActor
+        func test_endAgentRunWaitScope(
+            _ token: UUID,
+            completion: AgentRunWaitScopeCompletion
+        ) {
+            endAgentRunWaitScope(token, completion: completion)
+        }
+
+        @MainActor
+        func test_agentRunWaitScopeCount(parentRunID: UUID) -> Int {
+            purgeStaleAgentRunWaitScopes(source: "test-count")
+            return agentRunWaitScopesByToken.values.count { $0.parentRunID == parentRunID }
+        }
+
+        @MainActor
         @discardableResult
         func test_setActiveToolSlot(
             toolName: String,

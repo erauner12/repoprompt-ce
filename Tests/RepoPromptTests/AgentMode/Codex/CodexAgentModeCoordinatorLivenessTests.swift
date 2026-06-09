@@ -364,36 +364,59 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
         XCTAssertNil(session.lastTerminalCommitRevision)
     }
 
-    func testActiveCodexNativeSendWaitsForAgentRunDrainBeforeSending() async throws {
-        let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
-        var drainStarted = false
-        var drainContinuation: CheckedContinuation<Bool, Never>?
-        let viewModel = makeViewModel(controller: controller) { _, source in
-            XCTAssertEqual(source, "codex-native-active-send")
-            drainStarted = true
-            return await withCheckedContinuation { continuation in
-                drainContinuation = continuation
-            }
-        }
-        let session = preparedCodexSession(in: viewModel, controller: controller)
-        let runID = try XCTUnwrap(session.runID)
+    func testActiveCodexNativeSendUsesRealAgentRunDrainBeforeSending() async throws {
+        try await AgentRunWaitDrainTestHarness.withHarness { harness in
+            let waitTask = harness.startWait()
+            try await harness.waitUntilBlocked()
 
-        let sendTask = Task {
-            await viewModel.test_codexCoordinator.sendCodexNativeMessage(
+            let ordering = CodexDrainSendOrderingRecorder()
+            let controller = LivenessFakeCodexController(
+                snapshot: .active(activeFlags: []),
+                onSendUserTurn: { ordering.recordSend() }
+            )
+            let viewModel = makeViewModel(controller: controller) { runID, source in
+                XCTAssertEqual(runID, harness.parentRunID)
+                XCTAssertEqual(source, "codex-native-active-send")
+                let drained = await harness.drain(source: source)
+                ordering.recordDrainCompletion(
+                    succeeded: drained,
+                    activeScopeCount: harness.activeScopeCount()
+                )
+                return drained
+            }
+            let session = preparedCodexSession(
+                in: viewModel,
+                controller: controller,
+                runID: harness.parentRunID
+            )
+
+            let outcome = await viewModel.test_codexCoordinator.sendCodexNativeMessage(
                 session: session,
                 text: "hello",
                 attachments: []
             )
+            let interruptedValue = try await waitTask.value
+            let interruptedObject = try XCTUnwrap(interruptedValue.objectValue)
+            let completions = await harness.completionRecorder.completions()
+            let registrationRemainsActive = await AgentRunSessionStore.hasActiveRegistration(
+                sessionID: harness.fixture.sessionID
+            )
+            let orderingSnapshot = ordering.snapshot()
+
+            XCTAssertEqual(outcome, .sent)
+            XCTAssertEqual(
+                interruptedObject["wait"]?.objectValue?["result"]?.stringValue,
+                "interrupted_by_steering"
+            )
+            XCTAssertEqual(controller.sendUserTurnCountSync(), 1)
+            XCTAssertTrue(orderingSnapshot.drainSucceeded)
+            XCTAssertEqual(orderingSnapshot.activeScopeCountAtDrainCompletion, 0)
+            XCTAssertTrue(orderingSnapshot.sendObservedAfterDrain)
+            XCTAssertEqual(harness.activeScopeCount(), 0)
+            XCTAssertEqual(completions.count, 1)
+            XCTAssertEqual(completions.first?.result, "interrupted_by_steering")
+            XCTAssertTrue(registrationRemainsActive)
         }
-
-        try await waitUntil { drainStarted }
-        XCTAssertEqual(controller.sendUserTurnCountSync(), 0)
-        XCTAssertEqual(session.runID, runID)
-
-        drainContinuation?.resume(returning: true)
-        let outcome = await sendTask.value
-        XCTAssertEqual(outcome, .sent)
-        XCTAssertEqual(controller.sendUserTurnCountSync(), 1)
     }
 
     func testActiveCodexNativeSendFailsWithoutSendingWhenAgentRunDrainFails() async {
@@ -432,11 +455,12 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
 
     private func preparedCodexSession(
         in viewModel: AgentModeViewModel,
-        controller: LivenessFakeCodexController
+        controller: LivenessFakeCodexController,
+        runID: UUID = UUID()
     ) -> AgentModeViewModel.TabSession {
         let session = viewModel.session(for: UUID())
         session.selectedAgent = .codexExec
-        session.runID = UUID()
+        session.runID = runID
         session.runState = .running
         session.beginRunAttempt(source: "test.codexLiveness")
         session.codexController = controller
@@ -483,18 +507,58 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
     }
 }
 
+private final class CodexDrainSendOrderingRecorder: @unchecked Sendable {
+    struct Snapshot {
+        let drainSucceeded: Bool
+        let activeScopeCountAtDrainCompletion: Int?
+        let sendObservedAfterDrain: Bool
+    }
+
+    private let lock = NSLock()
+    private var drainSucceeded = false
+    private var activeScopeCountAtDrainCompletion: Int?
+    private var sendObservedAfterDrain = false
+
+    func recordDrainCompletion(succeeded: Bool, activeScopeCount: Int) {
+        lock.lock()
+        drainSucceeded = succeeded
+        activeScopeCountAtDrainCompletion = activeScopeCount
+        lock.unlock()
+    }
+
+    func recordSend() {
+        lock.lock()
+        sendObservedAfterDrain = drainSucceeded && activeScopeCountAtDrainCompletion == 0
+        lock.unlock()
+    }
+
+    func snapshot() -> Snapshot {
+        lock.lock()
+        let snapshot = Snapshot(
+            drainSucceeded: drainSucceeded,
+            activeScopeCountAtDrainCompletion: activeScopeCountAtDrainCompletion,
+            sendObservedAfterDrain: sendObservedAfterDrain
+        )
+        lock.unlock()
+        return snapshot
+    }
+}
+
 private final class LivenessFakeCodexController: CodexSessionControlling {
     private var readSnapshotCount = 0
     private var sendUserTurnCount = 0
     private let snapshotStatus: CodexNativeSessionController.ThreadSnapshot.RuntimeStatus
     private let snapshotActiveTurnIDs: [String]
+    private let onSendUserTurn: (() -> Void)?
 
     init(
         snapshot: CodexNativeSessionController.ThreadSnapshot.RuntimeStatus,
-        activeTurnIDs: [String] = ["turn"]
+        activeTurnIDs: [String] = ["turn"],
+        onSendUserTurn: (() -> Void)? = nil
     ) {
         snapshotStatus = snapshot
         snapshotActiveTurnIDs = activeTurnIDs
+        self.onSendUserTurn = onSendUserTurn
     }
 
     var hasActiveThread: Bool {
@@ -547,14 +611,19 @@ private final class LivenessFakeCodexController: CodexSessionControlling {
     func setThreadName(_ name: String, threadID: String?) async throws {}
     func sendUserMessage(_ text: String) async throws {}
     func sendUserTurn(text: String, images: [AgentImageAttachment]) async throws {
-        sendUserTurnCount += 1
+        recordSendUserTurn()
     }
 
     func sendUserTurn(text: String, images: [AgentImageAttachment], model: String?, reasoningEffort: String?) async throws {
-        sendUserTurnCount += 1
+        recordSendUserTurn()
     }
 
     func sendUserTurn(text: String, images: [AgentImageAttachment], model: String?, reasoningEffort: String?, serviceTier: String?) async throws {
+        recordSendUserTurn()
+    }
+
+    private func recordSendUserTurn() {
+        onSendUserTurn?()
         sendUserTurnCount += 1
     }
 

@@ -280,8 +280,6 @@ actor AgentRunSessionStore {
         let waiters = takeWaiters(from: &record) { $0.cursor == cursor }
         if acceptedSnapshot.isActionableForMCPWait {
             clearPendingWake(in: &record, cursor: cursor)
-        } else if waiters.isEmpty {
-            setPendingWake(snapshot: acceptedSnapshot, reason: reason, in: &record, cursor: cursor)
         }
         records[snapshot.sessionID] = record
         guard !waiters.isEmpty else { return }

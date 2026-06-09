@@ -35,6 +35,7 @@ import XCTest
             XCTAssertEqual(
                 MCPToolDurationInventory.preservedLongSynchronousToolNames,
                 [
+                    MCPWindowToolName.search,
                     MCPWindowToolName.oracleUtils,
                     MCPWindowToolName.askOracle,
                     MCPWindowToolName.oracleSend,
@@ -66,7 +67,7 @@ import XCTest
                     MCPWindowToolName.manageWorktree
                 ]
             )
-            XCTAssertEqual(MCPToolDurationInventory.boundedToolNames.count, 12)
+            XCTAssertEqual(MCPToolDurationInventory.boundedToolNames.count, 11)
             XCTAssertTrue(
                 MCPToolDurationInventory.entries.allSatisfy {
                     !$0.expectedActiveDuration.isEmpty

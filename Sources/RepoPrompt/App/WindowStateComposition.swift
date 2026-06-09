@@ -87,7 +87,7 @@ enum WindowStateCompositionFactory {
             workspaceManager: workspaceManager,
             selectionCoordinator: selectionCoordinator,
             windowID: windowID,
-            workspaceSearch: { [store = workspaceFileContextStore, searchService = workspaceSearchService, workspaceManager] pattern, mode, isRegex, caseInsensitive, maxPaths, maxMatches, paths, includeExtensions, excludePatterns, contextLines, wholeWord, countOnly, fuzzySpaceMatching, rootScope in
+            workspaceSearch: { [store = workspaceFileContextStore, workspaceManager] pattern, mode, isRegex, caseInsensitive, maxPaths, maxMatches, paths, includeExtensions, excludePatterns, contextLines, wholeWord, countOnly, fuzzySpaceMatching, rootScope in
                 try await StoreBackedWorkspaceSearch.search(
                     pattern: pattern,
                     mode: mode,
@@ -104,7 +104,6 @@ enum WindowStateCompositionFactory {
                     fuzzySpaceMatching: fuzzySpaceMatching,
                     rootScope: rootScope,
                     store: store,
-                    searchService: searchService,
                     workspaceManager: workspaceManager
                 )
             },

@@ -145,6 +145,24 @@ enum ContentReadWorkloadClass: String {
     case unspecified
 }
 
+enum ContentReadSchedulerError: LocalizedError, Equatable {
+    case queueFull(retryAfterMilliseconds: Int)
+
+    var retryAfterMilliseconds: Int {
+        switch self {
+        case let .queueFull(retryAfterMilliseconds):
+            retryAfterMilliseconds
+        }
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .queueFull:
+            "Content-read capacity is temporarily busy and the bounded wait queue is full."
+        }
+    }
+}
+
 // MARK: - Encoding support -----------------------------------------------------
 
 /// Bundles the decoded text with the encoding that produced it.

@@ -1,5 +1,6 @@
 import Combine
 import CoreServices
+import Dispatch
 import Foundation
 
 enum WorkspaceFileTreeSnapshotMode: String {
@@ -207,6 +208,38 @@ actor WorkspaceFileContextStore {
                 successorCount: scopedIngressBarrierSuccessorCountsByRootID[rootID] ?? 0
             )
         }
+
+        func searchDecodedContentCacheSnapshotForTesting() async -> WorkspaceSearchDecodedContentCache.Snapshot {
+            await searchDecodedContentCache.snapshotForTesting()
+        }
+
+        func searchLaneSnapshotForTesting() async -> StoreBackedWorkspaceSearchLane.Snapshot {
+            await storeBackedSearchLane.snapshotForTesting()
+        }
+
+        func configureSearchLaneForTesting(
+            _ configuration: StoreBackedWorkspaceSearchLane.Configuration
+        ) async -> StoreBackedWorkspaceSearchLane.DebugConfigurationUpdateResult {
+            await storeBackedSearchLane.configureForTesting(configuration)
+        }
+
+        func resetSearchLaneConfigurationForTesting() async -> StoreBackedWorkspaceSearchLane.DebugConfigurationUpdateResult {
+            await storeBackedSearchLane.resetConfigurationForTesting()
+        }
+
+        func setSearchLanePermitAcquiredHandlerForTesting(
+            _ handler: (@Sendable () async -> Void)?
+        ) async {
+            await storeBackedSearchLane.setPermitAcquiredHandlerForTesting(handler)
+        }
+
+        func setSearchContentReadChunkHandlerForTesting(
+            rootID: UUID,
+            _ handler: (@Sendable (String) async -> Void)?
+        ) async throws {
+            let state = try state(for: rootID)
+            await state.service.setContentReadChunkHandlerForTesting(handler)
+        }
     #endif
 
     private enum ExplicitDiskLookupCandidatesResult {
@@ -245,6 +278,14 @@ actor WorkspaceFileContextStore {
         .allLoaded: 0
     ]
     private var searchCatalogSnapshotsByScope: [WorkspaceLookupRootScope: SearchCatalogSnapshotCacheEntry] = [:]
+    private let storeBackedSearchLane: StoreBackedWorkspaceSearchLane
+    private let searchDecodedContentCache = WorkspaceSearchDecodedContentCache()
+    private let searchContentSchedulerOwnerID = UUID()
+    #if os(macOS)
+        private let searchContentMemoryPressureSource: DispatchSourceMemoryPressure
+    #endif
+    private var searchContentInvalidationEpochsByFileID: [UUID: UInt64] = [:]
+    private var nextSearchContentInvalidationEpoch: UInt64 = 0
     private static let maxCachedSearchCatalogSnapshotScopes = 16
     private static let defaultMaxPendingDeltasPerRoot = 10000
     private let pathMatchWorker = PathMatchWorker()
@@ -266,7 +307,25 @@ actor WorkspaceFileContextStore {
     private static let maxConcurrentScopedIngressBarriers = 8
     private var codeScanResultTask: Task<Void, Never>?
 
+    init(searchLaneConfiguration: StoreBackedWorkspaceSearchLane.Configuration = .production) {
+        storeBackedSearchLane = StoreBackedWorkspaceSearchLane(configuration: searchLaneConfiguration)
+        #if os(macOS)
+            let source = DispatchSource.makeMemoryPressureSource(
+                eventMask: [.warning, .critical],
+                queue: .global(qos: .utility)
+            )
+            searchContentMemoryPressureSource = source
+            source.setEventHandler { [weak self] in
+                Task { await self?.clearSearchDecodedContentCache() }
+            }
+            source.activate()
+        #endif
+    }
+
     deinit {
+        #if os(macOS)
+            searchContentMemoryPressureSource.cancel()
+        #endif
         codeScanResultTask?.cancel()
         for cancellable in watcherCancellablesByRootID.values {
             cancellable.cancel()
@@ -591,6 +650,43 @@ actor WorkspaceFileContextStore {
             folderCount: folderCount,
             fileCount: fileCount
         )
+    }
+
+    func withStoreBackedSearchAccess<T>(
+        searchMode: SearchMode,
+        admissionClass: BroadSearchAdmissionClass?,
+        operation: @Sendable (FileSearchActor) async throws -> T
+    ) async throws -> T {
+        try await storeBackedSearchLane.withSearchAccess(
+            searchMode: searchMode,
+            admissionClass: admissionClass,
+            operation: operation
+        )
+    }
+
+    func rootScopeAvailability(_ rootScope: WorkspaceLookupRootScope) -> WorkspaceLookupRootScopeAvailability {
+        guard case let .sessionBoundWorkspace(_, requestedPhysicalRootPaths) = rootScope else {
+            return .available
+        }
+        let requested = Set(requestedPhysicalRootPaths.map {
+            StandardizedPath.absolute(($0 as NSString).expandingTildeInPath)
+        })
+        let loaded = Set(rootStatesByID.values.compactMap { state -> String? in
+            guard state.root.kind == .sessionWorktree else { return nil }
+            return state.root.standardizedFullPath
+        })
+        let missing = requested.subtracting(loaded).sorted()
+        return missing.isEmpty
+            ? .available
+            : .sessionWorktreeUnavailable(missingPhysicalRootPaths: missing)
+    }
+
+    func searchCatalogAccess(rootScope: WorkspaceLookupRootScope = .visibleWorkspace) -> WorkspaceSearchCatalogAccess {
+        let availability = rootScopeAvailability(rootScope)
+        guard availability == .available else {
+            return .unavailable(availability)
+        }
+        return .available(searchCatalogSnapshot(rootScope: rootScope))
     }
 
     func searchCatalogSnapshot(rootScope: WorkspaceLookupRootScope = .visibleWorkspace) -> WorkspaceSearchCatalogSnapshot {
@@ -1813,6 +1909,12 @@ actor WorkspaceFileContextStore {
         }
         guard !statesToUnload.isEmpty else { return }
         clearSearchCatalogSnapshotCache()
+        for entry in statesToUnload {
+            for fileID in entry.state.fileIDsByRelativePath.values {
+                searchContentInvalidationEpochsByFileID.removeValue(forKey: fileID)
+            }
+            await searchDecodedContentCache.invalidate(rootID: entry.rootID)
+        }
         #if DEBUG
             let rootUnloadStartMS = WorkspaceRestorePerfLog.timestampMSIfEnabled()
             let rootUnloadFolderCount = statesToUnload.reduce(0) { $0 + $1.state.folderIDsByRelativePath.count }
@@ -1976,6 +2078,91 @@ actor WorkspaceFileContextStore {
         let key = StandardizedPath.relative(relativePath)
         guard let folderID = state.folderIDsByRelativePath[key] else { return nil }
         return foldersByID[folderID]
+    }
+
+    func searchContentSnapshot(for expectedRecord: WorkspaceFileRecord) async throws -> FileSearchContentSnapshot {
+        for attempt in 0 ..< 2 {
+            try Task.checkCancellation()
+            guard let state = rootStatesByID[expectedRecord.rootID],
+                  let current = file(rootID: expectedRecord.rootID, relativePath: expectedRecord.standardizedRelativePath),
+                  current.id == expectedRecord.id
+            else {
+                return staleSearchContentSnapshot(for: expectedRecord)
+            }
+
+            let service = state.service
+            let epoch = searchContentInvalidationEpochsByFileID[current.id] ?? 0
+            let cacheKey = WorkspaceSearchContentCacheKey(
+                rootID: current.rootID,
+                fileID: current.id,
+                standardizedRelativePath: current.standardizedRelativePath
+            )
+            let fingerprint: FileContentFingerprint
+            do {
+                fingerprint = try await service.contentFingerprint(
+                    ofRelativePath: current.standardizedRelativePath
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch FileSystemError.fileNotFound {
+                pruneCatalogFileIfStillCurrent(current)
+                return staleSearchContentSnapshot(for: current)
+            } catch {
+                return staleSearchContentSnapshot(for: current)
+            }
+
+            guard searchContentRecordIsCurrent(current, invalidationEpoch: epoch) else {
+                if attempt == 0 { continue }
+                return staleSearchContentSnapshot(for: current)
+            }
+
+            let schedulerOwnerID = searchContentSchedulerOwnerID
+            do {
+                let cached = try await searchDecodedContentCache.snapshot(
+                    for: cacheKey,
+                    fingerprint: fingerprint,
+                    invalidationEpoch: epoch
+                ) {
+                    try await service.loadValidatedContent(
+                        ofRelativePath: current.standardizedRelativePath,
+                        expectedFingerprint: fingerprint,
+                        workloadClass: .contentSearch,
+                        schedulerOwnerID: schedulerOwnerID
+                    )
+                }
+                guard let cached else {
+                    if attempt == 0 { continue }
+                    return staleSearchContentSnapshot(for: current)
+                }
+                guard searchContentRecordIsCurrent(current, invalidationEpoch: epoch) else {
+                    if attempt == 0 { continue }
+                    return staleSearchContentSnapshot(for: current)
+                }
+                return FileSearchContentSnapshot(
+                    content: cached.content,
+                    contentRevision: cached.revision,
+                    modificationDate: cached.modificationDate,
+                    isFresh: true
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as ContentReadSchedulerError {
+                throw error
+            } catch FileContentValidationError.fingerprintChanged {
+                if attempt == 0 { continue }
+                return staleSearchContentSnapshot(for: current)
+            } catch FileSystemError.fileNotFound {
+                pruneCatalogFileIfStillCurrent(current)
+                return staleSearchContentSnapshot(for: current)
+            } catch {
+                return staleSearchContentSnapshot(for: current)
+            }
+        }
+        return staleSearchContentSnapshot(for: expectedRecord)
+    }
+
+    func clearSearchDecodedContentCache() async {
+        await searchDecodedContentCache.clear()
     }
 
     func readContent(
@@ -2335,6 +2522,7 @@ actor WorkspaceFileContextStore {
             throw FileSystemError.fileNotFound
         }
         if let file = file(rootID: rootID, relativePath: standardizedRelativePath) {
+            invalidateSearchContent(file)
             invalidateCodemapSnapshot(rootID: rootID, relativePath: standardizedRelativePath)
             if isDiscoverableFileID(file.id) {
                 publishAppliedIndexEvent(root: state.root, modifiedFileIDs: [file.id])
@@ -2893,7 +3081,11 @@ actor WorkspaceFileContextStore {
                       await state.service.catalogEligibleRegularFileExists(relativePath: relativePath),
                       regularFileAppearsPresentOnDisk(root: root, relativePath: relativePath)
                 else { continue }
-                let existed = file(rootID: rootID, relativePath: relativePath) != nil
+                let existingFile = file(rootID: rootID, relativePath: relativePath)
+                let existed = existingFile != nil
+                if let existingFile {
+                    invalidateSearchContent(existingFile)
+                }
                 let existingFolderPaths = Set(rootStatesByID[rootID].map { Array($0.folderIDsByRelativePath.keys) } ?? [])
                 indexFile(relativePath: relativePath, root: root)
                 if let file = file(rootID: rootID, relativePath: relativePath) {
@@ -2936,6 +3128,7 @@ actor WorkspaceFileContextStore {
                 }
             case .fileModified:
                 if let file = file(rootID: rootID, relativePath: relativePath) {
+                    invalidateSearchContent(file)
                     invalidateCodemapSnapshot(rootID: rootID, relativePath: relativePath)
                     if isDiscoverableFileID(file.id) { modifiedFileIDs.append(file.id) }
                 }
@@ -3504,6 +3697,50 @@ actor WorkspaceFileContextStore {
         searchCatalogSnapshotsByScope.removeAll(keepingCapacity: true)
     }
 
+    private func staleSearchContentSnapshot(for record: WorkspaceFileRecord) -> FileSearchContentSnapshot {
+        FileSearchContentSnapshot(
+            content: nil,
+            contentRevision: nil,
+            modificationDate: record.modificationDate ?? .distantPast,
+            isFresh: false
+        )
+    }
+
+    private func searchContentRecordIsCurrent(
+        _ record: WorkspaceFileRecord,
+        invalidationEpoch: UInt64
+    ) -> Bool {
+        guard let current = file(rootID: record.rootID, relativePath: record.standardizedRelativePath),
+              current.id == record.id
+        else { return false }
+        return (searchContentInvalidationEpochsByFileID[record.id] ?? 0) == invalidationEpoch
+    }
+
+    private func pruneCatalogFileIfStillCurrent(_ record: WorkspaceFileRecord) {
+        guard let current = file(rootID: record.rootID, relativePath: record.standardizedRelativePath),
+              current.id == record.id
+        else { return }
+        pruneCatalogFileMissingOnDisk(
+            rootID: current.rootID,
+            relativePath: current.standardizedRelativePath,
+            publishDelta: true
+        )
+    }
+
+    private func invalidateSearchContent(_ file: WorkspaceFileRecord) {
+        nextSearchContentInvalidationEpoch &+= 1
+        let invalidationEpoch = nextSearchContentInvalidationEpoch
+        searchContentInvalidationEpochsByFileID[file.id] = invalidationEpoch
+        let key = WorkspaceSearchContentCacheKey(
+            rootID: file.rootID,
+            fileID: file.id,
+            standardizedRelativePath: file.standardizedRelativePath
+        )
+        Task {
+            await searchDecodedContentCache.invalidate(key, through: invalidationEpoch)
+        }
+    }
+
     private func invalidatePathMatchSnapshot(affectedRootKinds: Set<WorkspaceRootKind>) {
         bumpCatalogGenerations(affectedRootKinds: affectedRootKinds)
         clearSearchCatalogSnapshotCache()
@@ -3652,6 +3889,8 @@ actor WorkspaceFileContextStore {
         guard let fileID = state.fileIDsByRelativePath.removeValue(forKey: key),
               let file = filesByID.removeValue(forKey: fileID)
         else { return nil }
+        invalidateSearchContent(file)
+        searchContentInvalidationEpochsByFileID.removeValue(forKey: fileID)
         fileIDsByStandardizedFullPath.removeValue(forKey: file.standardizedFullPath)
         managedOnlyFileIDs.remove(fileID)
         if codemapSnapshotsByFileID.removeValue(forKey: fileID) != nil {

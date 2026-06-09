@@ -8,6 +8,16 @@ enum WorkspaceLookupRootScope: Hashable {
     case sessionBoundWorkspace(logicalRootPaths: Set<String>, physicalRootPaths: Set<String>)
 }
 
+enum WorkspaceLookupRootScopeAvailability: Equatable {
+    case available
+    case sessionWorktreeUnavailable(missingPhysicalRootPaths: [String])
+}
+
+enum WorkspaceSearchCatalogAccess: Equatable {
+    case available(WorkspaceSearchCatalogSnapshot)
+    case unavailable(WorkspaceLookupRootScopeAvailability)
+}
+
 typealias LookupRootScope = WorkspaceLookupRootScope
 
 enum WorkspaceRootKind: Hashable {

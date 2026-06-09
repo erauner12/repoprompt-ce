@@ -264,11 +264,42 @@ final class WorkspaceRootBindingProjectionTests: XCTestCase {
         let boundLookup = await store.lookupPath(physicalPath, profile: .uiAssisted, rootScope: lookupContext.rootScope)
         let visibleLookup = await store.lookupPath("Sources/App.swift", profile: .uiAssisted, rootScope: .visibleWorkspace)
         let scopedRoots = await store.rootRefs(scope: lookupContext.rootScope)
+        let availability = await store.rootScopeAvailability(lookupContext.rootScope)
 
         XCTAssertEqual(physicalPath, unloadablePhysicalRoot.appendingPathComponent("Sources/App.swift").standardizedFileURL.path)
         XCTAssertNil(boundLookup)
         XCTAssertNotNil(visibleLookup)
         XCTAssertFalse(scopedRoots.contains { $0.standardizedFullPath == logicalRoot.standardizedFullPath })
+        XCTAssertEqual(
+            availability,
+            .sessionWorktreeUnavailable(missingPhysicalRootPaths: [unloadablePhysicalRoot.standardizedFileURL.path])
+        )
+    }
+
+    func testMaterializedSessionWorktreeScopeReportsAvailable() async throws {
+        let logicalRootURL = try makeTemporaryRoot(name: "ProjectionAvailableLogical")
+        let physicalRootURL = try makeTemporaryRoot(name: "ProjectionAvailablePhysical")
+        try write("let origin = \"worktree\"\n", to: physicalRootURL.appendingPathComponent("Sources/App.swift"))
+        let store = WorkspaceFileContextStore()
+        let loadedLogicalRoot = try await store.loadRoot(path: logicalRootURL.path)
+        let logicalRoot = WorkspaceRootRef(
+            id: loadedLogicalRoot.id,
+            name: loadedLogicalRoot.name,
+            fullPath: loadedLogicalRoot.standardizedFullPath
+        )
+        let physicalRoot = WorkspaceRootRef(id: UUID(), name: logicalRoot.name, fullPath: physicalRootURL.path)
+        let materializedProjection = await WorkspaceRootBindingProjectionMaterializer(store: store).materialize(
+            sessionID: UUID(),
+            bindings: [Self.binding(logicalRoot: logicalRoot, physicalRoot: physicalRoot, worktreeID: "available")]
+        )
+        let projection = try XCTUnwrap(materializedProjection)
+
+        let availability = await store.rootScopeAvailability(projection.lookupRootScope)
+        let scopedRoots = await store.rootRefs(scope: projection.lookupRootScope)
+        XCTAssertEqual(availability, .available)
+        XCTAssertTrue(scopedRoots.contains {
+            $0.standardizedFullPath == physicalRootURL.standardizedFileURL.path
+        })
     }
 
     private static func binding(
