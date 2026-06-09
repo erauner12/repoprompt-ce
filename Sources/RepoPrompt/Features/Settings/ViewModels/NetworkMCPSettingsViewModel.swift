@@ -170,11 +170,11 @@ final class NetworkMCPSettingsViewModel: ObservableObject {
     }
 
     func generateToken() async {
-        saveNewToken(label: "Network MCP token", feedback: "Token generated and copied")
+        await saveNewToken(label: "Network MCP token", feedback: "Token generated and copied")
     }
 
     func rotateToken() async {
-        saveNewToken(label: snapshot.token?.label ?? "Network MCP token", feedback: "Token rotated and copied")
+        await saveNewToken(label: snapshot.token?.label ?? "Network MCP token", feedback: "Token rotated and copied")
     }
 
     func copyToken() async {
@@ -248,13 +248,17 @@ final class NetworkMCPSettingsViewModel: ObservableObject {
         return draft
     }
 
-    private func saveNewToken(label: String, feedback: String) {
+    private func saveNewToken(label: String, feedback: String) async {
         do {
             let result = try tokenStore.generateAndSavePrimaryToken(label: label, accessMode: .interactive)
             settingsStore.setNetworkMCPTokenMetadata(result.metadata)
             settingsStore.setNetworkMCPTrustedClients([])
             copyToPasteboard(result.token)
             refreshSettingsSnapshot()
+            if snapshot.enabled {
+                await networkManager.ensureRunningAndRefreshHTTPListenerConfiguration()
+                listenerStatus = await networkManager.networkHTTPListenerStatus()
+            }
             showFeedback(feedback)
         } catch {
             showFeedback("Could not save token: \(error.localizedDescription)", isError: true)

@@ -49,6 +49,94 @@ final class NetworkMCPSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(ensureRunningAndRefreshCount, 1)
     }
 
+    func testGenerateTokenEnsuresListenerWhenPersistedEnabledStateRecoversFromStaleSecureMaterial() async throws {
+        let store = makeSettingsStore()
+        let secureStore = FakeNetworkMCPSecurePlainStringStore()
+        let tokenStore = MCPRemoteBearerTokenStore(secureStrings: secureStore)
+        let originalMetadata = try tokenStore.savePrimaryToken(
+            "original-network-mcp-token",
+            accessMode: .nonInteractive(reason: .networkMCPAuthentication)
+        )
+        store.setNetworkMCPTokenMetadata(originalMetadata)
+        store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(displayName: "Test", rootPaths: ["/repo"]))
+        try store.setNetworkMCPEnabled(true, secureTokenFingerprint: originalMetadata.fingerprint)
+        _ = try tokenStore.savePrimaryToken(
+            "stale-token-material",
+            accessMode: .nonInteractive(reason: .networkMCPAuthentication)
+        )
+        let listener = FakeNetworkMCPListenerManager()
+        let viewModel = NetworkMCPSettingsViewModel(
+            settingsStore: store,
+            tokenStore: tokenStore,
+            networkManager: listener
+        )
+
+        await viewModel.generateToken()
+
+        let snapshot = store.networkMCPSettingsSnapshot()
+        XCTAssertTrue(snapshot.enabled)
+        XCTAssertNotEqual(snapshot.token?.fingerprint, originalMetadata.fingerprint)
+        XCTAssertEqual(viewModel.feedbackMessage, "Token generated and copied")
+        let refreshCount = await listener.getRefreshCount()
+        let ensureRunningAndRefreshCount = await listener.getEnsureRunningAndRefreshCount()
+        XCTAssertEqual(refreshCount, 0)
+        XCTAssertEqual(ensureRunningAndRefreshCount, 1)
+    }
+
+    func testRotateTokenEnsuresListenerWhenPersistedEnabled() async throws {
+        let store = makeSettingsStore()
+        let secureStore = FakeNetworkMCPSecurePlainStringStore()
+        let tokenStore = MCPRemoteBearerTokenStore(secureStrings: secureStore)
+        let metadata = try tokenStore.savePrimaryToken(
+            "network-mcp-token",
+            accessMode: .nonInteractive(reason: .networkMCPAuthentication)
+        )
+        store.setNetworkMCPTokenMetadata(metadata)
+        store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(displayName: "Test", rootPaths: ["/repo"]))
+        try store.setNetworkMCPEnabled(true, secureTokenFingerprint: metadata.fingerprint)
+        let listener = FakeNetworkMCPListenerManager()
+        let viewModel = NetworkMCPSettingsViewModel(
+            settingsStore: store,
+            tokenStore: tokenStore,
+            networkManager: listener
+        )
+
+        await viewModel.rotateToken()
+
+        let snapshot = store.networkMCPSettingsSnapshot()
+        XCTAssertTrue(snapshot.enabled)
+        XCTAssertNotEqual(snapshot.token?.fingerprint, metadata.fingerprint)
+        XCTAssertEqual(viewModel.feedbackMessage, "Token rotated and copied")
+        let refreshCount = await listener.getRefreshCount()
+        let ensureRunningAndRefreshCount = await listener.getEnsureRunningAndRefreshCount()
+        XCTAssertEqual(refreshCount, 0)
+        XCTAssertEqual(ensureRunningAndRefreshCount, 1)
+    }
+
+    func testGenerateTokenDoesNotStartListenerWhenPersistedDisabled() async {
+        let store = makeSettingsStore()
+        let secureStore = FakeNetworkMCPSecurePlainStringStore()
+        let tokenStore = MCPRemoteBearerTokenStore(secureStrings: secureStore)
+        store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(displayName: "Test", rootPaths: ["/repo"]))
+        let listener = FakeNetworkMCPListenerManager()
+        let viewModel = NetworkMCPSettingsViewModel(
+            settingsStore: store,
+            tokenStore: tokenStore,
+            networkManager: listener
+        )
+
+        await viewModel.generateToken()
+
+        let snapshot = store.networkMCPSettingsSnapshot()
+        XCTAssertFalse(snapshot.enabled)
+        XCTAssertNotNil(snapshot.token)
+        XCTAssertEqual(viewModel.feedbackMessage, "Token generated and copied")
+        let refreshCount = await listener.getRefreshCount()
+        let ensureRunningAndRefreshCount = await listener.getEnsureRunningAndRefreshCount()
+        XCTAssertEqual(refreshCount, 0)
+        XCTAssertEqual(ensureRunningAndRefreshCount, 0)
+    }
+
     private func makeSettingsStore() -> GlobalSettingsStore {
         let suiteName = "NetworkMCPSettingsViewModelTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
