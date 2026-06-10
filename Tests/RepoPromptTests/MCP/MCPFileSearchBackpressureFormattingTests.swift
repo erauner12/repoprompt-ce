@@ -128,6 +128,53 @@ final class MCPFileSearchBackpressureFormattingTests: XCTestCase {
         XCTAssertFalse(text.contains("Retryable"), text)
     }
 
+    func testRemoteFriendlySearchSizeLimitFormattingShowsOmittedCounts() throws {
+        let dto = ToolResultDTOs.SearchResultDTO(
+            totalMatches: 2,
+            totalFiles: 2,
+            contentMatches: 1,
+            pathMatches: 1,
+            limitHit: true,
+            perFileCounts: [
+                .init(path: "/repo/Sources/A.swift", count: 1),
+                .init(path: "/repo/Tests/ATests.swift", count: 1)
+            ],
+            pathMatchLines: ["/repo/Sources/A.swift"],
+            contentMatchGroups: [
+                .init(
+                    path: "/repo/Tests/ATests.swift",
+                    lines: [.init(lineNumber: 12, lineText: "needle", contextBefore: nil, contextAfter: nil)]
+                )
+            ],
+            sizeLimitHit: true,
+            omittedTotal: 8,
+            omittedContentMatches: 5,
+            omittedPathMatches: 3
+        )
+
+        let text = try Self.onlyText(ToolOutputFormatter.formatSearch(value: Self.value(dto)))
+
+        XCTAssertTrue(text.contains("Partial (limit reached)"), text)
+        XCTAssertTrue(text.contains("**Omitted**: 8 results trimmed by response size cap (5 content, 3 path)"), text)
+        XCTAssertTrue(text.contains("Search Results"), text)
+    }
+
+    func testRemoteFriendlyFileTreeFormattingExplainsTruncationMarker() throws {
+        let dto = ToolResultDTOs.FileTreeDTO(
+            rootsCount: 1,
+            usesLegend: true,
+            tree: "/repo\n└── ...",
+            note: "auto mode trimmed deep folders",
+            wasTruncated: true
+        )
+
+        let text = try Self.onlyText(ToolOutputFormatter.formatFileTree(value: Self.value(dto)))
+
+        XCTAssertTrue(text.contains("'...' indicates truncated content"), text)
+        XCTAssertTrue(text.contains("auto mode trimmed deep folders"), text)
+        XCTAssertTrue(text.contains("└── ..."), text)
+    }
+
     func testNormalSearchDTOOmitsOptionalBackpressureFields() throws {
         let dto = ToolResultDTOs.SearchResultDTO(
             totalMatches: 0,

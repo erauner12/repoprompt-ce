@@ -132,7 +132,7 @@ final class MCPOracleToolProvider: MCPWindowToolProviding {
                         description: "When true, export the response to a file and return `oracle_export_path` plus `oracle_export_instruction`. Include `oracle_export_path` inside the `message` you send on your next delegation call; the specific delegation tool is named by your system prompt."
                     )
                 ],
-                required: ["message"]
+                required: []
             )
         ) { [dependencies] _, args in
             try await dependencies.executeOracleSend(args)
