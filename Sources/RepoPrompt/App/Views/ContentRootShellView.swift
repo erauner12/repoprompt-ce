@@ -24,10 +24,13 @@ struct ContentRootShellView: View {
             if let clientID = viewModel.state.mcpServer.pendingClientID,
                viewModel.state.mcpServer.isApprovalOverlayVisible
             {
-                MCPApprovalOverlayView(clientID: clientID)
-                    .environmentObject(viewModel.state.mcpServer)
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                    .zIndex(1000)
+                MCPApprovalOverlayView(
+                    clientID: clientID,
+                    presentation: viewModel.state.mcpServer.pendingApprovalPresentation
+                )
+                .environmentObject(viewModel.state.mcpServer)
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                .zIndex(1000)
             }
 
             // Workspace Operation Approval Overlay

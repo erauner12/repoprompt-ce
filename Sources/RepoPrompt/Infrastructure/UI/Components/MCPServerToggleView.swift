@@ -7,6 +7,7 @@ private struct MCPToolbarVisualState: Equatable {
         case inactive
         case active
         case attention
+        case approvalRequired
     }
 
     let kind: Kind
@@ -18,8 +19,17 @@ private struct MCPToolbarVisualState: Equatable {
             Color.gray.opacity(0.65)
         case .active:
             .green
-        case .attention:
+        case .attention, .approvalRequired:
             .orange
+        }
+    }
+
+    var buttonTitle: String {
+        switch kind {
+        case .approvalRequired:
+            "MCP Approval"
+        default:
+            "MCP Server"
         }
     }
 
@@ -34,6 +44,8 @@ private struct MCPToolbarVisualState: Equatable {
             return "MCP tools enabled for this window"
         case .attention:
             return "Review MCP status for this window"
+        case .approvalRequired:
+            return "Approve or deny the waiting MCP client"
         }
     }
 }
@@ -47,20 +59,35 @@ private final class MCPToolbarStateObserver: ObservableObject {
     init(server: MCPServerViewModel) {
         visualState = Self.makeState(
             windowToolsEnabled: server.windowToolsEnabled,
-            lastErrorMessage: server.lastErrorMessage
+            lastErrorMessage: server.lastErrorMessage,
+            pendingClientID: server.pendingClientID
         )
 
-        Publishers.CombineLatest(
+        Publishers.CombineLatest3(
             server.$windowToolsEnabled.removeDuplicates(),
-            server.$lastErrorMessage.removeDuplicates()
+            server.$lastErrorMessage.removeDuplicates(),
+            server.$pendingClientID.removeDuplicates()
         )
-        .map(Self.makeState(windowToolsEnabled:lastErrorMessage:))
+        .map { windowToolsEnabled, lastErrorMessage, pendingClientID in
+            Self.makeState(
+                windowToolsEnabled: windowToolsEnabled,
+                lastErrorMessage: lastErrorMessage,
+                pendingClientID: pendingClientID
+            )
+        }
         .removeDuplicates()
         .sink { [weak self] in self?.visualState = $0 }
         .store(in: &cancellables)
     }
 
-    private static func makeState(windowToolsEnabled: Bool, lastErrorMessage: String?) -> MCPToolbarVisualState {
+    private static func makeState(
+        windowToolsEnabled: Bool,
+        lastErrorMessage: String?,
+        pendingClientID: String?
+    ) -> MCPToolbarVisualState {
+        if let pendingClientID, !pendingClientID.isEmpty {
+            return MCPToolbarVisualState(kind: .approvalRequired, message: "Approval required: \(pendingClientID)")
+        }
         if let lastErrorMessage, !lastErrorMessage.isEmpty {
             return MCPToolbarVisualState(kind: .attention, message: lastErrorMessage)
         }
@@ -97,10 +124,19 @@ struct MCPServerToggleView: View {
     var body: some View {
         Button(action: { showPopover.toggle() }) {
             HStack(spacing: 6) {
-                Image(systemName: "server.rack")
-                    .imageScale(.medium)
-                    .foregroundColor(buttonIconColor)
-                Text("MCP Server")
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "server.rack")
+                        .imageScale(.medium)
+                        .foregroundColor(buttonIconColor)
+
+                    if toolbarStateObserver.visualState.kind == .approvalRequired {
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 7, height: 7)
+                            .offset(x: 4, y: -4)
+                    }
+                }
+                Text(toolbarStateObserver.visualState.buttonTitle)
             }
         }
         .buttonStyle(CustomButtonStyle())
@@ -315,11 +351,11 @@ struct MCPServerPopoverContent: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if let client = server.pendingClientID {
-                Text("Waiting for approval: \(client)")
-                    .font(fontPreset.captionFont)
-                    .foregroundColor(.orange)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                MCPInlineApprovalActionsView(
+                    server: server,
+                    clientID: client,
+                    presentation: server.pendingApprovalPresentation
+                )
             }
         }
     }
@@ -418,11 +454,21 @@ struct MCPServerPopoverContent: View {
     private var statusIndicator: some View {
         HStack(alignment: .top, spacing: compactRowSpacing) {
             Circle()
-                .fill((isServerRunning && windowToolsEnabled) ? Color.green : Color.gray)
+                .fill(server.pendingClientID == nil ? ((isServerRunning && windowToolsEnabled) ? Color.green : Color.gray) : Color.orange)
                 .frame(width: 8, height: 8)
                 .padding(.top, fontPreset.scaledClamped(5, min: 5, max: 7))
             VStack(alignment: .leading, spacing: fontPreset.scaledClamped(3, min: 3, max: 6)) {
-                if windowToolsEnabled {
+                if let pendingClientID = server.pendingClientID {
+                    Text("Approval required")
+                        .font(fontPreset.font.weight(.semibold))
+                        .foregroundColor(.orange)
+                    Text("Review request from \(pendingClientID)")
+                        .font(fontPreset.captionFont)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if windowToolsEnabled {
                     if isServerRunning {
                         Text("Active")
                             .font(fontPreset.font)

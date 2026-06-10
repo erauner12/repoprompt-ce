@@ -4,6 +4,7 @@ import SwiftUI
 struct MCPSettingsView: View {
     @ObservedObject var vm: MCPServerViewModel
     @ObservedObject var promptVM: PromptViewModel
+    let windowState: WindowState
     let windowID: Int
     var onNavigate: ((SettingsTab) -> Void)?
     var closeAction: (() -> Void)?
@@ -48,6 +49,7 @@ struct MCPSettingsView: View {
     @State private var showSettingsPopover = false
     @State private var showErrorPopover = false
     @State private var showJSONConfig = false
+    @StateObject private var networkMCPSettings = NetworkMCPSettingsViewModel()
 
     // CLI Installation state
     @State private var cliInstallStatus: CLIPathInstaller.InstallationStatus = .notInstalled
@@ -84,6 +86,11 @@ struct MCPSettingsView: View {
                 Divider()
 
                 serverControlSection
+                Divider()
+                NetworkMCPSettingsView(
+                    viewModel: networkMCPSettings,
+                    windowState: windowState
+                )
                 Divider()
                 modelPresetsSection
                 Divider()
@@ -130,9 +137,11 @@ struct MCPSettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if let client = vm.pendingClientID {
-                Text("Waiting for approval: \(client)")
-                    .font(fontPreset.captionFont)
-                    .foregroundColor(.orange)
+                MCPInlineApprovalActionsView(
+                    server: vm,
+                    clientID: client,
+                    presentation: vm.pendingApprovalPresentation
+                )
             }
         }
     }
@@ -235,10 +244,19 @@ struct MCPSettingsView: View {
     private var statusIndicator: some View {
         HStack(spacing: 6) {
             Circle()
-                .fill((vm.isRunning && vm.windowToolsEnabled) ? Color.green : Color.gray)
+                .fill(vm.pendingClientID == nil ? ((vm.isRunning && vm.windowToolsEnabled) ? Color.green : Color.gray) : Color.orange)
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
-                if vm.windowToolsEnabled {
+                if let pendingClientID = vm.pendingClientID {
+                    Text("Approval required")
+                        .font(fontPreset.font.weight(.semibold))
+                        .foregroundColor(.orange)
+                    Text("Review request from \(pendingClientID)")
+                        .font(fontPreset.captionFont)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else if vm.windowToolsEnabled {
                     Text(vm.isRunning ? "Active" : "Waiting for listener…")
                         .font(fontPreset.font)
                         .foregroundColor(vm.isRunning ? .primary : .secondary)

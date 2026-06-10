@@ -831,6 +831,15 @@ class GlobalSettingsStore: ObservableObject {
         }
     }
 
+    func setNetworkMCPEndpoint(bindAddress: String, port: Int, commit: Bool = true) throws {
+        let normalizedBindAddress = try validatedNetworkMCPBindAddress(bindAddress)
+        let normalizedPort = try validatedNetworkMCPPort(port)
+        updateNetworkMCPSettings(commit: commit) { settings in
+            settings.bindAddress = normalizedBindAddress
+            settings.port = normalizedPort
+        }
+    }
+
     func setNetworkMCPDefaultTarget(
         _ target: NetworkMCPDefaultTargetMetadata?,
         commit: Bool = true
