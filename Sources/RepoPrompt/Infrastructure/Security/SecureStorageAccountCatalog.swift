@@ -26,6 +26,9 @@ enum SecureStorageAccount: CaseIterable, Hashable, Identifiable {
     case claudeCompatibleKimiAPIKey
     case claudeCompatibleCustomAPIKey
 
+    /// Network MCP accounts.
+    case networkMCPPrimaryBearerToken
+
     // Agent permission document accounts.
     case agentPermissionSubagentDocument
     case agentPermissionCodexDocument
@@ -71,6 +74,8 @@ enum SecureStorageAccount: CaseIterable, Hashable, Identifiable {
             "ClaudeCompatibleBackend.kimi.apiKey"
         case .claudeCompatibleCustomAPIKey:
             "ClaudeCompatibleBackend.custom.apiKey"
+        case .networkMCPPrimaryBearerToken:
+            "com.pvncher.repoprompt.ce.networkMCP.primaryBearerToken"
         case .agentPermissionSubagentDocument:
             Self.decode([
                 40, 42, 116, 59, 61, 63, 52, 46, 116, 42, 63, 40, 55, 51, 41, 41,
@@ -123,6 +128,7 @@ enum SecureStorageAccount: CaseIterable, Hashable, Identifiable {
         case .zAIAPI: "Z.AI API key"
         case .claudeCompatibleKimiAPIKey: "Kimi compatible API key"
         case .claudeCompatibleCustomAPIKey: "Custom Claude-compatible API key"
+        case .networkMCPPrimaryBearerToken: "Network MCP bearer token"
         case .agentPermissionSubagentDocument: "Subagent permissions"
         case .agentPermissionCodexDocument: "Codex permissions"
         case .agentPermissionClaudeDocument: "Claude permissions"
@@ -160,6 +166,10 @@ enum SecureStorageAccountCatalog {
         .zAIAPI,
         .claudeCompatibleKimiAPIKey,
         .claudeCompatibleCustomAPIKey
+    ]
+
+    static let networkMCPAccounts: [SecureStorageAccount] = [
+        .networkMCPPrimaryBearerToken
     ]
 
     static let agentPermissionAccounts: [SecureStorageAccount] = [

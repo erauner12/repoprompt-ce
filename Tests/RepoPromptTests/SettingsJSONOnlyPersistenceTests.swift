@@ -595,17 +595,17 @@ final class SettingsJSONOnlyPersistenceTests: XCTestCase {
 
 private final class FakeNetworkMCPSettingsSecurePlainStringStore: SecurePlainStringStoring {
     let persistsValuesAcrossLaunches = true
-    var plainValues: [String: String] = [:]
+    var plainValues: [SecureStorageAccount: String] = [:]
 
-    func getPlainValue(for key: String, accessMode _: KeychainAccessMode) throws -> String? {
-        plainValues[key]
+    func getPlainValue(for account: SecureStorageAccount, accessMode _: KeychainAccessMode) throws -> String? {
+        plainValues[account]
     }
 
-    func savePlainValue(_ value: String, for key: String, accessMode _: KeychainAccessMode) throws {
-        plainValues[key] = value
+    func savePlainValue(_ value: String, for account: SecureStorageAccount, accessMode _: KeychainAccessMode) throws {
+        plainValues[account] = value
     }
 
-    func deletePlainValue(for key: String, accessMode _: KeychainAccessMode) throws {
-        plainValues.removeValue(forKey: key)
+    func deletePlainValue(for account: SecureStorageAccount, accessMode _: KeychainAccessMode) throws {
+        plainValues.removeValue(forKey: account)
     }
 }
