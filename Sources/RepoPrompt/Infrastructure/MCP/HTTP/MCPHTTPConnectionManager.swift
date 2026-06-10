@@ -117,6 +117,16 @@ actor MCPHTTPConnectionManager: MCPServerConnection {
         updateState(.cancelled)
     }
 
+    func abortForExecutionWatchdog() async {
+        guard !isClosing else { return }
+        isClosing = true
+        healthMonitoringTask?.cancel()
+        healthMonitoringTask = nil
+        await transport.disconnect()
+        updateState(.cancelled)
+        Task { await server.stop() }
+    }
+
     func terminate(reason: TerminationReason, message: String?) async {
         guard !isClosing else { return }
         mcpConnectionLog("Terminating HTTP MCP connection \(connectionID) with reason: \(reason.rawValue)")
@@ -133,6 +143,10 @@ actor MCPHTTPConnectionManager: MCPServerConnection {
 
     func secondsSinceLastActivity() async -> TimeInterval {
         Date().timeIntervalSince(lastActivityAt)
+    }
+
+    func transportIngressSnapshot() async -> MCPTransportIngressSnapshot? {
+        nil
     }
 
     func handle(_ request: MCP.HTTPRequest) async -> MCP.HTTPResponse {
