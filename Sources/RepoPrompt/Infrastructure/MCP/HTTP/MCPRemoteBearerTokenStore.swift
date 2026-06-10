@@ -3,7 +3,7 @@ import Foundation
 import Security
 
 struct MCPRemoteBearerTokenStore {
-    static let primaryTokenStorageKey = "com.pvncher.repoprompt.ce.networkMCP.primaryBearerToken"
+    static let primaryTokenStorageAccount = SecureStorageAccount.networkMCPPrimaryBearerToken
     static let defaultTokenLabel = "Network MCP token"
 
     private let secureStrings: SecurePlainStringStoring
@@ -45,7 +45,7 @@ struct MCPRemoteBearerTokenStore {
             throw MCPRemoteBearerTokenStoreError.emptyToken
         }
 
-        try secureStrings.savePlainValue(normalized, for: Self.primaryTokenStorageKey, accessMode: accessMode)
+        try secureStrings.savePlainValue(normalized, for: Self.primaryTokenStorageAccount, accessMode: accessMode)
         let timestamp = now()
         return NetworkMCPBearerTokenMetadata(
             id: idGenerator(),
@@ -60,7 +60,7 @@ struct MCPRemoteBearerTokenStore {
     func loadPrimaryToken(
         accessMode: KeychainAccessMode = .nonInteractive(reason: .networkMCPAuthentication)
     ) throws -> String? {
-        let token = try secureStrings.getPlainValue(for: Self.primaryTokenStorageKey, accessMode: accessMode)?
+        let token = try secureStrings.getPlainValue(for: Self.primaryTokenStorageAccount, accessMode: accessMode)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let token, !token.isEmpty else { return nil }
         return token
@@ -73,7 +73,7 @@ struct MCPRemoteBearerTokenStore {
     }
 
     func deletePrimaryToken(accessMode: KeychainAccessMode = .interactive) throws {
-        try secureStrings.deletePlainValue(for: Self.primaryTokenStorageKey, accessMode: accessMode)
+        try secureStrings.deletePlainValue(for: Self.primaryTokenStorageAccount, accessMode: accessMode)
     }
 
     func authenticate(

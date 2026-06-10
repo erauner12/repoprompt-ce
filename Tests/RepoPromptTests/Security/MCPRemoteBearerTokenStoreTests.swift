@@ -14,7 +14,7 @@ final class MCPRemoteBearerTokenStoreTests: XCTestCase {
         XCTAssertEqual(metadata.createdAt, Date(timeIntervalSince1970: 1800))
         XCTAssertEqual(metadata.rotatedAt, Date(timeIntervalSince1970: 1800))
         XCTAssertEqual(metadata.secureStoragePersistsAcrossLaunches, true)
-        XCTAssertEqual(secureStrings.plainValues[MCPRemoteBearerTokenStore.primaryTokenStorageKey], "secret-token")
+        XCTAssertEqual(secureStrings.plainValues[MCPRemoteBearerTokenStore.primaryTokenStorageAccount], "secret-token")
         XCTAssertEqual(secureStrings.plainSaveAccessModes, [.interactive])
 
         XCTAssertEqual(
@@ -34,7 +34,7 @@ final class MCPRemoteBearerTokenStoreTests: XCTestCase {
         let result = try store.generateAndSavePrimaryToken(label: nil, byteCount: 4)
 
         XCTAssertEqual(result.token, "AAECAw")
-        XCTAssertEqual(secureStrings.plainValues[MCPRemoteBearerTokenStore.primaryTokenStorageKey], result.token)
+        XCTAssertEqual(secureStrings.plainValues[MCPRemoteBearerTokenStore.primaryTokenStorageAccount], result.token)
         XCTAssertEqual(result.metadata.label, MCPRemoteBearerTokenStore.defaultTokenLabel)
 
         let encoded = try JSONEncoder().encode(result.metadata)
@@ -108,7 +108,7 @@ final class MCPRemoteBearerTokenStoreTests: XCTestCase {
         let second = try store.savePrimaryToken("second-token", label: "second")
 
         XCTAssertNotEqual(first.fingerprint, second.fingerprint)
-        XCTAssertEqual(secureStrings.plainValues[MCPRemoteBearerTokenStore.primaryTokenStorageKey], "second-token")
+        XCTAssertEqual(secureStrings.plainValues[MCPRemoteBearerTokenStore.primaryTokenStorageAccount], "second-token")
         XCTAssertEqual(store.authenticate(authorizationHeader: "Bearer first-token"), .rejected(.invalidBearerToken))
         XCTAssertEqual(
             store.authenticate(authorizationHeader: "Bearer second-token"),
@@ -125,7 +125,7 @@ final class MCPRemoteBearerTokenStoreTests: XCTestCase {
         XCTAssertEqual(secureStrings.plainGetAccessModes, [.nonInteractive(reason: .test)])
 
         try store.deletePrimaryToken()
-        XCTAssertNil(secureStrings.plainValues[MCPRemoteBearerTokenStore.primaryTokenStorageKey])
+        XCTAssertNil(secureStrings.plainValues[MCPRemoteBearerTokenStore.primaryTokenStorageAccount])
         XCTAssertEqual(secureStrings.plainDeleteAccessModes, [.interactive])
         XCTAssertFalse(try store.hasPrimaryToken(accessMode: .nonInteractive(reason: .test)))
     }
@@ -153,7 +153,7 @@ final class MCPRemoteBearerTokenStoreTests: XCTestCase {
 private final class FakeNetworkMCPSecurePlainStringStore: SecurePlainStringStoring {
     let persistsValuesAcrossLaunches: Bool
 
-    var plainValues: [String: String] = [:]
+    var plainValues: [SecureStorageAccount: String] = [:]
     var plainGetError: Error?
     var plainSaveError: Error?
     var plainDeleteError: Error?
@@ -174,31 +174,31 @@ private final class FakeNetworkMCPSecurePlainStringStore: SecurePlainStringStori
         self.persistsValuesAcrossLaunches = persistsValuesAcrossLaunches
     }
 
-    func getPlainValue(for key: String, accessMode: KeychainAccessMode) throws -> String? {
+    func getPlainValue(for account: SecureStorageAccount, accessMode: KeychainAccessMode) throws -> String? {
         plainGetAccessModes.append(accessMode)
         if let plainGetError {
             throw plainGetError
         }
-        return plainValues[key]
+        return plainValues[account]
     }
 
     func savePlainValue(
         _ value: String,
-        for key: String,
+        for account: SecureStorageAccount,
         accessMode: KeychainAccessMode
     ) throws {
         plainSaveAccessModes.append(accessMode)
         if let plainSaveError {
             throw plainSaveError
         }
-        plainValues[key] = value
+        plainValues[account] = value
     }
 
-    func deletePlainValue(for key: String, accessMode: KeychainAccessMode) throws {
+    func deletePlainValue(for account: SecureStorageAccount, accessMode: KeychainAccessMode) throws {
         plainDeleteAccessModes.append(accessMode)
         if let plainDeleteError {
             throw plainDeleteError
         }
-        plainValues.removeValue(forKey: key)
+        plainValues.removeValue(forKey: account)
     }
 }
