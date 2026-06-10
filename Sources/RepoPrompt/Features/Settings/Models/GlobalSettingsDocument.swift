@@ -4,11 +4,13 @@ import Foundation
 /// `~/Library/Application Support/RepoPrompt CE/Settings/globalSettings.json`.
 ///
 /// Schema v1 contains copy settings, chat settings, and cross-workspace global
-/// defaults. Schema v2 adds optional scalar preference groups. Scalar fields stay
-/// optional so missing JSON fields fall back through the typed GlobalSettingsStore
-/// accessors without losing current default behavior.
+/// defaults. Schema v2 adds optional scalar preference groups. Schema v3 adds
+/// Network MCP HTTP metadata under scalar MCP settings while keeping bearer-token
+/// material in secure storage. Scalar fields stay optional so missing JSON fields
+/// fall back through the typed GlobalSettingsStore accessors without losing
+/// current default behavior.
 struct GlobalSettingsDocument: Codable {
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
 
     var schemaVersion: Int
     var updatedAt: Date
@@ -165,6 +167,7 @@ struct GlobalScalarPreferences: Codable, Equatable {
         var collapseLatestFileChanges: Bool?
         var showTooltips: Bool?
         var experimentalAttributedTextEditor: Bool?
+        var fileMentionPickerStyle: String?
         var enableKeyboardShortcuts: Bool?
         var fontScaleBodySize: Double?
 
@@ -174,6 +177,7 @@ struct GlobalScalarPreferences: Codable, Equatable {
             collapseLatestFileChanges: Bool? = nil,
             showTooltips: Bool? = nil,
             experimentalAttributedTextEditor: Bool? = nil,
+            fileMentionPickerStyle: String? = nil,
             enableKeyboardShortcuts: Bool? = nil,
             fontScaleBodySize: Double? = nil
         ) {
@@ -182,6 +186,7 @@ struct GlobalScalarPreferences: Codable, Equatable {
             self.collapseLatestFileChanges = collapseLatestFileChanges
             self.showTooltips = showTooltips
             self.experimentalAttributedTextEditor = experimentalAttributedTextEditor
+            self.fileMentionPickerStyle = fileMentionPickerStyle
             self.enableKeyboardShortcuts = enableKeyboardShortcuts
             self.fontScaleBodySize = fontScaleBodySize
         }
@@ -244,15 +249,18 @@ struct GlobalScalarPreferences: Codable, Equatable {
         var autoStart: Bool?
         var showModelPresets: Bool?
         var temporarilyDisablePresets: Bool?
+        var networkHTTP: NetworkMCPSettings?
 
         init(
             autoStart: Bool? = nil,
             showModelPresets: Bool? = nil,
-            temporarilyDisablePresets: Bool? = nil
+            temporarilyDisablePresets: Bool? = nil,
+            networkHTTP: NetworkMCPSettings? = nil
         ) {
             self.autoStart = autoStart
             self.showModelPresets = showModelPresets
             self.temporarilyDisablePresets = temporarilyDisablePresets
+            self.networkHTTP = networkHTTP
         }
     }
 

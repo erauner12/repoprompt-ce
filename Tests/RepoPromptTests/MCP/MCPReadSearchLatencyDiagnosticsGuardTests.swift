@@ -19,152 +19,91 @@
             XCTAssertTrue(diagnostics.contains("mcp_read_search_capture_snapshot"))
             XCTAssertTrue(diagnostics.contains("mcp_read_search_admission_snapshot"))
             XCTAssertTrue(diagnostics.contains("mcp_read_search_admission_configure"))
-            XCTAssertTrue(diagnostics.contains("mcp_read_search_content_fetch_admission_snapshot"))
-            XCTAssertTrue(diagnostics.contains("mcp_read_search_content_fetch_admission_configure"))
+            XCTAssertTrue(diagnostics.contains("mcp_read_search_content_read_scheduler_snapshot"))
 
             let sibling = try source("Sources/RepoPrompt/Features/Diagnostics/MCP/MCPConnectionManager+DebugDiagnosticsReadSearchLatency.swift")
             XCTAssertTrue(sibling.contains("#if DEBUG"))
             XCTAssertTrue(sibling.contains("100 ... 100_000"))
-            XCTAssertTrue(sibling.contains("1 ... 4"))
-            XCTAssertTrue(sibling.contains("1 ... 128"))
-            XCTAssertTrue(sibling.contains("0 ... 256"))
-            XCTAssertTrue(sibling.contains("0 ... 1024"))
             XCTAssertTrue(sibling.contains("100 ... 60000"))
+            XCTAssertTrue(sibling.contains("0 ... 60000"))
             XCTAssertTrue(sibling.contains("overload_count"))
             XCTAssertTrue(sibling.contains("wait_expiry_count"))
-            XCTAssertTrue(sibling.contains("global_active_count"))
-            XCTAssertTrue(sibling.contains("global_queued_count"))
-            XCTAssertTrue(sibling.contains("lane_loads"))
-            XCTAssertTrue(sibling.contains("store_active_count"))
-            XCTAssertTrue(sibling.contains("store_queued_count"))
-            XCTAssertTrue(sibling.contains("fair_share_per_store"))
-            XCTAssertTrue(sibling.contains("max_burst_per_store"))
-            XCTAssertTrue(sibling.contains("queued_search_count"))
-            XCTAssertTrue(sibling.contains("maxBurstPerStore >= fairSharePerStore"))
+            XCTAssertTrue(sibling.contains("active_count"))
+            XCTAssertTrue(sibling.contains("queued_count"))
+            XCTAssertTrue(sibling.contains("window_count"))
+            XCTAssertTrue(sibling.contains("\"lanes\""))
+            XCTAssertTrue(sibling.contains("maximum_active_count"))
+            XCTAssertTrue(sibling.contains("maximum_queued_count"))
+            XCTAssertTrue(sibling.contains("max_queued_waiters"))
+            XCTAssertTrue(sibling.contains("active_permit_count"))
+            XCTAssertTrue(sibling.contains("queued_waiter_count"))
+            XCTAssertTrue(sibling.contains("owner_lane_count"))
+            XCTAssertTrue(sibling.contains("cancellation_count"))
+            XCTAssertTrue(sibling.contains("interactive_grant_count"))
+            XCTAssertTrue(sibling.contains("bulk_grant_count"))
         }
 
-        func testAdmissionDebugDiagnosticsConfigureSnapshotAndRejectOutOfRangeStressValues() async throws {
-            try await StoreBackedWorkspaceSearchSharedAdmissionTestLease.shared.withLease {
-                let coordinator = StoreBackedWorkspaceSearchAdmissionCoordinator.shared
-                let baseline = await coordinator.snapshotForDebug().configuration
-                do {
-                    let manager = ServerNetworkManager.shared
-                    let connectionID = UUID()
-                    let configured = await manager.handleDebugDiagnosticsTool(
-                        connectionID: connectionID,
-                        arguments: [
-                            "op": .string("mcp_read_search_admission_configure"),
-                            "per_store_capacity": .int(4),
-                            "global_capacity": .int(128),
-                            "max_queued_per_store": .int(256),
-                            "max_queued_global": .int(1024),
-                            "max_queue_wait_ms": .int(60000)
-                        ]
-                    )
-                    let configuredPayload = try debugDiagnosticsPayload(configured)
-                    XCTAssertEqual(configuredPayload["ok"] as? Bool, true)
-                    let admission = try XCTUnwrap(configuredPayload["admission"] as? [String: Any])
-                    let configuration = try XCTUnwrap(admission["configuration"] as? [String: Any])
-                    XCTAssertEqual((configuration["per_store_capacity"] as? NSNumber)?.intValue, 4)
-                    XCTAssertEqual((configuration["global_capacity"] as? NSNumber)?.intValue, 128)
-                    XCTAssertEqual((configuration["max_queued_per_store"] as? NSNumber)?.intValue, 256)
-                    XCTAssertEqual((configuration["max_queued_global"] as? NSNumber)?.intValue, 1024)
-                    XCTAssertEqual((configuration["max_queue_wait_ms"] as? NSNumber)?.intValue, 60000)
-                    XCTAssertEqual(admission["idle"] as? Bool, true)
-                    XCTAssertEqual((admission["global_active_count"] as? NSNumber)?.intValue, 0)
-                    XCTAssertEqual((admission["global_queued_count"] as? NSNumber)?.intValue, 0)
-                    XCTAssertEqual((admission["lane_loads"] as? [[String: Any]])?.count, 0)
+        func testPerStoreAdmissionDebugConfigurationIsFixedCapacityIdleOnlyAndBounded() async {
+            let store = WorkspaceFileContextStore()
+            let baseline = await store.searchLaneSnapshotForTesting()
+            XCTAssertEqual(baseline.activePermitCount, 0)
+            XCTAssertEqual(baseline.waiterCount, 0)
 
-                    let invalid = await manager.handleDebugDiagnosticsTool(
-                        connectionID: connectionID,
-                        arguments: [
-                            "op": .string("mcp_read_search_admission_configure"),
-                            "per_store_capacity": .int(4),
-                            "global_capacity": .int(129),
-                            "max_queued_per_store": .int(256),
-                            "max_queued_global": .int(1024),
-                            "max_queue_wait_ms": .int(60000)
-                        ]
-                    )
-                    let invalidPayload = try debugDiagnosticsPayload(invalid)
-                    XCTAssertEqual(invalidPayload["ok"] as? Bool, false)
-                    XCTAssertEqual(invalidPayload["code"] as? String, "invalid_params")
-                    let unchanged = await coordinator.snapshotForDebug()
-                    XCTAssertEqual(unchanged.configuration.globalCapacity, 128)
+            let replacement = StoreBackedWorkspaceSearchLane.Configuration(
+                maxQueueWait: .seconds(60),
+                retryAfterMilliseconds: 60000
+            )
+            guard case let .applied(configured) = await store.configureSearchLaneForTesting(replacement) else {
+                return XCTFail("Idle per-store lane should accept bounded DEBUG configuration")
+            }
+            XCTAssertEqual(configured.configuration.maxQueueWaitMilliseconds, 60000)
+            XCTAssertEqual(configured.configuration.retryAfterMilliseconds, 60000)
+            XCTAssertTrue(configured.isIdle)
 
-                    let snapshot = await manager.handleDebugDiagnosticsTool(
-                        connectionID: connectionID,
-                        arguments: ["op": .string("mcp_read_search_admission_snapshot")]
-                    )
-                    XCTAssertEqual(try debugDiagnosticsPayload(snapshot)["ok"] as? Bool, true)
-                    await restoreAdmissionDebugConfiguration(baseline, coordinator: coordinator)
-                } catch {
-                    await restoreAdmissionDebugConfiguration(baseline, coordinator: coordinator)
-                    throw error
-                }
+            let sibling = try? source("Sources/RepoPrompt/Features/Diagnostics/MCP/MCPConnectionManager+DebugDiagnosticsReadSearchLatency.swift")
+            XCTAssertTrue(sibling?.contains("\"active_capacity\": 1") == true)
+            XCTAssertTrue(sibling?.contains("\"max_queued\": 1") == true)
+            XCTAssertTrue(sibling?.contains("range: 100 ... 60000") == true)
+            XCTAssertTrue(sibling?.contains("range: 0 ... 60000") == true)
+            XCTAssertFalse(sibling?.contains("global_capacity") == true)
+        }
+
+        func testSearchLaneInvalidWindowErrorsRetainRequestedOperation() async throws {
+            let manager = ServerNetworkManager.shared
+            for operation in [
+                "mcp_read_search_admission_snapshot",
+                "mcp_read_search_admission_configure"
+            ] {
+                let result = await manager.handleDebugDiagnosticsTool(
+                    connectionID: UUID(),
+                    arguments: [
+                        "op": .string(operation),
+                        "window_id": .int(0)
+                    ]
+                )
+                let payload = try debugDiagnosticsPayload(result)
+                XCTAssertEqual(payload["ok"] as? Bool, false)
+                XCTAssertEqual(payload["op"] as? String, operation)
+                XCTAssertEqual(payload["code"] as? String, "invalid_params")
             }
         }
 
-        func testContentFetchAdmissionDebugDiagnosticsConfigureSnapshotAndRejectInvalidRelationship() async throws {
-            try await StoreBackedWorkspaceSearchSharedAdmissionTestLease.shared.withLease {
-                let coordinator = StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator.shared
-                let baseline = await coordinator.snapshotForDebug().configuration
-                do {
-                    let manager = ServerNetworkManager.shared
-                    let connectionID = UUID()
-                    let configured = await manager.handleDebugDiagnosticsTool(
-                        connectionID: connectionID,
-                        arguments: [
-                            "op": .string("mcp_read_search_content_fetch_admission_configure"),
-                            "fair_share_per_store": .int(2),
-                            "max_burst_per_store": .int(4),
-                            "global_capacity": .int(32),
-                            "max_queued_per_store": .int(128),
-                            "max_queued_global": .int(512),
-                            "max_queue_wait_ms": .int(8000)
-                        ]
-                    )
-                    let configuredPayload = try debugDiagnosticsPayload(configured)
-                    XCTAssertEqual(configuredPayload["ok"] as? Bool, true)
-                    let admission = try XCTUnwrap(configuredPayload["admission"] as? [String: Any])
-                    let configuration = try XCTUnwrap(admission["configuration"] as? [String: Any])
-                    XCTAssertEqual((configuration["fair_share_per_store"] as? NSNumber)?.intValue, 2)
-                    XCTAssertEqual((configuration["max_burst_per_store"] as? NSNumber)?.intValue, 4)
-                    XCTAssertEqual((configuration["global_capacity"] as? NSNumber)?.intValue, 32)
-                    XCTAssertEqual((configuration["max_queued_per_store"] as? NSNumber)?.intValue, 128)
-                    XCTAssertEqual((configuration["max_queued_global"] as? NSNumber)?.intValue, 512)
-                    XCTAssertEqual((configuration["max_queue_wait_ms"] as? NSNumber)?.intValue, 8000)
-                    XCTAssertEqual((admission["lane_loads"] as? [[String: Any]])?.count, 0)
-
-                    let invalid = await manager.handleDebugDiagnosticsTool(
-                        connectionID: connectionID,
-                        arguments: [
-                            "op": .string("mcp_read_search_content_fetch_admission_configure"),
-                            "fair_share_per_store": .int(4),
-                            "max_burst_per_store": .int(2),
-                            "global_capacity": .int(32),
-                            "max_queued_per_store": .int(128),
-                            "max_queued_global": .int(512),
-                            "max_queue_wait_ms": .int(8000)
-                        ]
-                    )
-                    let invalidPayload = try debugDiagnosticsPayload(invalid)
-                    XCTAssertEqual(invalidPayload["ok"] as? Bool, false)
-                    XCTAssertEqual(invalidPayload["code"] as? String, "invalid_params")
-                    let unchanged = await coordinator.snapshotForDebug()
-                    XCTAssertEqual(unchanged.configuration.maxBurstPerStore, 4)
-
-                    let snapshot = await manager.handleDebugDiagnosticsTool(
-                        connectionID: connectionID,
-                        arguments: ["op": .string("mcp_read_search_content_fetch_admission_snapshot")]
-                    )
-                    XCTAssertEqual(try debugDiagnosticsPayload(snapshot)["ok"] as? Bool, true)
-                    await restoreContentFetchAdmissionDebugConfiguration(baseline, coordinator: coordinator)
-                } catch {
-                    await restoreContentFetchAdmissionDebugConfiguration(baseline, coordinator: coordinator)
-                    throw error
-                }
-            }
+        func testContentReadSchedulerDebugDiagnosticsExposeAggregateSnapshot() async throws {
+            let manager = ServerNetworkManager.shared
+            let result = await manager.handleDebugDiagnosticsTool(
+                connectionID: UUID(),
+                arguments: ["op": .string("mcp_read_search_content_read_scheduler_snapshot")]
+            )
+            let payload = try debugDiagnosticsPayload(result)
+            XCTAssertEqual(payload["ok"] as? Bool, true)
+            let scheduler = try XCTUnwrap(payload["scheduler"] as? [String: Any])
+            XCTAssertEqual((scheduler["capacity"] as? NSNumber)?.intValue, FileSystemService.contentReadWorkerLimitForTesting)
+            XCTAssertEqual((scheduler["max_queued_waiters"] as? NSNumber)?.intValue, 512)
+            XCTAssertNotNil(scheduler["active_permit_count"])
+            XCTAssertNotNil(scheduler["queued_waiter_count"])
+            XCTAssertNotNil(scheduler["owner_lane_count"])
+            XCTAssertNotNil(scheduler["grant_count"])
+            XCTAssertNotNil(scheduler["overload_count"])
         }
 
         func testExpectedAttributionStagesRemainPresent() throws {
@@ -268,8 +207,6 @@
                 "EditFlow.Search.AutoSelect.Mutation",
                 "EditFlow.Search.BroadAdmissionWait",
                 "EditFlow.Search.BroadAdmissionLeaseHold",
-                "EditFlow.Search.ContentFetchAdmissionWait",
-                "EditFlow.Search.ContentFetchLeaseHold",
                 "EditFlow.Search.IngressFreshnessWait",
                 "EditFlow.Search.ContentFreshnessValidation",
                 "EditFlow.Search.ContentFreshnessValidation.StoreActorBody",
@@ -390,7 +327,7 @@
                     "EditFlowPerf.Lifecycle.Search.providerAutoSelectionReturned"
                 ]
             )
-            for outcome in ["skippedBackpressure", "skippedPatternError", "skippedCountOnly"] {
+            for outcome in ["skippedWorktreeScopeUnavailable", "skippedBackpressure", "skippedPatternError", "skippedCountOnly"] {
                 XCTAssertTrue(execute.contains("EditFlowPerf.Dimensions(outcome: \"\(outcome)\""), "Missing search auto-selection reply outcome: \(outcome)")
             }
 
@@ -541,19 +478,33 @@
 
         func testRunToolDecompositionHooksRemainScopedAndProviderExecutionIsDimensioned() throws {
             let viewModel = try source("Sources/RepoPrompt/Infrastructure/MCP/ViewModels/MCPServerViewModel.swift")
+            let runToolStart = try XCTUnwrap(viewModel.range(of: "    private func runTool<T>("))
+            let runToolEnd = try XCTUnwrap(
+                viewModel.range(
+                    of: "    var windowMCPTools: [Tool]",
+                    range: runToolStart.upperBound ..< viewModel.endIndex
+                )
+            )
+            let runTool = String(viewModel[runToolStart.lowerBound ..< runToolEnd.lowerBound])
             for hook in [
                 "runToolSetup",
                 "runToolRegistration",
                 "runToolTimeoutEnvelope",
                 "runToolCompletionCleanup"
             ] {
-                XCTAssertTrue(viewModel.contains(hook), "Missing runTool decomposition hook: \(hook)")
+                XCTAssertTrue(runTool.contains(hook), "Missing runTool decomposition hook: \(hook)")
             }
-            let providerExecution = try XCTUnwrap(viewModel.range(of: "EditFlowPerf.Stage.MCPToolCall.providerExecution,"))
-            let providerInvocation = viewModel[providerExecution.lowerBound...].prefix(180)
+            let providerExecution = try XCTUnwrap(runTool.range(of: "EditFlowPerf.Stage.MCPToolCall.providerExecution,"))
+            let providerInvocation = runTool[providerExecution.lowerBound...].prefix(180)
             XCTAssertTrue(providerInvocation.contains("EditFlowPerf.Dimensions(toolName: name)"))
-            XCTAssertTrue(viewModel.contains("result = try await withThrowingTaskGroup(of: T.self)"))
-            XCTAssertEqual(viewModel.components(separatedBy: "EditFlowPerf.Stage.MCPToolCall.runToolCompletionCleanup,").count - 1, 4)
+            XCTAssertFalse(runTool.contains("withThrowingTaskGroup(of: T.self)"))
+            XCTAssertTrue(runTool.contains("withTaskCancellationHandler"))
+            XCTAssertTrue(runTool.contains("MCPRunToolCleanupClaim"))
+            XCTAssertFalse(runTool.contains("Task {\n                    await cleanupExecution"))
+            XCTAssertTrue(runTool.contains("await cleanupExecution(outcome)"))
+            XCTAssertFalse(runTool.contains("throw MCPError.internalError(\"tool cancelled by user\")"))
+            XCTAssertTrue(runTool.contains("throw MCPToolExecutionCancelledError()"))
+            XCTAssertEqual(runTool.components(separatedBy: "EditFlowPerf.Stage.MCPToolCall.runToolCompletionCleanup,").count - 1, 2)
         }
 
         func testNewReadDispatchStageRecorderCapturesToolDimensionAndFinishes() throws {
@@ -606,81 +557,206 @@
             XCTAssertTrue(snapshot.stages.allSatisfy { $0.sampleCount == 1 })
         }
 
-        func testServiceToolLookupInnerAttributionHooksRemainCompileGatedOwnedAndReleaseEquivalent() throws {
-            let manager = try source("Sources/RepoPrompt/Infrastructure/MCP/MCPConnectionManager.swift")
-            let lookupBegin = try XCTUnwrap(manager.range(of: "let serviceToolLookupState = EditFlowPerf.begin("))
-            let directInvocation = try XCTUnwrap(manager.range(of: "try await toolDef.callAsFunction(effectiveArgs)", range: lookupBegin.upperBound ..< manager.endIndex))
-            let lookup = String(manager[lookupBegin.lowerBound ..< directInvocation.lowerBound])
-
-            var searchStart = lookup.startIndex
-            for hook in [
-                "let serviceToolsAwaitState = EditFlowPerf.begin(EditFlowPerf.Stage.MCPToolCall.serviceToolLookupServiceToolsAwait)",
-                "let serviceTools = await service.tools",
-                "EditFlowPerf.end(EditFlowPerf.Stage.MCPToolCall.serviceToolLookupServiceToolsAwait, serviceToolsAwaitState)",
-                "let toolDefinitionScanState = EditFlowPerf.begin(EditFlowPerf.Stage.MCPToolCall.serviceToolLookupToolDefinitionScan)",
-                "guard let toolDef = serviceTools.first(where: { $0.name == toolName }) else {",
-                "EditFlowPerf.end(EditFlowPerf.Stage.MCPToolCall.serviceToolLookupToolDefinitionScan, toolDefinitionScanState)",
-                "let publicWindowIDInjectionState = EditFlowPerf.begin(EditFlowPerf.Stage.MCPToolCall.serviceToolLookupPublicWindowIDInjection)",
-                "let routingWindowID: Int? = {",
-                "let selectedSchemaDeclaresWindowID =",
-                "routingWindowID != nil",
-                "capturedArguments[\"window_id\"] == nil",
-                "capturedArgsForFormatter[\"window_id\"] == nil",
-                "self.schemaDeclaresWindowID(schema: toolDef.inputSchema)",
-                "schemaDeclaresWindowID: selectedSchemaDeclaresWindowID",
-                "args: capturedArguments",
-                "schemaDeclaresWindowID: selectedSchemaDeclaresWindowID",
-                "args: capturedArgsForFormatter",
-                "EditFlowPerf.end(EditFlowPerf.Stage.MCPToolCall.serviceToolLookupPublicWindowIDInjection, publicWindowIDInjectionState)",
-                "EditFlowPerf.end(EditFlowPerf.Stage.MCPToolCall.serviceToolLookup, serviceToolLookupState)"
-            ] {
-                let match = try XCTUnwrap(lookup.range(of: hook, range: searchStart ..< lookup.endIndex), "Missing or out-of-order ServiceToolLookup attribution hook: \(hook)")
-                searchStart = match.upperBound
+        func testServiceToolLookupInnerAttributionHooksRemainCompileGatedAndOwnMeasuredOperations() throws {
+            func assertCompileGated(
+                _ marker: Range<String.Index>,
+                in source: String,
+                context: String
+            ) throws {
+                let opening = try XCTUnwrap(
+                    source.range(
+                        of: "#if DEBUG || EDIT_FLOW_PERF",
+                        options: .backwards,
+                        range: source.startIndex ..< marker.lowerBound
+                    ),
+                    "Missing DEBUG gate before \(context)"
+                )
+                if let precedingClose = source.range(
+                    of: "#endif",
+                    options: .backwards,
+                    range: source.startIndex ..< marker.lowerBound
+                ) {
+                    XCTAssertLessThan(precedingClose.lowerBound, opening.lowerBound, context)
+                }
+                _ = try XCTUnwrap(
+                    source.range(of: "#endif", range: marker.upperBound ..< source.endIndex),
+                    "Missing DEBUG gate close after \(context)"
+                )
             }
 
-            XCTAssertEqual(manager.components(separatedBy: "let serviceTools = await service.tools").count - 1, 1)
-            XCTAssertEqual(manager.components(separatedBy: "guard let toolDef = serviceTools.first(where: { $0.name == toolName })").count - 1, 1)
-            XCTAssertEqual(lookup.components(separatedBy: "self.schemaDeclaresWindowID(schema: toolDef.inputSchema)").count - 1, 1)
-            XCTAssertEqual(lookup.components(separatedBy: "schemaDeclaresWindowID: selectedSchemaDeclaresWindowID").count - 1, 2)
-            XCTAssertEqual(lookup.components(separatedBy: "args: capturedArguments").count - 1, 1)
-            XCTAssertEqual(lookup.components(separatedBy: "args: capturedArgsForFormatter").count - 1, 1)
-            XCTAssertEqual(manager.components(separatedBy: "try await toolDef.callAsFunction(effectiveArgs)").count - 1, 2)
-            XCTAssertEqual(lookup.components(separatedBy: "serviceToolLookupServiceToolsAwait").count - 1, 2)
-            XCTAssertEqual(lookup.components(separatedBy: "serviceToolLookupToolDefinitionScan").count - 1, 3)
-            XCTAssertEqual(lookup.components(separatedBy: "serviceToolLookupPublicWindowIDInjection").count - 1, 2)
-            XCTAssertGreaterThanOrEqual(lookup.components(separatedBy: "#if DEBUG || EDIT_FLOW_PERF").count - 1, 7)
-            XCTAssertFalse(manager.contains("service.call("))
+            func scopedSource(
+                from startMarker: String,
+                to endMarker: String,
+                in source: String,
+                context: String
+            ) throws -> String {
+                let start = try XCTUnwrap(source.range(of: startMarker), "Missing scope start for \(context)")
+                let end = try XCTUnwrap(
+                    source.range(of: endMarker, range: start.upperBound ..< source.endIndex),
+                    "Missing scope end for \(context)"
+                )
+                return String(source[start.lowerBound ..< end.lowerBound])
+            }
 
-            let injectionHelperBegin = try XCTUnwrap(manager.range(of: "    private nonisolated func injectWindowIDIfNeeded("))
-            let injectionHelperEnd = try XCTUnwrap(manager.range(of: "\n    func registerExpectedAgentPID", range: injectionHelperBegin.upperBound ..< manager.endIndex))
-            let injectionHelper = String(manager[injectionHelperBegin.lowerBound ..< injectionHelperEnd.lowerBound])
-            XCTAssertTrue(injectionHelper.contains("schemaDeclaresWindowID: Bool"))
-            XCTAssertTrue(injectionHelper.contains("if args[\"window_id\"] != nil { return args }"))
-            XCTAssertFalse(injectionHelper.contains("schema: JSONSchema"))
+            func measuredRegion(
+                stage: String,
+                in source: String,
+                context: String
+            ) throws -> String {
+                let begin = try XCTUnwrap(
+                    source.range(of: "EditFlowPerf.begin(EditFlowPerf.Stage.MCPToolCall.\(stage))"),
+                    "Missing begin marker for \(context)"
+                )
+                let end = try XCTUnwrap(
+                    source.range(
+                        of: "EditFlowPerf.end(EditFlowPerf.Stage.MCPToolCall.\(stage),",
+                        range: begin.upperBound ..< source.endIndex
+                    ),
+                    "Missing end marker for \(context)"
+                )
+                try assertCompileGated(begin, in: source, context: "\(context) begin")
+                try assertCompileGated(end, in: source, context: "\(context) end")
+                return String(source[begin.lowerBound ..< end.upperBound])
+            }
+
+            func assertMeasured(
+                stage: String,
+                operation: String,
+                in source: String,
+                context: String
+            ) throws {
+                let region = try measuredRegion(stage: stage, in: source, context: context)
+                XCTAssertTrue(region.contains(operation), "\(context) no longer owns \(operation)")
+            }
+
+            func assertDeferredMeasurement(
+                stage: String,
+                operation: String,
+                in source: String,
+                context: String
+            ) throws {
+                let begin = try XCTUnwrap(
+                    source.range(of: "EditFlowPerf.begin(EditFlowPerf.Stage.MCPToolCall.\(stage))"),
+                    "Missing begin marker for \(context)"
+                )
+                let end = try XCTUnwrap(
+                    source.range(
+                        of: "EditFlowPerf.end(EditFlowPerf.Stage.MCPToolCall.\(stage),",
+                        range: begin.upperBound ..< source.endIndex
+                    ),
+                    "Missing deferred end marker for \(context)"
+                )
+                let deferOpen = try XCTUnwrap(
+                    source.range(of: "defer {", range: begin.upperBound ..< end.lowerBound),
+                    "Missing defer ownership for \(context)"
+                )
+                let deferClose = try XCTUnwrap(
+                    source.range(of: "}", range: end.upperBound ..< source.endIndex),
+                    "Missing defer close for \(context)"
+                )
+                let ownedOperation = try XCTUnwrap(
+                    source.range(of: operation, range: deferClose.upperBound ..< source.endIndex),
+                    "Missing owned operation for \(context)"
+                )
+                try assertCompileGated(begin, in: source, context: "\(context) begin")
+                try assertCompileGated(end, in: source, context: "\(context) end")
+                XCTAssertLessThan(begin.lowerBound, deferOpen.lowerBound, context)
+                XCTAssertLessThan(deferOpen.lowerBound, end.lowerBound, context)
+                XCTAssertLessThan(end.lowerBound, deferClose.lowerBound, context)
+                XCTAssertLessThan(deferClose.lowerBound, ownedOperation.lowerBound, context)
+            }
+
+            // Structural exception: recorder tests prove the stage inventory. These checks retain
+            // only telemetry ownership and DEBUG-gating facts that runtime tests cannot observe.
+            let manager = try source("Sources/RepoPrompt/Infrastructure/MCP/MCPConnectionManager.swift")
+            try assertMeasured(
+                stage: "serviceToolLookupServiceToolsAwait",
+                operation: "await service.tools",
+                in: manager,
+                context: "service-tools await"
+            )
+            try assertMeasured(
+                stage: "serviceToolLookupToolDefinitionScan",
+                operation: ".first(where:",
+                in: manager,
+                context: "tool-definition scan"
+            )
+            let injectionRegion = try measuredRegion(
+                stage: "serviceToolLookupPublicWindowIDInjection",
+                in: manager,
+                context: "public window-ID injection"
+            )
+            let providerDestination = try XCTUnwrap(injectionRegion.range(of: "effectiveArgs ="))
+            let providerInjection = try XCTUnwrap(
+                injectionRegion.range(
+                    of: "injectWindowIDIfNeeded(",
+                    range: providerDestination.upperBound ..< injectionRegion.endIndex
+                )
+            )
+            let formatterDestination = try XCTUnwrap(
+                injectionRegion.range(
+                    of: "effectiveArgsForFormatter =",
+                    range: providerInjection.upperBound ..< injectionRegion.endIndex
+                )
+            )
+            let formatterInjection = try XCTUnwrap(
+                injectionRegion.range(
+                    of: "injectWindowIDIfNeeded(",
+                    range: formatterDestination.upperBound ..< injectionRegion.endIndex
+                )
+            )
+            XCTAssertLessThan(providerDestination.lowerBound, providerInjection.lowerBound)
+            XCTAssertLessThan(providerInjection.lowerBound, formatterDestination.lowerBound)
+            XCTAssertLessThan(formatterDestination.lowerBound, formatterInjection.lowerBound)
+            XCTAssertEqual(injectionRegion.components(separatedBy: "injectWindowIDIfNeeded(").count - 1, 2)
 
             let appSettings = try source("Sources/RepoPrompt/Infrastructure/MCP/AppSettingsMCPService.swift")
-            XCTAssertEqual(appSettings.components(separatedBy: "serviceToolLookupAppSettingsToolsBuild").count - 1, 2)
-            XCTAssertTrue(appSettings.contains("#if DEBUG || EDIT_FLOW_PERF\n                let appSettingsToolsBuildState"))
-            XCTAssertTrue(appSettings.contains("return makeTools()"))
+            let appSettingsTools = try scopedSource(
+                from: "var tools: [Tool] {",
+                to: "private func makeTools()",
+                in: appSettings,
+                context: "app-settings tools accessor"
+            )
+            try assertDeferredMeasurement(
+                stage: "serviceToolLookupAppSettingsToolsBuild",
+                operation: "makeTools()",
+                in: appSettingsTools,
+                context: "app-settings tool construction"
+            )
 
             let routing = try source("Sources/RepoPrompt/Infrastructure/MCP/WindowRoutingService.swift")
-            let toolsCacheStart = try XCTUnwrap(routing.range(of: "private actor ToolsCache"))
-            let toolsCacheEnd = try XCTUnwrap(routing.range(of: "private extension Array", range: toolsCacheStart.upperBound ..< routing.endIndex))
-            let toolsCache = String(routing[toolsCacheStart.lowerBound ..< toolsCacheEnd.lowerBound])
-            XCTAssertEqual(routing.components(separatedBy: "serviceToolLookupWindowRoutingToolsCacheActorBody").count - 1, 2)
-            XCTAssertTrue(toolsCache.contains("#if DEBUG || EDIT_FLOW_PERF"))
-            XCTAssertTrue(toolsCache.contains("return tools"))
+            let routingCacheGet = try scopedSource(
+                from: "func get() -> [Tool] {",
+                to: "private extension Array",
+                in: routing,
+                context: "window-routing cache getter"
+            )
+            try assertDeferredMeasurement(
+                stage: "serviceToolLookupWindowRoutingToolsCacheActorBody",
+                operation: "return tools",
+                in: routingCacheGet,
+                context: "window-routing cache actor body"
+            )
 
             let catalog = try source("Sources/RepoPrompt/Infrastructure/MCP/WindowTools/MCPWindowToolCatalogService.swift")
-            XCTAssertEqual(catalog.components(separatedBy: "serviceToolLookupWindowCatalogToolsActorBodyTotal").count - 1, 2)
-            XCTAssertEqual(catalog.components(separatedBy: "serviceToolLookupWindowCatalogToolsMaterialization").count - 1, 2)
-            let cacheHitReturn = try XCTUnwrap(catalog.range(of: "if let toolsCache {\n                return toolsCache\n            }"))
-            let materialization = try XCTUnwrap(catalog.range(of: "let materializationState = EditFlowPerf.begin(", range: cacheHitReturn.upperBound ..< catalog.endIndex))
-            let providersGrouping = try XCTUnwrap(catalog.range(of: "var providersByGroup:", range: materialization.upperBound ..< catalog.endIndex))
-            XCTAssertLessThan(cacheHitReturn.lowerBound, materialization.lowerBound)
-            XCTAssertLessThan(materialization.lowerBound, providersGrouping.lowerBound)
-            XCTAssertTrue(catalog.contains("#if DEBUG || EDIT_FLOW_PERF"))
-            XCTAssertTrue(catalog.contains("toolsCache = built\n            return built"))
+            let catalogTools = try scopedSource(
+                from: "var tools: [Tool] {",
+                to: "func invalidateToolsCache()",
+                in: catalog,
+                context: "window-catalog tools accessor"
+            )
+            try assertDeferredMeasurement(
+                stage: "serviceToolLookupWindowCatalogToolsActorBodyTotal",
+                operation: "if let toolsCache",
+                in: catalogTools,
+                context: "window-catalog total actor body"
+            )
+            try assertDeferredMeasurement(
+                stage: "serviceToolLookupWindowCatalogToolsMaterialization",
+                operation: "providersByGroup",
+                in: catalogTools,
+                context: "window-catalog materialization"
+            )
         }
 
         func testMCPWindowToolCatalogLifecycleAttributionRecorderUsesStaticEmptyDimensions() {
@@ -1427,7 +1503,15 @@
             XCTAssertTrue(store.contains("case .sessionBoundWorkspace:\n            scopedSnapshotGeneration(scope: .allLoaded)"))
             XCTAssertTrue(store.contains("private func clearSearchCatalogSnapshotCache() {\n        searchCatalogSnapshotsByScope.removeAll(keepingCapacity: true)\n    }"))
             XCTAssertTrue(store.contains("rootStatesByID[originalRootID] = state\n            clearSearchCatalogSnapshotCache()\n            indexed.append(fullPath)"))
-            XCTAssertTrue(store.contains("guard !statesToUnload.isEmpty else { return }\n        clearSearchCatalogSnapshotCache()\n        #if DEBUG"))
+            assertSourceOrder(
+                in: store,
+                hooks: [
+                    "guard !statesToUnload.isEmpty else { return }",
+                    "clearSearchCatalogSnapshotCache()",
+                    "await searchDecodedContentCache.invalidate(rootID: entry.rootID)",
+                    "#if DEBUG"
+                ]
+            )
             XCTAssertTrue(store.contains("bumpCatalogGenerations(affectedRootKinds: affectedRootKinds)\n        clearSearchCatalogSnapshotCache()\n        invalidatePathMatchCache()"))
             XCTAssertTrue(store.contains("#endif\n        invalidatePathMatchCache()\n        finishRootUnload(for: unloadingPaths)"))
             XCTAssertTrue(store.contains("cacheHit: true"))
@@ -1570,6 +1654,7 @@
                 "FileSystem.ContentReadWorkerPermitWaitBegan",
                 "FileSystem.ContentReadWorkerPermitAcquired",
                 "FileSystem.ContentReadWorkerPermitCancelled",
+                "FileSystem.ContentReadWorkerOverloaded",
                 "FileSystem.ContentReadWorkerReturned",
                 "FileSystem.ContentLoadReturned",
                 "Search.BroadAdmissionWaitBegan",
@@ -1578,12 +1663,6 @@
                 "Search.BroadAdmissionPermitReleased",
                 "Search.BroadAdmissionOverloaded",
                 "Search.BroadAdmissionWaitExpired",
-                "Search.ContentFetchWaitBegan",
-                "Search.ContentFetchPermitAcquired",
-                "Search.ContentFetchPermitCancelled",
-                "Search.ContentFetchPermitReleased",
-                "Search.ContentFetchOverloaded",
-                "Search.ContentFetchWaitExpired",
                 "Search.ContentFreshnessStoreEntered",
                 "Search.ContentFreshnessStoreReturned",
                 "Search.ContentFreshnessRootEntered",
@@ -1829,6 +1908,11 @@
             XCTAssertTrue(contentLoading.contains("EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerPermitWaitBegan"))
             XCTAssertTrue(contentLoading.contains("EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerPermitAcquired"))
             XCTAssertTrue(contentLoading.contains("EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerPermitCancelled"))
+            XCTAssertTrue(contentLoading.contains("EditFlowPerf.Lifecycle.FileSystem.contentReadWorkerOverloaded"))
+            XCTAssertTrue(contentLoading.contains("maxQueuedWaiterCount: 512"))
+            XCTAssertTrue(contentLoading.contains("ownerID: request.schedulerOwnerID"))
+            XCTAssertTrue(contentLoading.contains("agePromotionNanoseconds"))
+            XCTAssertTrue(contentLoading.contains("maxConsecutiveInteractiveGrants"))
             XCTAssertTrue(contentLoading.contains("EditFlowPerf.Stage.FileSystem.contentReadWorkerBody"))
             XCTAssertTrue(contentLoading.contains("workloadClass: request.workloadClass"))
             XCTAssertTrue(contentLoading.contains("contentSource: \"disk\""))
@@ -1838,14 +1922,15 @@
                 in: contentLoading,
                 hooks: [
                     "let permitWaitState = EditFlowPerf.begin(",
-                    "let acquisition = try await acquire(",
+                    "let acquisition: PermitAcquisition",
+                    "acquisition = try await acquire(",
                     "EditFlowPerf.end(\n                EditFlowPerf.Stage.FileSystem.contentReadWorkerPermitWait",
-                    "defer { release() }",
+                    "defer { release(acquisition) }",
                     "return try await body()"
                 ]
             )
 
-            let coordinator = try source("Sources/RepoPrompt/Features/Search/StoreBackedWorkspaceSearchAdmissionCoordinator.swift")
+            let coordinator = try source("Sources/RepoPrompt/Features/Search/StoreBackedWorkspaceSearchLane.swift")
             XCTAssertTrue(coordinator.contains("EditFlowPerf.Stage.Search.broadAdmissionWait"))
             XCTAssertTrue(coordinator.contains("EditFlowPerf.Lifecycle.Search.broadAdmissionWaitBegan"))
             XCTAssertTrue(coordinator.contains("EditFlowPerf.Lifecycle.Search.broadAdmissionPermitAcquired"))
@@ -1854,10 +1939,10 @@
             XCTAssertTrue(coordinator.contains("EditFlowPerf.Lifecycle.Search.broadAdmissionOverloaded"))
             XCTAssertTrue(coordinator.contains("EditFlowPerf.Lifecycle.Search.broadAdmissionWaitExpired"))
             XCTAssertTrue(coordinator.contains("EditFlowPerf.Stage.Search.broadAdmissionLeaseHold"))
-            XCTAssertTrue(coordinator.contains("storeCapacity: configuration.perStoreCapacity"))
-            XCTAssertTrue(coordinator.contains("globalCapacity: configuration.globalCapacity"))
-            XCTAssertTrue(coordinator.contains("storeQueueDepth: metrics.storeQueueDepth"))
-            XCTAssertTrue(coordinator.contains("globalQueueDepth: metrics.globalQueueDepth"))
+            XCTAssertTrue(coordinator.contains("storeCapacity: 1"))
+            XCTAssertTrue(coordinator.contains("globalCapacity: 0"))
+            XCTAssertTrue(coordinator.contains("storeQueueDepth: metrics.queueDepth"))
+            XCTAssertTrue(coordinator.contains("globalQueueDepth: 0"))
             XCTAssertTrue(coordinator.contains("queueAgeBucket: queueAgeBucket"))
             XCTAssertFalse(coordinator.contains("EditFlowPerf.Dimensions(path:"))
             assertSourceOrder(
@@ -1869,32 +1954,7 @@
                     "defer {",
                     "EditFlowPerf.Stage.Search.broadAdmissionLeaseHold",
                     "release(acquisition)",
-                    "return try await operation()"
-                ]
-            )
-
-            let contentFetchCoordinator = try source("Sources/RepoPrompt/Features/Search/StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator.swift")
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Stage.Search.contentFetchAdmissionWait"))
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Stage.Search.contentFetchLeaseHold"))
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Lifecycle.Search.contentFetchWaitBegan"))
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Lifecycle.Search.contentFetchPermitAcquired"))
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Lifecycle.Search.contentFetchPermitCancelled"))
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Lifecycle.Search.contentFetchPermitReleased"))
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Lifecycle.Search.contentFetchOverloaded"))
-            XCTAssertTrue(contentFetchCoordinator.contains("EditFlowPerf.Lifecycle.Search.contentFetchWaitExpired"))
-            XCTAssertTrue(contentFetchCoordinator.contains("admissionClass: \"contentFetch\""))
-            XCTAssertFalse(contentFetchCoordinator.contains("EditFlowPerf.Dimensions(path:"))
-            XCTAssertFalse(contentFetchCoordinator.contains("ObjectIdentifier(store).debugDescription"))
-            assertSourceOrder(
-                in: contentFetchCoordinator,
-                hooks: [
-                    "let waitState = EditFlowPerf.begin(",
-                    "acquisition = try await acquire(",
-                    "let leaseHoldState = EditFlowPerf.begin(",
-                    "defer {",
-                    "EditFlowPerf.Stage.Search.contentFetchLeaseHold",
-                    "release(acquisition)",
-                    "return try await operation()"
+                    "return try await operation(fileSearchActor)"
                 ]
             )
         }
@@ -1913,7 +1973,7 @@
             ] {
                 XCTAssertTrue(manager.contains(hook), "Missing manager attribution hook: \(hook)")
             }
-            XCTAssertEqual(manager.components(separatedBy: "try await toolDef.callAsFunction(effectiveArgs)").count - 1, 2)
+            XCTAssertEqual(manager.components(separatedBy: "try await toolDef.callAsFunction(effectiveArgs)").count - 1, 1)
             XCTAssertFalse(manager.contains("service.call("))
 
             let readable = try source("Sources/RepoPrompt/Infrastructure/WorkspaceContext/WorkspaceReadableFileService.swift")
@@ -2017,6 +2077,8 @@
                 "EditFlowPerf.Stage.Search.resultConstruction",
                 "admittedFileCount:",
                 "scannedFileCount:",
+                "batchSize:",
+                "workerCount:",
                 "matchedFileCount:",
                 "contentMatchCount:",
                 "pathMatchCount:",
@@ -2030,6 +2092,8 @@
             assertSourceOrder(
                 in: searchMatch,
                 hooks: [
+                    "} catch let error as ContentReadSchedulerError {",
+                    "StoreBackedWorkspaceSearchAdmissionError.contentReadQueueFull(",
                     "} catch let error as StoreBackedWorkspaceSearchAdmissionError {",
                     "throw error",
                     "} catch is CancellationError {",
@@ -2042,40 +2106,37 @@
         }
 
         func testAdmissionDebugControlsRemainIdleOnlyAggregateBoundedAndPrivacySafe() throws {
-            let coordinator = try source("Sources/RepoPrompt/Features/Search/StoreBackedWorkspaceSearchAdmissionCoordinator.swift")
-            XCTAssertTrue(coordinator.contains("snapshotForDebug"))
-            XCTAssertTrue(coordinator.contains("configureForDebug"))
-            XCTAssertTrue(coordinator.contains("resetDebugConfiguration"))
-            XCTAssertTrue(coordinator.contains("globalActiveCount == 0"))
-            XCTAssertTrue(coordinator.contains("globalQueuedCount == 0"))
-            XCTAssertTrue(coordinator.contains("lanes.isEmpty"))
-            XCTAssertTrue(coordinator.contains("aggregate counters only"))
+            let coordinator = try source("Sources/RepoPrompt/Features/Search/StoreBackedWorkspaceSearchLane.swift")
+            XCTAssertTrue(coordinator.contains("snapshotForTesting"))
+            XCTAssertTrue(coordinator.contains("configureForTesting"))
+            XCTAssertTrue(coordinator.contains("resetConfigurationForTesting"))
+            XCTAssertTrue(coordinator.contains("activeLeaseID == nil, waiterState == nil"))
             XCTAssertTrue(coordinator.contains("let enqueuedAt = clock.now()"))
-            XCTAssertFalse(coordinator.contains("await self.enqueueWaiter"))
-            XCTAssertFalse(coordinator.contains("pendingWaiterIDs"))
-            XCTAssertFalse(coordinator.contains("ObjectIdentifier(store).debugDescription"))
+            XCTAssertTrue(coordinator.contains("maximumActivePermitCount"))
+            XCTAssertTrue(coordinator.contains("maximumWaiterCount"))
+            XCTAssertFalse(coordinator.contains("static let shared"))
+            XCTAssertFalse(coordinator.contains("ObjectIdentifier"))
 
             let sibling = try source("Sources/RepoPrompt/Features/Diagnostics/MCP/MCPConnectionManager+DebugDiagnosticsReadSearchLatency.swift")
-            XCTAssertTrue(sibling.contains("\"overload_count\": overloadCount"))
-            XCTAssertTrue(sibling.contains("\"wait_expiry_count\": waitExpiryCount"))
-            XCTAssertTrue(sibling.contains("\"queued_cancellation_count\": queuedCancellationCount"))
-            XCTAssertTrue(sibling.contains("\"lane_loads\": laneLoads.map"))
-            XCTAssertTrue(sibling.contains("\"store_active_count\": laneLoad.activeCount"))
-            XCTAssertTrue(sibling.contains("\"store_queued_count\": laneLoad.queuedCount"))
+            XCTAssertTrue(sibling.contains("\"overload_count\": entries.reduce"))
+            XCTAssertTrue(sibling.contains("\"wait_expiry_count\": entries.reduce"))
+            XCTAssertTrue(sibling.contains("\"queued_cancellation_count\": entries.reduce"))
+            XCTAssertTrue(sibling.contains("\"lanes\": entries.map"))
+            XCTAssertTrue(sibling.contains("\"active_count\": entry.snapshot.activePermitCount"))
+            XCTAssertTrue(sibling.contains("\"queued_count\": entry.snapshot.waiterCount"))
             XCTAssertFalse(sibling.contains("store_identifier"))
             XCTAssertFalse(sibling.contains("workspace_name"))
 
-            let contentFetchCoordinator = try source("Sources/RepoPrompt/Features/Search/StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator.swift")
-            XCTAssertTrue(contentFetchCoordinator.contains("snapshotForDebug"))
-            XCTAssertTrue(contentFetchCoordinator.contains("configureForDebug"))
-            XCTAssertTrue(contentFetchCoordinator.contains("resetDebugConfiguration"))
-            XCTAssertTrue(contentFetchCoordinator.contains("globalActiveCount == 0"))
-            XCTAssertTrue(contentFetchCoordinator.contains("globalQueuedCount == 0"))
-            XCTAssertTrue(contentFetchCoordinator.contains("lanes.isEmpty"))
-            XCTAssertTrue(contentFetchCoordinator.contains("Aggregate-only snapshots"))
-            XCTAssertTrue(contentFetchCoordinator.contains("queuedSearchCount"))
-            XCTAssertFalse(contentFetchCoordinator.contains("ObjectIdentifier(store).debugDescription"))
-            XCTAssertTrue(sibling.contains("\"queued_search_count\": laneLoad.queuedSearchCount"))
+            let contentLoading = try source("Sources/RepoPrompt/Infrastructure/FileSystem/FileSystemService+ContentLoading.swift")
+            XCTAssertTrue(contentLoading.contains("struct Snapshot: Equatable"))
+            XCTAssertTrue(contentLoading.contains("activePermitCount == 0 && queuedWaiterCount == 0 && ownerLaneCount == 0"))
+            XCTAssertTrue(contentLoading.contains("maxQueuedWaiterCount: 512"))
+            XCTAssertTrue(contentLoading.contains("ContentReadSchedulerError.queueFull"))
+            XCTAssertFalse(contentLoading.contains("ObjectIdentifier"))
+            XCTAssertTrue(sibling.contains("\"active_permit_count\": activePermitCount"))
+            XCTAssertTrue(sibling.contains("\"queued_waiter_count\": queuedWaiterCount"))
+            XCTAssertTrue(sibling.contains("\"owner_lane_count\": ownerLaneCount"))
+            XCTAssertTrue(sibling.contains("\"grant_count\": grantCount"))
         }
 
         func testLifecycleSourceOrderCoversDispatchRunToolAndIngressBoundaries() throws {
@@ -2186,7 +2247,7 @@
                 in: search,
                 hooks: [
                     "_ = await store.awaitAppliedIngress(rootScope: rootScope)",
-                    "let snapshot = await store.searchCatalogSnapshot(rootScope: rootScope)"
+                    "switch await store.searchCatalogAccess(rootScope: rootScope)"
                 ]
             )
             let workspaceFiles = try source("Sources/RepoPrompt/Features/WorkspaceFiles/ViewModels/WorkspaceFilesViewModel.swift")
@@ -2245,36 +2306,6 @@
                 }
                 searchStart = match.upperBound
             }
-        }
-
-        private func restoreAdmissionDebugConfiguration(
-            _ configuration: StoreBackedWorkspaceSearchAdmissionCoordinator.Configuration,
-            coordinator: StoreBackedWorkspaceSearchAdmissionCoordinator
-        ) async {
-            for _ in 0 ..< 10000 {
-                switch await coordinator.configureForDebug(configuration) {
-                case .applied:
-                    return
-                case .busy:
-                    await Task.yield()
-                }
-            }
-            XCTFail("Admission coordinator should restore DEBUG baseline after diagnostics test")
-        }
-
-        private func restoreContentFetchAdmissionDebugConfiguration(
-            _ configuration: StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator.Configuration,
-            coordinator: StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator
-        ) async {
-            for _ in 0 ..< 10000 {
-                switch await coordinator.configureForDebug(configuration) {
-                case .applied:
-                    return
-                case .busy:
-                    await Task.yield()
-                }
-            }
-            XCTFail("Content-fetch admission coordinator should restore DEBUG baseline after diagnostics test")
         }
 
         private func startedCapture(label: String, maxSamples: Int) -> EditFlowPerf.DebugCaptureSnapshot {

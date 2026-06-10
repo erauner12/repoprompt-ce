@@ -1,58 +1,31 @@
 import Foundation
 
-/// Store-backed runtime search facade for MCP and other non-UI consumers.
-///
-/// This intentionally works from `WorkspaceFileContextStore` catalog snapshots and
-/// `WorkspaceSearchService` readiness/index state rather than `WorkspaceFilesViewModel`
-/// tree projections.
-enum StoreBackedWorkspaceSearch {
-    private static let fileSearchActor = FileSearchActor()
+enum StoreBackedWorkspaceSearchError: LocalizedError, Equatable {
+    case worktreeScopeUnavailable(missingPhysicalRootPaths: [String])
 
-    static func search(
-        pattern: String,
-        mode: SearchMode = .auto,
-        isRegex: Bool = false,
-        caseInsensitive: Bool = false,
-        maxPaths: Int = 100,
-        maxMatches: Int = 250,
-        paths: [String]? = nil,
-        includeExtensions: [String] = [],
-        excludePatterns: [String] = [],
-        contextLines: Int = 0,
-        wholeWord: Bool = false,
-        countOnly: Bool = false,
-        fuzzySpaceMatching: Bool = true,
-        allowLiteralUnescapeFallback: Bool = true,
-        rootScope: WorkspaceLookupRootScope = .allLoaded,
-        store: WorkspaceFileContextStore,
-        searchService _: WorkspaceSearchService,
-        workspaceManager: WorkspaceManagerViewModel?,
-        admissionCoordinator: StoreBackedWorkspaceSearchAdmissionCoordinator = .shared,
-        contentFetchCoordinator: StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator = .shared
-    ) async throws -> SearchResults {
-        try await search(
-            pattern: pattern,
-            mode: mode,
-            isRegex: isRegex,
-            caseInsensitive: caseInsensitive,
-            maxPaths: maxPaths,
-            maxMatches: maxMatches,
-            paths: paths,
-            includeExtensions: includeExtensions,
-            excludePatterns: excludePatterns,
-            contextLines: contextLines,
-            wholeWord: wholeWord,
-            countOnly: countOnly,
-            fuzzySpaceMatching: fuzzySpaceMatching,
-            allowLiteralUnescapeFallback: allowLiteralUnescapeFallback,
-            rootScope: rootScope,
-            store: store,
-            workspaceManager: workspaceManager,
-            admissionCoordinator: admissionCoordinator,
-            contentFetchCoordinator: contentFetchCoordinator
-        )
+    var retryAfterMilliseconds: Int {
+        1000
     }
 
+    var suggestion: String {
+        "Retry after the suggested delay. If the worktree remains unavailable, restore it or rebind the Agent session to an available worktree."
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case let .worktreeScopeUnavailable(missingPhysicalRootPaths):
+            let count = missingPhysicalRootPaths.count
+            let noun = count == 1 ? "worktree root is" : "worktree roots are"
+            return "The bound physical \(noun) unavailable. The visible base workspace was intentionally not searched."
+        }
+    }
+}
+
+/// Store-backed runtime search facade for MCP and other non-UI consumers.
+///
+/// This intentionally works from `WorkspaceFileContextStore` catalog snapshots rather than
+/// `WorkspaceFilesViewModel` tree projections.
+enum StoreBackedWorkspaceSearch {
     static func search(
         pattern: String,
         mode: SearchMode = .auto,
@@ -70,13 +43,23 @@ enum StoreBackedWorkspaceSearch {
         allowLiteralUnescapeFallback: Bool = true,
         rootScope: WorkspaceLookupRootScope = .allLoaded,
         store: WorkspaceFileContextStore,
-        workspaceManager: WorkspaceManagerViewModel?,
-        admissionCoordinator: StoreBackedWorkspaceSearchAdmissionCoordinator = .shared,
-        contentFetchCoordinator: StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator = .shared
+        workspaceManager: WorkspaceManagerViewModel?
     ) async throws -> SearchResults {
+        try Task.checkCancellation()
+        try await ensureRootScopeAvailable(rootScope, store: store)
         try await ensureSearchReady(store: store, workspaceManager: workspaceManager)
+
+        let ingressFreshnessState = EditFlowPerf.begin(EditFlowPerf.Stage.Search.ingressFreshnessWait)
+        _ = await store.awaitAppliedIngress(rootScope: rootScope)
+        EditFlowPerf.end(EditFlowPerf.Stage.Search.ingressFreshnessWait, ingressFreshnessState)
+        try Task.checkCancellation()
+
         let effectiveMode = mode == .auto ? FileSearchActor.inferredAutoMode(pattern) : mode
-        let operation = {
+        let admissionClass = broadSearchAdmissionClass(pattern: pattern, mode: mode, paths: paths)
+        return try await store.withStoreBackedSearchAccess(
+            searchMode: effectiveMode,
+            admissionClass: admissionClass
+        ) { fileSearchActor in
             try await performSearch(
                 pattern: pattern,
                 mode: mode,
@@ -95,18 +78,9 @@ enum StoreBackedWorkspaceSearch {
                 allowLiteralUnescapeFallback: allowLiteralUnescapeFallback,
                 rootScope: rootScope,
                 store: store,
-                contentFetchCoordinator: contentFetchCoordinator
+                fileSearchActor: fileSearchActor
             )
         }
-        if let admissionClass = broadSearchAdmissionClass(pattern: pattern, mode: mode, paths: paths) {
-            return try await admissionCoordinator.withBroadSearchPermit(
-                for: store,
-                searchMode: effectiveMode,
-                admissionClass: admissionClass,
-                operation: operation
-            )
-        }
-        return try await operation()
     }
 
     static func requiresBroadSearchAdmission(
@@ -155,12 +129,8 @@ enum StoreBackedWorkspaceSearch {
         allowLiteralUnescapeFallback: Bool,
         rootScope: WorkspaceLookupRootScope,
         store: WorkspaceFileContextStore,
-        contentFetchCoordinator: StoreBackedWorkspaceSearchContentFetchAdmissionCoordinator
+        fileSearchActor: FileSearchActor
     ) async throws -> SearchResults {
-        let ingressFreshnessState = EditFlowPerf.begin(EditFlowPerf.Stage.Search.ingressFreshnessWait)
-        _ = await store.awaitAppliedIngress(rootScope: rootScope)
-        EditFlowPerf.end(EditFlowPerf.Stage.Search.ingressFreshnessWait, ingressFreshnessState)
-
         let entryPerfState = EditFlowPerf.begin(
             EditFlowPerf.Stage.Search.entrypoint,
             EditFlowPerf.Dimensions(
@@ -191,7 +161,14 @@ enum StoreBackedWorkspaceSearch {
             )
         }
 
-        let snapshot = await store.searchCatalogSnapshot(rootScope: rootScope)
+        let snapshot: WorkspaceSearchCatalogSnapshot
+        switch await store.searchCatalogAccess(rootScope: rootScope) {
+        case let .available(availableSnapshot):
+            snapshot = availableSnapshot
+        case let .unavailable(availability):
+            entryPerfStatus = "error"
+            throw searchError(for: availability)
+        }
 
         let rootsByID = Dictionary(uniqueKeysWithValues: snapshot.roots.map { ($0.id, $0) })
         let visibleRootRefs = await store.rootRefs(scope: .visibleWorkspace)
@@ -256,7 +233,6 @@ enum StoreBackedWorkspaceSearch {
             ? .validateDiskMetadata
             : .cachedMetadata
         let aliasByRootPath = pathSearchAliasByRootPath(roots: visibleRootRecords)
-        let searchID = UUID()
         var wasAutoCorrected: Bool? = nil
         var results: SearchResults
         do {
@@ -293,8 +269,6 @@ enum StoreBackedWorkspaceSearch {
                     in: filesToSearch,
                     rootsByID: rootsByID,
                     store: store,
-                    contentFetchCoordinator: contentFetchCoordinator,
-                    searchID: searchID,
                     aliasByRootPath: aliasByRootPath
                 )
             }
@@ -307,6 +281,27 @@ enum StoreBackedWorkspaceSearch {
             results.warningMessage = searchAutoCorrectionWarning(isRegex: isRegex)
         }
         return results
+    }
+
+    private static func ensureRootScopeAvailable(
+        _ rootScope: WorkspaceLookupRootScope,
+        store: WorkspaceFileContextStore
+    ) async throws {
+        let availability = await store.rootScopeAvailability(rootScope)
+        guard availability == .available else {
+            throw searchError(for: availability)
+        }
+    }
+
+    private static func searchError(
+        for availability: WorkspaceLookupRootScopeAvailability
+    ) -> StoreBackedWorkspaceSearchError {
+        switch availability {
+        case .available:
+            preconditionFailure("Available root scope does not produce a search error")
+        case let .sessionWorktreeUnavailable(missingPhysicalRootPaths):
+            .worktreeScopeUnavailable(missingPhysicalRootPaths: missingPhysicalRootPaths)
+        }
     }
 
     private static func ensureSearchReady(

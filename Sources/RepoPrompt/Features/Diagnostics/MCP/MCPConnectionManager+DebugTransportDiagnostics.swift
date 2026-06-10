@@ -101,6 +101,20 @@ import MCP
             ))
         }
 
+        func debugTransportIngressSnapshotToolPayload(
+            op: String,
+            connectionID: UUID,
+            arguments: [String: Value]
+        ) async -> CallTool.Result {
+            guard let requestedID = debugOptionalUUID(arguments, "connection_id", op: op) else {
+                return debugDiagnosticsError(op: op, code: "invalid_params", message: "connection_id must be a UUID string when provided.")
+            }
+            return await debugDiagnosticsResult(debugTransportIngressSnapshotPayload(
+                currentConnectionID: connectionID,
+                requestedConnectionID: requestedID
+            ))
+        }
+
         func debugRoutingSnapshotToolPayload(
             op: String,
             connectionID: UUID,
@@ -135,6 +149,22 @@ import MCP
                 sessionFingerprint: debugString(arguments, "session_fingerprint"),
                 connectionID: connectionID
             ))
+        }
+
+        func debugRunRoutingHistoryToolPayload(op: String, arguments: [String: Value]) -> CallTool.Result {
+            let limit: Int
+            switch debugBoundedInt(arguments, "limit", defaultValue: 200, range: 1 ... 500) {
+            case let .value(value), let .defaulted(value): limit = value
+            case .invalid:
+                return debugDiagnosticsError(op: op, code: "invalid_params", message: "limit must be an integer in 1...500.")
+            }
+            guard let parsedRunID = debugOptionalUUID(arguments, "run_id", op: op) else {
+                return debugDiagnosticsError(op: op, code: "invalid_params", message: "run_id must be a UUID string.")
+            }
+            guard let runID = parsedRunID else {
+                return debugDiagnosticsError(op: op, code: "invalid_params", message: "run_id is required.")
+            }
+            return debugDiagnosticsResult(debugRunRoutingHistoryPayload(runID: runID, limit: limit))
         }
 
         func debugClearConnectionHistoryToolPayload(op: String, arguments: [String: Value]) -> CallTool.Result {

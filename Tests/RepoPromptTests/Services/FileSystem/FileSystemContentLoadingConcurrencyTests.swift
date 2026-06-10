@@ -407,9 +407,10 @@ final class FileSystemContentLoadingConcurrencyTests: XCTestCase {
             let laterContent = try await service.loadContent(ofRelativePath: "Later.txt")
             XCTAssertEqual(laterContent, "later")
             let limiterSnapshot = await FileSystemService.contentReadWorkerLimiterSnapshotForTesting()
-            XCTAssertEqual(limiterSnapshot.queueDepth, 0)
-            XCTAssertEqual(limiterSnapshot.waiterCount, 0)
-            XCTAssertEqual(limiterSnapshot.pendingWaiterCount, 0)
+            XCTAssertEqual(limiterSnapshot.activePermitCount, 0)
+            XCTAssertEqual(limiterSnapshot.queuedWaiterCount, 0)
+            XCTAssertEqual(limiterSnapshot.ownerLaneCount, 0)
+            XCTAssertTrue(limiterSnapshot.isIdle)
             let snapshot = EditFlowPerf.debugCaptureSnapshot(finish: true)
             let events = snapshot.lifecycleEvents.filter { $0.correlationID == correlation.id.uuidString }
             XCTAssertEqual(events.map(\.eventName), [
@@ -430,6 +431,171 @@ final class FileSystemContentLoadingConcurrencyTests: XCTestCase {
                     $0.sanitizedDimensions.contains("workloadClass=interactiveRead")
             })
             await service.setContentReadChunkHandlerForTesting(nil)
+        }
+
+        func testContentReadSchedulerBoundsQueueCancelsWaitersAndReturnsIdle() async throws {
+            let limiter = ContentReadAsyncLimiter(
+                capacity: 1,
+                maxQueuedWaiterCount: 1,
+                retryAfterMilliseconds: 777
+            )
+            let gate = AsyncGate()
+            let heldOwner = UUID()
+            let queuedOwner = UUID()
+
+            let held = Task {
+                try await limiter.withPermit(workloadClass: .contentSearch, ownerID: heldOwner) {
+                    await gate.markStartedAndWaitForRelease()
+                    return 1
+                }
+            }
+            await gate.waitUntilStarted()
+            let queued = Task {
+                try await limiter.withPermit(workloadClass: .contentSearch, ownerID: queuedOwner) { 2 }
+            }
+            let queuedSnapshot = await waitForLimiterSnapshot(limiter) { $0.queuedWaiterCount == 1 }
+            XCTAssertEqual(queuedSnapshot.activePermitCount, 1)
+            XCTAssertEqual(queuedSnapshot.ownerLaneCount, 2)
+
+            do {
+                _ = try await limiter.withPermit(workloadClass: .contentSearch, ownerID: UUID()) { 3 }
+                XCTFail("Expected bounded scheduler backpressure")
+            } catch let error as ContentReadSchedulerError {
+                XCTAssertEqual(error, .queueFull(retryAfterMilliseconds: 777))
+            }
+
+            queued.cancel()
+            do {
+                _ = try await queued.value
+                XCTFail("Expected queued scheduler cancellation")
+            } catch is CancellationError {
+                // Expected.
+            }
+            let cancelledSnapshot = await waitForLimiterSnapshot(limiter) { $0.queuedWaiterCount == 0 }
+            XCTAssertEqual(cancelledSnapshot.cancellationCount, 1)
+            XCTAssertEqual(cancelledSnapshot.overloadCount, 1)
+
+            await gate.release()
+            let heldValue = try await held.value
+            XCTAssertEqual(heldValue, 1)
+            let idle = await waitForLimiterSnapshot(limiter) { $0.isIdle }
+            XCTAssertTrue(idle.isIdle)
+            XCTAssertEqual(idle.activePermitCount, 0)
+            XCTAssertEqual(idle.queuedWaiterCount, 0)
+            XCTAssertEqual(idle.ownerLaneCount, 0)
+        }
+
+        func testContentReadSchedulerPrioritizesInteractiveWaitersOverBulk() async throws {
+            let limiter = ContentReadAsyncLimiter(capacity: 1, maxQueuedWaiterCount: 4)
+            let gate = AsyncGate()
+            let recorder = AsyncValueRecorder()
+
+            let held = Task {
+                try await limiter.withPermit(workloadClass: .contentSearch, ownerID: UUID()) {
+                    await gate.markStartedAndWaitForRelease()
+                }
+            }
+            await gate.waitUntilStarted()
+            let bulk = Task {
+                try await limiter.withPermit(workloadClass: .codemap, ownerID: UUID()) {
+                    await recorder.append(2)
+                }
+            }
+            _ = await waitForLimiterSnapshot(limiter) { $0.queuedWaiterCount == 1 }
+            let interactive = Task {
+                try await limiter.withPermit(workloadClass: .interactiveRead, ownerID: UUID()) {
+                    await recorder.append(1)
+                }
+            }
+            _ = await waitForLimiterSnapshot(limiter) { $0.queuedWaiterCount == 2 }
+
+            await gate.release()
+            _ = try await held.value
+            _ = try await interactive.value
+            _ = try await bulk.value
+
+            let values = await recorder.values()
+            XCTAssertEqual(values, [1, 2])
+            let idle = await waitForLimiterSnapshot(limiter) { $0.isIdle }
+            XCTAssertEqual(idle.interactiveGrantCount, 1)
+            XCTAssertEqual(idle.bulkGrantCount, 1)
+        }
+
+        func testContentReadSchedulerPromotesAgedWaitersAheadOfNewInteractiveWork() async throws {
+            let limiter = ContentReadAsyncLimiter(
+                capacity: 1,
+                maxQueuedWaiterCount: 4,
+                agePromotionNanoseconds: 10_000_000
+            )
+            let gate = AsyncGate()
+            let recorder = AsyncValueRecorder()
+
+            let held = Task {
+                try await limiter.withPermit(workloadClass: .contentSearch, ownerID: UUID()) {
+                    await gate.markStartedAndWaitForRelease()
+                }
+            }
+            await gate.waitUntilStarted()
+            let agedBulk = Task {
+                try await limiter.withPermit(workloadClass: .codemap, ownerID: UUID()) {
+                    await recorder.append(1)
+                }
+            }
+            _ = await waitForLimiterSnapshot(limiter) { $0.queuedWaiterCount == 1 }
+            try await Task.sleep(nanoseconds: 20_000_000)
+            let interactive = Task {
+                try await limiter.withPermit(workloadClass: .interactiveRead, ownerID: UUID()) {
+                    await recorder.append(2)
+                }
+            }
+            _ = await waitForLimiterSnapshot(limiter) { $0.queuedWaiterCount == 2 }
+
+            await gate.release()
+            _ = try await held.value
+            _ = try await agedBulk.value
+            _ = try await interactive.value
+
+            let values = await recorder.values()
+            XCTAssertEqual(values, [1, 2])
+            let idle = await waitForLimiterSnapshot(limiter) { $0.isIdle }
+            XCTAssertTrue(idle.isIdle)
+        }
+
+        func testContentReadSchedulerRoundRobinsOwnersWhilePreservingOwnerFIFO() async throws {
+            let limiter = ContentReadAsyncLimiter(capacity: 1, maxQueuedWaiterCount: 8)
+            let gate = AsyncGate()
+            let recorder = AsyncValueRecorder()
+            let ownerA = UUID()
+            let ownerB = UUID()
+
+            let held = Task {
+                try await limiter.withPermit(workloadClass: .contentSearch, ownerID: UUID()) {
+                    await gate.markStartedAndWaitForRelease()
+                }
+            }
+            await gate.waitUntilStarted()
+            var tasks: [Task<Void, Error>] = []
+            tasks.append(Task { try await limiter.withPermit(workloadClass: .contentSearch, ownerID: ownerA) { await recorder.append(1) } })
+            _ = await waitForLimiterSnapshot(limiter) { $0.queuedWaiterCount == 1 }
+            tasks.append(Task { try await limiter.withPermit(workloadClass: .contentSearch, ownerID: ownerA) { await recorder.append(2) } })
+            _ = await waitForLimiterSnapshot(limiter) { $0.queuedWaiterCount == 2 }
+            tasks.append(Task { try await limiter.withPermit(workloadClass: .contentSearch, ownerID: ownerB) { await recorder.append(3) } })
+            _ = await waitForLimiterSnapshot(limiter) { $0.queuedWaiterCount == 3 }
+            tasks.append(Task { try await limiter.withPermit(workloadClass: .contentSearch, ownerID: ownerB) { await recorder.append(4) } })
+            _ = await waitForLimiterSnapshot(limiter) { $0.queuedWaiterCount == 4 }
+
+            await gate.release()
+            _ = try await held.value
+            for task in tasks {
+                _ = try await task.value
+            }
+
+            let recordedValues = await recorder.values()
+            XCTAssertEqual(recordedValues, [1, 3, 2, 4])
+            let idle = await waitForLimiterSnapshot(limiter) { $0.isIdle }
+            XCTAssertTrue(idle.isIdle)
+            XCTAssertEqual(idle.grantCount, 5)
+            XCTAssertEqual(idle.normalGrantCount, 5)
         }
     #endif
 
@@ -457,6 +623,22 @@ final class FileSystemContentLoadingConcurrencyTests: XCTestCase {
     }
 
     #if DEBUG
+        private func waitForLimiterSnapshot(
+            _ limiter: ContentReadAsyncLimiter,
+            timeoutNanoseconds: UInt64 = 1_000_000_000,
+            predicate: (ContentReadAsyncLimiter.Snapshot) -> Bool
+        ) async -> ContentReadAsyncLimiter.Snapshot {
+            let interval: UInt64 = 10_000_000
+            var waited: UInt64 = 0
+            while waited < timeoutNanoseconds {
+                let snapshot = await limiter.snapshotForTesting()
+                if predicate(snapshot) { return snapshot }
+                try? await Task.sleep(nanoseconds: interval)
+                waited += interval
+            }
+            return await limiter.snapshotForTesting()
+        }
+
         private func saturateContentReadWorkers(
             service: FileSystemService,
             root: URL,
@@ -621,6 +803,18 @@ private actor AsyncCounter {
             waited += interval
         }
         return count >= target
+    }
+}
+
+private actor AsyncValueRecorder {
+    private var recordedValues: [Int] = []
+
+    func append(_ value: Int) {
+        recordedValues.append(value)
+    }
+
+    func values() -> [Int] {
+        recordedValues
     }
 }
 

@@ -28,7 +28,8 @@ enum WindowStateCompositionFactory {
     static func make(
         windowID: Int,
         deferredInitialAgentSystemWorkspaceRefresh: Bool,
-        sharedMCPService: MCPService
+        sharedMCPService: MCPService,
+        contextBuilderProviderFactory: ContextBuilderAgentViewModel.ProviderFactory? = nil
     ) -> WindowStateComposition {
         // 1) Workspace file context store + visible file-tree UI adapter
         let workspaceFileContextStore = WorkspaceFileContextStore()
@@ -86,7 +87,7 @@ enum WindowStateCompositionFactory {
             workspaceManager: workspaceManager,
             selectionCoordinator: selectionCoordinator,
             windowID: windowID,
-            workspaceSearch: { [store = workspaceFileContextStore, searchService = workspaceSearchService, workspaceManager] pattern, mode, isRegex, caseInsensitive, maxPaths, maxMatches, paths, includeExtensions, excludePatterns, contextLines, wholeWord, countOnly, fuzzySpaceMatching, rootScope in
+            workspaceSearch: { [store = workspaceFileContextStore, workspaceManager] pattern, mode, isRegex, caseInsensitive, maxPaths, maxMatches, paths, includeExtensions, excludePatterns, contextLines, wholeWord, countOnly, fuzzySpaceMatching, rootScope in
                 try await StoreBackedWorkspaceSearch.search(
                     pattern: pattern,
                     mode: mode,
@@ -103,7 +104,6 @@ enum WindowStateCompositionFactory {
                     fuzzySpaceMatching: fuzzySpaceMatching,
                     rootScope: rootScope,
                     store: store,
-                    searchService: searchService,
                     workspaceManager: workspaceManager
                 )
             },
@@ -120,7 +120,8 @@ enum WindowStateCompositionFactory {
             promptManager: promptManager,
             workspaceManager: workspaceManager,
             mcpServer: mcpServer,
-            oracleViewModel: oracleViewModel
+            oracleViewModel: oracleViewModel,
+            providerFactory: contextBuilderProviderFactory
         )
 
         // 13) Agent mode (for minimal agent UI)

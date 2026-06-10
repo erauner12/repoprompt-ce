@@ -31,7 +31,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Sequence, Tuple
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 TERMINAL_STATES = {"completed", "failed", "canceled"}
 LANE_NAMES = {"build", "debugArtifact", "liveApp", "release", "style"}
 LOG_TAIL_LINES = 30
@@ -125,8 +125,8 @@ Operation commands:
   ./conductor app status
   ./conductor app stop                                 # latest interactive stop intent
   ./conductor app relaunch [-- <app args...>]          # latest interactive relaunch intent
-  ./conductor smoke [--launch] [--workspace <name>] [--window-id <id>] [--agent-run]
-    (without --launch, requires the CE debug app to already be running and CLI installed)
+  ./conductor smoke [--launch | --packaged-app <path>] [--artifact-manifest <path>] [--workspace <name>] [--window-id <id>] [--agent-run]
+    (without --launch/--packaged-app, requires the CE debug app to already be running and CLI installed)
   ./conductor diagnostics agent-mode-on [--log-file <path>]
   ./conductor release preflight|artifact|package|local-install
 
@@ -689,7 +689,11 @@ def latest_lifecycle_intent(operation: str, args: Dict[str, Any]) -> Optional[st
 
 
 def is_launch_capable_job(operation: str, args: Dict[str, Any]) -> bool:
-    return operation == "run" or (operation == "app" and args.get("subcommand") == "relaunch") or (operation == "smoke" and bool(args.get("launch")))
+    return (
+        operation == "run"
+        or (operation == "app" and args.get("subcommand") == "relaunch")
+        or (operation == "smoke" and bool(args.get("launch") or args.get("packagedApp")))
+    )
 
 
 @dataclasses.dataclass
@@ -912,6 +916,8 @@ class OperationRegistry:
             lanes = ["debugArtifact", "liveApp"]
             if args.get("launch"):
                 lanes = ["build", "debugArtifact", "liveApp"]
+            elif args.get("packagedApp"):
+                lanes = ["liveApp"]
             smoke_args = dict(args)
             smoke_args["operationTimeout"] = effective_timeout
             return self._internal_argv("smoke", smoke_args), lanes, cwd, env, effective_timeout
@@ -1397,6 +1403,7 @@ class DaemonState:
                     argv,
                     cwd=str(cwd),
                     env=env,
+                    stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
@@ -1730,39 +1737,45 @@ def request_daemon(paths: Paths, payload: Dict[str, Any], timeout: Optional[floa
     return response.get("payload") or {}
 
 
-def daemon_running(paths: Paths) -> bool:
+def compatible_daemon_status_or_stop_idle_mismatch(paths: Paths) -> Tuple[Optional[Dict[str, Any]], Optional[ConductorError]]:
     try:
         payload = request_daemon(paths, {"type": "status"}, timeout=1.0)
-        return payload.get("protocolVersion") == PROTOCOL_VERSION
-    except ConductorError:
-        return False
+    except ConductorError as exc:
+        return None, exc
+
+    protocol = payload.get("protocolVersion")
+    if protocol == PROTOCOL_VERSION:
+        return payload, None
+
+    active = payload.get("runningJobs") or []
+    queued = payload.get("queuedJobs") or []
+    if active or queued:
+        raise ConductorError(
+            f"daemon protocol mismatch (daemon={protocol}, client={PROTOCOL_VERSION}) and jobs are active; "
+            "run './conductor daemon stop --force' after deciding it is safe"
+        )
+    try:
+        request_daemon(paths, {"type": "stop", "force": False}, timeout=FORCE_STOP_RPC_TIMEOUT_SECONDS)
+    except ConductorError as exc:
+        raise ConductorError(
+            f"daemon protocol mismatch (daemon={protocol}, client={PROTOCOL_VERSION}) could not stop without force; "
+            "jobs may have become active. Run './conductor daemon stop --force' after deciding it is safe"
+        ) from exc
+    if not wait_until_stopped(paths, timeout=TERMINATE_GRACE_SECONDS + 5.0):
+        raise ConductorError(
+            f"daemon protocol mismatch (daemon={protocol}, client={PROTOCOL_VERSION}) did not stop cleanly; "
+            "run './conductor daemon stop --force' after deciding it is safe"
+        )
+    return None, None
 
 
 def ensure_daemon(paths: Paths, start_if_needed: bool = True) -> Dict[str, Any]:
     ensure_state_dirs(paths)
     cleanup_stale_files(paths)
     contact_error: Optional[ConductorError] = None
-    try:
-        payload = request_daemon(paths, {"type": "status"}, timeout=1.0)
-    except ConductorError as exc:
-        contact_error = exc
-    else:
-        protocol = payload.get("protocolVersion")
-        if protocol == PROTOCOL_VERSION:
-            return payload
-        active = payload.get("runningJobs") or []
-        queued = payload.get("queuedJobs") or []
-        if active or queued:
-            raise ConductorError(
-                f"daemon protocol mismatch (daemon={protocol}, client={PROTOCOL_VERSION}) and jobs are active; "
-                "run './conductor daemon stop --force' after deciding it is safe"
-            )
-        request_daemon(paths, {"type": "stop", "force": True}, timeout=FORCE_STOP_RPC_TIMEOUT_SECONDS)
-        if not wait_until_stopped(paths, timeout=TERMINATE_GRACE_SECONDS + 5.0):
-            raise ConductorError(
-                f"daemon protocol mismatch (daemon={protocol}, client={PROTOCOL_VERSION}) did not stop cleanly; "
-                "run './conductor daemon stop --force' after deciding it is safe"
-            )
+    payload, contact_error = compatible_daemon_status_or_stop_idle_mismatch(paths)
+    if payload is not None:
+        return payload
 
     live_pid = read_pid(paths.pid_path)
     if contact_error and live_pid and pid_alive(live_pid):
@@ -1779,13 +1792,21 @@ def ensure_daemon(paths: Paths, start_if_needed: bool = True) -> Dict[str, Any]:
     with paths.lock_path.open("a+") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         cleanup_stale_files(paths)
-        if daemon_running(paths):
-            return request_daemon(paths, {"type": "status"}, timeout=1.0)
+        payload, locked_contact_error = compatible_daemon_status_or_stop_idle_mismatch(paths)
+        if payload is not None:
+            return payload
+        locked_live_pid = read_pid(paths.pid_path)
+        if locked_contact_error and locked_live_pid and pid_alive(locked_live_pid):
+            raise ConductorError(
+                f"daemon pid {locked_live_pid} is alive but the socket is unresponsive; "
+                "run './conductor daemon stop --force' before starting a replacement"
+            )
         script = Path(__file__).resolve()
         with paths.daemon_log_path.open("ab") as daemon_log:
             proc = subprocess.Popen(
                 [sys.executable, str(script), "__daemon", "--repo-root", str(paths.repo_root)],
                 cwd=str(paths.repo_root),
+                stdin=subprocess.DEVNULL,
                 stdout=daemon_log,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
@@ -2441,6 +2462,7 @@ def run_operation_command(
             list(argv),
             cwd=str(cwd),
             env=env,
+            stdin=subprocess.DEVNULL,
             text=True,
             capture_output=True,
             timeout=timeout,
@@ -2495,6 +2517,21 @@ def resolve_debug_cli() -> Optional[str]:
     if bundled.is_file() and os.access(bundled, os.X_OK):
         return str(bundled)
     return None
+
+
+def resolve_embedded_helper(app_bundle: Path) -> str:
+    app = app_bundle.expanduser().resolve(strict=True)
+    candidate = app / "Contents" / "MacOS" / "repoprompt-mcp"
+    if candidate.is_symlink():
+        raise ConductorError(f"embedded MCP helper must not be a symlink: {candidate}")
+    helper = candidate.resolve(strict=True)
+    try:
+        helper.relative_to(app)
+    except ValueError as exc:
+        raise ConductorError(f"embedded MCP helper escapes launched app bundle: {helper}") from exc
+    if not helper.is_file() or not os.access(helper, os.X_OK):
+        raise ConductorError(f"embedded MCP helper is not an executable regular file: {helper}")
+    return str(helper)
 
 
 def require_debug_cli() -> Optional[str]:
@@ -2630,6 +2667,23 @@ def operation_release_preflight_missing(_repo_root: Path) -> int:
 
 def operation_smoke(repo_root: Path, args: Dict[str, Any]) -> int:
     env = os.environ.copy()
+    packaged_app = args.get("packagedApp")
+    if packaged_app:
+        argv = [
+            str(repo_root / "Scripts" / "smoke_packaged_mcp_roundtrip.sh"),
+            str(packaged_app),
+            "Conductor packaged app",
+        ]
+        if args.get("artifactManifest"):
+            argv.append(str(args["artifactManifest"]))
+        code, _stdout, _stderr = run_operation_command(
+            "packaged app MCP roundtrip",
+            argv,
+            repo_root,
+            env=env,
+        )
+        return code
+
     window_id = str(args.get("windowId") or 1)
     workspace = str(args.get("workspace") or "repoprompt-ce")
     operation_timeout = float(args.get("operationTimeout") or MEDIUM_TIMEOUT_SECONDS)
@@ -2641,9 +2695,17 @@ def operation_smoke(repo_root: Path, args: Dict[str, Any]) -> int:
         if code != 0:
             return code
 
-    cli = require_debug_cli()
-    if not cli:
-        return 1
+    if launched:
+        try:
+            cli = resolve_embedded_helper(debug_app_bundle_path())
+        except (ConductorError, FileNotFoundError, OSError) as exc:
+            print(f"ERROR: could not resolve exact helper from launched app: {exc}", flush=True)
+            return 1
+        print(f"Resolved launched app embedded helper: {cli}", flush=True)
+    else:
+        cli = require_debug_cli()
+        if not cli:
+            return 1
 
     if launched:
         print("Polling rpce-cli-debug windows until the app is ready...", flush=True)
@@ -2871,7 +2933,10 @@ def handle_real_operation(paths: Paths, operation: str, argv: List[str]) -> int:
             args["appArgs"] = trailing[1:] if trailing else []
     elif operation == "smoke":
         parser = argparse.ArgumentParser(prog="conductor smoke")
-        parser.add_argument("--launch", action="store_true")
+        launch_group = parser.add_mutually_exclusive_group()
+        launch_group.add_argument("--launch", action="store_true")
+        launch_group.add_argument("--packaged-app")
+        parser.add_argument("--artifact-manifest")
         parser.add_argument("--workspace", default="repoprompt-ce")
         parser.add_argument("--window-id", type=int, default=1)
         parser.add_argument("--agent-run", action="store_true")
@@ -2879,9 +2944,15 @@ def handle_real_operation(paths: Paths, operation: str, argv: List[str]) -> int:
         ns = parser.parse_args(rest)
         if ns.agent_timeout < 0:
             raise ConductorError("--agent-timeout must be non-negative")
+        if ns.artifact_manifest and not ns.packaged_app:
+            raise ConductorError("--artifact-manifest requires --packaged-app")
+        if ns.packaged_app and ns.agent_run:
+            raise ConductorError("--agent-run is not supported with --packaged-app")
         args.update(
             {
                 "launch": ns.launch,
+                "packagedApp": ns.packaged_app,
+                "artifactManifest": ns.artifact_manifest,
                 "workspace": ns.workspace,
                 "windowId": ns.window_id,
                 "agentRun": ns.agent_run,

@@ -17,6 +17,20 @@ struct AgentExploreMCPToolService {
     var beginAgentRunWait: (_ metadata: RequestMetadata, _ sessionIDs: Set<UUID>, _ timeoutSeconds: TimeInterval?) async -> UUID? = { _, _, _ in nil }
     var endAgentRunWait: (_ token: UUID, _ completion: AgentRunWaitScopeCompletion) async -> Void = { _, _ in }
     let startRun: StartRun
+    var vcsService: VCSService = .shared
+    var gitTargetResolver: GitRepoTargetResolver = .init()
+
+    private var startWorktreeCoordinator: AgentMCPStartWorktreeCoordinator {
+        AgentMCPStartWorktreeCoordinator(
+            operationName: "agent_explore.start",
+            vcsService: vcsService,
+            gitTargetResolver: gitTargetResolver
+        )
+    }
+
+    static func resolvedStartTimeoutSeconds(_ value: Value?) throws -> TimeInterval {
+        try AgentRunMCPToolService.resolvedStartTimeoutSeconds(value)
+    }
 
     func execute(args: [String: Value]) async throws -> Value {
         guard let op = AgentMCPToolHelpers.normalizedString(args["op"])?.lowercased() else {
@@ -40,12 +54,18 @@ struct AgentExploreMCPToolService {
         try validateAllowedKeys(args, op: "start", allowed: Self.startKeys)
         let startMessages = try parseStartMessages(args)
         let messages = startMessages.messages
+        let worktreeStartRequest = try startWorktreeCoordinator.parseRequest(args: args)
+        try validateBatchWorktreeRequest(worktreeStartRequest, messageCount: messages.count)
         let detach = AgentMCPToolHelpers.parseBool(args["detach"]) ?? false
-        let timeoutSeconds = try AgentMCPToolHelpers.parseTimeoutSeconds(args["timeout"]) ?? AgentRunMCPToolService.defaultWaitTimeoutSeconds
+        let timeoutSeconds = try Self.resolvedStartTimeoutSeconds(args["timeout"])
 
         let metadata = await captureRequestMetadata()
         let context = try await resolveStartContext(metadata: metadata)
-        let started = try await startExploreRuns(messages: messages, context: context)
+        let started = try await startExploreRuns(
+            messages: messages,
+            context: context,
+            worktreeRequest: worktreeStartRequest
+        )
 
         guard startMessages.isBatch, started.count > 1 else {
             let run = started[0]
@@ -203,7 +223,8 @@ struct AgentExploreMCPToolService {
 
     private func createFreshExploreTargets(
         count: Int,
-        context: ExploreStartContext
+        context: ExploreStartContext,
+        inheritWorktreeBindings: Bool
     ) async throws -> [AgentModeViewModel.MCPSessionTarget] {
         var targets: [AgentModeViewModel.MCPSessionTarget] = []
         targets.reserveCapacity(count)
@@ -214,7 +235,8 @@ struct AgentExploreMCPToolService {
                     sessionID: nil,
                     createIfNeeded: true,
                     sessionName: nil,
-                    parentSessionID: context.parentSessionID
+                    parentSessionID: context.parentSessionID,
+                    inheritWorktreeBindings: inheritWorktreeBindings
                 )
                 targets.append(target)
             }
@@ -227,20 +249,40 @@ struct AgentExploreMCPToolService {
 
     private func startExploreRuns(
         messages: [String],
-        context: ExploreStartContext
+        context: ExploreStartContext,
+        worktreeRequest: AgentMCPStartWorktreeCoordinator.Request
     ) async throws -> [StartedExploreRun] {
-        let targets = try await createFreshExploreTargets(count: messages.count, context: context)
+        let targets = try await createFreshExploreTargets(
+            count: messages.count,
+            context: context,
+            inheritWorktreeBindings: worktreeRequest.inheritParentWorktreeBindings
+        )
         var started: [StartedExploreRun] = []
         started.reserveCapacity(messages.count)
         for (index, target) in targets.enumerated() {
             let message = messages[index]
             do {
-                let outcome = try await startExploreRun(target: target, message: message, context: context)
+                try await startWorktreeCoordinator.prepare(
+                    request: worktreeRequest,
+                    target: target,
+                    targetWindow: context.targetWindow
+                )
+                let outcome: AgentExternalMCPRunStarter.StartOutcome
+                do {
+                    outcome = try await startExploreRun(target: target, message: message, context: context)
+                } catch {
+                    throw startWorktreeCoordinator.providerStartError(
+                        error,
+                        targetSessionID: target.sessionID,
+                        agentModeVM: context.agentModeVM
+                    )
+                }
                 started.append(StartedExploreRun(index: index, target: target, requestedMessage: message, outcome: outcome))
             } catch {
                 await context.agentModeVM.mcpDiscardSessionTarget(target)
                 let remainingTargets = Array(targets.dropFirst(index + 1))
                 await discardTargets(remainingTargets, agentModeVM: context.agentModeVM)
+                if error is CancellationError { throw error }
                 guard !started.isEmpty else { throw error }
                 let startedIDs = started.map(\.outcome.snapshot.sessionID.uuidString).joined(separator: ", ")
                 throw MCPError.internalError(
@@ -268,6 +310,23 @@ struct AgentExploreMCPToolService {
             .explore,
             nil
         )
+    }
+
+    private func validateBatchWorktreeRequest(
+        _ request: AgentMCPStartWorktreeCoordinator.Request,
+        messageCount: Int
+    ) throws {
+        guard messageCount > 1, request.mode == .create else { return }
+        if request.path != nil {
+            throw MCPError.invalidParams(
+                "agent_explore.start with multiple messages cannot use an explicit worktree_path. Omit worktree_path so each child receives a distinct app-managed worktree."
+            )
+        }
+        if request.branch != nil {
+            throw MCPError.invalidParams(
+                "agent_explore.start with multiple messages cannot use an explicit worktree_branch. Omit worktree_branch so each child receives a distinct branch."
+            )
+        }
     }
 
     private func discardTargets(
@@ -363,7 +422,7 @@ struct AgentExploreMCPToolService {
         agentModeVM: AgentModeViewModel
     ) throws {
         for sessionID in sessionIDs {
-            guard let liveSession = liveSession(for: sessionID, agentModeVM: agentModeVM) else {
+            guard let liveSession = try agentModeVM.authoritativeLiveSession(for: sessionID) else {
                 throw MCPError.invalidParams("Session '\(sessionID.uuidString)' is not a live explore child of the current agent session.")
             }
             guard liveSession.parentSessionID == callerSessionID,
@@ -371,12 +430,6 @@ struct AgentExploreMCPToolService {
             else {
                 throw MCPError.invalidParams("Session '\(sessionID.uuidString)' is not an explore child of the current agent session.")
             }
-        }
-    }
-
-    private func liveSession(for sessionID: UUID, agentModeVM: AgentModeViewModel) -> AgentModeViewModel.TabSession? {
-        agentModeVM.sessions.values.first { session in
-            session.activeAgentSessionID == sessionID || session.mcpControlContext?.sessionID == sessionID
         }
     }
 
@@ -422,9 +475,13 @@ struct AgentExploreMCPToolService {
         var snapshots: [AgentRunMCPSnapshot] = []
         snapshots.reserveCapacity(sessionIDs.count)
         for sessionID in sessionIDs {
-            if let liveSnapshot = agentModeVM.mcpSnapshot(sessionID: sessionID) {
+            if let registration = agentModeVM.mcpRegistration(sessionID: sessionID),
+               let liveSnapshot = agentModeVM.mcpSnapshot(registration: registration)
+            {
                 snapshots.append(liveSnapshot)
-            } else if let storedSnapshot = await AgentRunSessionStore.snapshot(for: sessionID) {
+            } else if let registration = agentModeVM.mcpRegistration(sessionID: sessionID),
+                      let storedSnapshot = await AgentRunSessionStore.snapshot(for: registration)
+            {
                 snapshots.append(storedSnapshot)
             } else {
                 snapshots.append(.expired(sessionID: sessionID))
@@ -441,7 +498,8 @@ struct AgentExploreMCPToolService {
         }
     }
 
-    private static let startKeys: Set<String> = ["op", "message", "messages", "detach", "timeout"]
+    private static let startKeys = Set(["op", "message", "messages", "detach", "timeout"])
+        .union(AgentMCPStartWorktreeCoordinator.Request.argumentKeys)
     private static let pollKeys: Set<String> = ["op", "session_id", "session_ids"]
     private static let waitKeys: Set<String> = ["op", "session_id", "session_ids", "timeout"]
     private static let cancelKeys: Set<String> = ["op", "session_id"]

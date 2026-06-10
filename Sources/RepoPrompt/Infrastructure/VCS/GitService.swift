@@ -121,7 +121,7 @@ actor GitService {
 
         if exitCode == 0 {
             let records = try GitWorktreePorcelainParser.parse(stdout, format: .nulTerminated)
-            return try makeWorktreeDescriptors(from: records, currentRepoURL: repoURL)
+            return try await makeWorktreeDescriptors(from: records, currentRepoURL: repoURL)
         }
 
         guard Self.shouldFallbackFromWorktreeListZError(stderr) else {
@@ -137,7 +137,7 @@ actor GitService {
         }
 
         let records = try GitWorktreePorcelainParser.parse(fallbackStdout, format: .newlineTerminated)
-        return try makeWorktreeDescriptors(from: records, currentRepoURL: repoURL)
+        return try await makeWorktreeDescriptors(from: records, currentRepoURL: repoURL)
     }
 
     /// Create a Git worktree using the existing Git subprocess plumbing.
@@ -639,7 +639,7 @@ actor GitService {
     /// Get uncommitted modified files in the repository
     func getUncommittedFiles(at repoURL: URL) async throws -> [UncommittedFile] {
         let (stdout, stderr, exitCode) = try await runGit(
-            ["status", "--porcelain"],
+            ["status", "--porcelain", "--untracked-files=all"],
             at: repoURL
         )
 
@@ -677,7 +677,7 @@ actor GitService {
     /// Get git status output in porcelain format with NUL delimiters.
     func getStatusPorcelainZ(at repoURL: URL) async throws -> Data {
         let (stdout, stderr, exitCode) = try await runGit(
-            ["status", "--porcelain", "-z"],
+            ["status", "--porcelain", "-z", "--untracked-files=all"],
             at: repoURL
         )
         guard exitCode == 0 else {
@@ -1299,10 +1299,19 @@ actor GitService {
     }
 
     /// Get list of local branches with last commit dates
-    func getLocalBranches(at repoURL: URL) async throws -> [Branch] {
-        // Get branches with their last commit dates using for-each-ref
+    func getLocalBranches(at repoURL: URL, limit: Int? = nil) async throws -> [Branch] {
+        var arguments = [
+            "for-each-ref",
+            "--sort=-committerdate",
+            "--format=%(refname:short)%09%(committerdate:iso8601)%09%(HEAD)"
+        ]
+        if let limit {
+            arguments.append("--count=\(max(0, limit))")
+        }
+        arguments.append("refs/heads")
+
         let (stdout, stderr, exitCode) = try await runGit(
-            ["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)%09%(committerdate:iso8601)%09%(HEAD)", "refs/heads"],
+            arguments,
             at: repoURL
         )
 
@@ -1311,6 +1320,211 @@ actor GitService {
         }
 
         return parseBranchOutputWithDates(stdout)
+    }
+
+    func gitBranchSwitchOptions(at repoURL: URL) async throws -> GitBranchSwitchOptions {
+        let branches = try await getLocalBranches(at: repoURL)
+        let currentBranch = try await currentBranchOrNil(at: repoURL)
+        let currentHead = try await getHeadSHA(at: repoURL)
+        let worktreeOccupancy = try await branchWorktreeOccupancyByBranchName(excludingCurrentCheckoutAt: repoURL)
+        return GitBranchSwitchOptions(
+            rootPath: repoURL.standardizedFileURL.path,
+            repoRootPath: repoURL.standardizedFileURL.path,
+            currentBranch: currentBranch,
+            currentHead: currentHead,
+            isDetached: currentBranch == nil,
+            branches: branches.map { branch in
+                VCSBranch(
+                    name: branch.name,
+                    isCurrent: branch.name == currentBranch || branch.isCurrent,
+                    lastCommitDate: branch.lastCommitDate,
+                    checkedOutWorktree: worktreeOccupancy[branch.name]
+                )
+            }
+        )
+    }
+
+    func preflightGitBranchSwitch(branchName: String, at repoURL: URL) async throws -> GitBranchSwitchPreflight {
+        try Self.validateLocalBranchName(branchName)
+        try await requireLocalBranch(branchName, at: repoURL)
+        try await requireBranchNotCheckedOutInAnotherWorktree(branchName, at: repoURL)
+        let currentBranch = try await currentBranchOrNil(at: repoURL)
+        let currentHead = try await getHeadSHA(at: repoURL)
+        async let dirtyFilesTask = getUncommittedFiles(at: repoURL)
+        async let mergeStateTask = inspectMergeState(at: repoURL)
+        let dirtyFiles = try await dirtyFilesTask
+        let mergeState = try await mergeStateTask
+        var warnings: [GitBranchSwitchPreflightWarning] = []
+        if currentBranch == nil {
+            warnings.append(.detachedHead)
+        }
+        if !dirtyFiles.isEmpty {
+            warnings.append(.uncommittedChanges)
+        }
+        if mergeState.inProgress {
+            warnings.append(.mergeInProgress)
+        }
+        return GitBranchSwitchPreflight(
+            rootPath: repoURL.standardizedFileURL.path,
+            repoRootPath: repoURL.standardizedFileURL.path,
+            targetBranch: branchName,
+            currentBranch: currentBranch,
+            currentHead: currentHead,
+            isCurrentBranch: currentBranch == branchName,
+            warnings: warnings
+        )
+    }
+
+    func switchGitBranch(_ request: GitBranchSwitchRequest, at repoURL: URL) async throws -> GitBranchSwitchResult {
+        let mutationKey = getLayout(for: repoURL)?.commonDir.standardizedFileURL.path
+            ?? repoURL.standardizedFileURL.path
+
+        return try await worktreeMutationCoordinator.withLock(key: mutationKey) { [weak self] in
+            guard let self else {
+                throw GitBranchSwitchError.unavailable("git service was released before branch switching")
+            }
+            try Self.validateLocalBranchName(request.branchName)
+            try await requireLocalBranch(request.branchName, at: repoURL)
+
+            let previousBranch = try await currentBranchOrNil(at: repoURL)
+            let previousHead = try await getHeadSHA(at: repoURL)
+            try Self.validateExpectedCheckout(
+                expectedBranch: request.expectedCurrentBranch,
+                expectedHead: request.expectedCurrentHead,
+                actualBranch: previousBranch,
+                actualHead: previousHead
+            )
+            if previousBranch == request.branchName {
+                return GitBranchSwitchResult(
+                    rootPath: repoURL.standardizedFileURL.path,
+                    repoRootPath: repoURL.standardizedFileURL.path,
+                    previousBranch: previousBranch,
+                    previousHead: previousHead,
+                    newBranch: request.branchName,
+                    newHead: previousHead,
+                    didSwitch: false
+                )
+            }
+
+            try await requireBranchNotCheckedOutInAnotherWorktree(request.branchName, at: repoURL)
+
+            let switchResult = try await runGit(["switch", "--no-guess", request.branchName], at: repoURL)
+            if switchResult.2 != 0 {
+                if Self.shouldFallbackFromGitSwitchError(switchResult.1) {
+                    let checkoutResult = try await runGit(["checkout", request.branchName], at: repoURL)
+                    guard checkoutResult.2 == 0 else {
+                        throw GitBranchSwitchError.gitRefused("git checkout failed: \(checkoutResult.1)")
+                    }
+                } else {
+                    throw GitBranchSwitchError.gitRefused("git switch failed: \(switchResult.1)")
+                }
+            }
+
+            let newBranch = try await currentBranchOrNil(at: repoURL)
+            let newHead = try await getHeadSHA(at: repoURL)
+            guard newBranch == request.branchName else {
+                throw GitBranchSwitchError.gitRefused("Git reported success, but the checkout is now on \(newBranch ?? "detached HEAD") instead of \(request.branchName).")
+            }
+            return GitBranchSwitchResult(
+                rootPath: repoURL.standardizedFileURL.path,
+                repoRootPath: repoURL.standardizedFileURL.path,
+                previousBranch: previousBranch,
+                previousHead: previousHead,
+                newBranch: request.branchName,
+                newHead: newHead,
+                didSwitch: true
+            )
+        }
+    }
+
+    private func currentBranchOrNil(at repoURL: URL) async throws -> String? {
+        let branch = try await getCurrentBranch(at: repoURL).trimmingCharacters(in: .whitespacesAndNewlines)
+        return branch.isEmpty || branch == "HEAD" ? nil : branch
+    }
+
+    private static func validateLocalBranchName(_ branchName: String) throws {
+        let trimmed = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed == branchName,
+              !branchName.isEmpty,
+              !branchName.hasPrefix("-"),
+              !branchName.unicodeScalars.contains(where: { CharacterSet.newlines.contains($0) || CharacterSet.controlCharacters.contains($0) })
+        else {
+            throw GitBranchSwitchError.invalidBranchName(branchName)
+        }
+    }
+
+    private func requireLocalBranch(_ branchName: String, at repoURL: URL) async throws {
+        let (_, _, exitCode) = try await runGit(
+            ["show-ref", "--verify", "--quiet", "refs/heads/\(branchName)"],
+            at: repoURL
+        )
+        guard exitCode == 0 else {
+            throw GitBranchSwitchError.branchNotLocal(branchName)
+        }
+    }
+
+    private func branchWorktreeOccupancyByBranchName(
+        excludingCurrentCheckoutAt repoURL: URL
+    ) async throws -> [String: VCSBranchWorktreeOccupancy] {
+        let worktrees = try await listWorktrees(at: repoURL)
+        var result: [String: VCSBranchWorktreeOccupancy] = [:]
+
+        for descriptor in worktrees {
+            guard let branch = descriptor.branch?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !branch.isEmpty,
+                  !descriptor.isDetached,
+                  !descriptor.isCurrent
+            else { continue }
+
+            result[branch] = VCSBranchWorktreeOccupancy(
+                worktreePath: descriptor.path,
+                worktreeName: descriptor.name,
+                worktreeID: descriptor.worktreeID
+            )
+        }
+
+        return result
+    }
+
+    private func requireBranchNotCheckedOutInAnotherWorktree(_ branchName: String, at repoURL: URL) async throws {
+        let worktreeOccupancy = try await branchWorktreeOccupancyByBranchName(excludingCurrentCheckoutAt: repoURL)
+        guard let occupied = worktreeOccupancy[branchName] else { return }
+        throw GitBranchSwitchError.branchCheckedOutInWorktree(
+            branch: branchName,
+            worktreePath: occupied.worktreePath,
+            worktreeName: occupied.worktreeName
+        )
+    }
+
+    private static func validateExpectedCheckout(
+        expectedBranch: String?,
+        expectedHead: String?,
+        actualBranch: String?,
+        actualHead: String
+    ) throws {
+        if let expectedBranch, expectedBranch != actualBranch {
+            throw GitBranchSwitchError.staleCheckout(
+                expectedBranch: expectedBranch,
+                actualBranch: actualBranch,
+                expectedHead: expectedHead,
+                actualHead: actualHead
+            )
+        }
+        if let expectedHead, expectedHead != actualHead {
+            throw GitBranchSwitchError.staleCheckout(
+                expectedBranch: expectedBranch,
+                actualBranch: actualBranch,
+                expectedHead: expectedHead,
+                actualHead: actualHead
+            )
+        }
+    }
+
+    private static func shouldFallbackFromGitSwitchError(_ stderr: String) -> Bool {
+        let lowercased = stderr.lowercased()
+        return lowercased.contains("'switch' is not a git command")
+            || lowercased.contains("unknown command 'switch'")
+            || lowercased.contains("unknown subcommand: switch")
     }
 
     /// Get list of remote branches with last commit dates, sorted by most recent
@@ -1714,7 +1928,7 @@ actor GitService {
 
     /// Get structured working status with staged, modified, and untracked files.
     func getWorkingStatus(at repoURL: URL) async throws -> WorkingStatus {
-        let args = ["status", "--porcelain", "-z"]
+        let args = ["status", "--porcelain", "-z", "--untracked-files=all"]
         let (stdout, stderr, exitCode) = try await runGit(args, at: repoURL)
         guard exitCode == 0 else {
             throw GitError(message: "git status --porcelain -z failed: \(stderr)")
@@ -2089,31 +2303,11 @@ actor GitService {
             _ = fcntl(fd, F_SETNOSIGPIPE, 1)
         }
 
-        // Build async streams for stdout/stderr and single consumer tasks to collect data
-        final class SendableContinuation: @unchecked Sendable {
-            private let _cont: AsyncStream<Data>.Continuation
-            init(_ c: AsyncStream<Data>.Continuation) {
-                _cont = c
-            }
-
-            func yield(_ d: Data) {
-                _cont.yield(d)
-            }
-
-            func finish() {
-                _cont.finish()
-            }
-        }
-        var outBox: SendableContinuation!
-        let outStream = AsyncStream<Data>(bufferingPolicy: .unbounded) { cont in outBox = SendableContinuation(cont) }
-        var errBox: SendableContinuation!
-        let errStream = AsyncStream<Data>(bufferingPolicy: .unbounded) { cont in errBox = SendableContinuation(cont) }
-
-        // Freeze references to sendable boxes for cross-thread use
-        // (avoid capturing vars in concurrently-executing closures)
-        // Note: set handlers only after boxes are initialized
-        let outC = outBox!
-        let errC = errBox!
+        // Build async streams for stdout/stderr and single consumer tasks to collect data.
+        // GitProcessPipeDrain serializes readability callbacks with termination/cancellation
+        // so a final chunk cannot be read by a callback and then dropped after stream closure.
+        let (outStream, outDrain) = GitProcessPipeDrain.makeStream()
+        let (errStream, errDrain) = GitProcessPipeDrain.makeStream()
 
         let outCollector = Task(priority: .userInitiated) { () -> Data in
             var buf = Data()
@@ -2134,13 +2328,11 @@ actor GitService {
             try await withCheckedThrowingContinuation { continuation in
                 // Drain stdout
                 outPipe.fileHandleForReading.readabilityHandler = { handle in
-                    let chunk = handle.availableData
-                    if !chunk.isEmpty { outC.yield(chunk) }
+                    outDrain.consumeAvailableData(from: handle)
                 }
                 // Drain stderr
                 errPipe.fileHandleForReading.readabilityHandler = { handle in
-                    let chunk = handle.availableData
-                    if !chunk.isEmpty { errC.yield(chunk) }
+                    errDrain.consumeAvailableData(from: handle)
                 }
 
                 process.terminationHandler = { proc in
@@ -2148,17 +2340,10 @@ actor GitService {
                     outPipe.fileHandleForReading.readabilityHandler = nil
                     errPipe.fileHandleForReading.readabilityHandler = nil
 
-                    // Read any remaining bytes that arrived between the last readability
-                    // callback and process termination. Without this, stdout/stderr can be
-                    // truncated for larger outputs and parsing (e.g. --numstat) becomes empty.
-                    let outTail = outPipe.fileHandleForReading.readDataToEndOfFile()
-                    let errTail = errPipe.fileHandleForReading.readDataToEndOfFile()
-
-                    // Send any remaining bytes, then finish streams and await collectors
-                    if !outTail.isEmpty { outC.yield(outTail) }
-                    if !errTail.isEmpty { errC.yield(errTail) }
-                    outC.finish()
-                    errC.finish()
+                    // Drain bytes that arrived between the last readability callback and
+                    // process termination, then close each stream after any in-flight callback.
+                    outDrain.finishReading(from: outPipe.fileHandleForReading)
+                    errDrain.finishReading(from: errPipe.fileHandleForReading)
 
                     Task {
                         let stdoutData = await outCollector.value
@@ -2196,22 +2381,24 @@ actor GitService {
                         }
                     }
                 } catch {
-                    // Ensure handlers are removed on failure
+                    // Ensure handlers and collectors are released when launch fails.
                     outPipe.fileHandleForReading.readabilityHandler = nil
                     errPipe.fileHandleForReading.readabilityHandler = nil
+                    outDrain.cancel()
+                    errDrain.cancel()
                     continuation.resume(throwing: error)
                 }
             }
         }, onCancel: {
-            // Stop reading, finish streams, and terminate the git process to avoid pent-up data
+            // Stop callbacks and terminate before waiting on a drain lock. A callback may be
+            // blocked in FileHandle.availableData until the child closes its pipe.
             outPipe.fileHandleForReading.readabilityHandler = nil
             errPipe.fileHandleForReading.readabilityHandler = nil
-            outC.finish()
-            errC.finish()
-            // Only terminate if the process actually started to avoid NSInvalidArgumentException
             if process.isRunning {
                 process.terminate()
             }
+            outDrain.cancel()
+            errDrain.cancel()
         })
     }
 
@@ -2223,15 +2410,87 @@ actor GitService {
             || lowercased.contains("usage: git worktree")
     }
 
+    private func resolveMainWorktreeRoot(
+        for layout: GitRepositoryLayout,
+        at repoURL: URL
+    ) async -> URL? {
+        if let knownRoot = layout.knownMainWorktreeRoot {
+            return knownRoot
+        }
+
+        let queries: [(arguments: [String], directory: URL, requiresRepoContext: Bool)] = [
+            (["config", "--path", "--get", "core.worktree"], repoURL, true),
+            (["--git-dir", layout.commonDir.path, "config", "--worktree", "--path", "--get", "core.worktree"], layout.commonDir, false)
+        ]
+        for query in queries {
+            guard let result = try? await runGit(
+                query.arguments,
+                at: query.directory,
+                requiresRepoContext: query.requiresRepoContext
+            ), result.2 == 0
+            else {
+                continue
+            }
+            let rawPath = result.0.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !rawPath.isEmpty else { continue }
+
+            let candidate = if rawPath.hasPrefix("/") {
+                URL(fileURLWithPath: rawPath).standardizedFileURL
+            } else {
+                layout.commonDir.appendingPathComponent(rawPath).standardizedFileURL
+            }
+            guard let candidateLayout = getLayout(for: candidate),
+                  !candidateLayout.isLinkedWorktree,
+                  candidateLayout.commonDir.standardizedFileURL.path == layout.commonDir.standardizedFileURL.path
+            else {
+                continue
+            }
+            return candidate
+        }
+        return nil
+    }
+
+    private func normalizedWorktreeRecords(
+        _ records: [GitWorktreePorcelainRecord],
+        currentLayout: GitRepositoryLayout?,
+        resolvedMainRoot: URL?
+    ) -> [GitWorktreePorcelainRecord] {
+        guard let currentLayout else { return records }
+        let commonGitDirPath = currentLayout.commonDir.standardizedFileURL.path
+
+        return records.compactMap { record in
+            let recordPath = URL(fileURLWithPath: record.path).standardizedFileURL.path
+            guard recordPath == commonGitDirPath else {
+                return record
+            }
+            guard let resolvedMainRoot else {
+                return nil
+            }
+            var normalized = record
+            normalized.path = resolvedMainRoot.standardizedFileURL.path
+            return normalized
+        }
+    }
+
     private func makeWorktreeDescriptors(
         from records: [GitWorktreePorcelainRecord],
         currentRepoURL: URL
-    ) throws -> [GitWorktreeDescriptor] {
-        let worktreeRecords = records.filter { !$0.isBare }
+    ) async throws -> [GitWorktreeDescriptor] {
+        let currentLayout = getLayout(for: currentRepoURL)
+        let resolvedMainRoot: URL? = if let currentLayout {
+            await resolveMainWorktreeRoot(for: currentLayout, at: currentRepoURL)
+        } else {
+            nil
+        }
+        let worktreeRecords = normalizedWorktreeRecords(
+            records.filter { !$0.isBare },
+            currentLayout: currentLayout,
+            resolvedMainRoot: resolvedMainRoot
+        )
         guard !worktreeRecords.isEmpty else { return [] }
 
         let layoutsByPath: [String: GitRepositoryLayout] = Dictionary(
-            uniqueKeysWithValues: worktreeRecords.compactMap { record in
+            uniqueKeysWithValues: worktreeRecords.compactMap { record -> (String, GitRepositoryLayout)? in
                 let pathURL = URL(fileURLWithPath: record.path)
                 guard let layout = GitRepositoryLayoutResolver.resolve(atWorkTreeRoot: pathURL) else {
                     return nil
@@ -2240,22 +2499,17 @@ actor GitService {
             }
         )
 
-        let currentLayout = getLayout(for: currentRepoURL)
         let commonGitDir = currentLayout?.commonDir
             ?? layoutsByPath.values.first?.commonDir
         guard let commonGitDir else {
             throw GitError(message: "git worktree list succeeded but repository layout could not be resolved")
         }
 
-        let mainPath = worktreeRecords.first { record in
+        let discoveredMainRoot = worktreeRecords.first { record in
             let path = URL(fileURLWithPath: record.path).standardizedFileURL.path
-            if let layout = layoutsByPath[path] {
-                return !layout.isWorktree && layout.gitDir.standardizedFileURL == layout.commonDir.standardizedFileURL
-            }
-            return false
-        }?.path
-
-        let mainURL = mainPath.map { URL(fileURLWithPath: $0).standardizedFileURL }
+            return layoutsByPath[path].map { !$0.isLinkedWorktree } ?? false
+        }.map { URL(fileURLWithPath: $0.path).standardizedFileURL }
+        let mainURL = resolvedMainRoot ?? discoveredMainRoot
         let repository = GitWorktreeIdentity.repositoryIdentity(
             commonGitDir: commonGitDir,
             mainWorktreeRoot: mainURL
@@ -2268,7 +2522,7 @@ actor GitService {
             let layout = layoutsByPath[path]
             let gitDir = layout?.gitDir.standardizedFileURL
             let isMain: Bool = if let layout {
-                !layout.isWorktree && layout.gitDir.standardizedFileURL == layout.commonDir.standardizedFileURL
+                !layout.isLinkedWorktree
             } else {
                 mainURL?.path == path && !record.isBare
             }
@@ -2535,6 +2789,74 @@ actor GitService {
             }
         }
         return map
+    }
+}
+
+/// Serializes pipe readability callbacks with process termination and cancellation.
+///
+/// `FileHandle.readabilityHandler` may already be executing when a process termination
+/// handler clears it. Without this lock, that callback can read the final bytes, lose the
+/// race to stream closure, and have its subsequent yield discarded.
+final class GitProcessPipeDrain: @unchecked Sendable {
+    private let lock = NSLock()
+    private let continuation: AsyncStream<Data>.Continuation
+    private var isFinished = false
+
+    private init(continuation: AsyncStream<Data>.Continuation) {
+        self.continuation = continuation
+    }
+
+    static func makeStream() -> (stream: AsyncStream<Data>, drain: GitProcessPipeDrain) {
+        var drain: GitProcessPipeDrain?
+        let stream = AsyncStream<Data>(bufferingPolicy: .unbounded) { continuation in
+            drain = GitProcessPipeDrain(continuation: continuation)
+        }
+        return (stream, drain!)
+    }
+
+    func consumeAvailableData(from handle: FileHandle) {
+        consume { handle.availableData }
+    }
+
+    func finishReading(from handle: FileHandle) {
+        finish { handle.readDataToEndOfFile() }
+    }
+
+    func consume(read: () -> Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isFinished else { return }
+
+        let data = read()
+        if !data.isEmpty {
+            continuation.yield(data)
+        }
+    }
+
+    func finish(
+        readRemaining: () -> Data,
+        onWillLock: (() -> Void)? = nil
+    ) {
+        onWillLock?()
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isFinished else { return }
+
+        let data = readRemaining()
+        if !data.isEmpty {
+            continuation.yield(data)
+        }
+        isFinished = true
+        continuation.finish()
+    }
+
+    func cancel() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isFinished else { return }
+
+        isFinished = true
+        continuation.finish()
     }
 }
 

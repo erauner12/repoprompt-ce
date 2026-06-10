@@ -167,7 +167,7 @@ final class SettingsJSONOnlyPersistenceTests: XCTestCase {
         )
     }
 
-    func testWorktreeVisualIdentityDecodesMissingFieldWithoutSchemaBump() throws {
+    func testWorktreeVisualIdentityDecodesMissingFieldFromPreviousSchema() throws {
         let json = #"{"schemaVersion":2,"updatedAt":"2026-05-20T00:00:00Z","copySettingsByWorkspaceID":{},"chatSettingsByWorkspaceID":{},"globalDefaults":{},"scalarPreferences":{}}"#
         let temp = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: temp) }
@@ -180,8 +180,298 @@ final class SettingsJSONOnlyPersistenceTests: XCTestCase {
             fileStore: GlobalSettingsFileStore(fileURL: fileURL)
         )
 
-        XCTAssertEqual(GlobalSettingsDocument.currentSchemaVersion, 2)
+        XCTAssertEqual(GlobalSettingsDocument.currentSchemaVersion, 3)
         XCTAssertTrue(store.worktreeVisualIdentitiesByRepositoryID().isEmpty)
+    }
+
+    func testNetworkMCPDefaultsAreDisabledAndDoNotPersistRawSecrets() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fileURL = temp.appendingPathComponent("Settings/globalSettings.json")
+        let store = try GlobalSettingsStore(
+            defaults: XCTUnwrap(UserDefaults(suiteName: "SettingsJSONOnlyPersistenceTests.\(UUID().uuidString)")),
+            fileStore: GlobalSettingsFileStore(fileURL: fileURL)
+        )
+
+        let defaults = store.networkMCPSettingsSnapshot()
+        XCTAssertFalse(defaults.enabled)
+        XCTAssertEqual(defaults.bindAddress, "127.0.0.1")
+        XCTAssertEqual(defaults.port, 4150)
+        XCTAssertNil(defaults.defaultTarget)
+        XCTAssertNil(defaults.token)
+        XCTAssertTrue(defaults.trustedClients.isEmpty)
+
+        let json = try String(contentsOf: fileURL, encoding: .utf8)
+        XCTAssertFalse(json.localizedCaseInsensitiveContains("authorization"))
+        XCTAssertFalse(json.localizedCaseInsensitiveContains("bearer"))
+    }
+
+    func testNetworkMCPSettingsPersistMetadataOnly() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fileURL = temp.appendingPathComponent("Settings/globalSettings.json")
+        let fileStore = GlobalSettingsFileStore(fileURL: fileURL)
+        let suiteName = "SettingsJSONOnlyPersistenceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = GlobalSettingsStore(defaults: defaults, fileStore: fileStore)
+        let workspaceID = UUID()
+        let tokenMetadata = NetworkMCPBearerTokenMetadata(
+            id: UUID(),
+            label: "OpenClaw",
+            fingerprint: "sha256:0123456789abcdef",
+            createdAt: Date(timeIntervalSince1970: 1800),
+            secureStoragePersistsAcrossLaunches: true
+        )
+
+        try store.setNetworkMCPBindAddress(" 0.0.0.0 ")
+        try store.setNetworkMCPPort(4151)
+        let contextID = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-0000000000c1"))
+        store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(
+            workspaceID: workspaceID,
+            contextID: " \(contextID.uuidString) ",
+            displayName: " Workspace ",
+            rootPaths: [" /repo ", ""],
+            openIfNeeded: true,
+            updatedAt: Date(timeIntervalSince1970: 1900)
+        ))
+        store.setNetworkMCPTokenMetadata(tokenMetadata)
+        store.setNetworkMCPTrustedClients([
+            NetworkMCPTrustedClientPolicy(
+                clientDisplayName: " Laptop ",
+                normalizedClientID: " openclaw:laptop ",
+                tokenFingerprint: tokenMetadata.fingerprint,
+                lastAddress: " 192.168.1.25 ",
+                createdAt: Date(timeIntervalSince1970: 2000)
+            ),
+            NetworkMCPTrustedClientPolicy(
+                normalizedClientID: " ",
+                tokenFingerprint: " ",
+                createdAt: Date(timeIntervalSince1970: 2001)
+            )
+        ])
+        try store.setNetworkMCPEnabled(true, secureTokenFingerprint: tokenMetadata.fingerprint)
+
+        let reloaded = GlobalSettingsStore(defaults: defaults, fileStore: fileStore).networkMCPSettingsSnapshot()
+        XCTAssertTrue(reloaded.enabled)
+        XCTAssertEqual(reloaded.bindAddress, "0.0.0.0")
+        XCTAssertEqual(reloaded.port, 4151)
+        XCTAssertEqual(reloaded.defaultTarget?.workspaceID, workspaceID)
+        XCTAssertEqual(reloaded.defaultTarget?.contextID, contextID.uuidString)
+        XCTAssertEqual(reloaded.defaultTarget?.displayName, "Workspace")
+        XCTAssertEqual(reloaded.defaultTarget?.rootPaths, ["/repo"])
+        XCTAssertEqual(reloaded.token, tokenMetadata)
+        XCTAssertEqual(reloaded.trustedClients.count, 1)
+        XCTAssertEqual(reloaded.trustedClients.first?.clientDisplayName, "Laptop")
+        XCTAssertEqual(reloaded.trustedClients.first?.normalizedClientID, "openclaw:laptop")
+
+        let json = try String(contentsOf: fileURL, encoding: .utf8)
+        XCTAssertTrue(json.contains("networkHTTP"))
+        XCTAssertTrue(json.contains("sha256:0123456789abcdef"))
+        XCTAssertFalse(json.contains("secret-token-value"))
+        XCTAssertFalse(json.localizedCaseInsensitiveContains("authorization"))
+        XCTAssertFalse(json.localizedCaseInsensitiveContains("bearer secret"))
+    }
+
+    func testNetworkMCPSettingsValidationAndEnablementPrerequisites() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fileURL = temp.appendingPathComponent("Settings/globalSettings.json")
+        let store = try GlobalSettingsStore(
+            defaults: XCTUnwrap(UserDefaults(suiteName: "SettingsJSONOnlyPersistenceTests.\(UUID().uuidString)")),
+            fileStore: GlobalSettingsFileStore(fileURL: fileURL)
+        )
+
+        XCTAssertThrowsError(try store.setNetworkMCPBindAddress("localhost")) { error in
+            XCTAssertEqual(error as? NetworkMCPSettingsError, .invalidBindAddress("localhost"))
+        }
+        XCTAssertThrowsError(try store.setNetworkMCPPort(0)) { error in
+            XCTAssertEqual(error as? NetworkMCPSettingsError, .invalidPort(0))
+        }
+        XCTAssertThrowsError(try store.setNetworkMCPPort(1023)) { error in
+            XCTAssertEqual(error as? NetworkMCPSettingsError, .invalidPort(1023))
+        }
+        XCTAssertThrowsError(try store.setNetworkMCPEnabled(true, secureTokenFingerprint: nil)) { error in
+            XCTAssertEqual(error as? NetworkMCPSettingsError, .missingDefaultTarget)
+        }
+
+        store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(contextID: "ctx", rootPaths: ["/repo"]))
+        XCTAssertThrowsError(try store.setNetworkMCPEnabled(true, secureTokenFingerprint: nil)) { error in
+            XCTAssertEqual(error as? NetworkMCPSettingsError, .underspecifiedDefaultTarget)
+        }
+
+        store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(
+            contextID: "00000000-0000-0000-0000-0000000000c2",
+            rootPaths: ["/repo"]
+        ))
+        XCTAssertThrowsError(try store.setNetworkMCPEnabled(true, secureTokenFingerprint: nil)) { error in
+            XCTAssertEqual(error as? NetworkMCPSettingsError, .missingTokenMetadata)
+        }
+
+        store.setNetworkMCPTokenMetadata(NetworkMCPBearerTokenMetadata(
+            label: "OpenClaw",
+            fingerprint: "sha256:feedfacecafebeef",
+            createdAt: Date(timeIntervalSince1970: 1800)
+        ))
+        XCTAssertThrowsError(try store.setNetworkMCPEnabled(true, secureTokenFingerprint: nil)) { error in
+            XCTAssertEqual(error as? NetworkMCPSettingsError, .missingSecureTokenMaterial)
+        }
+        XCTAssertThrowsError(try store.setNetworkMCPEnabled(true, secureTokenFingerprint: "sha256:stale")) { error in
+            XCTAssertEqual(error as? NetworkMCPSettingsError, .secureTokenMetadataMismatch)
+        }
+
+        try store.setNetworkMCPEnabled(true, secureTokenFingerprint: "sha256:feedfacecafebeef")
+        XCTAssertTrue(store.networkMCPSettingsSnapshot().enabled)
+        try store.setNetworkMCPEnabled(false, secureTokenFingerprint: nil)
+        XCTAssertFalse(store.networkMCPSettingsSnapshot().enabled)
+    }
+
+    func testNetworkMCPSettingsFacadeRejectsStaleOrDeletedSecureTokenMaterial() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fileURL = temp.appendingPathComponent("Settings/globalSettings.json")
+        let store = try GlobalSettingsStore(
+            defaults: XCTUnwrap(UserDefaults(suiteName: "SettingsJSONOnlyPersistenceTests.\(UUID().uuidString)")),
+            fileStore: GlobalSettingsFileStore(fileURL: fileURL)
+        )
+        let secureStrings = FakeNetworkMCPSettingsSecurePlainStringStore()
+        let tokenStore = MCPRemoteBearerTokenStore(secureStrings: secureStrings)
+        let facade = NetworkMCPSettingsFacade(settingsStore: store, tokenStore: tokenStore)
+
+        store.setNetworkMCPDefaultTarget(NetworkMCPDefaultTargetMetadata(
+            contextID: "00000000-0000-0000-0000-0000000000c3",
+            rootPaths: ["/repo"]
+        ))
+        let originalMetadata = try tokenStore.savePrimaryToken("original-token")
+        store.setNetworkMCPTokenMetadata(originalMetadata)
+        try store.setNetworkMCPEnabled(true, secureTokenFingerprint: originalMetadata.fingerprint)
+        XCTAssertTrue(store.networkMCPSettingsSnapshot().enabled)
+        XCTAssertTrue(facade.settingsSnapshot().enabled)
+
+        try tokenStore.savePrimaryToken("rotated-token")
+        XCTAssertFalse(facade.settingsSnapshot().enabled)
+        XCTAssertTrue(store.networkMCPSettingsSnapshot().enabled)
+
+        XCTAssertThrowsError(try facade.setEnabled(true)) { error in
+            XCTAssertEqual(error as? NetworkMCPSettingsError, .secureTokenMetadataMismatch)
+        }
+        XCTAssertTrue(store.networkMCPSettingsSnapshot().enabled)
+
+        try tokenStore.deletePrimaryToken()
+        XCTAssertFalse(facade.settingsSnapshot().enabled)
+        XCTAssertThrowsError(try facade.setEnabled(true)) { error in
+            XCTAssertEqual(error as? NetworkMCPSettingsError, .missingSecureTokenMaterial)
+        }
+        XCTAssertTrue(store.networkMCPSettingsSnapshot().enabled)
+    }
+
+    func testNetworkMCPSettingsSnapshotDisablesMalformedDefaultTargetEvenWithTokenMetadata() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fileURL = temp.appendingPathComponent("Settings/globalSettings.json")
+        let fileStore = GlobalSettingsFileStore(fileURL: fileURL)
+        try fileStore.save(GlobalSettingsDocument(
+            scalarPreferences: GlobalScalarPreferences(
+                mcp: GlobalScalarPreferences.MCPSettings(networkHTTP: NetworkMCPSettings(
+                    enabled: true,
+                    defaultTarget: NetworkMCPDefaultTargetMetadata(
+                        contextID: "not-a-uuid",
+                        rootPaths: ["/repo"]
+                    ),
+                    token: NetworkMCPBearerTokenMetadata(
+                        label: "OpenClaw",
+                        fingerprint: "sha256:feedfacecafebeef",
+                        createdAt: Date(timeIntervalSince1970: 1800)
+                    )
+                ))
+            )
+        ))
+
+        let snapshot = try GlobalSettingsStore(
+            defaults: XCTUnwrap(UserDefaults(suiteName: "SettingsJSONOnlyPersistenceTests.\(UUID().uuidString)")),
+            fileStore: fileStore
+        ).networkMCPSettingsSnapshot()
+
+        XCTAssertFalse(snapshot.enabled)
+        XCTAssertEqual(snapshot.defaultTarget?.contextID, "not-a-uuid")
+        XCTAssertEqual(snapshot.token?.fingerprint, "sha256:feedfacecafebeef")
+    }
+
+    func testNetworkMCPSettingsSnapshotNormalizesMalformedPersistedValues() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fileURL = temp.appendingPathComponent("Settings/globalSettings.json")
+        let fileStore = GlobalSettingsFileStore(fileURL: fileURL)
+        try fileStore.save(GlobalSettingsDocument(
+            scalarPreferences: GlobalScalarPreferences(
+                mcp: GlobalScalarPreferences.MCPSettings(networkHTTP: NetworkMCPSettings(
+                    enabled: true,
+                    bindAddress: "localhost",
+                    port: 80,
+                    defaultTarget: NetworkMCPDefaultTargetMetadata(
+                        contextID: " ",
+                        displayName: " Workspace ",
+                        rootPaths: [" ", " /repo "]
+                    ),
+                    token: NetworkMCPBearerTokenMetadata(
+                        label: " ",
+                        fingerprint: " ",
+                        createdAt: Date(timeIntervalSince1970: 1800)
+                    ),
+                    trustedClients: [
+                        NetworkMCPTrustedClientPolicy(
+                            clientDisplayName: " Laptop ",
+                            normalizedClientID: " ",
+                            tokenFingerprint: "sha256:token",
+                            createdAt: Date(timeIntervalSince1970: 1800)
+                        ),
+                        NetworkMCPTrustedClientPolicy(
+                            clientDisplayName: " Laptop ",
+                            normalizedClientID: " openclaw ",
+                            tokenFingerprint: " sha256:token ",
+                            lastAddress: " 192.168.1.5 ",
+                            createdAt: Date(timeIntervalSince1970: 1800)
+                        )
+                    ]
+                ))
+            )
+        ))
+
+        let snapshot = try GlobalSettingsStore(
+            defaults: XCTUnwrap(UserDefaults(suiteName: "SettingsJSONOnlyPersistenceTests.\(UUID().uuidString)")),
+            fileStore: fileStore
+        ).networkMCPSettingsSnapshot()
+
+        XCTAssertFalse(snapshot.enabled)
+        XCTAssertEqual(snapshot.bindAddress, NetworkMCPSettings.defaultBindAddress)
+        XCTAssertEqual(snapshot.port, NetworkMCPSettings.defaultPort)
+        XCTAssertEqual(snapshot.defaultTarget?.contextID, nil)
+        XCTAssertEqual(snapshot.defaultTarget?.displayName, "Workspace")
+        XCTAssertEqual(snapshot.defaultTarget?.rootPaths, ["/repo"])
+        XCTAssertNil(snapshot.token)
+        XCTAssertEqual(snapshot.trustedClients.count, 1)
+        XCTAssertEqual(snapshot.trustedClients.first?.clientDisplayName, "Laptop")
+        XCTAssertEqual(snapshot.trustedClients.first?.normalizedClientID, "openclaw")
+        XCTAssertEqual(snapshot.trustedClients.first?.tokenFingerprint, "sha256:token")
+        XCTAssertEqual(snapshot.trustedClients.first?.lastAddress, "192.168.1.5")
+    }
+
+    func testNetworkMCPPreviousSchemaDecodesWithDefaultsAndMigratesOnSave() throws {
+        let json = #"{"schemaVersion":2,"updatedAt":"2026-05-20T00:00:00Z","copySettingsByWorkspaceID":{},"chatSettingsByWorkspaceID":{},"globalDefaults":{},"scalarPreferences":{"mcp":{"autoStart":true}}}"#
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fileURL = temp.appendingPathComponent("Settings/globalSettings.json")
+        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: fileURL)
+        let fileStore = GlobalSettingsFileStore(fileURL: fileURL)
+
+        let store = try GlobalSettingsStore(
+            defaults: XCTUnwrap(UserDefaults(suiteName: "SettingsJSONOnlyPersistenceTests.\(UUID().uuidString)")),
+            fileStore: fileStore
+        )
+
+        XCTAssertEqual(store.networkMCPSettingsSnapshot(), NetworkMCPSettingsSnapshot())
+        XCTAssertEqual(try (fileStore.load()).schemaVersion, GlobalSettingsDocument.currentSchemaVersion)
     }
 
     func testCorruptGlobalSettingsIsBackedUpAndReplacedWithDefaults() throws {
@@ -239,10 +529,83 @@ final class SettingsJSONOnlyPersistenceTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), futureJSON)
     }
 
+    func testFileMentionPickerStyleDefaultsToCompactWithoutPersistingRawSetting() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fileURL = temp.appendingPathComponent("Settings/globalSettings.json")
+        let fileStore = GlobalSettingsFileStore(fileURL: fileURL)
+        let store = try GlobalSettingsStore(
+            defaults: XCTUnwrap(UserDefaults(suiteName: "SettingsJSONOnlyPersistenceTests.\(UUID().uuidString)")),
+            fileStore: fileStore
+        )
+        let before = try String(contentsOf: fileURL, encoding: .utf8)
+
+        XCTAssertEqual(store.fileMentionPickerStyle(), .compact)
+        XCTAssertEqual(store.fileMentionPickerConfiguration(), .compact)
+        XCTAssertNil(try fileStore.load().scalarPreferences?.ui?.fileMentionPickerStyle)
+        XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), before)
+    }
+
+    func testFileMentionPickerStyleSavesAndLoadsExpandedRawValue() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fileURL = temp.appendingPathComponent("Settings/globalSettings.json")
+        let fileStore = GlobalSettingsFileStore(fileURL: fileURL)
+        let suiteName = "SettingsJSONOnlyPersistenceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = GlobalSettingsStore(defaults: defaults, fileStore: fileStore)
+
+        store.setFileMentionPickerStyle(.expanded)
+
+        XCTAssertEqual(try fileStore.load().scalarPreferences?.ui?.fileMentionPickerStyle, "expanded")
+        let reloaded = GlobalSettingsStore(defaults: defaults, fileStore: fileStore)
+        XCTAssertEqual(reloaded.fileMentionPickerStyle(), .expanded)
+        XCTAssertEqual(reloaded.fileMentionPickerConfiguration(), .expanded)
+    }
+
+    func testInvalidFileMentionPickerStyleRawDefaultsToCompactWithoutReadTimeMutation() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fileURL = temp.appendingPathComponent("Settings/globalSettings.json")
+        let fileStore = GlobalSettingsFileStore(fileURL: fileURL)
+        try fileStore.save(GlobalSettingsDocument(
+            scalarPreferences: GlobalScalarPreferences(
+                ui: .init(fileMentionPickerStyle: "wide")
+            )
+        ))
+
+        let store = try GlobalSettingsStore(
+            defaults: XCTUnwrap(UserDefaults(suiteName: "SettingsJSONOnlyPersistenceTests.\(UUID().uuidString)")),
+            fileStore: fileStore
+        )
+
+        XCTAssertEqual(store.fileMentionPickerStyle(), .compact)
+        XCTAssertEqual(store.fileMentionPickerConfiguration(), .compact)
+        XCTAssertEqual(try fileStore.load().scalarPreferences?.ui?.fileMentionPickerStyle, "wide")
+    }
+
     private func makeTempDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("SettingsJSONOnlyPersistenceTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+}
+
+private final class FakeNetworkMCPSettingsSecurePlainStringStore: SecurePlainStringStoring {
+    let persistsValuesAcrossLaunches = true
+    var plainValues: [SecureStorageAccount: String] = [:]
+
+    func getPlainValue(for account: SecureStorageAccount, accessMode _: KeychainAccessMode) throws -> String? {
+        plainValues[account]
+    }
+
+    func savePlainValue(_ value: String, for account: SecureStorageAccount, accessMode _: KeychainAccessMode) throws {
+        plainValues[account] = value
+    }
+
+    func deletePlainValue(for account: SecureStorageAccount, accessMode _: KeychainAccessMode) throws {
+        plainValues.removeValue(forKey: account)
     }
 }

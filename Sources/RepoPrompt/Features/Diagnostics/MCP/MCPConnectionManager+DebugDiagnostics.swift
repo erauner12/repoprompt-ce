@@ -29,10 +29,14 @@ import MCP
                 return await debugDiagnosticsResult(debugPingPayload(connectionID: connectionID, op: op, arguments: arguments))
             case "connection_snapshot":
                 return await debugConnectionSnapshotToolPayload(op: op, connectionID: connectionID, arguments: arguments)
+            case "transport_snapshot":
+                return await debugTransportIngressSnapshotToolPayload(op: op, connectionID: connectionID, arguments: arguments)
             case "routing_snapshot":
                 return await debugRoutingSnapshotToolPayload(op: op, connectionID: connectionID, arguments: arguments)
             case "connection_history":
                 return debugConnectionHistoryToolPayload(op: op, arguments: arguments)
+            case "run_routing_history":
+                return debugRunRoutingHistoryToolPayload(op: op, arguments: arguments)
             case "clear_connection_history":
                 return debugClearConnectionHistoryToolPayload(op: op, arguments: arguments)
             case "wait_for_reconnect":
@@ -129,9 +133,11 @@ import MCP
                 #else
                     return debugDiagnosticsError(op: op, code: "unavailable", message: "`mcp_read_search_capture_snapshot` is only available in DEBUG builds.")
                 #endif
+            case "mcp_tool_duration_inventory":
+                return debugMCPToolDurationInventoryPayload(op: op)
             case "mcp_read_search_admission_snapshot":
                 #if DEBUG
-                    return await debugMCPReadSearchAdmissionSnapshotPayload(op: op)
+                    return await debugMCPReadSearchAdmissionSnapshotPayload(op: op, arguments: arguments)
                 #else
                     return debugDiagnosticsError(op: op, code: "unavailable", message: "`mcp_read_search_admission_snapshot` is only available in DEBUG builds.")
                 #endif
@@ -141,17 +147,11 @@ import MCP
                 #else
                     return debugDiagnosticsError(op: op, code: "unavailable", message: "`mcp_read_search_admission_configure` is only available in DEBUG builds.")
                 #endif
-            case "mcp_read_search_content_fetch_admission_snapshot":
+            case "mcp_read_search_content_read_scheduler_snapshot":
                 #if DEBUG
-                    return await debugMCPReadSearchContentFetchAdmissionSnapshotPayload(op: op)
+                    return await debugMCPReadSearchContentReadSchedulerSnapshotPayload(op: op)
                 #else
-                    return debugDiagnosticsError(op: op, code: "unavailable", message: "`mcp_read_search_content_fetch_admission_snapshot` is only available in DEBUG builds.")
-                #endif
-            case "mcp_read_search_content_fetch_admission_configure":
-                #if DEBUG
-                    return await debugMCPReadSearchContentFetchAdmissionConfigurePayload(op: op, arguments: arguments)
-                #else
-                    return debugDiagnosticsError(op: op, code: "unavailable", message: "`mcp_read_search_content_fetch_admission_configure` is only available in DEBUG builds.")
+                    return debugDiagnosticsError(op: op, code: "unavailable", message: "`mcp_read_search_content_read_scheduler_snapshot` is only available in DEBUG builds.")
                 #endif
             case "bootstrap_diagnostics":
                 return await debugBootstrapDiagnosticsPayload(op: op)

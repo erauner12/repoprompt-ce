@@ -22,6 +22,173 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
         })
     }
 
+    func testStructuredLivenessAdvancesLifecycleWithoutTranscriptRows() async {
+        let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
+        let viewModel = makeViewModel(controller: controller)
+        let session = preparedCodexSession(in: viewModel, controller: controller)
+        let baselineItems = session.items
+        let previousSequence = session.activeRunLiveness?.lastAcceptedSequence ?? 0
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .livenessActivity(.init(
+                kind: .mcpToolProgress,
+                method: "item/mcpToolCall/progress",
+                threadID: "fake",
+                turnID: "turn",
+                itemID: "item",
+                activeFlags: ["waiting_for_user_input"],
+                message: "progress"
+            )),
+            session: session
+        )
+
+        XCTAssertEqual(session.items, baselineItems)
+        XCTAssertGreaterThan(session.activeRunLiveness?.lastAcceptedSequence ?? 0, previousSequence)
+        XCTAssertEqual(session.activeRunLiveness?.stage, .running)
+        XCTAssertEqual(session.runningStatusText, "Codex reports it is waiting for user input…")
+        XCTAssertEqual(session.runState, .running)
+    }
+
+    func testUnmatchedCompletionOnlyWebResultPreservesArgsForPersistenceAndReplay() async throws {
+        let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
+        let viewModel = makeViewModel(controller: controller)
+        let session = preparedCodexSession(in: viewModel, controller: controller)
+        let invocationID = UUID()
+        let argsJSON = #"{"action":"find_in_page","url":"https://example.com/docs","pattern":"install"}"#
+        let resultJSON = #"{"status":"completed","match_count":2}"#
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .toolResult(
+                name: "search",
+                invocationID: invocationID,
+                argsJSON: argsJSON,
+                resultJSON: resultJSON,
+                isError: false
+            ),
+            session: session
+        )
+
+        let item = try XCTUnwrap(session.items.last)
+        XCTAssertEqual(item.kind, .toolResult)
+        XCTAssertEqual(item.toolInvocationID, invocationID)
+        XCTAssertEqual(item.toolArgsJSON, argsJSON)
+        let livePresentation = try XCTUnwrap(
+            NativeToolCardPresentationBuilder.build(item: item, normalizedToolName: "search")
+        )
+        XCTAssertEqual(livePresentation.title, "Find In Page")
+
+        let persisted = AgentChatItemPersist(from: item)
+        let restored = persisted.toItem()
+        XCTAssertEqual(restored.toolInvocationID, invocationID)
+        let restoredPresentation = try XCTUnwrap(
+            NativeToolCardPresentationBuilder.build(item: restored, normalizedToolName: "search")
+        )
+        XCTAssertEqual(restoredPresentation.title, "Find In Page")
+        XCTAssertEqual(restoredPresentation.detailText, "2 matches")
+    }
+
+    func testStructuredRetryAndMissingMetadataFallbackRemainActiveWithoutRows() async {
+        let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
+        let viewModel = makeViewModel(controller: controller)
+        let session = preparedCodexSession(in: viewModel, controller: controller)
+        let baselineItems = session.items
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .errorNotification(.init(
+                message: "provider retry",
+                willRetry: true,
+                threadID: "fake",
+                turnID: "turn"
+            )),
+            session: session
+        )
+
+        XCTAssertEqual(session.runState, .running)
+        XCTAssertEqual(session.activeRunLiveness?.stage, .retrying)
+        XCTAssertEqual(session.activeRunLiveness?.retryIntent, .providerManaged)
+        XCTAssertEqual(session.items, baselineItems)
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .errorNotification(.init(
+                message: "Reconnecting... legacy payload",
+                willRetry: nil,
+                threadID: "fake",
+                turnID: "turn"
+            )),
+            session: session
+        )
+
+        XCTAssertEqual(session.runState, .running)
+        XCTAssertEqual(session.activeRunLiveness?.stage, .retrying)
+        XCTAssertEqual(session.items, baselineItems)
+    }
+
+    func testStructuredNonRetryingErrorUsesTerminalCommit() async {
+        let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
+        let viewModel = makeViewModel(controller: controller)
+        let session = preparedCodexSession(in: viewModel, controller: controller)
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .errorNotification(.init(
+                message: "fatal provider error",
+                willRetry: false,
+                threadID: "fake",
+                turnID: "turn"
+            )),
+            session: session
+        )
+
+        XCTAssertEqual(session.runState, .failed)
+        XCTAssertNil(session.activeRunOwnership)
+        XCTAssertNotNil(session.lastTerminalCommitRevision)
+        XCTAssertEqual(session.items.last?.kind, .error)
+        XCTAssertEqual(session.items.last?.text, "fatal provider error")
+    }
+
+    func testStaleStructuredScopeIsIgnored() async {
+        let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
+        let viewModel = makeViewModel(controller: controller)
+        let session = preparedCodexSession(in: viewModel, controller: controller)
+        let baselineItems = session.items
+        let baselineLiveness = session.activeRunLiveness
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .errorNotification(.init(
+                message: "stale fatal error",
+                willRetry: false,
+                threadID: "fake",
+                turnID: "old-turn",
+                itemID: "old-item"
+            )),
+            session: session
+        )
+
+        XCTAssertEqual(session.runState, .running)
+        XCTAssertEqual(session.activeRunLiveness, baselineLiveness)
+        XCTAssertEqual(session.items, baselineItems)
+    }
+
+    func testWatchdogPauseRemainsRunningAndDoesNotAppendTranscriptFailure() async throws {
+        let controller = LivenessFakeCodexController(snapshot: .idle, activeTurnIDs: [])
+        let viewModel = makeViewModel(controller: controller)
+        let session = preparedCodexSession(in: viewModel, controller: controller)
+        let baselineItems = session.items
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(.assistantDelta("progress"), session: session)
+        viewModel.test_codexCoordinator.test_flushPendingAssistantDelta(session)
+
+        try await waitUntil {
+            session.codexWatchdogState.isPausedAfterWarning
+        }
+
+        XCTAssertEqual(session.runState, .running)
+        XCTAssertEqual(session.items.count, baselineItems.count + 1)
+        XCTAssertEqual(session.items.last?.kind, .assistant)
+        XCTAssertEqual(session.items.last?.text, "progress")
+        XCTAssertFalse(session.items.contains { $0.kind == .error })
+        XCTAssertEqual(session.runningStatusText, "Repo Prompt thinks Codex has stalled or timed out. You can stop and resume.")
+    }
+
     func testPendingRequestUserInputSuppressesWatchdogAndPreservesQueue() async throws {
         let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
         let viewModel = makeViewModel(controller: controller)
@@ -69,36 +236,187 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
         XCTAssertFalse(bashItem.text.contains("inactive first chunk"))
     }
 
-    func testActiveCodexNativeSendWaitsForAgentRunDrainBeforeSending() async throws {
+    func testStaleCompletionBeforeObservedStartPreservesPendingTurnThenMatchingTurnFinalizes() async {
         let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
-        var drainStarted = false
-        var drainContinuation: CheckedContinuation<Bool, Never>?
-        let viewModel = makeViewModel(controller: controller) { _, source in
-            XCTAssertEqual(source, "codex-native-active-send")
-            drainStarted = true
-            return await withCheckedContinuation { continuation in
-                drainContinuation = continuation
-            }
-        }
+        let viewModel = makeViewModel(controller: controller)
         let session = preparedCodexSession(in: viewModel, controller: controller)
-        let runID = try XCTUnwrap(session.runID)
+        let ownership = session.activeRunOwnership
+        session.codexCurrentTurnID = nil
+        session.codexCurrentTurnKind = nil
+        session.codexTurnKindsByID.removeAll()
+        session.codexPendingTurnKind = .user
 
-        let sendTask = Task {
-            await viewModel.test_codexCoordinator.sendCodexNativeMessage(
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .turnCompleted(turnID: "stale-turn", status: .completed),
+            session: session
+        )
+
+        XCTAssertEqual(session.runState, .running)
+        XCTAssertEqual(session.activeRunOwnership, ownership)
+        XCTAssertEqual(session.codexPendingTurnKind, .user)
+        XCTAssertNil(session.codexCurrentTurnID)
+        XCTAssertNil(session.codexCurrentTurnKind)
+        XCTAssertNil(session.lastTerminalCommitRevision)
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .turnStarted(turnID: "current-turn"),
+            session: session
+        )
+
+        XCTAssertNil(session.codexPendingTurnKind)
+        XCTAssertEqual(session.codexCurrentTurnID, "current-turn")
+        XCTAssertEqual(session.codexCurrentTurnKind, .user)
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .turnCompleted(turnID: "current-turn", status: .completed),
+            session: session
+        )
+
+        XCTAssertEqual(session.runState, .completed)
+        XCTAssertNil(session.activeRunOwnership)
+        XCTAssertNotNil(session.lastTerminalCommitRevision)
+    }
+
+    func testMismatchedNonNilCompletionAfterStartPreservesCurrentCorrelation() async {
+        let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
+        let viewModel = makeViewModel(controller: controller)
+        let session = preparedCodexSession(in: viewModel, controller: controller)
+        let ownership = session.activeRunOwnership
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .turnCompleted(turnID: "different-turn", status: .completed),
+            session: session
+        )
+
+        XCTAssertEqual(session.runState, .running)
+        XCTAssertEqual(session.activeRunOwnership, ownership)
+        XCTAssertEqual(session.codexCurrentTurnID, "turn")
+        XCTAssertEqual(session.codexCurrentTurnKind, .user)
+        XCTAssertEqual(session.codexTurnKindsByID["turn"], .user)
+        XCTAssertNil(session.lastTerminalCommitRevision)
+    }
+
+    func testNilCompletionAfterIdentifiedStartCompletesCurrentTurn() async {
+        let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
+        let viewModel = makeViewModel(controller: controller)
+        let session = preparedCodexSession(in: viewModel, controller: controller)
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .turnCompleted(turnID: nil, status: .completed),
+            session: session
+        )
+
+        XCTAssertEqual(session.runState, .completed)
+        XCTAssertNil(session.activeRunOwnership)
+        XCTAssertNil(session.codexCurrentTurnID)
+        XCTAssertNil(session.codexCurrentTurnKind)
+        XCTAssertNotNil(session.lastTerminalCommitRevision)
+    }
+
+    func testNilStartFollowedByNilCompletionCompletesAnonymousTurn() async {
+        let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
+        let viewModel = makeViewModel(controller: controller)
+        let session = preparedCodexSession(in: viewModel, controller: controller)
+        session.codexCurrentTurnID = nil
+        session.codexCurrentTurnKind = nil
+        session.codexTurnKindsByID.removeAll()
+        session.codexPendingTurnKind = .user
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .turnStarted(turnID: nil),
+            session: session
+        )
+
+        XCTAssertNil(session.codexCurrentTurnID)
+        XCTAssertEqual(session.codexCurrentTurnKind, .user)
+        XCTAssertNil(session.codexPendingTurnKind)
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .turnCompleted(turnID: nil, status: .completed),
+            session: session
+        )
+
+        XCTAssertEqual(session.runState, .completed)
+        XCTAssertNil(session.activeRunOwnership)
+        XCTAssertNotNil(session.lastTerminalCommitRevision)
+    }
+
+    func testNilCompletionWithoutObservedStartIsRejectedAndPreservesPendingTurn() async {
+        let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
+        let viewModel = makeViewModel(controller: controller)
+        let session = preparedCodexSession(in: viewModel, controller: controller)
+        let ownership = session.activeRunOwnership
+        session.codexCurrentTurnID = nil
+        session.codexCurrentTurnKind = nil
+        session.codexTurnKindsByID.removeAll()
+        session.codexPendingTurnKind = .user
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .turnCompleted(turnID: nil, status: .completed),
+            session: session
+        )
+
+        XCTAssertEqual(session.runState, .running)
+        XCTAssertEqual(session.activeRunOwnership, ownership)
+        XCTAssertEqual(session.codexPendingTurnKind, .user)
+        XCTAssertNil(session.codexCurrentTurnID)
+        XCTAssertNil(session.codexCurrentTurnKind)
+        XCTAssertNil(session.lastTerminalCommitRevision)
+    }
+
+    func testActiveCodexNativeSendUsesRealAgentRunDrainBeforeSending() async throws {
+        try await AgentRunWaitDrainTestHarness.withHarness { harness in
+            let waitTask = harness.startWait()
+            try await harness.waitUntilBlocked()
+
+            let ordering = CodexDrainSendOrderingRecorder()
+            let controller = LivenessFakeCodexController(
+                snapshot: .active(activeFlags: []),
+                onSendUserTurn: { ordering.recordSend() }
+            )
+            let viewModel = makeViewModel(controller: controller) { runID, source in
+                XCTAssertEqual(runID, harness.parentRunID)
+                XCTAssertEqual(source, "codex-native-active-send")
+                let drained = await harness.drain(source: source)
+                ordering.recordDrainCompletion(
+                    succeeded: drained,
+                    activeScopeCount: harness.activeScopeCount()
+                )
+                return drained
+            }
+            let session = preparedCodexSession(
+                in: viewModel,
+                controller: controller,
+                runID: harness.parentRunID
+            )
+
+            let outcome = await viewModel.test_codexCoordinator.sendCodexNativeMessage(
                 session: session,
                 text: "hello",
                 attachments: []
             )
+            let interruptedValue = try await waitTask.value
+            let interruptedObject = try XCTUnwrap(interruptedValue.objectValue)
+            let completions = await harness.completionRecorder.completions()
+            let registrationRemainsActive = await AgentRunSessionStore.hasActiveRegistration(
+                sessionID: harness.fixture.sessionID
+            )
+            let orderingSnapshot = ordering.snapshot()
+
+            XCTAssertEqual(outcome, .sent)
+            XCTAssertEqual(
+                interruptedObject["wait"]?.objectValue?["result"]?.stringValue,
+                "interrupted_by_steering"
+            )
+            XCTAssertEqual(controller.sendUserTurnCountSync(), 1)
+            XCTAssertTrue(orderingSnapshot.drainSucceeded)
+            XCTAssertEqual(orderingSnapshot.activeScopeCountAtDrainCompletion, 0)
+            XCTAssertTrue(orderingSnapshot.sendObservedAfterDrain)
+            XCTAssertEqual(harness.activeScopeCount(), 0)
+            XCTAssertEqual(completions.count, 1)
+            XCTAssertEqual(completions.first?.result, "interrupted_by_steering")
+            XCTAssertTrue(registrationRemainsActive)
         }
-
-        try await waitUntil { drainStarted }
-        XCTAssertEqual(controller.sendUserTurnCountSync(), 0)
-        XCTAssertEqual(session.runID, runID)
-
-        drainContinuation?.resume(returning: true)
-        let outcome = await sendTask.value
-        XCTAssertEqual(outcome, .sent)
-        XCTAssertEqual(controller.sendUserTurnCountSync(), 1)
     }
 
     func testActiveCodexNativeSendFailsWithoutSendingWhenAgentRunDrainFails() async {
@@ -124,24 +442,32 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
         controller: LivenessFakeCodexController,
         drain: AgentModeViewModel.CodexAgentRunWaitDrain? = nil
     ) -> AgentModeViewModel {
-        AgentModeViewModel(
+        let viewModel = AgentModeViewModel(
             codexControllerFactory: { _, _, _, _, _, _ in controller },
             testCodexActiveAgentRunWaitDrain: drain,
             testCodexStallWatchdogPollIntervalNanos: 10_000_000,
             testCodexStallWatchdogProbeThreshold: 0.02,
             testCodexStallWatchdogRecoveryThreshold: 0.02
         )
+        viewModel.test_initializeRunService()
+        return viewModel
     }
 
     private func preparedCodexSession(
         in viewModel: AgentModeViewModel,
-        controller: LivenessFakeCodexController
+        controller: LivenessFakeCodexController,
+        runID: UUID = UUID()
     ) -> AgentModeViewModel.TabSession {
         let session = viewModel.session(for: UUID())
         session.selectedAgent = .codexExec
-        session.runID = UUID()
+        session.runID = runID
         session.runState = .running
+        session.beginRunAttempt(source: "test.codexLiveness")
         session.codexController = controller
+        session.codexConversationID = "fake"
+        session.codexCurrentTurnID = "turn"
+        session.codexCurrentTurnKind = .user
+        session.codexTurnKindsByID["turn"] = .user
         session.codexControllerGoalSupportEnabled = CodexGoalSupport.isEnabled
         return session
     }
@@ -181,13 +507,58 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
     }
 }
 
+private final class CodexDrainSendOrderingRecorder: @unchecked Sendable {
+    struct Snapshot {
+        let drainSucceeded: Bool
+        let activeScopeCountAtDrainCompletion: Int?
+        let sendObservedAfterDrain: Bool
+    }
+
+    private let lock = NSLock()
+    private var drainSucceeded = false
+    private var activeScopeCountAtDrainCompletion: Int?
+    private var sendObservedAfterDrain = false
+
+    func recordDrainCompletion(succeeded: Bool, activeScopeCount: Int) {
+        lock.lock()
+        drainSucceeded = succeeded
+        activeScopeCountAtDrainCompletion = activeScopeCount
+        lock.unlock()
+    }
+
+    func recordSend() {
+        lock.lock()
+        sendObservedAfterDrain = drainSucceeded && activeScopeCountAtDrainCompletion == 0
+        lock.unlock()
+    }
+
+    func snapshot() -> Snapshot {
+        lock.lock()
+        let snapshot = Snapshot(
+            drainSucceeded: drainSucceeded,
+            activeScopeCountAtDrainCompletion: activeScopeCountAtDrainCompletion,
+            sendObservedAfterDrain: sendObservedAfterDrain
+        )
+        lock.unlock()
+        return snapshot
+    }
+}
+
 private final class LivenessFakeCodexController: CodexSessionControlling {
     private var readSnapshotCount = 0
     private var sendUserTurnCount = 0
     private let snapshotStatus: CodexNativeSessionController.ThreadSnapshot.RuntimeStatus
+    private let snapshotActiveTurnIDs: [String]
+    private let onSendUserTurn: (() -> Void)?
 
-    init(snapshot: CodexNativeSessionController.ThreadSnapshot.RuntimeStatus) {
+    init(
+        snapshot: CodexNativeSessionController.ThreadSnapshot.RuntimeStatus,
+        activeTurnIDs: [String] = ["turn"],
+        onSendUserTurn: (() -> Void)? = nil
+    ) {
         snapshotStatus = snapshot
+        snapshotActiveTurnIDs = activeTurnIDs
+        self.onSendUserTurn = onSendUserTurn
     }
 
     var hasActiveThread: Bool {
@@ -231,8 +602,8 @@ private final class LivenessFakeCodexController: CodexSessionControlling {
             model: nil,
             reasoningEffort: nil,
             runtimeStatus: snapshotStatus,
-            currentTurnID: "turn",
-            activeTurnIDs: ["turn"],
+            currentTurnID: snapshotActiveTurnIDs.first,
+            activeTurnIDs: snapshotActiveTurnIDs,
             latestTurnStatus: nil
         )
     }
@@ -240,14 +611,19 @@ private final class LivenessFakeCodexController: CodexSessionControlling {
     func setThreadName(_ name: String, threadID: String?) async throws {}
     func sendUserMessage(_ text: String) async throws {}
     func sendUserTurn(text: String, images: [AgentImageAttachment]) async throws {
-        sendUserTurnCount += 1
+        recordSendUserTurn()
     }
 
     func sendUserTurn(text: String, images: [AgentImageAttachment], model: String?, reasoningEffort: String?) async throws {
-        sendUserTurnCount += 1
+        recordSendUserTurn()
     }
 
     func sendUserTurn(text: String, images: [AgentImageAttachment], model: String?, reasoningEffort: String?, serviceTier: String?) async throws {
+        recordSendUserTurn()
+    }
+
+    private func recordSendUserTurn() {
+        onSendUserTurn?()
         sendUserTurnCount += 1
     }
 

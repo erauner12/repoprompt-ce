@@ -113,10 +113,14 @@ enum ConnectionStateSnapshot: Equatable {
 protocol MCPServerConnection: Actor {
     func start(approvalHandler: @escaping (MCP.Client.Info) async -> Bool) async throws
     func stop() async
+    /// Immediately severs transport delivery for a tool execution that ignored cancellation.
+    /// This must not await handler/server shutdown.
+    func abortForExecutionWatchdog() async
     func notifyToolListChanged() async
     func connectionState() -> ConnectionStateSnapshot
     func isViableForRetention() -> Bool
     func secondsSinceLastActivity() async -> TimeInterval
+    func transportIngressSnapshot() async -> MCPTransportIngressSnapshot?
     /// Whether this is a legacy filesystem-backed connection (deprecated)
     nonisolated var isFilesystemBacked: Bool { get }
     /// Legacy: connection folder URL for filesystem connections
@@ -746,6 +750,22 @@ actor ServerNetworkManager {
             let windowID: Int?
             let state: String?
             let reason: String?
+            let transportIngress: MCPTransportIngressSnapshot?
+        }
+
+        private struct DebugRunRoutingEvent {
+            let seq: UInt64
+            let timestamp: Date
+            let runID: UUID
+            let event: String
+            let connectionID: UUID?
+            let fields: [String: String]
+        }
+
+        private struct DebugRetainedTransportIngress {
+            let snapshot: MCPTransportIngressSnapshot
+            let clientName: String?
+            let sessionToken: String?
         }
 
         private struct DebugRestartStatus {
@@ -757,12 +777,25 @@ actor ServerNetworkManager {
 
         private var debugConnectionHistory: [DebugConnectionEvent] = []
         private var debugConnectionHistorySeq: UInt64 = 0
+        private var debugRunRoutingHistory: [DebugRunRoutingEvent] = []
+        private var debugRunRoutingHistorySeq: UInt64 = 0
+        private var debugRunRoutingHistoryDroppedCount = 0
         private var debugRestartStatesByID: [UUID: DebugRestartStatus] = [:]
+        private var debugRetainedTransportIngressByConnectionID: [UUID: DebugRetainedTransportIngress] = [:]
+        private var debugRetainedTransportIngressOrder: [UUID] = []
+        private var debugRecordedTransportTerminalConnectionIDs: Set<UUID> = []
         private let debugConnectionHistoryLimit = 1000
+        private let debugRunRoutingHistoryLimit = 1000
+        private let debugRetainedTransportIngressLimit = 100
         private let debugRestartStatusLimit = 50
+        private var debugResolvedToolOperationOverrides: [String: @Sendable () async throws -> Value] = [:]
+        private var debugExecutionWatchdogAbortTargets: [UUID: any MCPServerConnection] = [:]
     #endif
 
     private var connections: [UUID: any MCPServerConnection] = [:]
+    private var connectionsBeingRemoved: Set<UUID> = []
+    private var executionWatchdogTerminalConnections: Set<UUID> = []
+    private var toolExecutionWatchdogEnvironment = MCPToolExecutionWatchdogEnvironment.continuous()
     private var connectionLifecycleGenerationByID: [UUID: UInt64] = [:]
     private var connectionTasks: [UUID: Task<Void, Never>] = [:]
     private var pendingConnections: [UUID: String] = [:]
@@ -785,6 +818,16 @@ actor ServerNetworkManager {
         guard rawJSON else { return CallTool.Result.err(message) }
         let value: Value = .object([
             "is_error": .bool(true),
+            "error": .string(message)
+        ])
+        return CallTool.Result(content: [.text(text: ToolOutputFormatter.rawJSONString(value), annotations: nil, _meta: nil)], isError: true)
+    }
+
+    static func executionContractToolErrorResult(rawJSON: Bool, code: String, message: String) -> CallTool.Result {
+        guard rawJSON else { return CallTool.Result.err("\(code): \(message)") }
+        let value: Value = .object([
+            "is_error": .bool(true),
+            "code": .string(code),
             "error": .string(message)
         ])
         return CallTool.Result(content: [.text(text: ToolOutputFormatter.rawJSONString(value), annotations: nil, _meta: nil)], isError: true)
@@ -822,6 +865,7 @@ actor ServerNetworkManager {
     /// the policy expires. This keeps Context Builder sandboxes from leaking into shared MCP sessions yet
     /// still allows intentional overrides when necessary.
     private struct ClientConnectionPolicy {
+        let id: UUID
         let windowID: Int
         let restrictedTools: Set<String>
         let oneShot: Bool
@@ -842,6 +886,8 @@ actor ServerNetworkManager {
         /// When true, only an MCP peer whose verified PID descends from a registered
         /// expected agent PID may consume this queued policy.
         var requiresExpectedAgentPID: Bool
+        /// One-shot policies stay queued but unavailable while route installation awaits.
+        var reservationConnectionID: UUID?
     }
 
     /// Run-scoped policy state captured when the first connection for a run is admitted.
@@ -874,12 +920,42 @@ actor ServerNetworkManager {
         case timedOut
     }
 
+    private enum PendingPolicyApplicationOutcome: Equatable {
+        case applied(runID: UUID?)
+        case fallback
+        case rejected(runID: UUID?, reason: String)
+    }
+
+    private struct PendingPolicyRestorePoint {
+        let restrictedTools: Set<String>?
+        let additionalTools: Set<String>?
+        let runPurpose: MCPRunPurpose?
+        let windowID: Int?
+        let windowAssignment: Int?
+        let runID: UUID?
+        let wasPreassigned: Bool
+        let wasRunAdmitted: Bool
+        let runPolicyState: RunConnectionPolicyState?
+        let runWindowID: Int?
+    }
+
     private var pendingPoliciesByClient: [String: [ClientConnectionPolicy]] = [:]
+    #if DEBUG
+        private var debugShouldSuspendNextPendingPolicyRouteInstallation = false
+        private var debugPendingPolicyRouteInstallationIsSuspended = false
+        private var debugPendingPolicyRouteInstallationResumeWaiters: [CheckedContinuation<Void, Never>] = []
+        private var debugShouldSuspendNextPendingPolicyCommit = false
+        private var debugPendingPolicyCommitIsSuspended = false
+        private var debugPendingPolicyCommitResumeWaiters: [CheckedContinuation<Void, Never>] = []
+        private var debugPendingPolicyReplacementSchedules: [(existing: UUID, replacement: UUID, runID: UUID)] = []
+    #endif
     private var expectedAgentPIDsByClient: [String: Set<pid_t>] = [:]
     private var expectedAgentPIDsByRunID: [UUID: Set<pid_t>] = [:]
     private var runPolicyStateByRunID: [UUID: RunConnectionPolicyState] = [:]
     private var admittedPolicyRunIDs: Set<UUID> = []
     private var windowIDByRunID: [UUID: Int] = [:]
+    private var pendingPolicyApplicationIDByConnectionID: [UUID: UUID] = [:]
+    private var pendingPolicyApplicationIDByRunID: [UUID: UUID] = [:]
 
     // 🆕 Per-connection → windowID routing map
     private var connectionWindowMap: [UUID: Int] = [:]
@@ -1615,7 +1691,8 @@ actor ServerNetworkManager {
         _ connectionID: UUID,
         runID: UUID,
         windowID explicitWindowID: Int? = nil,
-        persistWindowBinding: Bool = true
+        persistWindowBinding: Bool = true,
+        signalRouting: Bool = true
     ) async -> Bool {
         let resolvedWindowID: Int? = if let explicitWindowID {
             explicitWindowID
@@ -1640,6 +1717,9 @@ actor ServerNetworkManager {
             return mappedRun == runID && mappedConnection == connectionID
         }
         if alreadyMapped {
+            if signalRouting {
+                await MCPRoutingWaiter.notifyRouted(runID: runID)
+            }
             if persistWindowBinding, connectionWindowMap[connectionID] != windowID {
                 setConnectionWindowMapping(connectionID, windowID: windowID)
             }
@@ -1660,7 +1740,8 @@ actor ServerNetworkManager {
             let didRegister = window.mcpServer.registerRunIDMapping(
                 connectionID: connectionID,
                 runID: runID,
-                windowID: windowID
+                windowID: windowID,
+                signalRouting: signalRouting
             )
             if didRegister {
                 connectionLog("mapConnectionToRunID: mapped connection \(connectionID) to runID \(runID) in window \(windowID)")
@@ -1694,6 +1775,47 @@ actor ServerNetworkManager {
             persistWindowBinding: persistWindowBinding
         )
         return true
+    }
+
+    private func mapConnectionToRunIDForPendingPolicy(
+        _ connectionID: UUID,
+        runID: UUID,
+        windowID: Int
+    ) async -> MCPServerViewModel.PendingPolicyRunIDMappingToken? {
+        let token = await MainActor.run { () -> MCPServerViewModel.PendingPolicyRunIDMappingToken? in
+            guard let window = WindowStatesManager.shared.window(withID: windowID) else {
+                log.warning("mapConnectionToRunIDForPendingPolicy: window \(windowID) not found for connection \(connectionID)")
+                return nil
+            }
+            return window.mcpServer.registerPendingPolicyRunIDMapping(
+                connectionID: connectionID,
+                runID: runID,
+                windowID: windowID
+            )
+        }
+        guard let token else {
+            log.warning("mapConnectionToRunIDForPendingPolicy: registration refused connection \(connectionID) run \(runID) window \(windowID)")
+            return nil
+        }
+
+        if connectionWindowMap[connectionID] != windowID {
+            setConnectionWindowMapping(connectionID, windowID: windowID)
+        }
+        runIDByConnectionID[connectionID] = runID
+        windowIDByRunID[runID] = windowID
+        updateLiveRunAffinity(
+            clientName: clientIdentifier(forConnection: connectionID) ?? "",
+            sessionKey: connections[connectionID]?.capabilityToken ?? capabilityTokenByConnection[connectionID],
+            runID: runID,
+            windowID: windowID,
+            purpose: runPurposeByConnection[connectionID] ?? runPolicyStateByRunID[runID]?.purpose
+        )
+        await applyRunPolicyStateIfAvailable(
+            runID: runID,
+            connectionID: connectionID,
+            persistWindowBinding: true
+        )
+        return token
     }
 
     private func seedRunPolicyState(
@@ -2076,6 +2198,7 @@ actor ServerNetworkManager {
         runPolicyStateByRunID.removeValue(forKey: runID)
         admittedPolicyRunIDs.remove(runID)
         windowIDByRunID.removeValue(forKey: runID)
+        pendingPolicyApplicationIDByRunID.removeValue(forKey: runID)
         clearLiveRunAffinity(for: runID)
         let connectionIDsForRun = runIDByConnectionID.compactMap { connectionID, mappedRunID in
             mappedRunID == runID ? connectionID : nil
@@ -2470,7 +2593,7 @@ actor ServerNetworkManager {
         let now = Date()
         if now.timeIntervalSince(lastKillSignalCleanupAt) >= killSignalCleanupInterval {
             lastKillSignalCleanupAt = now
-            MCPKillSignal.cleanupStaleSignals()
+            MCPKillSignal.cleanupStaleSignals(in: MCPFilesystemConstants.identity.killSignalsDirectoryURL())
         }
     }
 
@@ -2584,20 +2707,6 @@ actor ServerNetworkManager {
         lastBootstrapHealthCheckAt = now
 
         let socketPath = resolvedBootstrapSocketURL().path
-        let exists = FileManager.default.fileExists(atPath: socketPath)
-
-        if !exists {
-            log.warning("Bootstrap socket path missing: \(socketPath). Restarting listener.")
-            restartBootstrapSocketServer(reason: "socket_path_missing", lifecycleGeneration: healthCheckLifecycleGeneration)
-            return
-        }
-
-        if !isUnixDomainSocket(atPath: socketPath) {
-            log.warning("Bootstrap socket path is not a socket: \(socketPath). Restarting listener.")
-            restartBootstrapSocketServer(reason: "socket_path_not_socket", lifecycleGeneration: healthCheckLifecycleGeneration)
-            return
-        }
-
         guard let server = bootstrapSocketServer,
               bootstrapSocketServerLifecycleGeneration == healthCheckLifecycleGeneration
         else {
@@ -2611,6 +2720,12 @@ actor ServerNetworkManager {
 
         let diagnostics = await server.diagnostics()
         guard isCurrentBootstrapListener(server, lifecycleGeneration: healthCheckLifecycleGeneration) else { return }
+        if !diagnostics.ownsSocketPath {
+            log.warning("Bootstrap listener no longer owns socket path \(socketPath) (status=\(String(describing: diagnostics.socketPathStatus))); stopping orphan and restarting with backoff.")
+            restartBootstrapSocketServer(reason: "socket_path_ownership_lost", lifecycleGeneration: healthCheckLifecycleGeneration)
+            return
+        }
+
         if !diagnostics.listenFDValid {
             log.warning("Bootstrap listen FD invalid; restarting.")
             restartBootstrapSocketServer(reason: "listen_fd_invalid", lifecycleGeneration: healthCheckLifecycleGeneration)
@@ -2634,14 +2749,6 @@ actor ServerNetworkManager {
     private func bootstrapBackoffDelay(for failures: Int) -> TimeInterval {
         let capped = min(failures, 4)
         return min(10.0, pow(2.0, Double(capped)))
-    }
-
-    private func isUnixDomainSocket(atPath path: String) -> Bool {
-        var info = stat()
-        if lstat(path, &info) != 0 {
-            return false
-        }
-        return (info.st_mode & S_IFMT) == S_IFSOCK
     }
 
     private func restartBootstrapSocketServer(
@@ -2853,13 +2960,19 @@ actor ServerNetworkManager {
         // If this session token already has a live connection, we will replace it after accept.
         let replacedIDForCapacity = existingConnectionID(forSessionToken: sessionToken)
 
-        _ = await awaitAgentBootstrapPolicyBeforeAcceptIfNeeded(
+        let policyReadiness = await awaitAgentBootstrapPolicyBeforeAcceptIfNeeded(
             bootstrapClientName: clientName,
             connectionID: connectionID,
             sessionKey: sessionToken,
             clientPid: clientPid,
             isReplacementForSession: replacedIDForCapacity != nil
         )
+        if policyReadiness == .timedOut {
+            return .reject(.rejected(
+                reason: "Agent policy admission timed out.",
+                errorCode: MCPBootstrapErrorCode.serverNotReady.rawValue
+            ))
+        }
         guard isCurrentBootstrapListener(sourceListener, lifecycleGeneration: admissionLifecycleGeneration) else {
             return rejectBootstrapAdmissionBecauseStopped(connectionID: connectionID)
         }
@@ -3316,6 +3429,39 @@ actor ServerNetworkManager {
                     guard self.isCurrentConnection(connectionID, lifecycleGeneration: expectedLifecycleGeneration) else { return false }
                     connectionLog("Approval handler returned \(approved) for \(connectionID)")
                     if approved {
+                        #if DEBUG
+                            let diagnosticPolicy = self.oldestPendingPolicyEntry(for: clientInfo.name) { policy in
+                                self.canConsumePendingPolicy(
+                                    policy,
+                                    clientName: clientInfo.name,
+                                    clientPid: clientPid
+                                )
+                            }
+                            if let diagnosticPolicy, let runID = diagnosticPolicy.policy.runID {
+                                let expectedPIDs = self.expectedAgentPIDs(for: clientInfo.name, runID: runID)
+                                    .map(String.init)
+                                    .sorted()
+                                    .joined(separator: ",")
+                                self.debugRecordRunRoutingEvent(
+                                    runID: runID,
+                                    event: "client_identity_observed",
+                                    connectionID: connectionID,
+                                    fields: [
+                                        "bootstrap_client_name": bootstrapClientName ?? "nil",
+                                        "authoritative_client_name": clientInfo.name,
+                                        "helper_peer_pid": String(clientPid),
+                                        "ancestor_chain": self.pidAncestorChainDescription(from: pid_t(clientPid)),
+                                        "expected_pids": expectedPIDs,
+                                        "pending_policy_key": diagnosticPolicy.key,
+                                        "policy_consumable": String(self.canConsumePendingPolicy(
+                                            diagnosticPolicy.policy,
+                                            clientName: clientInfo.name,
+                                            clientPid: clientPid
+                                        ))
+                                    ]
+                                )
+                            }
+                        #endif
                         let readiness = await self.awaitAgentPolicyAdmissionIfNeeded(
                             clientName: clientInfo.name,
                             bootstrapClientName: bootstrapClientName,
@@ -3329,13 +3475,21 @@ actor ServerNetworkManager {
                             return false
                         }
 
-                        await self.applyPendingPolicyIfAvailable(
+                        let policyOutcome = await self.applyPendingPolicyIfAvailable(
                             clientName: clientInfo.name,
                             connectionID: connectionID,
                             clientPid: clientPid,
-                            bootstrapClientName: bootstrapClientName
+                            bootstrapClientName: bootstrapClientName,
+                            expectedLifecycleGeneration: expectedLifecycleGeneration
                         )
                         guard self.isCurrentConnection(connectionID, lifecycleGeneration: expectedLifecycleGeneration) else { return false }
+                        if case let .rejected(runID, reason) = policyOutcome {
+                            mcpPolicyLog(
+                                "rejected MCP initialize after pid-gated policy wait client=\(clientInfo.name) connection=\(connectionID) runID=\(runID?.uuidString ?? "nil") reason=\(reason)"
+                            )
+                            self.pendingConnections.removeValue(forKey: connectionID)
+                            return false
+                        }
                         self.notifyConnectionWaiters(
                             connectionID: connectionID,
                             clientName: clientInfo.name,
@@ -3522,6 +3676,8 @@ actor ServerNetworkManager {
         runPolicyStateByRunID.removeAll()
         admittedPolicyRunIDs.removeAll()
         windowIDByRunID.removeAll()
+        pendingPolicyApplicationIDByConnectionID.removeAll()
+        pendingPolicyApplicationIDByRunID.removeAll()
         activeConnectionsByClient.removeAll()
         clientIDByConnection.removeAll()
         callLimiters.removeAll()
@@ -3574,7 +3730,7 @@ actor ServerNetworkManager {
                 markClientUserKilled: false
             )
         case .idleTimeout:
-            // Hygiene cleanup - allow clean reconnects
+            // Hygiene cleanup - allow clean reconnects.
             .softDisconnect
         case .connectionReplaced:
             // Default to hard behavior; caller can override for same-session replacement
@@ -3709,7 +3865,8 @@ actor ServerNetworkManager {
                 try MCPKillSignal.writeKillSignal(
                     sessionToken: token,
                     reason: reason,
-                    message: message
+                    message: message,
+                    directory: MCPFilesystemConstants.identity.killSignalsDirectoryURL()
                 )
                 connectionLog("Wrote kill signal for session \(token.prefix(8))...")
             } catch {
@@ -3738,7 +3895,7 @@ actor ServerNetworkManager {
         // Periodic cleanup of expired entries
         cleanupExpiredKilledSessions()
         cleanupExpiredUserKilledClients()
-        MCPKillSignal.cleanupStaleSignals()
+        MCPKillSignal.cleanupStaleSignals(in: MCPFilesystemConstants.identity.killSignalsDirectoryURL())
     }
 
     /// Soft-disconnects a connection without kill signals or cooldowns.
@@ -3829,7 +3986,118 @@ actor ServerNetworkManager {
         await terminateConnection(oldID, reason: .connectionReplaced, message: message, semanticsOverride: hardSemantics)
     }
 
+    private func schedulePendingPolicyConnectionReplacement(
+        _ token: MCPServerViewModel.PendingPolicyRunIDMappingToken,
+        windowID: Int
+    ) {
+        guard let displacedConnectionID = token.displacedConnectionID else { return }
+        #if DEBUG
+            debugPendingPolicyReplacementSchedules.append((
+                existing: displacedConnectionID,
+                replacement: token.connectionID,
+                runID: token.runID
+            ))
+        #endif
+        Task {
+            await ServerNetworkManager.shared.handlePendingPolicyConnectionReplacement(
+                token,
+                windowID: windowID
+            )
+        }
+    }
+
+    private func handlePendingPolicyConnectionReplacement(
+        _ token: MCPServerViewModel.PendingPolicyRunIDMappingToken,
+        windowID: Int
+    ) async {
+        guard let displacedConnectionID = token.displacedConnectionID else { return }
+        let replacementStillOwnsRun = await MainActor.run {
+            guard let window = WindowStatesManager.shared.window(withID: windowID) else { return false }
+            return window.mcpServer.isCurrentPendingPolicyRunIDMapping(token)
+                && window.mcpServer.connectionIDToRunID[displacedConnectionID] == nil
+        }
+        guard replacementStillOwnsRun else {
+            connectionLog("Skipping stale pending-policy replacement old=\(displacedConnectionID) new=\(token.connectionID) runID=\(token.runID)")
+            return
+        }
+        await handleConnectionReplaced(
+            existing: displacedConnectionID,
+            by: token.connectionID,
+            runID: token.runID,
+            message: "Connection replaced by new connection for same runID"
+        )
+    }
+
+    func recordTransportIngressTerminal(
+        connectionID: UUID,
+        clientName: String?,
+        sessionToken: String?,
+        snapshot: MCPTransportIngressSnapshot
+    ) {
+        guard snapshot.terminalCause == .receiveBufferOverflow else { return }
+        log.error(
+            "MCP connection \(connectionID) ingress terminated: cause=\(MCPTransportTerminalCause.receiveBufferOverflow.rawValue) capacity=\(snapshot.receiveBufferCapacity) highWaterMark=\(snapshot.receiveBufferHighWaterMark)"
+        )
+        #if DEBUG
+            let retained = DebugRetainedTransportIngress(
+                snapshot: snapshot,
+                clientName: clientName,
+                sessionToken: sessionToken
+            )
+            debugRetainedTransportIngressByConnectionID[connectionID] = retained
+            debugRetainedTransportIngressOrder.removeAll { $0 == connectionID }
+            debugRetainedTransportIngressOrder.append(connectionID)
+            while debugRetainedTransportIngressOrder.count > debugRetainedTransportIngressLimit {
+                let expiredID = debugRetainedTransportIngressOrder.removeFirst()
+                debugRetainedTransportIngressByConnectionID.removeValue(forKey: expiredID)
+                debugRecordedTransportTerminalConnectionIDs.remove(expiredID)
+            }
+            if debugRecordedTransportTerminalConnectionIDs.insert(connectionID).inserted {
+                debugRecordConnectionEvent(
+                    "transport_terminal",
+                    connectionID: connectionID,
+                    reason: MCPTransportTerminalCause.receiveBufferOverflow.rawValue,
+                    clientName: clientName,
+                    sessionToken: sessionToken,
+                    transportIngress: snapshot
+                )
+            }
+        #endif
+    }
+
+    private func abortConnectionForExecutionWatchdog(_ id: UUID) async {
+        guard executionWatchdogTerminalConnections.insert(id).inserted else { return }
+        connectionLog("Execution watchdog marked connection terminal: \(id)")
+        #if DEBUG
+            debugRecordConnectionEvent(
+                "tool_execution_watchdog_abort",
+                connectionID: id,
+                reason: "tool_execution_watchdog"
+            )
+        #endif
+
+        let connection: (any MCPServerConnection)? = if let registeredConnection = connections[id] {
+            registeredConnection
+        } else {
+            #if DEBUG
+                debugExecutionWatchdogAbortTargets[id]
+            #else
+                nil
+            #endif
+        }
+        guard let connection else { return }
+        await connection.abortForExecutionWatchdog()
+        Task { [weak self] in
+            await self?.removeConnection(id)
+        }
+    }
+
     func removeConnection(_ id: UUID) async {
+        guard !connectionsBeingRemoved.contains(id) else {
+            connectionLog("removeConnection: \(id) cleanup already in progress; ignoring duplicate call")
+            return
+        }
+
         // Always drop any lingering bootstrap reservation (commit/rollback should handle it,
         // but this is a leak safety-net for edge cases)
         if let reservation = bootstrapReservations.removeValue(forKey: id) {
@@ -3847,6 +4115,9 @@ actor ServerNetworkManager {
             connectionLog("removeConnection: \(id) already removed; ignoring duplicate call")
             return
         }
+
+        connectionsBeingRemoved.insert(id)
+        defer { connectionsBeingRemoved.remove(id) }
 
         connectionLog("Removing connection: \(id)")
 
@@ -3869,6 +4140,7 @@ actor ServerNetworkManager {
         additionalToolsByConnection.removeValue(forKey: id)
         runPurposeByConnection.removeValue(forKey: id)
         runIDByConnectionID.removeValue(forKey: id)
+        pendingPolicyApplicationIDByConnectionID.removeValue(forKey: id)
         windowAssignmentByConnection.removeValue(forKey: id)
         preassignedConnections.remove(id)
         windowCountAtConnectionTime.removeValue(forKey: id)
@@ -4173,6 +4445,19 @@ actor ServerNetworkManager {
         mcpPolicyLog(
             "registered expected agent pid client=\(clientName) storageKey=\(storageKey) pid=\(pid) runID=\(runID?.uuidString ?? "nil") count=\(pids.count)"
         )
+        #if DEBUG
+            if let runID {
+                debugRecordRunRoutingEvent(
+                    runID: runID,
+                    event: "expected_pid_registered",
+                    fields: [
+                        "client_name": clientName,
+                        "expected_pid": String(pid),
+                        "expected_pid_count": String((expectedAgentPIDsByRunID[runID] ?? []).count)
+                    ]
+                )
+            }
+        #endif
     }
 
     func clearExpectedAgentPID(_ pid: pid_t, for clientName: String, runID: UUID? = nil) {
@@ -4201,6 +4486,19 @@ actor ServerNetworkManager {
         mcpPolicyLog(
             "cleared expected agent pid client=\(clientName) pid=\(pid) runID=\(runID?.uuidString ?? "nil") removed=\(removedCount)"
         )
+        #if DEBUG
+            if let runID {
+                debugRecordRunRoutingEvent(
+                    runID: runID,
+                    event: "expected_pid_cleared",
+                    fields: [
+                        "client_name": clientName,
+                        "expected_pid": String(pid),
+                        "removed_count": String(removedCount)
+                    ]
+                )
+            }
+        #endif
     }
 
     private func removeExpectedAgentPID(_ pid: pid_t, forRunID runID: UUID) {
@@ -4232,7 +4530,8 @@ actor ServerNetworkManager {
         matching clientPid: Int
     ) -> (key: String, index: Int, policy: ClientConnectionPolicy)? {
         oldestPendingPolicyEntry(for: clientName) { policy in
-            policy.requiresExpectedAgentPID
+            policy.reservationConnectionID == nil
+                && policy.requiresExpectedAgentPID
                 && canConsumePendingPolicy(policy, clientName: clientName, clientPid: clientPid)
         }
     }
@@ -4279,6 +4578,11 @@ actor ServerNetworkManager {
         else {
             return .notRequired
         }
+        // Do not spend the ownership wait twice. A PID-gated policy is checked and
+        // consumed atomically after the authoritative MCP initialize identity arrives.
+        if hasPIDGatedPendingPolicy(for: bootstrapClientName) {
+            return .ready
+        }
         if let readiness = directAgentBootstrapAdmissionStatus(
             clientName: bootstrapClientName,
             sessionKey: sessionKey,
@@ -4315,10 +4619,13 @@ actor ServerNetworkManager {
             }
         }
 
-        mcpPolicyLog(
-            "allowing direct agent bootstrap without pending pid-owned policy client=\(bootstrapClientName) connection=\(connectionID) clientPid=\(clientPid) ancestorChain=[\(ancestorDescription)] timeout=\(timeout)s"
+        log.warning(
+            "Rejecting direct agent bootstrap \(connectionID) for known client '\(bootstrapClientName)' - expected policy or live run affinity did not become consumable within \(timeout)s"
         )
-        return .notRequired
+        mcpPolicyLog(
+            "rejected direct agent bootstrap client=\(bootstrapClientName) connection=\(connectionID) reason=policy_admission_timeout clientPid=\(clientPid) ancestorChain=[\(ancestorDescription)] timeout=\(timeout)s"
+        )
+        return .timedOut
     }
 
     private func awaitAgentPolicyAdmissionIfNeeded(
@@ -4333,20 +4640,11 @@ actor ServerNetworkManager {
             return .notRequired
         }
 
-        let isDirectAgentBootstrap = bootstrapClientName.map { bootstrapName in
-            Self.isKnownAgentClientName(bootstrapName) && MCPClientIdentity.matches(bootstrapName, clientName)
-        } ?? false
-        if isDirectAgentBootstrap,
-           hasPIDGatedPendingPolicy(for: clientName),
-           oldestPIDGatedPendingPolicyEntry(for: clientName, matching: clientPid) == nil
-        {
-            return await waitForDirectAgentBootstrapOwnership(
-                clientName: clientName,
-                connectionID: connectionID,
-                clientPid: clientPid,
-                timeout: timeout,
-                holdReason: "direct_agent_mcp_initialize"
-            )
+        // PID-gated ownership is resolved atomically at policy consumption. This covers
+        // helper bootstrap identities (for example repoprompt_ce_cli_debug) that transition
+        // to an authoritative provider identity before the ACP parent PID is registered.
+        if hasPIDGatedPendingPolicy(for: clientName) {
+            return .ready
         }
 
         if hasAgentPolicyAdmissionTarget(clientName: clientName, sessionKey: sessionKey, clientPid: clientPid) {
@@ -4367,36 +4665,6 @@ actor ServerNetworkManager {
             timeout: timeout,
             holdReason: "mcp_initialize"
         )
-    }
-
-    private func waitForDirectAgentBootstrapOwnership(
-        clientName: String,
-        connectionID: UUID,
-        clientPid: Int,
-        timeout: TimeInterval,
-        holdReason: String
-    ) async -> AgentPolicyAdmissionReadiness {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if Task.isCancelled {
-                return .timedOut
-            }
-            if oldestPIDGatedPendingPolicyEntry(for: clientName, matching: clientPid) != nil {
-                return .ready
-            }
-            if !hasPIDGatedPendingPolicy(for: clientName),
-               expectedAgentPIDs(for: clientName).isEmpty
-            {
-                return .notRequired
-            }
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-
-        let ancestorDescription = pidAncestorChainDescription(from: pid_t(clientPid))
-        mcpPolicyLog(
-            "allowing direct agent MCP initialize without pid-owned policy client=\(clientName) connection=\(connectionID) holdReason=\(holdReason) clientPid=\(clientPid) ancestorChain=[\(ancestorDescription)] timeout=\(timeout)s"
-        )
-        return .notRequired
     }
 
     private func waitForAgentPolicyAdmission(
@@ -4504,6 +4772,7 @@ actor ServerNetworkManager {
         pruneExpiredPolicies(for: clientName)
         let sanitizedRestricted = Self.sanitizedRoutingRestrictedTools(restrictedTools)
         let policy = ClientConnectionPolicy(
+            id: UUID(),
             windowID: windowID,
             restrictedTools: sanitizedRestricted,
             oneShot: oneShot,
@@ -4516,7 +4785,8 @@ actor ServerNetworkManager {
             purpose: purpose,
             taskLabelKind: taskLabelKind,
             allowsAgentExternalControlTools: allowsAgentExternalControlTools,
-            requiresExpectedAgentPID: requiresExpectedAgentPID
+            requiresExpectedAgentPID: requiresExpectedAgentPID,
+            reservationConnectionID: nil
         )
         let grantDescription = Self.describeGrantedTools(restricted: sanitizedRestricted)
         let restrictedDescription = Self.describeToolList(sanitizedRestricted)
@@ -4546,6 +4816,7 @@ actor ServerNetworkManager {
             let beforeCount = queue.count
             queue.removeAll {
                 guard
+                    $0.reservationConnectionID == nil,
                     $0.oneShot,
                     $0.purpose == .agentModeRun,
                     $0.windowID == windowID
@@ -4593,6 +4864,24 @@ actor ServerNetworkManager {
         mcpPolicyLog(
             "installed policy client=\(clientName) storageKey=\(storageKey) window=\(windowID) purpose=\(purpose.rawValue) oneShot=\(oneShot) ttl=\(ttl)s runID=\(runID?.uuidString ?? "nil") tabID=\(tabID?.uuidString ?? "nil") requiresExpectedPID=\(requiresExpectedAgentPID) queueCount=\(queue.count)"
         )
+        #if DEBUG
+            if let runID {
+                debugRecordRunRoutingEvent(
+                    runID: runID,
+                    event: "policy_installed",
+                    fields: [
+                        "client_name": clientName,
+                        "pending_policy_key": storageKey,
+                        "window_id": String(windowID),
+                        "tab_id": tabID?.uuidString ?? "nil",
+                        "purpose": purpose.rawValue,
+                        "one_shot": String(oneShot),
+                        "requires_expected_pid": String(requiresExpectedAgentPID),
+                        "queue_count": String(queue.count)
+                    ]
+                )
+            }
+        #endif
     }
 
     func requireExpectedAgentPIDForPendingPolicy(
@@ -4621,6 +4910,82 @@ actor ServerNetworkManager {
     }
 
     #if DEBUG
+        func debugSuspendNextPendingPolicyRouteInstallation() {
+            debugShouldSuspendNextPendingPolicyRouteInstallation = true
+        }
+
+        func debugIsPendingPolicyRouteInstallationSuspended() -> Bool {
+            debugPendingPolicyRouteInstallationIsSuspended
+        }
+
+        func debugResumePendingPolicyRouteInstallation() {
+            debugShouldSuspendNextPendingPolicyRouteInstallation = false
+            debugPendingPolicyRouteInstallationIsSuspended = false
+            let waiters = debugPendingPolicyRouteInstallationResumeWaiters
+            debugPendingPolicyRouteInstallationResumeWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+
+        func debugInvalidatePendingPolicyApplication(connectionID: UUID) {
+            pendingConnections.removeValue(forKey: connectionID)
+        }
+
+        func debugSupersedePendingPolicyApplicationOwnership(connectionID: UUID, runID: UUID) {
+            let applicationID = UUID()
+            pendingPolicyApplicationIDByConnectionID[connectionID] = applicationID
+            pendingPolicyApplicationIDByRunID[runID] = applicationID
+        }
+
+        func debugSuspendNextPendingPolicyCommit() {
+            debugShouldSuspendNextPendingPolicyCommit = true
+        }
+
+        func debugIsPendingPolicyCommitSuspended() -> Bool {
+            debugPendingPolicyCommitIsSuspended
+        }
+
+        func debugResumePendingPolicyCommit() {
+            debugShouldSuspendNextPendingPolicyCommit = false
+            debugPendingPolicyCommitIsSuspended = false
+            let waiters = debugPendingPolicyCommitResumeWaiters
+            debugPendingPolicyCommitResumeWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+
+        private func debugSuspendPendingPolicyRouteInstallationIfNeeded() async {
+            guard debugShouldSuspendNextPendingPolicyRouteInstallation else { return }
+            debugShouldSuspendNextPendingPolicyRouteInstallation = false
+            debugPendingPolicyRouteInstallationIsSuspended = true
+            await withCheckedContinuation { continuation in
+                debugPendingPolicyRouteInstallationResumeWaiters.append(continuation)
+            }
+            debugPendingPolicyRouteInstallationIsSuspended = false
+        }
+
+        private func debugSuspendPendingPolicyCommitIfNeeded() async {
+            guard debugShouldSuspendNextPendingPolicyCommit else { return }
+            debugShouldSuspendNextPendingPolicyCommit = false
+            debugPendingPolicyCommitIsSuspended = true
+            await withCheckedContinuation { continuation in
+                debugPendingPolicyCommitResumeWaiters.append(continuation)
+            }
+            debugPendingPolicyCommitIsSuspended = false
+        }
+
+        func debugPendingPolicyReplacementScheduleCount(
+            existing: UUID,
+            replacement: UUID,
+            runID: UUID
+        ) -> Int {
+            debugPendingPolicyReplacementSchedules.count {
+                $0.existing == existing && $0.replacement == replacement && $0.runID == runID
+            }
+        }
+
+        func debugClearPendingPolicyReplacementSchedules() {
+            debugPendingPolicyReplacementSchedules.removeAll()
+        }
+
         func debugPendingPolicySnapshot(for clientName: String) -> [(windowID: Int, tabID: UUID?, runID: UUID?, oneShot: Bool, purpose: MCPRunPurpose)] {
             pruneExpiredPolicies(for: clientName)
             let keys = matchingClientKeys(for: clientName, in: Array(pendingPoliciesByClient.keys))
@@ -4640,16 +5005,71 @@ actor ServerNetworkManager {
             clientName: String,
             connectionID: UUID,
             clientPid: Int? = nil,
-            bootstrapClientName: String? = nil
-        ) async -> (restrictedTools: Set<String>, additionalTools: Set<String>, purpose: MCPRunPurpose, windowID: Int?) {
+            bootstrapClientName: String? = nil,
+            sessionKey: String? = nil,
+            pidGateTimeout: TimeInterval = 0.25,
+            requireRunRouting: Bool = true
+        ) async -> (restrictedTools: Set<String>, additionalTools: Set<String>, purpose: MCPRunPurpose, windowID: Int?, outcome: String, runID: UUID?) {
             pendingConnections[connectionID] = clientName
-            await applyPendingPolicyIfAvailable(
+            if let sessionKey {
+                capabilityTokenByConnection[connectionID] = sessionKey
+            }
+            let outcome = await applyPendingPolicyIfAvailable(
                 clientName: clientName,
                 connectionID: connectionID,
                 clientPid: clientPid,
-                bootstrapClientName: bootstrapClientName
+                bootstrapClientName: bootstrapClientName,
+                pidGateTimeout: pidGateTimeout,
+                requireRunRouting: requireRunRouting
             )
-            return debugConnectionPolicyState(for: connectionID)
+            let state = debugConnectionPolicyState(for: connectionID)
+            let outcomeDescription: String
+            let outcomeRunID: UUID?
+            switch outcome {
+            case let .applied(runID):
+                outcomeDescription = "applied"
+                outcomeRunID = runID
+            case .fallback:
+                outcomeDescription = "fallback"
+                outcomeRunID = nil
+            case let .rejected(runID, reason):
+                outcomeDescription = "rejected:\(reason)"
+                outcomeRunID = runID
+            }
+            return (
+                restrictedTools: state.restrictedTools,
+                additionalTools: state.additionalTools,
+                purpose: state.purpose,
+                windowID: state.windowID,
+                outcome: outcomeDescription,
+                runID: outcomeRunID
+            )
+        }
+
+        func debugBootstrapPolicyAdmissionStatus(
+            bootstrapClientName: String?,
+            connectionID: UUID,
+            sessionKey: String? = nil,
+            clientPid: Int,
+            isReplacementForSession: Bool = false,
+            timeout: TimeInterval = 0.05
+        ) async -> String {
+            let readiness = await awaitAgentBootstrapPolicyBeforeAcceptIfNeeded(
+                bootstrapClientName: bootstrapClientName,
+                connectionID: connectionID,
+                sessionKey: sessionKey,
+                clientPid: clientPid,
+                isReplacementForSession: isReplacementForSession,
+                timeout: timeout
+            )
+            switch readiness {
+            case .notRequired:
+                return "notRequired"
+            case .ready:
+                return "ready"
+            case .timedOut:
+                return "timedOut"
+            }
         }
 
         func debugAgentPolicyAdmissionStatus(
@@ -4718,6 +5138,10 @@ actor ServerNetworkManager {
                 purpose: runPurposeByConnection[connectionID] ?? .unknown,
                 windowID: connectionWindowMap[connectionID]
             )
+        }
+
+        func debugCachedRunID(for connectionID: UUID) -> UUID? {
+            runIDByConnectionID[connectionID]
         }
 
         func debugSeedConnectionRunRouting(
@@ -4841,6 +5265,94 @@ actor ServerNetworkManager {
                 return Self.clientStorageKey(clientName)
             }
 
+            private nonisolated static func debugSanitizedRunRoutingFields(_ fields: [String: String]) -> [String: String] {
+                let sensitiveKeyFragments = [
+                    "auth", "bearer", "credential", "environment", "password", "prompt", "secret",
+                    "sessiontoken", "session_token", "token", "transcript"
+                ]
+                let sensitiveValueFragments = [
+                    "authorization:", "proxy-authorization:", "bearer ", "api-key", "api_key",
+                    "apikey", "credential", "password", "private_key", "secret", "session_token",
+                    "sessiontoken", "token="
+                ]
+                return fields.sorted { $0.key < $1.key }.prefix(32).reduce(into: [:]) { result, entry in
+                    let normalizedKey = entry.key.lowercased().replacingOccurrences(of: "-", with: "_")
+                    let normalizedValue = entry.value.lowercased()
+                    let isSensitiveKey = sensitiveKeyFragments.contains { normalizedKey.contains($0) }
+                        || normalizedKey == "api_key"
+                        || normalizedKey.hasSuffix("_api_key")
+                        || normalizedKey == "private_key"
+                        || normalizedKey.hasSuffix("_private_key")
+                    let valueComponents = normalizedValue.split { $0.isWhitespace || $0 == "|" }
+                    let containsSensitiveValue = sensitiveValueFragments.contains { fragment in
+                        if fragment.contains(" ") {
+                            return normalizedValue.contains(fragment)
+                        }
+                        return valueComponents.contains { component in
+                            component.contains(fragment) && !component.contains("<redacted>")
+                        }
+                    }
+                    let value = isSensitiveKey || containsSensitiveValue
+                        ? "<redacted>"
+                        : String(entry.value.prefix(512))
+                    result[String(entry.key.prefix(64))] = value
+                }
+            }
+
+            func debugRecordRunRoutingEvent(
+                runID: UUID,
+                event: String,
+                connectionID: UUID? = nil,
+                fields: [String: String] = [:]
+            ) {
+                debugRunRoutingHistorySeq &+= 1
+                debugRunRoutingHistory.append(DebugRunRoutingEvent(
+                    seq: debugRunRoutingHistorySeq,
+                    timestamp: Date(),
+                    runID: runID,
+                    event: String(event.prefix(96)),
+                    connectionID: connectionID,
+                    fields: Self.debugSanitizedRunRoutingFields(fields)
+                ))
+                if debugRunRoutingHistory.count > debugRunRoutingHistoryLimit {
+                    let overflow = debugRunRoutingHistory.count - debugRunRoutingHistoryLimit
+                    debugRunRoutingHistory.removeFirst(overflow)
+                    debugRunRoutingHistoryDroppedCount += overflow
+                }
+            }
+
+            private func debugRunRoutingHistoryObject(_ event: DebugRunRoutingEvent) -> [String: Any] {
+                [
+                    "seq": Int(event.seq),
+                    "timestamp_ms": debugDateMilliseconds(event.timestamp),
+                    "run_id": event.runID.uuidString,
+                    "event": event.event,
+                    "connection_id": event.connectionID?.uuidString ?? NSNull(),
+                    "fields": event.fields
+                ]
+            }
+
+            func debugRunRoutingHistoryPayload(runID: UUID, limit: Int) -> [String: Any] {
+                let matching = debugRunRoutingHistory.filter { $0.runID == runID }
+                let events = Array(matching.suffix(limit))
+                return [
+                    "ok": true,
+                    "op": "run_routing_history",
+                    "run_id": runID.uuidString,
+                    "events": events.map(debugRunRoutingHistoryObject),
+                    "oldest_available_seq": debugRunRoutingHistory.first.map { Int($0.seq) } ?? NSNull(),
+                    "latest_seq": debugRunRoutingHistory.last.map { Int($0.seq) } ?? NSNull(),
+                    "dropped_event_count": debugRunRoutingHistoryDroppedCount,
+                    "history_capacity": debugRunRoutingHistoryLimit
+                ]
+            }
+
+            func debugClearRunRoutingHistoryForTesting() {
+                debugRunRoutingHistory.removeAll()
+                debugRunRoutingHistorySeq = 0
+                debugRunRoutingHistoryDroppedCount = 0
+            }
+
             private func debugRecordConnectionEvent(
                 _ event: String,
                 connectionID: UUID? = nil,
@@ -4849,7 +5361,8 @@ actor ServerNetworkManager {
                 state: String? = nil,
                 clientName overrideClientName: String? = nil,
                 sessionToken overrideSessionToken: String? = nil,
-                windowID overrideWindowID: Int? = nil
+                windowID overrideWindowID: Int? = nil,
+                transportIngress: MCPTransportIngressSnapshot? = nil
             ) {
                 debugConnectionHistorySeq &+= 1
                 let resolvedClientName = overrideClientName ?? connectionID.flatMap { clientIdentifier(forConnection: $0) }
@@ -4866,12 +5379,26 @@ actor ServerNetworkManager {
                     sessionFingerprint: debugSessionFingerprint(forToken: resolvedSessionToken),
                     windowID: overrideWindowID ?? connectionID.flatMap { connectionWindowMap[$0] },
                     state: resolvedState,
-                    reason: reason
+                    reason: reason,
+                    transportIngress: transportIngress
                 )
                 debugConnectionHistory.append(entry)
                 if debugConnectionHistory.count > debugConnectionHistoryLimit {
                     debugConnectionHistory.removeFirst(debugConnectionHistory.count - debugConnectionHistoryLimit)
                 }
+            }
+
+            private nonisolated func debugTransportIngressObject(
+                _ snapshot: MCPTransportIngressSnapshot
+            ) -> [String: Any] {
+                [
+                    "receive_capacity": snapshot.receiveBufferCapacity,
+                    "accepted_frames": snapshot.acceptedFrameCount,
+                    "dropped_frames": snapshot.droppedFrameCount,
+                    "receive_high_water_mark": snapshot.receiveBufferHighWaterMark,
+                    "terminal": snapshot.isTerminal,
+                    "terminal_cause": snapshot.terminalCause?.rawValue ?? NSNull()
+                ]
             }
 
             private func debugHistoryObject(_ event: DebugConnectionEvent) -> [String: Any] {
@@ -4887,7 +5414,8 @@ actor ServerNetworkManager {
                     "session_fingerprint": event.sessionFingerprint ?? NSNull(),
                     "window_id": event.windowID ?? NSNull(),
                     "state": event.state ?? NSNull(),
-                    "reason": event.reason ?? NSNull()
+                    "reason": event.reason ?? NSNull(),
+                    "transport_ingress": event.transportIngress.map(debugTransportIngressObject) ?? NSNull()
                 ]
             }
 
@@ -5055,6 +5583,48 @@ actor ServerNetworkManager {
                 ]
             }
 
+            func debugTransportIngressSnapshotPayload(
+                currentConnectionID: UUID,
+                requestedConnectionID: UUID?
+            ) async -> [String: Any] {
+                let targetID = requestedConnectionID ?? currentConnectionID
+                if let connection = connections[targetID],
+                   let snapshot = await connection.transportIngressSnapshot()
+                {
+                    return [
+                        "ok": true,
+                        "op": "transport_snapshot",
+                        "current_connection_id": currentConnectionID.uuidString,
+                        "requested_connection_id": targetID.uuidString,
+                        "present": true,
+                        "active": true,
+                        "ingress": debugTransportIngressObject(snapshot)
+                    ]
+                }
+                if let retained = debugRetainedTransportIngressByConnectionID[targetID] {
+                    return [
+                        "ok": true,
+                        "op": "transport_snapshot",
+                        "current_connection_id": currentConnectionID.uuidString,
+                        "requested_connection_id": targetID.uuidString,
+                        "present": true,
+                        "active": false,
+                        "client_name": retained.clientName ?? NSNull(),
+                        "session_fingerprint": debugSessionFingerprint(forToken: retained.sessionToken) ?? NSNull(),
+                        "ingress": debugTransportIngressObject(retained.snapshot)
+                    ]
+                }
+                return [
+                    "ok": true,
+                    "op": "transport_snapshot",
+                    "current_connection_id": currentConnectionID.uuidString,
+                    "requested_connection_id": targetID.uuidString,
+                    "present": false,
+                    "active": false,
+                    "ingress": NSNull()
+                ]
+            }
+
             func debugConnectionSnapshotPayload(
                 currentConnectionID: UUID,
                 requestedConnectionID: UUID?,
@@ -5145,6 +5715,9 @@ actor ServerNetworkManager {
             func debugClearConnectionHistoryPayload() -> [String: Any] {
                 let removed = debugConnectionHistory.count
                 debugConnectionHistory.removeAll()
+                debugRetainedTransportIngressByConnectionID.removeAll()
+                debugRetainedTransportIngressOrder.removeAll()
+                debugRecordedTransportTerminalConnectionIDs.removeAll()
                 return [
                     "ok": true,
                     "op": "clear_connection_history",
@@ -5881,8 +6454,47 @@ actor ServerNetworkManager {
         }
 
         func debugRemoveConnection(_ id: UUID) async {
+            #if DEBUG
+                debugExecutionWatchdogAbortTargets.removeValue(forKey: id)
+            #endif
             await removeConnection(id)
         }
+
+        #if DEBUG
+            func debugRegisterConnectionForSocketFixture(
+                connectionID: UUID,
+                connection: any MCPServerConnection,
+                clientName: String,
+                sessionToken: String
+            ) {
+                _ = clientName
+                _ = sessionToken
+                debugExecutionWatchdogAbortTargets[connectionID] = connection
+            }
+
+            func debugSetToolExecutionWatchdogEnvironment(_ environment: MCPToolExecutionWatchdogEnvironment) {
+                toolExecutionWatchdogEnvironment = environment
+            }
+
+            func debugResetToolExecutionWatchdogEnvironment() {
+                toolExecutionWatchdogEnvironment = .continuous()
+            }
+
+            func debugSetResolvedToolOperationOverride(
+                toolName: String,
+                operation: (@Sendable () async throws -> Value)?
+            ) {
+                if let operation {
+                    debugResolvedToolOperationOverrides[toolName] = operation
+                } else {
+                    debugResolvedToolOperationOverrides.removeValue(forKey: toolName)
+                }
+            }
+
+            func debugIsExecutionWatchdogTerminal(connectionID: UUID) -> Bool {
+                executionWatchdogTerminalConnections.contains(connectionID)
+            }
+        #endif
 
         func debugMarkActiveToolOwner(windowID: Int, connectionID: UUID, toolName: String) {
             markActiveToolOwner(windowID: windowID, connectionID: connectionID, toolName: toolName)
@@ -6023,7 +6635,23 @@ actor ServerNetworkManager {
     ) async {
         pruneExpiredPolicies(for: clientName)
         let keys = matchingClientKeys(for: clientName, in: Array(pendingPoliciesByClient.keys))
-        guard !keys.isEmpty else { return }
+        guard !keys.isEmpty else {
+            #if DEBUG
+                if let runID {
+                    debugRecordRunRoutingEvent(
+                        runID: runID,
+                        event: "policy_cleared",
+                        fields: [
+                            "client_name": clientName,
+                            "removed_count": "0",
+                            "remaining_count": "0",
+                            "reason": "no_matching_policy"
+                        ]
+                    )
+                }
+            #endif
+            return
+        }
         var removedCount = 0
         var remainingCount = 0
         for key in keys {
@@ -6049,6 +6677,20 @@ actor ServerNetworkManager {
         mcpPolicyLog(
             "cleared policy client=\(clientName) window=\(windowID.map(String.init) ?? "all") runID=\(runID?.uuidString ?? "all") removed=\(removedCount) remaining=\(remainingCount)"
         )
+        #if DEBUG
+            if let runID {
+                debugRecordRunRoutingEvent(
+                    runID: runID,
+                    event: "policy_cleared",
+                    fields: [
+                        "client_name": clientName,
+                        "window_id": windowID.map(String.init) ?? "all",
+                        "removed_count": String(removedCount),
+                        "remaining_count": String(remainingCount)
+                    ]
+                )
+            }
+        #endif
     }
 
     func setRestrictedTools(for connectionID: UUID, tools: Set<String>) async {
@@ -6226,6 +6868,68 @@ actor ServerNetworkManager {
         return isExpectedAgentDescendant(clientName: clientName, clientPid: clientPid, runID: policy.runID) == true
     }
 
+    private func oldestReservedPendingPolicyEntry(
+        for clientName: String
+    ) -> (key: String, index: Int, policy: ClientConnectionPolicy)? {
+        oldestPendingPolicyEntry(for: clientName) { $0.reservationConnectionID != nil }
+    }
+
+    private func reserveOneShotPendingPolicy(
+        _ matchedQueueEntry: (key: String, index: Int, policy: ClientConnectionPolicy),
+        for connectionID: UUID
+    ) -> ClientConnectionPolicy? {
+        guard matchedQueueEntry.policy.oneShot,
+              var queue = pendingPoliciesByClient[matchedQueueEntry.key],
+              queue.indices.contains(matchedQueueEntry.index),
+              queue[matchedQueueEntry.index].id == matchedQueueEntry.policy.id,
+              queue[matchedQueueEntry.index].reservationConnectionID == nil
+        else {
+            return nil
+        }
+        queue[matchedQueueEntry.index].reservationConnectionID = connectionID
+        let policy = queue[matchedQueueEntry.index]
+        pendingPoliciesByClient[matchedQueueEntry.key] = queue
+        return policy
+    }
+
+    private func consumeOneShotPendingPolicy(
+        id: UUID,
+        key: String,
+        connectionID: UUID
+    ) -> Bool {
+        guard var queue = pendingPoliciesByClient[key],
+              let index = queue.firstIndex(where: {
+                  $0.id == id && $0.reservationConnectionID == connectionID
+              })
+        else {
+            return false
+        }
+        queue.remove(at: index)
+        if queue.isEmpty {
+            pendingPoliciesByClient.removeValue(forKey: key)
+        } else {
+            pendingPoliciesByClient[key] = queue
+        }
+        return true
+    }
+
+    private func rollbackOneShotPendingPolicyReservation(
+        id: UUID,
+        key: String,
+        connectionID: UUID
+    ) -> Bool {
+        guard var queue = pendingPoliciesByClient[key],
+              let index = queue.firstIndex(where: {
+                  $0.id == id && $0.reservationConnectionID == connectionID
+              })
+        else {
+            return false
+        }
+        queue[index].reservationConnectionID = nil
+        pendingPoliciesByClient[key] = queue
+        return true
+    }
+
     private func logReservedPendingPolicy(
         _ policy: ClientConnectionPolicy,
         clientName: String,
@@ -6242,10 +6946,140 @@ actor ServerNetworkManager {
         clientName: String,
         connectionID: UUID,
         clientPid: Int? = nil,
-        bootstrapClientName: String? = nil
-    ) async {
-        let matchedQueueEntry = oldestPendingPolicyEntry(for: clientName) { policy in
-            canConsumePendingPolicy(policy, clientName: clientName, clientPid: clientPid)
+        bootstrapClientName: String? = nil,
+        pidGateTimeout: TimeInterval = 2.0,
+        requireRunRouting: Bool = true,
+        expectedLifecycleGeneration: UInt64? = nil
+    ) async -> PendingPolicyApplicationOutcome {
+        if let reservedEntry = oldestReservedPendingPolicyEntry(for: clientName),
+           canConsumePendingPolicy(reservedEntry.policy, clientName: clientName, clientPid: clientPid)
+        {
+            mcpPolicyLog(
+                "pending policy route installation already reserved client=\(clientName) connection=\(connectionID) reservedConnection=\(reservedEntry.policy.reservationConnectionID?.uuidString ?? "nil") runID=\(reservedEntry.policy.runID?.uuidString ?? "nil")"
+            )
+            return .rejected(runID: reservedEntry.policy.runID, reason: "policy_reserved")
+        }
+
+        if let reservedEntry = oldestPendingPolicyEntry(for: clientName, where: {
+            $0.reservationConnectionID == nil && $0.requiresExpectedAgentPID
+        }),
+            oldestPIDGatedPendingPolicyEntry(for: clientName, matching: clientPid ?? -1) == nil
+        {
+            let runID = reservedEntry.policy.runID
+            let ancestorDescription = clientPid.map { pidAncestorChainDescription(from: pid_t($0)) } ?? "nil"
+            let expectedDescription = expectedAgentPIDs(for: clientName, runID: runID)
+                .map(String.init)
+                .sorted()
+                .joined(separator: ",")
+            mcpPolicyLog(
+                "holding pid-gated policy consumption client=\(clientName) bootstrapClient=\(bootstrapClientName ?? "nil") connection=\(connectionID) clientPid=\(clientPid.map(String.init) ?? "nil") ancestorChain=[\(ancestorDescription)] expectedAgentPIDs=[\(expectedDescription)] runID=\(runID?.uuidString ?? "nil") timeout=\(pidGateTimeout)s"
+            )
+            #if DEBUG
+                if let runID {
+                    debugRecordRunRoutingEvent(
+                        runID: runID,
+                        event: "pid_gate_wait_started",
+                        connectionID: connectionID,
+                        fields: [
+                            "client_name": clientName,
+                            "bootstrap_client_name": bootstrapClientName ?? "nil",
+                            "helper_peer_pid": clientPid.map(String.init) ?? "nil",
+                            "ancestor_chain": ancestorDescription,
+                            "expected_pids": expectedDescription,
+                            "pending_policy_key": reservedEntry.key,
+                            "timeout_ms": String(Int((pidGateTimeout * 1000).rounded()))
+                        ]
+                    )
+                }
+            #endif
+
+            let deadline = Date().addingTimeInterval(pidGateTimeout)
+            while oldestPIDGatedPendingPolicyEntry(for: clientName, matching: clientPid ?? -1) == nil {
+                if Task.isCancelled {
+                    #if DEBUG
+                        if let runID {
+                            debugRecordRunRoutingEvent(
+                                runID: runID,
+                                event: "pid_gate_wait_rejected",
+                                connectionID: connectionID,
+                                fields: ["reason": "cancelled"]
+                            )
+                        }
+                    #endif
+                    return .rejected(runID: runID, reason: "cancelled")
+                }
+                guard hasPIDGatedPendingPolicy(for: clientName) else {
+                    #if DEBUG
+                        if let runID {
+                            debugRecordRunRoutingEvent(
+                                runID: runID,
+                                event: "pid_gate_wait_rejected",
+                                connectionID: connectionID,
+                                fields: ["reason": "policy_removed"]
+                            )
+                        }
+                    #endif
+                    return .rejected(runID: runID, reason: "policy_removed")
+                }
+                guard Date() < deadline else {
+                    logReservedPendingPolicy(
+                        reservedEntry.policy,
+                        clientName: clientName,
+                        connectionID: connectionID,
+                        clientPid: clientPid,
+                        bootstrapClientName: bootstrapClientName
+                    )
+                    #if DEBUG
+                        if let runID {
+                            debugRecordRunRoutingEvent(
+                                runID: runID,
+                                event: "pid_gate_wait_rejected",
+                                connectionID: connectionID,
+                                fields: [
+                                    "reason": "ownership_timeout",
+                                    "helper_peer_pid": clientPid.map(String.init) ?? "nil",
+                                    "ancestor_chain": ancestorDescription,
+                                    "expected_pids": expectedAgentPIDs(for: clientName, runID: runID)
+                                        .map(String.init)
+                                        .sorted()
+                                        .joined(separator: ",")
+                                ]
+                            )
+                        }
+                    #endif
+                    return .rejected(runID: runID, reason: "ownership_timeout")
+                }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            #if DEBUG
+                if let matchedEntry = oldestPIDGatedPendingPolicyEntry(for: clientName, matching: clientPid ?? -1),
+                   let matchedRunID = matchedEntry.policy.runID
+                {
+                    debugRecordRunRoutingEvent(
+                        runID: matchedRunID,
+                        event: "pid_gate_wait_completed",
+                        connectionID: connectionID,
+                        fields: [
+                            "helper_peer_pid": clientPid.map(String.init) ?? "nil",
+                            "expected_pids": expectedAgentPIDs(for: clientName, runID: matchedRunID)
+                                .map(String.init)
+                                .sorted()
+                                .joined(separator: ","),
+                            "pending_policy_key": matchedEntry.key
+                        ]
+                    )
+                }
+            #endif
+        }
+
+        let hasPIDGatedPolicy = hasPIDGatedPendingPolicy(for: clientName)
+        let matchedQueueEntry = if hasPIDGatedPolicy {
+            oldestPIDGatedPendingPolicyEntry(for: clientName, matching: clientPid ?? -1)
+        } else {
+            oldestPendingPolicyEntry(for: clientName) { policy in
+                policy.reservationConnectionID == nil
+                    && canConsumePendingPolicy(policy, clientName: clientName, clientPid: clientPid)
+            }
         }
         guard let matchedQueueEntry else {
             #if DEBUG
@@ -6256,6 +7090,9 @@ actor ServerNetworkManager {
                     "reason": oldestPendingPolicyEntry(for: clientName) == nil ? "no_pending_policy" : "pending_policy_not_consumable"
                 ])
             #endif
+            if let reservedEntry = oldestReservedPendingPolicyEntry(for: clientName) {
+                return .rejected(runID: reservedEntry.policy.runID, reason: "policy_reserved")
+            }
             if let reservedEntry = oldestPendingPolicyEntry(for: clientName) {
                 logReservedPendingPolicy(
                     reservedEntry.policy,
@@ -6264,24 +7101,251 @@ actor ServerNetworkManager {
                     clientPid: clientPid,
                     bootstrapClientName: bootstrapClientName
                 )
-                await applyRoutingFallback(clientName: clientName, connectionID: connectionID, clientPid: clientPid, pendingPolicyWasReserved: true)
-            } else {
-                await applyRoutingFallback(clientName: clientName, connectionID: connectionID, clientPid: clientPid)
+                return .rejected(runID: reservedEntry.policy.runID, reason: "not_consumable")
             }
-            return
+            await applyRoutingFallback(clientName: clientName, connectionID: connectionID, clientPid: clientPid)
+            return .fallback
+        }
+        let sessionKey = connections[connectionID]?.capabilityToken ?? capabilityTokenByConnection[connectionID]
+        if let policyRunID = matchedQueueEntry.policy.runID,
+           let affinity = preferredLiveRunAffinity(for: clientName, sessionKey: sessionKey),
+           affinity.runID != policyRunID
+        {
+            #if DEBUG
+                debugRecordRunRoutingEvent(
+                    runID: policyRunID,
+                    event: "policy_rejected",
+                    connectionID: connectionID,
+                    fields: [
+                        "client_name": clientName,
+                        "reason": "session_token_bound_to_other_run",
+                        "bound_run_id": affinity.runID.uuidString
+                    ]
+                )
+            #endif
+            return .rejected(runID: policyRunID, reason: "session_token_bound_to_other_run")
         }
         var queue = pendingPoliciesByClient[matchedQueueEntry.key] ?? []
         mcpRoutingLog("Applying FIFO policy client=\(clientName) matchedKey=\(matchedQueueEntry.key) connectionID=\(connectionID) queueLength=\(queue.count) policyWindow=\(matchedQueueEntry.policy.windowID)")
-        let policy = queue.remove(at: matchedQueueEntry.index)
-        let remainingAfterPop = queue.count
-        if !policy.oneShot {
-            queue.append(policy)
-        }
-        let remainingAfterRequeue = queue.count
-        if queue.isEmpty {
-            pendingPoliciesByClient.removeValue(forKey: matchedQueueEntry.key)
+        let policy: ClientConnectionPolicy
+        let remainingAfterPop: Int
+        let remainingAfterRequeue: Int
+        if matchedQueueEntry.policy.oneShot {
+            guard let reservedPolicy = reserveOneShotPendingPolicy(matchedQueueEntry, for: connectionID) else {
+                return .rejected(runID: matchedQueueEntry.policy.runID, reason: "policy_reservation_failed")
+            }
+            policy = reservedPolicy
+            remainingAfterPop = max(0, queue.count - 1)
+            remainingAfterRequeue = remainingAfterPop
         } else {
+            policy = queue.remove(at: matchedQueueEntry.index)
+            remainingAfterPop = queue.count
+            queue.append(policy)
+            remainingAfterRequeue = queue.count
             pendingPoliciesByClient[matchedQueueEntry.key] = queue
+        }
+
+        let restorePoint = PendingPolicyRestorePoint(
+            restrictedTools: restrictedToolsByConnection[connectionID],
+            additionalTools: additionalToolsByConnection[connectionID],
+            runPurpose: runPurposeByConnection[connectionID],
+            windowID: connectionWindowMap[connectionID],
+            windowAssignment: windowAssignmentByConnection[connectionID],
+            runID: runIDByConnectionID[connectionID],
+            wasPreassigned: preassignedConnections.contains(connectionID),
+            wasRunAdmitted: policy.runID.map { admittedPolicyRunIDs.contains($0) } ?? false,
+            runPolicyState: policy.runID.flatMap { runPolicyStateByRunID[$0] },
+            runWindowID: policy.runID.flatMap { windowIDByRunID[$0] }
+        )
+        let pendingPolicyApplicationID = UUID()
+        pendingPolicyApplicationIDByConnectionID[connectionID] = pendingPolicyApplicationID
+        if let runID = policy.runID {
+            pendingPolicyApplicationIDByRunID[runID] = pendingPolicyApplicationID
+        }
+
+        // Stage the complete policy before registering the run mapping. The mapping
+        // signals MCPRoutingWaiter, so restrictions and run identity must already be
+        // visible before the bootstrap gate can be released.
+        restrictedToolsByConnection[connectionID] = policy.restrictedTools
+        preassignedConnections.insert(connectionID)
+        runPurposeByConnection[connectionID] = policy.purpose
+        cacheRunPolicyStateIfNeeded(policy)
+        if let runID = policy.runID {
+            admittedPolicyRunIDs.insert(runID)
+            runIDByConnectionID[connectionID] = runID
+        }
+        if let additional = policy.additionalTools {
+            additionalToolsByConnection[connectionID] = additional
+        } else {
+            additionalToolsByConnection.removeValue(forKey: connectionID)
+        }
+        connectionWindowMap[connectionID] = policy.windowID
+        windowAssignmentByConnection[connectionID] = policy.windowID
+
+        #if DEBUG
+            await debugSuspendPendingPolicyRouteInstallationIfNeeded()
+        #endif
+
+        guard isPendingPolicyApplicationOwner(
+            pendingPolicyApplicationID,
+            connectionID: connectionID,
+            runID: policy.runID
+        ),
+            isPendingPolicyApplicationCurrent(
+                connectionID: connectionID,
+                clientName: clientName,
+                expectedLifecycleGeneration: expectedLifecycleGeneration
+            )
+        else {
+            if policy.oneShot {
+                _ = rollbackOneShotPendingPolicyReservation(
+                    id: policy.id,
+                    key: matchedQueueEntry.key,
+                    connectionID: connectionID
+                )
+            }
+            await rollbackPendingPolicyApplication(
+                policy,
+                clientName: clientName,
+                connectionID: connectionID,
+                restorePoint: restorePoint,
+                applicationID: pendingPolicyApplicationID,
+                signalRoutingFailure: false
+            )
+            return .rejected(runID: policy.runID, reason: "stale_connection")
+        }
+
+        var pendingPolicyRunIDMappingToken: MCPServerViewModel.PendingPolicyRunIDMappingToken?
+        if requireRunRouting, let runID = policy.runID {
+            let routed: Bool
+            if let tabID = policy.tabID {
+                mcpRoutingLog("Policy includes tab context - installing for tab=\(tabID) run=\(runID)")
+                let installation = await installTabContextFromPolicy(
+                    clientID: connectionID.uuidString,
+                    clientName: clientName,
+                    windowID: policy.windowID,
+                    tabID: tabID,
+                    runID: runID,
+                    signalRouting: false
+                )
+                routed = installation.routed
+                pendingPolicyRunIDMappingToken = installation.replacementToken
+            } else {
+                pendingPolicyRunIDMappingToken = await mapConnectionToRunIDForPendingPolicy(
+                    connectionID,
+                    runID: runID,
+                    windowID: policy.windowID
+                )
+                routed = pendingPolicyRunIDMappingToken != nil
+            }
+            #if DEBUG
+                debugRecordRunRoutingEvent(
+                    runID: runID,
+                    event: routed ? "run_route_mapped" : "run_route_mapping_failed",
+                    connectionID: connectionID,
+                    fields: [
+                        "client_name": clientName,
+                        "window_id": String(policy.windowID),
+                        "tab_id": policy.tabID?.uuidString ?? "nil"
+                    ]
+                )
+            #endif
+            guard routed else {
+                let reservationRolledBack = !policy.oneShot || rollbackOneShotPendingPolicyReservation(
+                    id: policy.id,
+                    key: matchedQueueEntry.key,
+                    connectionID: connectionID
+                )
+                await rollbackPendingPolicyApplication(
+                    policy,
+                    clientName: clientName,
+                    connectionID: connectionID,
+                    restorePoint: restorePoint,
+                    applicationID: pendingPolicyApplicationID,
+                    pendingPolicyRunIDMappingToken: pendingPolicyRunIDMappingToken
+                )
+                return .rejected(
+                    runID: runID,
+                    reason: reservationRolledBack ? "route_mapping_failed" : "policy_removed"
+                )
+            }
+
+            #if DEBUG
+                await debugSuspendPendingPolicyCommitIfNeeded()
+            #endif
+
+            let routeMappingToken = pendingPolicyRunIDMappingToken
+            let routeMappingIsCurrent = await MainActor.run {
+                routeMappingToken.map { token in
+                    guard let window = WindowStatesManager.shared.window(withID: policy.windowID) else {
+                        return false
+                    }
+                    return window.mcpServer.isCurrentPendingPolicyRunIDMapping(token)
+                } ?? true
+            }
+            guard routeMappingIsCurrent,
+                  isPendingPolicyApplicationOwner(
+                      pendingPolicyApplicationID,
+                      connectionID: connectionID,
+                      runID: policy.runID
+                  ),
+                  isPendingPolicyApplicationCurrent(
+                      connectionID: connectionID,
+                      clientName: clientName,
+                      expectedLifecycleGeneration: expectedLifecycleGeneration
+                  )
+            else {
+                if policy.oneShot {
+                    _ = rollbackOneShotPendingPolicyReservation(
+                        id: policy.id,
+                        key: matchedQueueEntry.key,
+                        connectionID: connectionID
+                    )
+                }
+                await rollbackPendingPolicyApplication(
+                    policy,
+                    clientName: clientName,
+                    connectionID: connectionID,
+                    restorePoint: restorePoint,
+                    applicationID: pendingPolicyApplicationID,
+                    pendingPolicyRunIDMappingToken: pendingPolicyRunIDMappingToken,
+                    signalRoutingFailure: false
+                )
+                return .rejected(runID: runID, reason: "stale_connection")
+            }
+        }
+
+        if policy.oneShot,
+           !consumeOneShotPendingPolicy(
+               id: policy.id,
+               key: matchedQueueEntry.key,
+               connectionID: connectionID
+           )
+        {
+            await rollbackPendingPolicyApplication(
+                policy,
+                clientName: clientName,
+                connectionID: connectionID,
+                restorePoint: restorePoint,
+                applicationID: pendingPolicyApplicationID,
+                pendingPolicyRunIDMappingToken: pendingPolicyRunIDMappingToken
+            )
+            return .rejected(runID: policy.runID, reason: "policy_removed")
+        }
+
+        finishPendingPolicyApplication(
+            pendingPolicyApplicationID,
+            connectionID: connectionID,
+            runID: policy.runID
+        )
+        if let pendingPolicyRunIDMappingToken {
+            schedulePendingPolicyConnectionReplacement(
+                pendingPolicyRunIDMappingToken,
+                windowID: policy.windowID
+            )
+        }
+        if requireRunRouting, let runID = policy.runID {
+            await MCPRoutingWaiter.notifyRouted(runID: runID)
         }
 
         let grantDescription = Self.describeGrantedTools(restricted: policy.restrictedTools)
@@ -6293,6 +7357,23 @@ actor ServerNetworkManager {
             "applied policy client=\(clientName) matchedKey=\(matchedQueueEntry.key) connection=\(connectionID) window=\(policy.windowID) purpose=\(policy.purpose.rawValue) oneShot=\(policy.oneShot) runID=\(policy.runID?.uuidString ?? "nil") tabID=\(policy.tabID?.uuidString ?? "nil") queueAfterPop=\(remainingAfterPop) queueAfterStore=\(remainingAfterRequeue)"
         )
         #if DEBUG
+            if let runID = policy.runID {
+                debugRecordRunRoutingEvent(
+                    runID: runID,
+                    event: "policy_applied",
+                    connectionID: connectionID,
+                    fields: [
+                        "client_name": clientName,
+                        "bootstrap_client_name": bootstrapClientName ?? "nil",
+                        "helper_peer_pid": clientPid.map(String.init) ?? "nil",
+                        "pending_policy_key": matchedQueueEntry.key,
+                        "window_id": String(policy.windowID),
+                        "tab_id": policy.tabID?.uuidString ?? "nil",
+                        "purpose": policy.purpose.rawValue,
+                        "queue_after_store": String(remainingAfterRequeue)
+                    ]
+                )
+            }
             AgentModePerfDiagnostics.event("mcp.policy.pendingPolicyApplied", fields: [
                 "connectionID": connectionID.uuidString,
                 "clientName": clientName,
@@ -6312,15 +7393,7 @@ actor ServerNetworkManager {
                 "queueAfterStore": String(remainingAfterRequeue)
             ])
         #endif
-        restrictedToolsByConnection[connectionID] = policy.restrictedTools
-        preassignedConnections.insert(connectionID)
-
-        // Install run purpose/cache first so persisted routing snapshots capture purpose.
-        runPurposeByConnection[connectionID] = policy.purpose
-        cacheRunPolicyStateIfNeeded(policy)
         if let runID = policy.runID {
-            admittedPolicyRunIDs.insert(runID)
-            runIDByConnectionID[connectionID] = runID
             updateLiveRunAffinity(
                 clientName: clientName,
                 sessionKey: connections[connectionID]?.capabilityToken ?? capabilityTokenByConnection[connectionID],
@@ -6330,31 +7403,169 @@ actor ServerNetworkManager {
             )
         }
 
-        // Install additional tools (policy-gated tools like ask_user)
-        if let additional = policy.additionalTools {
-            additionalToolsByConnection[connectionID] = additional
-        } else {
-            additionalToolsByConnection.removeValue(forKey: connectionID)
-        }
-
         setConnectionWindowMapping(connectionID, windowID: policy.windowID)
         mcpRoutingLog("Set window mapping connectionID=\(connectionID) → window=\(policy.windowID)")
 
-        // If policy includes tab context, install it directly
-        if let tabID = policy.tabID, let runID = policy.runID {
-            mcpRoutingLog("Policy includes tab context - installing for tab=\(tabID) run=\(runID)")
-            // Note: runID mapping is stored in MCPServerViewModel.connectionIDToRunID by installTabContext
-            await installTabContextFromPolicy(
-                clientID: connectionID.uuidString,
-                clientName: clientName,
-                windowID: policy.windowID,
-                tabID: tabID,
-                runID: runID
-            )
-        }
-
         await updateRoutingRecordForConnection(connectionID, clientID: clientName)
         await notifyToolListChanged(connectionID: connectionID)
+        return .applied(runID: policy.runID)
+    }
+
+    private func isPendingPolicyApplicationOwner(
+        _ applicationID: UUID,
+        connectionID: UUID,
+        runID: UUID?
+    ) -> Bool {
+        guard pendingPolicyApplicationIDByConnectionID[connectionID] == applicationID else { return false }
+        return runID.map { pendingPolicyApplicationIDByRunID[$0] == applicationID } ?? true
+    }
+
+    private func isPendingPolicyApplicationCurrent(
+        connectionID: UUID,
+        clientName: String,
+        expectedLifecycleGeneration: UInt64?
+    ) -> Bool {
+        if let expectedLifecycleGeneration {
+            return isCurrentConnection(connectionID, lifecycleGeneration: expectedLifecycleGeneration)
+        }
+        return pendingConnections[connectionID] == clientName
+    }
+
+    private func rollbackPendingPolicyApplication(
+        _ policy: ClientConnectionPolicy,
+        clientName: String,
+        connectionID: UUID,
+        restorePoint: PendingPolicyRestorePoint,
+        applicationID: UUID,
+        pendingPolicyRunIDMappingToken: MCPServerViewModel.PendingPolicyRunIDMappingToken? = nil,
+        signalRoutingFailure: Bool = true
+    ) async {
+        var mappingRollbackResult: MCPServerViewModel.PendingPolicyRunIDMappingRollbackResult?
+        if let runID = policy.runID {
+            mappingRollbackResult = await MainActor.run {
+                guard let window = WindowStatesManager.shared.window(withID: policy.windowID) else { return nil }
+                if let pendingPolicyRunIDMappingToken {
+                    return window.mcpServer.rollbackPendingPolicyRunIDMapping(
+                        pendingPolicyRunIDMappingToken,
+                        clientName: clientName,
+                        windowID: policy.windowID,
+                        signalRoutingFailure: signalRoutingFailure
+                    )
+                }
+                window.mcpServer.removeTabContext(
+                    forConnectionID: connectionID,
+                    clientName: clientName,
+                    windowID: policy.windowID,
+                    runID: runID
+                )
+                window.mcpServer.cleanupRunIDMapping(
+                    runID: runID,
+                    connectionID: connectionID,
+                    signalRoutingFailure: signalRoutingFailure
+                )
+                return .restored
+            }
+        }
+
+        var ownsConnectionState = pendingPolicyApplicationIDByConnectionID[connectionID] == applicationID
+        var ownsRunState = policy.runID.map { pendingPolicyApplicationIDByRunID[$0] == applicationID } ?? false
+        switch mappingRollbackResult {
+        case .supersededBySameConnection:
+            ownsConnectionState = false
+            ownsRunState = false
+        case .supersededByOtherConnection:
+            ownsRunState = false
+        case .restored, nil:
+            break
+        }
+        restorePendingPolicyState(
+            restorePoint,
+            connectionID: connectionID,
+            policyRunID: policy.runID,
+            restoreConnectionScopedState: ownsConnectionState,
+            restoreRunScopedState: ownsRunState
+        )
+        finishPendingPolicyApplication(
+            applicationID,
+            connectionID: connectionID,
+            runID: policy.runID
+        )
+    }
+
+    private func finishPendingPolicyApplication(
+        _ applicationID: UUID,
+        connectionID: UUID,
+        runID: UUID?
+    ) {
+        if pendingPolicyApplicationIDByConnectionID[connectionID] == applicationID {
+            pendingPolicyApplicationIDByConnectionID.removeValue(forKey: connectionID)
+        }
+        if let runID, pendingPolicyApplicationIDByRunID[runID] == applicationID {
+            pendingPolicyApplicationIDByRunID.removeValue(forKey: runID)
+        }
+    }
+
+    private func restorePendingPolicyState(
+        _ restorePoint: PendingPolicyRestorePoint,
+        connectionID: UUID,
+        policyRunID: UUID?,
+        restoreConnectionScopedState: Bool,
+        restoreRunScopedState: Bool
+    ) {
+        if restoreConnectionScopedState {
+            if let restrictedTools = restorePoint.restrictedTools {
+                restrictedToolsByConnection[connectionID] = restrictedTools
+            } else {
+                restrictedToolsByConnection.removeValue(forKey: connectionID)
+            }
+            if let additionalTools = restorePoint.additionalTools {
+                additionalToolsByConnection[connectionID] = additionalTools
+            } else {
+                additionalToolsByConnection.removeValue(forKey: connectionID)
+            }
+            if let runPurpose = restorePoint.runPurpose {
+                runPurposeByConnection[connectionID] = runPurpose
+            } else {
+                runPurposeByConnection.removeValue(forKey: connectionID)
+            }
+            if let windowID = restorePoint.windowID {
+                connectionWindowMap[connectionID] = windowID
+            } else {
+                connectionWindowMap.removeValue(forKey: connectionID)
+            }
+            if let windowAssignment = restorePoint.windowAssignment {
+                windowAssignmentByConnection[connectionID] = windowAssignment
+            } else {
+                windowAssignmentByConnection.removeValue(forKey: connectionID)
+            }
+            if let runID = restorePoint.runID {
+                runIDByConnectionID[connectionID] = runID
+            } else {
+                runIDByConnectionID.removeValue(forKey: connectionID)
+            }
+            if restorePoint.wasPreassigned {
+                preassignedConnections.insert(connectionID)
+            } else {
+                preassignedConnections.remove(connectionID)
+            }
+        }
+
+        guard restoreRunScopedState, let policyRunID else { return }
+        if restorePoint.wasRunAdmitted {
+            admittedPolicyRunIDs.insert(policyRunID)
+        } else {
+            admittedPolicyRunIDs.remove(policyRunID)
+        }
+        if let runPolicyState = restorePoint.runPolicyState {
+            runPolicyStateByRunID[policyRunID] = runPolicyState
+        } else {
+            runPolicyStateByRunID.removeValue(forKey: policyRunID)
+        }
+        if let runWindowID = restorePoint.runWindowID {
+            windowIDByRunID[policyRunID] = runWindowID
+        } else {
+            windowIDByRunID.removeValue(forKey: policyRunID)
+        }
     }
 
     /// Install tab context from a connection policy (for Context Builder agents)
@@ -6363,32 +7574,42 @@ actor ServerNetworkManager {
         clientName: String,
         windowID: Int,
         tabID: UUID,
-        runID: UUID
-    ) async {
-        let resolved = await MainActor.run { () -> (workspaceID: UUID, snapshot: ComposeTabState)? in
+        runID: UUID,
+        signalRouting: Bool = true
+    ) async -> (routed: Bool, replacementToken: MCPServerViewModel.PendingPolicyRunIDMappingToken?) {
+        let resolved = await MainActor.run {
+            () -> (
+                workspaceID: UUID,
+                snapshot: ComposeTabState,
+                routed: Bool,
+                replacementToken: MCPServerViewModel.PendingPolicyRunIDMappingToken?
+            )? in
             guard let windowState = WindowStatesManager.shared.window(withID: windowID) else {
                 return nil
             }
             guard let resolved = windowState.workspaceManager.resolveComposeTabRoutingSnapshot(for: tabID) else {
                 return nil
             }
-            windowState.mcpServer.installTabContext(
+            let replacementToken = windowState.mcpServer.installTabContext(
                 clientID: clientID,
                 clientName: clientName,
                 windowID: windowID,
                 workspaceID: resolved.workspaceID,
                 snapshot: resolved.snapshot,
-                runID: runID
+                runID: runID,
+                signalRouting: signalRouting,
+                deferRunIDReplacementForPendingPolicy: true
             )
-            return (resolved.workspaceID, resolved.snapshot)
+            let routed = replacementToken != nil
+            return (resolved.workspaceID, resolved.snapshot, routed, replacementToken)
         }
 
         guard let resolved else {
             log.warning("installTabContextFromPolicy: tab \(tabID) could not resolve routing snapshot in window \(windowID)")
-            return
+            return (false, nil)
         }
 
-        if let cached = runPolicyStateByRunID[runID] {
+        if resolved.routed, let cached = runPolicyStateByRunID[runID] {
             seedRunPolicyState(
                 runID: runID,
                 windowID: windowID,
@@ -6403,6 +7624,7 @@ actor ServerNetworkManager {
             )
         }
         connectionLog("Installed tab context from policy: tab=\(tabID) run=\(runID) window=\(windowID) workspace=\(resolved.workspaceID) client=\(clientName)")
+        return (resolved.routed, resolved.replacementToken)
     }
 
     @discardableResult
@@ -6548,6 +7770,7 @@ actor ServerNetworkManager {
             guard let self else { return ListTools.Result(tools: []) }
 
             connectionLog("Handling ListTools request for \(connectionID)")
+            let clientIdentifier = await clientIdentifier(forConnection: connectionID)
 
             // Safety net: ensure tool catalog is ready before returning list.
             // The primary readiness wait happens during handshake, but this catches edge cases.
@@ -6667,7 +7890,10 @@ actor ServerNetworkManager {
                                 name: tool.name,
                                 description: description,
                                 inputSchema: schemaValue,
-                                annotations: tool.annotations
+                                annotations: CodexMCPToolAnnotationProjection.project(
+                                    tool.annotations,
+                                    clientIdentifier: clientIdentifier
+                                )
                             )
                         )
                     }
@@ -6971,6 +8197,16 @@ actor ServerNetworkManager {
                 )
                 return await limiter.withPermit {
                     EditFlowPerf.end(EditFlowPerf.Stage.MCPToolCall.limiterWait, limiterWaitState)
+                    guard !Task.isCancelled,
+                          await !(self.executionWatchdogTerminalConnections.contains(connectionID))
+                    else {
+                        connectionLog("tools/call \(toolName): rejected after limiter because connection is terminal or cancelled")
+                        return Self.executionContractToolErrorResult(
+                            rawJSON: capturedRawJSON,
+                            code: "tool_execution_connection_terminal",
+                            message: "The MCP connection was closed after an earlier tool failed to stop."
+                        )
+                    }
                     EditFlowPerf.lifecycleEvent(
                         EditFlowPerf.Lifecycle.MCPToolCall.limiterAcquired,
                         correlation: lifecycleCorrelation,
@@ -7305,34 +8541,117 @@ actor ServerNetworkManager {
                                     }
                                 }
 
-                                @Sendable func dispatchResolvedProvider(_ operation: @Sendable () async throws -> Value) async throws -> Value {
+                                @Sendable func dispatchResolvedProvider(_ operation: @escaping @Sendable () async throws -> Value) async throws -> Value {
+                                    guard let contract = MCPToolExecutionContractCatalog.contract(for: toolName) else {
+                                        throw MCPToolExecutionDispatchError.missingContract(toolName: toolName)
+                                    }
+
+                                    let environment = await self.toolExecutionWatchdogEnvironment
+                                    let traceOrigin = await environment.now()
+                                    @Sendable func emitExecutionTrace(
+                                        _ phase: MCPToolExecutionTraceEvent.Phase,
+                                        cancellationRequested: Bool? = nil,
+                                        cancellationOutcome: String? = nil,
+                                        graceOutcome: String? = nil,
+                                        escalationReason: String? = nil
+                                    ) async {
+                                        let now = await environment.now()
+                                        MCPToolExecutionTracer.emit(MCPToolExecutionTraceEvent(
+                                            toolName: toolName,
+                                            connectionID: connectionID,
+                                            invocationID: invocationID,
+                                            runID: observerRunIDForCallbacksFinal,
+                                            contractKind: contract.kind,
+                                            executionDeadlineSeconds: contract.deadline?.mcpSeconds,
+                                            cleanupGraceSeconds: contract.cancellationGrace?.mcpSeconds,
+                                            phase: phase,
+                                            elapsedMilliseconds: max(0, now.mcpMilliseconds - traceOrigin.mcpMilliseconds),
+                                            cancellationRequested: cancellationRequested,
+                                            cancellationOutcome: cancellationOutcome,
+                                            graceOutcome: graceOutcome,
+                                            escalationReason: escalationReason
+                                        ))
+                                    }
+
+                                    await emitExecutionTrace(.contractSelected)
+                                    await emitExecutionTrace(.started)
                                     EditFlowPerf.lifecycleEvent(
                                         EditFlowPerf.Lifecycle.MCPToolCall.resolvedProviderBegan,
                                         correlation: lifecycleCorrelation,
                                         EditFlowPerf.Dimensions(toolName: toolName)
                                     )
-                                    do {
-                                        let value = try await EditFlowPerf.measure(
-                                            EditFlowPerf.Stage.MCPToolCall.resolvedProviderDispatch,
-                                            EditFlowPerf.Dimensions(toolName: toolName),
-                                            operation: operation
-                                        )
-                                        EditFlowPerf.lifecycleEvent(
-                                            EditFlowPerf.Lifecycle.MCPToolCall.resolvedProviderEnded,
-                                            correlation: lifecycleCorrelation,
-                                            EditFlowPerf.Dimensions(toolName: toolName, outcome: "success")
-                                        )
-                                        return value
-                                    } catch {
-                                        EditFlowPerf.lifecycleEvent(
-                                            EditFlowPerf.Lifecycle.MCPToolCall.resolvedProviderEnded,
-                                            correlation: lifecycleCorrelation,
-                                            EditFlowPerf.Dimensions(
-                                                toolName: toolName,
-                                                outcome: error is CancellationError ? "cancelled" : "error"
+
+                                    let tracedOperation: @Sendable () async throws -> Value = {
+                                        do {
+                                            let value = try await EditFlowPerf.measure(
+                                                EditFlowPerf.Stage.MCPToolCall.resolvedProviderDispatch,
+                                                EditFlowPerf.Dimensions(toolName: toolName),
+                                                operation: operation
                                             )
-                                        )
-                                        throw error
+                                            await emitExecutionTrace(.handlerCompleted, cancellationOutcome: "success")
+                                            EditFlowPerf.lifecycleEvent(
+                                                EditFlowPerf.Lifecycle.MCPToolCall.resolvedProviderEnded,
+                                                correlation: lifecycleCorrelation,
+                                                EditFlowPerf.Dimensions(toolName: toolName, outcome: "success")
+                                            )
+                                            return value
+                                        } catch {
+                                            let outcome = MCPToolExecutionCancelledError.matches(error) ? "cancelled" : "error"
+                                            await emitExecutionTrace(.handlerCompleted, cancellationOutcome: outcome)
+                                            EditFlowPerf.lifecycleEvent(
+                                                EditFlowPerf.Lifecycle.MCPToolCall.resolvedProviderEnded,
+                                                correlation: lifecycleCorrelation,
+                                                EditFlowPerf.Dimensions(toolName: toolName, outcome: outcome)
+                                            )
+                                            throw error
+                                        }
+                                    }
+
+                                    switch contract {
+                                    case let .bounded(deadline, cancellationGrace):
+                                        do {
+                                            return try await MCPToolExecutionWatchdog.execute(
+                                                deadline: deadline,
+                                                cancellationGrace: cancellationGrace,
+                                                environment: environment,
+                                                onEvent: { event in
+                                                    switch event {
+                                                    case .deadlineExpired:
+                                                        await emitExecutionTrace(.deadlineExpired)
+                                                    case .cancellationRequested:
+                                                        await emitExecutionTrace(.cancellationRequested, cancellationRequested: true)
+                                                    case let .settledDuringGrace(settlement):
+                                                        await emitExecutionTrace(
+                                                            .settledDuringGrace,
+                                                            cancellationRequested: true,
+                                                            cancellationOutcome: settlement.rawValue,
+                                                            graceOutcome: "settled"
+                                                        )
+                                                    case .cleanupGraceExpired:
+                                                        await emitExecutionTrace(
+                                                            .cleanupGraceExpired,
+                                                            cancellationRequested: true,
+                                                            graceOutcome: "expired",
+                                                            escalationReason: "handler_ignored_cancellation"
+                                                        )
+                                                    }
+                                                },
+                                                operation: tracedOperation
+                                            )
+                                        } catch MCPToolExecutionWatchdogError.cleanupUnresponsive {
+                                            await emitExecutionTrace(
+                                                .connectionForceDisconnectRequested,
+                                                cancellationRequested: true,
+                                                graceOutcome: "expired",
+                                                escalationReason: "handler_ignored_cancellation"
+                                            )
+                                            throw MCPToolExecutionWatchdogError.cleanupUnresponsive
+                                        }
+                                    case .longSynchronousCancellable,
+                                         .lifecycleManagedCancellable,
+                                         .interactiveCancellable,
+                                         .workspaceLifecycleCancellable:
+                                        return try await tracedOperation()
                                     }
                                 }
 
@@ -7342,12 +8661,87 @@ actor ServerNetworkManager {
                                         correlation: lifecycleCorrelation,
                                         EditFlowPerf.Dimensions(toolName: toolName, outcome: outcome)
                                     )
+                                    MCPResponseDeliveryTracer.emit(MCPResponseDeliveryTraceEvent(
+                                        layer: "app_tool_handler",
+                                        phase: "handler_result_ready",
+                                        connectionID: connectionID.uuidString,
+                                        method: "tools/call",
+                                        tool: toolName,
+                                        invocationID: invocationID.uuidString,
+                                        lifecycleState: outcome
+                                    ))
                                     return EditFlowPerf.measure(
                                         EditFlowPerf.Stage.MCPToolCall.handlerResultHandoff,
                                         EditFlowPerf.Dimensions(toolName: toolName, outcome: outcome)
                                     ) {
                                         result
                                     }
+                                }
+
+                                @Sendable func executionContractFailureResult(
+                                    for error: Error,
+                                    context: String
+                                ) async -> CallTool.Result? {
+                                    let code: String
+                                    let message: String
+                                    let outcome: String
+                                    let shouldForceDisconnect: Bool
+
+                                    switch error {
+                                    case let MCPToolExecutionDispatchError.missingContract(missingToolName):
+                                        code = "tool_execution_contract_missing"
+                                        message = "No declared execution contract exists for MCP tool '\(missingToolName)'."
+                                        outcome = "executionContractMissing"
+                                        shouldForceDisconnect = false
+                                    case let MCPToolExecutionWatchdogError.executionTimedOut(settlement):
+                                        code = "tool_execution_timeout"
+                                        message = "Tool '\(toolName)' exceeded its \(MCPTimeoutPolicy.boundedToolExecutionDeadlineSeconds)-second execution contract and settled as \(settlement.rawValue) during cancellation grace."
+                                        outcome = "executionTimeout"
+                                        shouldForceDisconnect = false
+                                    case MCPToolExecutionWatchdogError.cleanupUnresponsive:
+                                        code = "tool_execution_cleanup_unresponsive"
+                                        message = "Tool '\(toolName)' exceeded its \(MCPTimeoutPolicy.boundedToolExecutionDeadlineSeconds)-second execution contract and did not stop during cancellation grace. The MCP connection was force-disconnected."
+                                        outcome = "executionCleanupUnresponsive"
+                                        shouldForceDisconnect = true
+                                    default:
+                                        return nil
+                                    }
+
+                                    log.error("MCP execution contract failure tool=\(toolName) context=\(context) code=\(code)")
+                                    let errorJSON = ToolOutputFormatter.rawJSONString(.object([
+                                        "code": .string(code),
+                                        "error": .string(message),
+                                        "tool": .string(toolName)
+                                    ]))
+                                    if let runID = await self.toolTrackingRunIDForCompletion(
+                                        callTimeRunID: observerRunIDForCallbacksFinal,
+                                        connectionID: connectionID,
+                                        toolName: toolName,
+                                        invocationID: invocationID,
+                                        context: "\(context) execution contract failure"
+                                    ) {
+                                        _ = await self.fireToolCompletedObservers(
+                                            runID: runID,
+                                            invocationID: invocationID,
+                                            toolName: toolName,
+                                            args: nil,
+                                            resultJSON: errorJSON,
+                                            isError: true
+                                        )
+                                    }
+
+                                    let result = Self.executionContractToolErrorResult(
+                                        rawJSON: capturedRawJSON,
+                                        code: code,
+                                        message: message
+                                    )
+                                    if shouldForceDisconnect {
+                                        await self.abortConnectionForExecutionWatchdog(connectionID)
+                                        // The transport is already severed. Deliberately skip handlerResult so
+                                        // execution-completion tracing cannot be mistaken for response delivery.
+                                        return result
+                                    }
+                                    return handlerResult(result, outcome: outcome)
                                 }
 
                                 let serviceToolLookupState = EditFlowPerf.begin(
@@ -7432,6 +8826,15 @@ actor ServerNetworkManager {
                                     EditFlowPerf.end(EditFlowPerf.Stage.MCPToolCall.serviceToolLookup, serviceToolLookupState)
                                     endPermitPreDispatchEnvelopeIfNeeded()
 
+                                    let resolvedOperation: @Sendable () async throws -> Value = {
+                                        #if DEBUG
+                                            if let operation = await self.debugResolvedToolOperationOverrides[toolName] {
+                                                return try await operation()
+                                            }
+                                        #endif
+                                        return try await toolDef.callAsFunction(effectiveArgs)
+                                    }
+
                                     // Now dispatch. If window-scoped, wrap in ownership scope (fallback to service window).
                                     if let wsSvc, shouldTrackToolOwnership {
                                         let ownershipWindowID = chosenID ?? wsSvc.windowID
@@ -7445,9 +8848,7 @@ actor ServerNetworkManager {
                                                     EditFlowPerf.Stage.MCPToolCall.dispatch,
                                                     EditFlowPerf.Dimensions(toolName: toolName)
                                                 ) {
-                                                    try await dispatchResolvedProvider {
-                                                        try await toolDef.callAsFunction(effectiveArgs)
-                                                    }
+                                                    try await dispatchResolvedProvider(resolvedOperation)
                                                 }
                                                 let permitPostDispatchEnvelopeState = EditFlowPerf.begin(
                                                     EditFlowPerf.Stage.MCPToolCall.permitPostDispatchEnvelope,
@@ -7512,6 +8913,12 @@ actor ServerNetworkManager {
                                                 )
                                             }
                                         } catch {
+                                            if let failure = await executionContractFailureResult(
+                                                for: error,
+                                                context: "window-scoped"
+                                            ) {
+                                                return failure
+                                            }
                                             let permitPostDispatchEnvelopeState = EditFlowPerf.begin(
                                                 EditFlowPerf.Stage.MCPToolCall.permitPostDispatchEnvelope,
                                                 EditFlowPerf.Dimensions(toolName: toolName, outcome: "dispatchError")
@@ -7558,9 +8965,7 @@ actor ServerNetworkManager {
                                                 EditFlowPerf.Stage.MCPToolCall.dispatch,
                                                 EditFlowPerf.Dimensions(toolName: toolName)
                                             ) {
-                                                try await dispatchResolvedProvider {
-                                                    try await toolDef.callAsFunction(effectiveArgs)
-                                                }
+                                                try await dispatchResolvedProvider(resolvedOperation)
                                             }
                                             let permitPostDispatchEnvelopeState = EditFlowPerf.begin(
                                                 EditFlowPerf.Stage.MCPToolCall.permitPostDispatchEnvelope,
@@ -7622,6 +9027,12 @@ actor ServerNetworkManager {
                                                 outcome: "success"
                                             )
                                         } catch {
+                                            if let failure = await executionContractFailureResult(
+                                                for: error,
+                                                context: "global"
+                                            ) {
+                                                return failure
+                                            }
                                             let permitPostDispatchEnvelopeState = EditFlowPerf.begin(
                                                 EditFlowPerf.Stage.MCPToolCall.permitPostDispatchEnvelope,
                                                 EditFlowPerf.Dimensions(toolName: toolName, outcome: "dispatchError")
@@ -8281,6 +9692,24 @@ actor ServerNetworkManager {
         return await limiter.activeCount() > 0
     }
 
+    #if DEBUG
+        func connectionLimiterSnapshotForTesting(
+            connectionID: UUID
+        ) async -> AsyncLimiter.DebugSnapshot? {
+            guard let limiter = callLimiters[connectionID] else { return nil }
+            return await limiter.debugSnapshot()
+        }
+
+        func setConnectionLimiterStateObserverForTesting(
+            connectionID: UUID,
+            observer: ((AsyncLimiter.DebugSnapshot) -> Void)?
+        ) async -> Bool {
+            guard let limiter = callLimiters[connectionID] else { return false }
+            await limiter.setDebugStateObserver(observer)
+            return true
+        }
+    #endif
+
     private func oldestEvictableConnectionID() async -> UUID? {
         let threshold = pressureEvictIdleSeconds
         guard threshold > 0 else { return nil }
@@ -8468,6 +9897,16 @@ actor AsyncLimiter {
     /// Tracks the number of tasks currently inside withPermit (including queued ones)
     private var inFlight: Int = 0
 
+    #if DEBUG
+        struct DebugSnapshot: Equatable {
+            let permits: Int
+            let waiterCount: Int
+            let inFlight: Int
+        }
+
+        private var debugStateObserver: ((DebugSnapshot) -> Void)?
+    #endif
+
     init(limit: Int) {
         self.limit = max(1, limit)
         permits = max(1, limit)
@@ -8477,9 +9916,13 @@ actor AsyncLimiter {
     private func acquirePermit() async {
         if permits > 0 {
             permits -= 1
+            notifyDebugStateChanged()
             return
         }
-        await withCheckedContinuation { waiters.append($0) }
+        await withCheckedContinuation {
+            waiters.append($0)
+            notifyDebugStateChanged()
+        }
         // When resumed, the caller now has a permit (recycled from a release)
     }
 
@@ -8492,6 +9935,7 @@ actor AsyncLimiter {
         } else {
             permits = min(permits + 1, limit)
         }
+        notifyDebugStateChanged()
     }
 
     /// Number of in-flight operations (0 means idle).
@@ -8500,12 +9944,43 @@ actor AsyncLimiter {
         inFlight
     }
 
+    #if DEBUG
+        func debugSnapshot() -> DebugSnapshot {
+            makeDebugSnapshot()
+        }
+
+        func setDebugStateObserver(
+            _ observer: ((DebugSnapshot) -> Void)?
+        ) {
+            debugStateObserver = observer
+            observer?(makeDebugSnapshot())
+        }
+
+        private func makeDebugSnapshot() -> DebugSnapshot {
+            DebugSnapshot(
+                permits: permits,
+                waiterCount: waiters.count,
+                inFlight: inFlight
+            )
+        }
+
+        private func notifyDebugStateChanged() {
+            debugStateObserver?(makeDebugSnapshot())
+        }
+    #else
+        private func notifyDebugStateChanged() {}
+    #endif
+
     /// Executes an operation with a permit, limiting concurrency.
     func withPermit<T>(
         _ op: @Sendable () async throws -> T
     ) async rethrows -> T {
         inFlight += 1
-        defer { inFlight -= 1 }
+        notifyDebugStateChanged()
+        defer {
+            inFlight -= 1
+            notifyDebugStateChanged()
+        }
         await acquirePermit()
         defer { releasePermit() }
         return try await op()

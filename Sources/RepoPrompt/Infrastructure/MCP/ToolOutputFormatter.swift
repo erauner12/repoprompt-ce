@@ -171,11 +171,17 @@ enum ToolOutputFormatter {
     private static func searchErrorResults(dto: ToolResultDTOs.SearchResultDTO, error: String) -> String {
         var lines: [String] = []
         let isBackpressure = dto.errorCode == "search_backpressure" && dto.retryable == true
-        lines.append(isBackpressure ? "## Search Results ⚠️" : "## Search Results ❌")
+        let isWorktreeUnavailable = dto.errorCode == "worktree_scope_unavailable" && dto.retryable == true
+        lines.append((isBackpressure || isWorktreeUnavailable) ? "## Search Results ⚠️" : "## Search Results ❌")
         if isBackpressure {
             lines.append("- **Status**: Temporarily busy")
+        } else if isWorktreeUnavailable {
+            lines.append("- **Status**: Worktree unavailable")
         }
         lines.append("- **Error**: \(error)")
+        if let errorCode = dto.errorCode, !errorCode.isEmpty {
+            lines.append("- **Code**: \(errorCode)")
+        }
         if dto.retryable == true {
             lines.append("- **Retryable**: yes")
         }
