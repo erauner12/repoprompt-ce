@@ -1,4 +1,4 @@
-.PHONY: doctor setup install-format-tools format-tools-status format format-check lint install-debug-cli uninstall-debug-cli debug-cli-status resolve build run test guardrails conductor-selftest release-selftest release-sync-cli-version release-preflight release-artifact install-local-production dev-status dev-build dev-swift-build dev-run dev-test dev-provider-test dev-smoke dev-smoke-launch dev-format dev-format-check dev-lint dev-format-tools-status dev-check-format-tools dev-install-format-tools dev-release-preflight dev-release-artifact dev-install-local-production dev-stop-app dev-daemon-stop clean
+.PHONY: doctor setup install-format-tools format-tools-status format format-check lint install-debug-cli uninstall-debug-cli debug-cli-status resolve build run test guardrails conductor-selftest release-selftest release-sync-cli-version release-preflight release-artifact install-local-production smoke-network-mcp-http dev-smoke-network-mcp-http dev-status dev-build dev-swift-build dev-run dev-test dev-provider-test dev-smoke dev-smoke-launch dev-format dev-format-check dev-lint dev-format-tools-status dev-check-format-tools dev-install-format-tools dev-release-preflight dev-release-artifact dev-install-local-production dev-stop-app dev-daemon-stop clean
 
 PRODUCT ?= all
 
@@ -72,6 +72,11 @@ release-artifact:
 
 install-local-production:
 	./Scripts/install_local_production.sh
+
+smoke-network-mcp-http:
+	./Scripts/smoke_network_mcp_http_loopback.sh
+
+dev-smoke-network-mcp-http: smoke-network-mcp-http
 
 dev-status:
 	./conductor status

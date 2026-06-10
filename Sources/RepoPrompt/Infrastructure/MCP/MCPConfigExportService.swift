@@ -145,6 +145,8 @@ actor MCPConfigExportService {
             "Non-loopback LAN clients require approval in RepoPrompt the first time they connect.",
             "Streamable HTTP uses `POST /mcp` for client messages, same-endpoint `GET /mcp` SSE for attached session streams, and `DELETE /mcp` for session termination.",
             "Long-running `context_builder` and `oracle_send` calls use the SDK Streamable HTTP SSE transport; keep the client session open for the tool result instead of relying on a separate job-control flow.",
+            "For OpenClaw, configure a generous MCP call timeout for RepoPrompt (at least 300s, 600s for broad `context_builder` planning/review calls); short client timeouts can leave server-side context/oracle work partially completed after the client gives up.",
+            "Recovering after client timeout: do not assume RepoPrompt canceled the work. Inspect the newest RepoPrompt tab/chat, use `bind_context list` or `workspace_context` to confirm the active state, then continue the recovered `context_builder` chat with `oracle_send` when appropriate.",
             "Use existing `export_response: true` options when you need durable response artifacts.",
             "Remote clients use the existing RepoPrompt MCP tool catalog after bearer authentication, remote-client approval, and default-target routing. High-impact/mutating tools still rely on the existing tool behavior, approvals, and workspace routing; configure the default target carefully.",
             "Do not expose or port-forward this HTTP endpoint; use it only on loopback or trusted private LANs."
