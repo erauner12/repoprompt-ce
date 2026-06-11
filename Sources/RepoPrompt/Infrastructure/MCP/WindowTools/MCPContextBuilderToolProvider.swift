@@ -206,7 +206,8 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
             try dependencies.makeOracleExportDestination(
                 workspace,
                 targetWindow.windowID,
-                finalTabID
+                finalTabID,
+                workspaceContext?.lookupContext ?? .visibleWorkspace
             )
         } else {
             nil

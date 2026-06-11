@@ -62,7 +62,8 @@ struct MCPWindowToolDependencies {
     typealias MakeOracleExportDestination = @MainActor @Sendable (
         _ workspace: WorkspaceModel?,
         _ windowID: Int,
-        _ tabID: UUID?
+        _ tabID: UUID?,
+        _ lookupContext: WorkspaceLookupContext
     ) throws -> OracleExportDestination
     typealias ResolveDefaultOracleExportPath = @MainActor @Sendable (
         _ mode: String,
@@ -174,7 +175,7 @@ struct MCPWindowToolDependencies {
         _ metadata: MCPServerViewModel.RequestMetadata,
         _ mutated: Bool
     ) async -> MCPServerViewModel.MCPSelectionPersistenceVerification?
-    typealias MakeSelectionHintError = @MainActor @Sendable (_ paths: [String], _ operation: String, _ lookupRootScope: WorkspaceLookupRootScope) async -> String
+    typealias MakeSelectionHintError = @MainActor @Sendable (_ paths: [String], _ operation: String, _ lookupContext: WorkspaceLookupContext) async -> String
     typealias PerformFileAction = @MainActor @Sendable (_ action: String, _ path: String, _ content: String?, _ newPath: String?, _ ifExists: String?) async throws -> String?
     typealias BuildCodeStructureDTO = @MainActor @Sendable (_ files: [WorkspaceFileRecord], _ maxResults: Int, _ includeUnmappedPaths: Bool, _ lookupContext: WorkspaceLookupContext) async throws -> ToolResultDTOs.SelectedCodeStructureDTO
     typealias ResolveFilesForCodeStructure = @MainActor @Sendable (_ paths: [String], _ lookupRootScope: WorkspaceLookupRootScope) async throws -> [WorkspaceFileRecord]
