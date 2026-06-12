@@ -732,11 +732,11 @@ extension MCPServerViewModel {
         guard let manager = workspaceManager else {
             throw TabBindError.missingWorkspace
         }
-        guard let captured = manager.collectMCPTabContextComposeSnapshot(
+        guard let stored = manager.collectMCPTabContextComposeSnapshot(
             tabID: tabID,
             workspaceID: requestedWorkspaceID,
-            captureActiveUIState: captureActiveUIState,
-            flushPendingUISelection: flushActiveSelection
+            captureActiveUIState: false,
+            flushPendingUISelection: false
         ) else {
             if let requestedWorkspaceID,
                !manager.workspaces.contains(where: { $0.id == requestedWorkspaceID })
@@ -746,7 +746,23 @@ extension MCPServerViewModel {
             throw TabBindError.tabNotFound(tabID)
         }
 
-        let snapshot = captured.snapshot
+        let storedSnapshot = stored.snapshot
+        let worktreeBindings = storedSnapshot.activeAgentSessionID.map {
+            agentWorktreeBindingsProvider?($0, storedSnapshot.id) ?? []
+        } ?? []
+        let preserveStoredSelection = !worktreeBindings.isEmpty
+        let captured = manager.collectMCPTabContextComposeSnapshot(
+            tabID: tabID,
+            workspaceID: stored.workspaceID,
+            captureActiveUIState: captureActiveUIState,
+            // Worktree-only paths intentionally are not mirrored into the logical base UI.
+            // Flushing that UI would erase the canonical tab selection on the next request.
+            flushPendingUISelection: flushActiveSelection && !preserveStoredSelection
+        ) ?? stored
+        var snapshot = captured.snapshot
+        if preserveStoredSelection {
+            snapshot.selection = storedSnapshot.selection
+        }
         return TabContextSnapshot(
             tabID: snapshot.id,
             windowID: windowID,
@@ -757,7 +773,7 @@ extension MCPServerViewModel {
             tabName: snapshot.name,
             runID: runID,
             activeAgentSessionID: snapshot.activeAgentSessionID,
-            worktreeBindings: snapshot.activeAgentSessionID.map { agentWorktreeBindingsProvider?($0, snapshot.id) ?? [] } ?? [],
+            worktreeBindings: worktreeBindings,
             explicitlyBound: explicitlyBound
         )
     }

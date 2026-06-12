@@ -113,7 +113,7 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
         XCTAssertTrue(formattedStart.contains("Agent Created WT"), formattedStart)
     }
 
-    func testBoundChildManageSelectionPersistsWorktreeOnlyFile() async throws {
+    func testWorktreeBoundManageSelectionPersistsAcrossOneShotContextConnections() async throws {
         let fixture = try Self.makeGitFixture()
         defer { try? FileManager.default.removeItem(at: fixture.sandbox) }
 
@@ -148,38 +148,44 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
             "session_id": .string(sessionID.uuidString)
         ])
 
-        let connectionID = UUID()
-        try window.mcpServer.bindTabForConnection(
-            connectionID: connectionID,
-            clientName: "bound-selection-regression",
+        let contextHint = MCPServerViewModel.TabContextHint(
             tabID: tabID,
             workspaceID: workspaceID,
             windowID: window.windowID
         )
-        let setValue = try await ServerNetworkManager.withConnectionID(connectionID) {
-            try await manageSelection([
-                "op": .string("set"),
-                "paths": .array([.string("WorktreeOnly.swift")]),
-                "mode": .string("full"),
-                "view": .string("files"),
-                "path_display": .string("full"),
-                "strict": .bool(true)
-            ])
+        let firstConnectionID = UUID()
+        let setValue = try await ServerNetworkManager.withConnectionID(firstConnectionID) {
+            try await ServerNetworkManager.$currentTabContextHint.withValue(contextHint) {
+                try await manageSelection([
+                    "op": .string("set"),
+                    "paths": .array([.string("WorktreeOnly.swift")]),
+                    "mode": .string("full"),
+                    "view": .string("files"),
+                    "path_display": .string("full"),
+                    "strict": .bool(true)
+                ])
+            }
         }
 
         let logicalPath = fixture.repo.appendingPathComponent("WorktreeOnly.swift").path
         XCTAssertEqual(try Self.selectionPaths(setValue), [logicalPath])
         XCTAssertEqual(window.workspaceManager.composeTab(with: tabID)?.selection.selectedPaths, [logicalPath])
+        XCTAssertTrue(window.fileManager.snapshotSelection().selectedPaths.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: logicalPath))
 
-        let getValue = try await ServerNetworkManager.withConnectionID(connectionID) {
-            try await manageSelection([
-                "op": .string("get"),
-                "view": .string("files"),
-                "path_display": .string("full")
-            ])
+        let secondConnectionID = UUID()
+        let getValue = try await ServerNetworkManager.withConnectionID(secondConnectionID) {
+            try await ServerNetworkManager.$currentTabContextHint.withValue(contextHint) {
+                try await manageSelection([
+                    "op": .string("get"),
+                    "view": .string("files"),
+                    "path_display": .string("full")
+                ])
+            }
         }
         XCTAssertEqual(try Self.selectionPaths(getValue), [logicalPath])
+        XCTAssertEqual(window.workspaceManager.composeTab(with: tabID)?.selection.selectedPaths, [logicalPath])
+        XCTAssertTrue(window.fileManager.snapshotSelection().selectedPaths.isEmpty)
     }
 
     func testManageWorktreeMergePreviewCleanApplyRawAndFormattedContract() async throws {
