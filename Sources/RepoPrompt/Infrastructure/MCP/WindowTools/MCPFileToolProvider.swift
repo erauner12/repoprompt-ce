@@ -354,22 +354,16 @@ final class MCPFileToolProvider: MCPWindowToolProviding {
             try await dependencies.readFile(resolvedPath, startLine1Based, limit, lookupContext.rootScope)
         }
         try Task.checkCancellation()
-        readResult = EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.providerReplyProjection) {
-            let projectedDisplayPath = readResult.reply.displayPath.map { displayPath in
-                lookupContext.bindingProjection?.projectedLogicalDisplayPath(forPhysicalPath: displayPath) ?? displayPath
-            }
-            return (
-                ToolResultDTOs.ReadFileReply(
-                    content: readResult.reply.content,
-                    totalLines: readResult.reply.totalLines,
-                    firstLine: readResult.reply.firstLine,
-                    lastLine: readResult.reply.lastLine,
-                    message: readResult.reply.message,
-                    displayPath: projectedDisplayPath,
-                    worktreeScope: worktreeScope
-                ),
-                readResult.shouldAutoSelect
+        let projectedDisplayPath = readResult.reply.displayPath.map { displayPath in
+            lookupContext.bindingProjection?.projectedLogicalDisplayPath(forPhysicalPath: displayPath) ?? displayPath
+        }
+        readResult = try await EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.providerReplyProjection) {
+            let reply = try await MCPReadFileToolProjection.projectReply(
+                readResult.reply,
+                displayPath: projectedDisplayPath,
+                worktreeScope: worktreeScope
             )
+            return (reply, readResult.shouldAutoSelect)
         }
         try Task.checkCancellation()
         await EditFlowPerf.measure(
@@ -381,8 +375,11 @@ final class MCPFileToolProvider: MCPWindowToolProviding {
             }
         }
         try Task.checkCancellation()
-        let value = try EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.providerValueEncoding) {
-            try Value(readResult.reply)
+        let value = try await EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.providerValueEncoding) {
+            try await MCPProviderProjectionWorker.encode(
+                readResult.reply,
+                toolName: MCPWindowToolName.readFile
+            )
         }
         EditFlowPerf.lifecycleEvent(EditFlowPerf.Lifecycle.ReadFile.providerResultReady)
         return value

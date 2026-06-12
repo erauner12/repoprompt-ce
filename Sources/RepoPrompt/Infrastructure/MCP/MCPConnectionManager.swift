@@ -341,7 +341,10 @@ private final class BootstrapTransferredSocketLedger: @unchecked Sendable {
 }
 
 enum MCPConnectionCallLane: String, CaseIterable {
+    /// Legacy diagnostics name for the explicit exclusive class.
     case ordinary
+    case smallRead = "small_read"
+    case gitRead = "git_read"
     case fileSearch = "file_search"
 }
 
@@ -362,14 +365,20 @@ actor ServerNetworkManager {
         toolNameAliases[name] ?? name
     }
 
-    nonisolated static func callLane(forCanonicalToolName toolName: String) -> MCPConnectionCallLane {
-        toolName == MCPWindowToolName.search ? .fileSearch : .ordinary
+    nonisolated static func admissionClass(forCanonicalToolName toolName: String) -> MCPToolAdmissionClass? {
+        MCPToolAdmissionPolicy.classification(forCanonicalToolName: toolName)
     }
 
-    /// Bounded concurrent `file_search` permits per connection. Sized to the parallel
-    /// read-only tool batches agent clients emit, and aligned with the per-workspace
-    /// broad-search active capacity so one connection's burst cannot exceed it.
-    nonisolated static let fileSearchCallLaneLimit = 4
+    nonisolated static func callLane(forCanonicalToolName toolName: String) -> MCPConnectionCallLane? {
+        admissionClass(forCanonicalToolName: toolName)?.connectionLane
+    }
+
+    nonisolated static let smallReadCallLaneLimit = MCPToolAdmissionPolicy.smallReadConnectionLimit
+    nonisolated static let gitReadCallLaneLimit = MCPToolAdmissionPolicy.gitReadConnectionLimit
+
+    /// Bounded concurrent `file_search` permits per connection. This remains aligned with
+    /// PR #155's per-workspace broad-search active capacity.
+    nonisolated static let fileSearchCallLaneLimit = MCPToolAdmissionPolicy.fileSearchConnectionLimit
 
     private static func validatedLiveRunID(
         candidateRunID: UUID,
@@ -1038,6 +1047,8 @@ actor ServerNetworkManager {
         }
 
         private let ordinary: AsyncLimiter
+        private let smallRead: AsyncLimiter
+        private let gitRead: AsyncLimiter
         private let fileSearch: AsyncLimiter
         private var admittedCallCount = 0
         private var admissionCloseState: AdmissionCloseState = .open
@@ -1046,17 +1057,23 @@ actor ServerNetworkManager {
         #if DEBUG
             init(
                 limit: Int,
+                smallReadLimit: Int,
+                gitReadLimit: Int,
                 fileSearchLimit: Int,
                 idleWaitSleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
                     try await Task.sleep(for: duration)
                 }
             ) {
                 ordinary = AsyncLimiter(limit: limit, idleWaitSleep: idleWaitSleep)
+                smallRead = AsyncLimiter(limit: smallReadLimit, idleWaitSleep: idleWaitSleep)
+                gitRead = AsyncLimiter(limit: gitReadLimit, idleWaitSleep: idleWaitSleep)
                 fileSearch = AsyncLimiter(limit: fileSearchLimit, idleWaitSleep: idleWaitSleep)
             }
         #else
-            init(limit: Int, fileSearchLimit: Int) {
+            init(limit: Int, smallReadLimit: Int, gitReadLimit: Int, fileSearchLimit: Int) {
                 ordinary = AsyncLimiter(limit: limit)
+                smallRead = AsyncLimiter(limit: smallReadLimit)
+                gitRead = AsyncLimiter(limit: gitReadLimit)
                 fileSearch = AsyncLimiter(limit: fileSearchLimit)
             }
         #endif
@@ -1077,13 +1094,124 @@ actor ServerNetworkManager {
 
         func withPermit<T>(
             lane: MCPConnectionCallLane,
+            toolName: String? = nil,
+            lifecycleCorrelation: EditFlowPerf.LifecycleCorrelation? = nil,
+            ownerResource: String? = nil,
+            ownerWindowID: Int? = nil,
+            ownerRunID: String? = nil,
             _ operation: @Sendable () async throws -> T
         ) async throws -> T {
             guard case .open = admissionCloseState else { throw AdmissionRejected() }
             admittedCallCount += 1
             defer { admittedCallCount -= 1 }
-            return try await limiter(for: lane).withPermit(operation)
+
+            let laneLimiter = limiter(for: lane)
+            #if DEBUG
+                let queuedSnapshot = await laneLimiter.debugSnapshot()
+                EditFlowPerf.lifecycleEvent(
+                    EditFlowPerf.Lifecycle.MCPToolCall.permitQueued,
+                    correlation: lifecycleCorrelation,
+                    EditFlowPerf.Dimensions(
+                        toolName: toolName,
+                        outcome: "queued",
+                        activeCount: queuedSnapshot.activePermitCount,
+                        admissionClass: lane.rawValue,
+                        queueDepth: queuedSnapshot.waiterCount + (queuedSnapshot.permits == 0 ? 1 : 0),
+                        windowID: ownerWindowID,
+                        runID: ownerRunID,
+                        ownerResource: ownerResource,
+                        permitActive: false,
+                        publicationPending: false,
+                        terminalBarrier: false
+                    )
+                )
+            #endif
+
+            do {
+                let result = try await laneLimiter.withPermit {
+                    #if DEBUG
+                        let acquiredSnapshot = await laneLimiter.debugSnapshot()
+                        EditFlowPerf.lifecycleEvent(
+                            EditFlowPerf.Lifecycle.MCPToolCall.permitAcquired,
+                            correlation: lifecycleCorrelation,
+                            EditFlowPerf.Dimensions(
+                                toolName: toolName,
+                                outcome: "acquired",
+                                activeCount: acquiredSnapshot.activePermitCount,
+                                admissionClass: lane.rawValue,
+                                queueDepth: acquiredSnapshot.waiterCount,
+                                windowID: ownerWindowID,
+                                runID: ownerRunID,
+                                ownerResource: ownerResource,
+                                permitActive: true,
+                                publicationPending: false,
+                                terminalBarrier: false
+                            )
+                        )
+                    #endif
+                    return try await operation()
+                }
+                #if DEBUG
+                    await recordPermitReleased(
+                        laneLimiter: laneLimiter,
+                        lane: lane,
+                        toolName: toolName,
+                        lifecycleCorrelation: lifecycleCorrelation,
+                        ownerResource: ownerResource,
+                        ownerWindowID: ownerWindowID,
+                        ownerRunID: ownerRunID,
+                        outcome: "completed"
+                    )
+                #endif
+                return result
+            } catch {
+                #if DEBUG
+                    await recordPermitReleased(
+                        laneLimiter: laneLimiter,
+                        lane: lane,
+                        toolName: toolName,
+                        lifecycleCorrelation: lifecycleCorrelation,
+                        ownerResource: ownerResource,
+                        ownerWindowID: ownerWindowID,
+                        ownerRunID: ownerRunID,
+                        outcome: error is CancellationError ? "cancelled" : "failed"
+                    )
+                #endif
+                throw error
+            }
         }
+
+        #if DEBUG
+            private func recordPermitReleased(
+                laneLimiter: AsyncLimiter,
+                lane: MCPConnectionCallLane,
+                toolName: String?,
+                lifecycleCorrelation: EditFlowPerf.LifecycleCorrelation?,
+                ownerResource: String?,
+                ownerWindowID: Int?,
+                ownerRunID: String?,
+                outcome: String
+            ) async {
+                let releasedSnapshot = await laneLimiter.debugSnapshot()
+                EditFlowPerf.lifecycleEvent(
+                    EditFlowPerf.Lifecycle.MCPToolCall.permitReleased,
+                    correlation: lifecycleCorrelation,
+                    EditFlowPerf.Dimensions(
+                        toolName: toolName,
+                        outcome: outcome,
+                        activeCount: releasedSnapshot.activePermitCount,
+                        admissionClass: lane.rawValue,
+                        queueDepth: releasedSnapshot.waiterCount,
+                        windowID: ownerWindowID,
+                        runID: ownerRunID,
+                        ownerResource: ownerResource,
+                        permitActive: false,
+                        publicationPending: true,
+                        terminalBarrier: false
+                    )
+                )
+            }
+        #endif
 
         func hasInFlightCalls() -> Bool {
             admittedCallCount > 0
@@ -1171,11 +1299,19 @@ actor ServerNetworkManager {
 
             func diagnosticsSnapshot() async -> MCPConnectionCallLimiterDebugSnapshot {
                 async let ordinarySnapshot = ordinary.debugSnapshot()
+                async let smallReadSnapshot = smallRead.debugSnapshot()
+                async let gitReadSnapshot = gitRead.debugSnapshot()
                 async let fileSearchSnapshot = fileSearch.debugSnapshot()
                 return await MCPConnectionCallLimiterDebugSnapshot(
                     ordinary: ordinarySnapshot,
+                    smallRead: smallReadSnapshot,
+                    gitRead: gitReadSnapshot,
                     fileSearch: fileSearchSnapshot
                 )
+            }
+
+            func diagnosticsSnapshot(for lane: MCPConnectionCallLane) async -> AsyncLimiter.DebugSnapshot {
+                await limiter(for: lane).debugSnapshot()
             }
 
             func admissionRetryWaiterCountForTesting() -> Int {
@@ -1219,21 +1355,32 @@ actor ServerNetworkManager {
 
         private func closeLanes() async {
             async let cancelOrdinary: Void = ordinary.cancelAll()
+            async let cancelSmallRead: Void = smallRead.cancelAll()
+            async let cancelGitRead: Void = gitRead.cancelAll()
             async let cancelFileSearch: Void = fileSearch.cancelAll()
-            _ = await (cancelOrdinary, cancelFileSearch)
+            _ = await (cancelOrdinary, cancelSmallRead, cancelGitRead, cancelFileSearch)
         }
 
         private func limiter(for lane: MCPConnectionCallLane) -> AsyncLimiter {
             switch lane {
             case .ordinary:
                 ordinary
+            case .smallRead:
+                smallRead
+            case .gitRead:
+                gitRead
             case .fileSearch:
                 fileSearch
             }
         }
 
         private var lanes: [(MCPConnectionCallLane, AsyncLimiter)] {
-            [(.ordinary, ordinary), (.fileSearch, fileSearch)]
+            [
+                (.ordinary, ordinary),
+                (.smallRead, smallRead),
+                (.gitRead, gitRead),
+                (.fileSearch, fileSearch)
+            ]
         }
     }
 
@@ -1241,6 +1388,14 @@ actor ServerNetworkManager {
     private var activeConnectionsByClient: [String: Set<UUID>] = [:]
     private var clientIDByConnection: [UUID: String] = [:]
     private var callLimiters: [UUID: MCPConnectionCallLimiters] = [:]
+
+    private nonisolated let mutationAdmissionController = MCPToolResourceAdmissionController(
+        limit: MCPToolAdmissionPolicy.exclusiveConnectionLimit
+    )
+    private nonisolated let smallReadAdmissionController = MCPToolResourceAdmissionController(
+        limit: MCPToolAdmissionPolicy.smallReadPerWindowLimit
+    )
+    private nonisolated let toolCardOwnershipLedger = MCPToolCardOwnershipLedger()
     #if DEBUG
         private var debugAfterDirectAdmissionPendingPublishedForTesting: (@Sendable (UUID) async -> Void)?
         private var debugAfterBootstrapPolicyReadinessForTesting: (@Sendable (String) async -> Void)?
@@ -2374,6 +2529,10 @@ actor ServerNetworkManager {
         Self.currentConnectionID
     }
 
+    private func requestTimelineConnectionGeneration(for connectionID: UUID) -> UInt64? {
+        connectionLifecycleGenerationByID[connectionID]
+    }
+
     /// Runs the given async operation with the TaskLocal connectionID and lifecycle correlation set.
     /// Use this to propagate the connection context across Task boundaries.
     nonisolated static func withConnectionID<T>(
@@ -3084,8 +3243,44 @@ actor ServerNetworkManager {
         guard let observers = toolCallObservers[runID], !observers.isEmpty else {
             return 0
         }
-        for (_, callback) in observers {
+        #if DEBUG
+            let batchStart = DispatchTime.now().uptimeNanoseconds
+        #endif
+        for (position, entry) in observers.enumerated() {
+            let (token, callback) = entry
+            #if DEBUG
+                let scheduledAt = DispatchTime.now().uptimeNanoseconds
+                let dimensions = EditFlowPerf.Dimensions(
+                    toolName: toolName,
+                    observerToken: token.uuidString,
+                    observerType: "legacy_call",
+                    serialPosition: position,
+                    queueDelayMicroseconds: Self.debugElapsedMicroseconds(from: batchStart, to: scheduledAt),
+                    correlationPath: "not_applicable",
+                    scannedItemCount: 0,
+                    runID: runID.uuidString
+                )
+                EditFlowPerf.lifecycleEvent(EditFlowPerf.Lifecycle.MCPToolCall.observerScheduled, dimensions)
+                EditFlowPerf.lifecycleEvent(EditFlowPerf.Lifecycle.MCPToolCall.observerEntered, dimensions)
+            #endif
             callback(toolName)
+            #if DEBUG
+                let finishedAt = DispatchTime.now().uptimeNanoseconds
+                EditFlowPerf.lifecycleEvent(
+                    EditFlowPerf.Lifecycle.MCPToolCall.observerExited,
+                    EditFlowPerf.Dimensions(
+                        toolName: toolName,
+                        observerToken: token.uuidString,
+                        observerType: "legacy_call",
+                        serialPosition: position,
+                        queueDelayMicroseconds: Self.debugElapsedMicroseconds(from: batchStart, to: scheduledAt),
+                        durationMicroseconds: Self.debugElapsedMicroseconds(from: scheduledAt, to: finishedAt),
+                        correlationPath: "not_applicable",
+                        scannedItemCount: 0,
+                        runID: runID.uuidString
+                    )
+                )
+            #endif
         }
         connectionLog("Tool call observer fired for runID \(runID) tool \(toolName) count \(observers.count)")
         return observers.count
@@ -3139,8 +3334,50 @@ actor ServerNetworkManager {
             }
             return 0
         }
-        for (_, observer) in observers {
-            await observer.onCalled(invocationID, toolName, args)
+        #if DEBUG
+            let batchStart = DispatchTime.now().uptimeNanoseconds
+        #endif
+        for (position, entry) in observers.enumerated() {
+            let (token, observer) = entry
+            #if DEBUG
+                let scheduledAt = DispatchTime.now().uptimeNanoseconds
+                let dimensions = EditFlowPerf.Dimensions(
+                    toolName: toolName,
+                    observerToken: token.uuidString,
+                    observerType: "event_call",
+                    serialPosition: position,
+                    queueDelayMicroseconds: Self.debugElapsedMicroseconds(from: batchStart, to: scheduledAt),
+                    correlationPath: "invocation_id",
+                    scannedItemCount: 0,
+                    runID: runID.uuidString
+                )
+                EditFlowPerf.lifecycleEvent(EditFlowPerf.Lifecycle.MCPToolCall.observerScheduled, dimensions)
+                EditFlowPerf.lifecycleEvent(EditFlowPerf.Lifecycle.MCPToolCall.observerEntered, dimensions)
+            #endif
+            #if DEBUG
+                let recorder = MCPToolObserverAttributionRecorder()
+                await MCPToolObserverAttributionContext.$recorder.withValue(recorder) {
+                    await observer.onCalled(invocationID, toolName, args)
+                }
+                let attribution = recorder.snapshot()
+                let finishedAt = DispatchTime.now().uptimeNanoseconds
+                EditFlowPerf.lifecycleEvent(
+                    EditFlowPerf.Lifecycle.MCPToolCall.observerExited,
+                    EditFlowPerf.Dimensions(
+                        toolName: toolName,
+                        observerToken: token.uuidString,
+                        observerType: "event_call",
+                        serialPosition: position,
+                        queueDelayMicroseconds: Self.debugElapsedMicroseconds(from: batchStart, to: scheduledAt),
+                        durationMicroseconds: Self.debugElapsedMicroseconds(from: scheduledAt, to: finishedAt),
+                        correlationPath: attribution?.correlationPath ?? "unreported",
+                        scannedItemCount: attribution?.scannedItemCount ?? 0,
+                        runID: runID.uuidString
+                    )
+                )
+            #else
+                await observer.onCalled(invocationID, toolName, args)
+            #endif
         }
         connectionLog("Tool called observers fired for runID \(runID) tool \(toolName) count \(observers.count)")
         return observers.count
@@ -3159,13 +3396,62 @@ actor ServerNetworkManager {
             }
             return 0
         }
-        for (_, observer) in observers {
+        #if DEBUG
+            let batchStart = DispatchTime.now().uptimeNanoseconds
+        #endif
+        var firedCount = 0
+        for (position, entry) in observers.enumerated() {
+            let (token, observer) = entry
             guard let onCompleted = observer.onCompleted else { continue }
-            await onCompleted(invocationID, toolName, args, resultJSON, isError)
+            firedCount += 1
+            #if DEBUG
+                let scheduledAt = DispatchTime.now().uptimeNanoseconds
+                let recorder = MCPToolObserverAttributionRecorder()
+                let dimensions = EditFlowPerf.Dimensions(
+                    toolName: toolName,
+                    observerToken: token.uuidString,
+                    observerType: "event_completion",
+                    serialPosition: position,
+                    queueDelayMicroseconds: Self.debugElapsedMicroseconds(from: batchStart, to: scheduledAt),
+                    resultBytes: resultJSON.utf8.count,
+                    runID: runID.uuidString
+                )
+                EditFlowPerf.lifecycleEvent(EditFlowPerf.Lifecycle.MCPToolCall.observerScheduled, dimensions)
+                EditFlowPerf.lifecycleEvent(EditFlowPerf.Lifecycle.MCPToolCall.observerEntered, dimensions)
+                await MCPToolObserverAttributionContext.$recorder.withValue(recorder) {
+                    await onCompleted(invocationID, toolName, args, resultJSON, isError)
+                }
+                let attribution = recorder.snapshot()
+                let finishedAt = DispatchTime.now().uptimeNanoseconds
+                EditFlowPerf.lifecycleEvent(
+                    EditFlowPerf.Lifecycle.MCPToolCall.observerExited,
+                    EditFlowPerf.Dimensions(
+                        toolName: toolName,
+                        observerToken: token.uuidString,
+                        observerType: "event_completion",
+                        serialPosition: position,
+                        queueDelayMicroseconds: Self.debugElapsedMicroseconds(from: batchStart, to: scheduledAt),
+                        durationMicroseconds: Self.debugElapsedMicroseconds(from: scheduledAt, to: finishedAt),
+                        correlationPath: attribution?.correlationPath ?? "unreported",
+                        scannedItemCount: attribution?.scannedItemCount ?? 0,
+                        resultBytes: resultJSON.utf8.count,
+                        runID: runID.uuidString
+                    )
+                )
+            #else
+                await onCompleted(invocationID, toolName, args, resultJSON, isError)
+            #endif
         }
-        connectionLog("Tool completed observers fired for runID \(runID) tool \(toolName) count \(observers.count)")
-        return observers.count
+        connectionLog("Tool completed observers fired for runID \(runID) tool \(toolName) count \(firedCount)")
+        return firedCount
     }
+
+    #if DEBUG
+        private nonisolated static func debugElapsedMicroseconds(from start: UInt64, to end: UInt64) -> Int {
+            guard end >= start else { return 0 }
+            return Int(min((end - start) / 1000, UInt64(Int.max)))
+        }
+    #endif
 
     // MARK: - Connection Waiter Helpers (event-driven, replaces 100ms polling)
 
@@ -4405,6 +4691,8 @@ actor ServerNetworkManager {
         connections[connectionID] = manager
         callLimiters[connectionID] = MCPConnectionCallLimiters(
             limit: limiterLimit(for: connectionID),
+            smallReadLimit: smallReadLimiterLimit(for: connectionID),
+            gitReadLimit: gitReadLimiterLimit(for: connectionID),
             fileSearchLimit: fileSearchLimiterLimit(for: connectionID)
         )
         connectionLifecycleGenerationByID[connectionID] = lifecycleGeneration
@@ -7797,6 +8085,8 @@ actor ServerNetworkManager {
             ) async -> AsyncLimiter {
                 let limiters = MCPConnectionCallLimiters(
                     limit: limiterLimit(for: connectionID),
+                    smallReadLimit: smallReadLimiterLimit(for: connectionID),
+                    gitReadLimit: gitReadLimiterLimit(for: connectionID),
                     fileSearchLimit: fileSearchLimiterLimit(for: connectionID),
                     idleWaitSleep: idleWaitSleep
                 )
@@ -7830,6 +8120,8 @@ actor ServerNetworkManager {
                 clientIDByConnection[connectionID] = clientID
                 callLimiters[connectionID] = MCPConnectionCallLimiters(
                     limit: limiterLimit(for: connectionID),
+                    smallReadLimit: smallReadLimiterLimit(for: connectionID),
+                    gitReadLimit: gitReadLimiterLimit(for: connectionID),
                     fileSearchLimit: fileSearchLimiterLimit(for: connectionID)
                 )
                 connectionStats[connectionID] = ConnectionStats(
@@ -8150,6 +8442,8 @@ actor ServerNetworkManager {
                 if callLimiters[connectionID] == nil {
                     callLimiters[connectionID] = MCPConnectionCallLimiters(
                         limit: limiterLimit(for: connectionID),
+                        smallReadLimit: smallReadLimiterLimit(for: connectionID),
+                        gitReadLimit: gitReadLimiterLimit(for: connectionID),
                         fileSearchLimit: fileSearchLimiterLimit(for: connectionID)
                     )
                 }
@@ -9694,7 +9988,53 @@ actor ServerNetworkManager {
                     }
                 }
             #endif
-            let lifecycleCorrelation = EditFlowPerf.makeLifecycleCorrelationIfActive()
+            #if DEBUG
+                let transportRequestIdentity = MCPRequestTimelineRegistry.shared.claimToolRequest(
+                    connectionID: connectionID.uuidString,
+                    originalToolName: originalName
+                )
+                let inheritedRequestIdentity = transportRequestIdentity?.fillingMissingFields(
+                    from: MCPRequestTimelineContext.current
+                ) ?? MCPRequestTimelineContext.current
+                let fallbackConnectionGeneration = await requestTimelineConnectionGeneration(for: connectionID)
+                let requestIdentity = MCPRequestTimelineIdentity(
+                    jsonRPCRequestID: inheritedRequestIdentity?.jsonRPCRequestID,
+                    connectionID: inheritedRequestIdentity?.connectionID ?? connectionID.uuidString,
+                    connectionGeneration: inheritedRequestIdentity?.connectionGeneration ?? fallbackConnectionGeneration,
+                    appInvocationID: inheritedRequestIdentity?.appInvocationID,
+                    requestOrdinal: inheritedRequestIdentity?.requestOrdinal
+                )
+                let invocationID = requestIdentity.appInvocationID.flatMap { UUID(uuidString: $0) } ?? UUID()
+                let resolvedRequestIdentity: MCPRequestTimelineIdentity? = MCPRequestTimelineIdentity(
+                    jsonRPCRequestID: requestIdentity.jsonRPCRequestID,
+                    connectionID: requestIdentity.connectionID,
+                    connectionGeneration: requestIdentity.connectionGeneration,
+                    appInvocationID: invocationID.uuidString,
+                    requestOrdinal: requestIdentity.requestOrdinal
+                )
+                let lifecycleCorrelation = EditFlowPerf.makeLifecycleCorrelationIfActive(
+                    requestIdentity: resolvedRequestIdentity
+                )
+                if let resolvedRequestIdentity {
+                    MCPResponseDeliveryTracer.emit(MCPResponseDeliveryTraceEvent(
+                        layer: "app_sdk",
+                        phase: "sdk_decode_completed",
+                        connectionID: resolvedRequestIdentity.connectionID,
+                        connectionGeneration: resolvedRequestIdentity.connectionGeneration,
+                        direction: .clientToServer,
+                        id: resolvedRequestIdentity.jsonRPCRequestID,
+                        method: "tools/call",
+                        tool: toolName,
+                        invocationID: invocationID.uuidString,
+                        requestOrdinal: resolvedRequestIdentity.requestOrdinal,
+                        requestIdentity: resolvedRequestIdentity
+                    ))
+                }
+            #else
+                let invocationID = UUID()
+                let resolvedRequestIdentity: MCPRequestTimelineIdentity? = nil
+                let lifecycleCorrelation = EditFlowPerf.makeLifecycleCorrelationIfActive()
+            #endif
             EditFlowPerf.lifecycleEvent(
                 EditFlowPerf.Lifecycle.MCPToolCall.received,
                 correlation: lifecycleCorrelation,
@@ -9926,8 +10266,16 @@ actor ServerNetworkManager {
                 EditFlowPerf.Dimensions(toolName: toolName)
             )
 
-            // Per-connection call lanes preserve ordinary FIFO while isolating serialized searches.
-            let callLane = Self.callLane(forCanonicalToolName: toolName)
+            // Connection lanes provide bounded FIFO admission only. Shared-state correctness is
+            // enforced below by explicit window/app/repository resource ownership.
+            guard let admissionClass = Self.admissionClass(forCanonicalToolName: toolName) else {
+                return Self.executionContractToolErrorResult(
+                    rawJSON: capturedRawJSON,
+                    code: "tool_execution_admission_unclassified",
+                    message: "No static admission classification exists for tool '\(toolName)'."
+                )
+            }
+            let callLane = admissionClass.connectionLane
             connectionLog("tools/call \(toolName): acquiring limiter lane=\(callLane.rawValue)")
             let limiterResolution = await EditFlowPerf.measure(
                 EditFlowPerf.Stage.MCPToolCall.limiterResolution,
@@ -9963,6 +10311,8 @@ actor ServerNetworkManager {
                     connectionID: connectionID,
                     lane: callLane,
                     resolution: limiterResolution,
+                    toolName: toolName,
+                    lifecycleCorrelation: lifecycleCorrelation,
                     cancellationResult: {
                         Self.executionContractToolErrorResult(
                             rawJSON: capturedRawJSON,
@@ -10169,7 +10519,78 @@ actor ServerNetworkManager {
                                         ? nil
                                         : await self.runIDForConnection(connectionID)
                                 }
-                                let invocationID = UUID()
+                                let mutationAdmissionLease: MCPToolResourceAdmissionController.Lease?
+                                if admissionClass == .exclusive {
+                                    let mutationResource: MCPToolResourceAdmissionController.Resource
+                                    if MCPGlobalToolName.orderedToolNames.contains(toolName) {
+                                        mutationResource = .appWide
+                                    } else if let chosenID {
+                                        mutationResource = .window(chosenID)
+                                    } else {
+                                        return Self.executionContractToolErrorResult(
+                                            rawJSON: capturedRawJSON,
+                                            code: "tool_execution_mutation_resource_unresolved",
+                                            message: "The exclusive tool '\(toolName)' has no resolved window resource."
+                                        )
+                                    }
+                                    do {
+                                        mutationAdmissionLease = try await self.mutationAdmissionController.acquire(mutationResource)
+                                    } catch {
+                                        return Self.executionContractToolErrorResult(
+                                            rawJSON: capturedRawJSON,
+                                            code: "tool_execution_connection_terminal",
+                                            message: "The MCP connection closed while waiting for exclusive resource admission."
+                                        )
+                                    }
+                                } else {
+                                    mutationAdmissionLease = nil
+                                }
+                                defer { mutationAdmissionLease?.release() }
+
+                                let smallReadAdmissionLease: MCPToolResourceAdmissionController.Lease?
+                                if admissionClass == .smallRead {
+                                    guard let chosenID else {
+                                        return Self.executionContractToolErrorResult(
+                                            rawJSON: capturedRawJSON,
+                                            code: "tool_execution_read_resource_unresolved",
+                                            message: "The small-read tool '\(toolName)' has no resolved window/store resource."
+                                        )
+                                    }
+                                    do {
+                                        smallReadAdmissionLease = try await self.smallReadAdmissionController.acquire(.window(chosenID))
+                                    } catch {
+                                        return Self.executionContractToolErrorResult(
+                                            rawJSON: capturedRawJSON,
+                                            code: "tool_execution_connection_terminal",
+                                            message: "The MCP connection closed while waiting for window/store read admission."
+                                        )
+                                    }
+                                } else {
+                                    smallReadAdmissionLease = nil
+                                }
+                                defer { smallReadAdmissionLease?.release() }
+
+                                let toolCardOwnershipLease: MCPToolCardOwnershipLedger.Lease?
+                                if let runID = observerRunIDForCallbacksFinal, let chosenID {
+                                    guard let lease = self.toolCardOwnershipLedger.begin(
+                                        windowID: chosenID,
+                                        runID: runID,
+                                        invocationID: invocationID,
+                                        connectionID: connectionID,
+                                        toolName: toolName
+                                    ) else {
+                                        return Self.executionContractToolErrorResult(
+                                            rawJSON: capturedRawJSON,
+                                            code: "tool_card_ownership_conflict",
+                                            message: "Duplicate tool-card ownership was rejected for invocation \(invocationID.uuidString)."
+                                        )
+                                    }
+                                    toolCardOwnershipLease = lease
+                                } else {
+                                    toolCardOwnershipLease = nil
+                                }
+                                defer { toolCardOwnershipLease?.release() }
+
                                 if let runID = observerRunIDForCallbacksFinal {
                                     let observerState = EditFlowPerf.begin(
                                         EditFlowPerf.Stage.MCPToolCall.observerCallbacks,
@@ -10385,6 +10806,20 @@ actor ServerNetworkManager {
                                         correlation: lifecycleCorrelation,
                                         EditFlowPerf.Dimensions(toolName: toolName)
                                     )
+                                    EditFlowPerf.lifecycleEvent(
+                                        EditFlowPerf.Lifecycle.MCPToolCall.publicationOwnershipState,
+                                        correlation: lifecycleCorrelation,
+                                        EditFlowPerf.Dimensions(
+                                            toolName: toolName,
+                                            windowID: Self.currentToolDispatchAuthorization?.windowIdentity?.windowID,
+                                            runID: observerRunIDForCallbacksFinal?.uuidString,
+                                            providerActive: true,
+                                            networkScopeActive: Self.currentToolDispatchAuthorization?.windowIdentity != nil,
+                                            permitActive: true,
+                                            publicationPending: false,
+                                            terminalBarrier: false
+                                        )
+                                    )
 
                                     let tracedOperation: @Sendable () async throws -> Value = {
                                         do {
@@ -10417,6 +10852,21 @@ actor ServerNetworkManager {
                                                 correlation: lifecycleCorrelation,
                                                 EditFlowPerf.Dimensions(toolName: toolName, outcome: "success")
                                             )
+                                            EditFlowPerf.lifecycleEvent(
+                                                EditFlowPerf.Lifecycle.MCPToolCall.publicationOwnershipState,
+                                                correlation: lifecycleCorrelation,
+                                                EditFlowPerf.Dimensions(
+                                                    toolName: toolName,
+                                                    outcome: "provider_completed",
+                                                    windowID: Self.currentToolDispatchAuthorization?.windowIdentity?.windowID,
+                                                    runID: observerRunIDForCallbacksFinal?.uuidString,
+                                                    providerActive: false,
+                                                    networkScopeActive: Self.currentToolDispatchAuthorization?.windowIdentity != nil,
+                                                    permitActive: true,
+                                                    publicationPending: true,
+                                                    terminalBarrier: false
+                                                )
+                                            )
                                             return value
                                         } catch {
                                             let outcome = MCPToolExecutionCancelledError.matches(error) ? "cancelled" : "error"
@@ -10425,6 +10875,21 @@ actor ServerNetworkManager {
                                                 EditFlowPerf.Lifecycle.MCPToolCall.resolvedProviderEnded,
                                                 correlation: lifecycleCorrelation,
                                                 EditFlowPerf.Dimensions(toolName: toolName, outcome: outcome)
+                                            )
+                                            EditFlowPerf.lifecycleEvent(
+                                                EditFlowPerf.Lifecycle.MCPToolCall.publicationOwnershipState,
+                                                correlation: lifecycleCorrelation,
+                                                EditFlowPerf.Dimensions(
+                                                    toolName: toolName,
+                                                    outcome: outcome,
+                                                    windowID: Self.currentToolDispatchAuthorization?.windowIdentity?.windowID,
+                                                    runID: observerRunIDForCallbacksFinal?.uuidString,
+                                                    providerActive: false,
+                                                    networkScopeActive: Self.currentToolDispatchAuthorization?.windowIdentity != nil,
+                                                    permitActive: true,
+                                                    publicationPending: true,
+                                                    terminalBarrier: false
+                                                )
                                             )
                                             throw error
                                         }
@@ -10487,11 +10952,19 @@ actor ServerNetworkManager {
                                     MCPResponseDeliveryTracer.emit(MCPResponseDeliveryTraceEvent(
                                         layer: "app_tool_handler",
                                         phase: "handler_result_ready",
-                                        connectionID: connectionID.uuidString,
+                                        connectionID: resolvedRequestIdentity?.connectionID ?? connectionID.uuidString,
+                                        connectionGeneration: resolvedRequestIdentity?.connectionGeneration,
                                         method: "tools/call",
                                         tool: toolName,
                                         invocationID: invocationID.uuidString,
-                                        lifecycleState: outcome
+                                        lifecycleState: outcome,
+                                        requestOrdinal: resolvedRequestIdentity?.requestOrdinal,
+                                        requestIdentity: resolvedRequestIdentity,
+                                        providerActive: false,
+                                        networkScopeActive: Self.currentToolDispatchAuthorization?.windowIdentity != nil,
+                                        permitActive: true,
+                                        publicationPending: true,
+                                        terminalBarrier: false
                                     ))
                                     return EditFlowPerf.measure(
                                         EditFlowPerf.Stage.MCPToolCall.handlerResultHandoff,
@@ -11668,10 +12141,19 @@ actor ServerNetworkManager {
     }
 
     private func limiterLimit(for connectionID: UUID) -> Int {
-        // Serialize ordinary RepoPrompt MCP tool calls within each connection.
-        // Identical calls therefore cannot race and produce duplicate/mis-tracked tool cards.
+        // The legacy `ordinary` lane is now the explicit exclusive class only.
         _ = connectionID
-        return 1
+        return MCPToolAdmissionPolicy.exclusiveConnectionLimit
+    }
+
+    private func smallReadLimiterLimit(for connectionID: UUID) -> Int {
+        _ = connectionID
+        return Self.smallReadCallLaneLimit
+    }
+
+    private func gitReadLimiterLimit(for connectionID: UUID) -> Int {
+        _ = connectionID
+        return Self.gitReadCallLaneLimit
     }
 
     private func fileSearchLimiterLimit(for connectionID: UUID) -> Int {
@@ -11735,6 +12217,8 @@ actor ServerNetworkManager {
         connectionID: UUID,
         lane: MCPConnectionCallLane,
         resolution: ConnectionCallLimiterResolution,
+        toolName: String? = nil,
+        lifecycleCorrelation: EditFlowPerf.LifecycleCorrelation? = nil,
         _ operation: @Sendable () async -> T
     ) async throws -> T {
         #if DEBUG
@@ -11759,7 +12243,23 @@ actor ServerNetworkManager {
                 #if DEBUG
                     let afterPermitAcquired = debugAfterConnectionCallPermitAcquiredForTesting
                 #endif
-                return try await attemptedLimiters.withPermit(lane: lane) {
+                #if DEBUG
+                    let ownerResource = "connection:\(connectionID.uuidString)"
+                    let ownerWindowID = connectionWindowMap[connectionID]
+                    let ownerRunID = runIDByConnectionID[connectionID]?.uuidString
+                #else
+                    let ownerResource: String? = nil
+                    let ownerWindowID: Int? = nil
+                    let ownerRunID: String? = nil
+                #endif
+                return try await attemptedLimiters.withPermit(
+                    lane: lane,
+                    toolName: toolName,
+                    lifecycleCorrelation: lifecycleCorrelation,
+                    ownerResource: ownerResource,
+                    ownerWindowID: ownerWindowID,
+                    ownerRunID: ownerRunID
+                ) {
                     #if DEBUG
                         await afterPermitAcquired?(connectionID)
                     #endif
@@ -11797,6 +12297,8 @@ actor ServerNetworkManager {
         connectionID: UUID,
         lane: MCPConnectionCallLane,
         resolution: ConnectionCallLimiterResolution,
+        toolName: String? = nil,
+        lifecycleCorrelation: EditFlowPerf.LifecycleCorrelation? = nil,
         cancellationResult: @Sendable () -> T,
         _ operation: @Sendable () async -> T
     ) async -> T {
@@ -11805,6 +12307,8 @@ actor ServerNetworkManager {
                 connectionID: connectionID,
                 lane: lane,
                 resolution: resolution,
+                toolName: toolName,
+                lifecycleCorrelation: lifecycleCorrelation,
                 operation
             )
         } catch {
@@ -11854,6 +12358,8 @@ actor ServerNetworkManager {
         func withConnectionCallPermitForTesting<T>(
             connectionID: UUID,
             lane: MCPConnectionCallLane,
+            toolName: String? = nil,
+            lifecycleCorrelation: EditFlowPerf.LifecycleCorrelation? = nil,
             _ operation: @Sendable () async -> T
         ) async throws -> T {
             if let resolution = connectionCallLimiterResolution(for: connectionID) {
@@ -11861,12 +12367,22 @@ actor ServerNetworkManager {
                     connectionID: connectionID,
                     lane: lane,
                     resolution: resolution,
+                    toolName: toolName,
+                    lifecycleCorrelation: lifecycleCorrelation,
                     operation
                 )
             }
             guard let limiters = callLimiters[connectionID] else { throw CancellationError() }
             await debugAfterConnectionCallLimiterResolutionForTesting?(connectionID)
-            return try await limiters.withPermit(lane: lane, operation)
+            return try await limiters.withPermit(
+                lane: lane,
+                toolName: toolName,
+                lifecycleCorrelation: lifecycleCorrelation,
+                ownerResource: "connection:\(connectionID.uuidString)",
+                ownerWindowID: connectionWindowMap[connectionID],
+                ownerRunID: runIDByConnectionID[connectionID]?.uuidString,
+                operation
+            )
         }
 
         func connectionIsEvictableForTesting(_ connectionID: UUID) async -> Bool {
@@ -12035,6 +12551,8 @@ actor ServerNetworkManager {
         // observe cancellation, while all subsequent calls resolve these fresh open lanes.
         let replacement = MCPConnectionCallLimiters(
             limit: limiterLimit(for: id),
+            smallReadLimit: smallReadLimiterLimit(for: id),
+            gitReadLimit: gitReadLimiterLimit(for: id),
             fileSearchLimit: fileSearchLimiterLimit(for: id)
         )
         callLimiters[id] = replacement
@@ -12549,6 +13067,8 @@ actor ServerNetworkManager {
 #if DEBUG
     struct MCPConnectionCallLimiterDebugSnapshot: Equatable {
         let ordinary: AsyncLimiter.DebugSnapshot
+        let smallRead: AsyncLimiter.DebugSnapshot
+        let gitRead: AsyncLimiter.DebugSnapshot
         let fileSearch: AsyncLimiter.DebugSnapshot
 
         var laneCount: Int {
@@ -12556,41 +13076,46 @@ actor ServerNetworkManager {
         }
 
         var limit: Int {
-            ordinary.limit + fileSearch.limit
+            ordinary.limit + smallRead.limit + gitRead.limit + fileSearch.limit
         }
 
         var permits: Int {
-            ordinary.permits + fileSearch.permits
+            ordinary.permits + smallRead.permits + gitRead.permits + fileSearch.permits
         }
 
         var activePermitCount: Int {
-            ordinary.activePermitCount + fileSearch.activePermitCount
+            ordinary.activePermitCount + smallRead.activePermitCount + gitRead.activePermitCount + fileSearch.activePermitCount
         }
 
         var waiterCount: Int {
-            ordinary.waiterCount + fileSearch.waiterCount
+            ordinary.waiterCount + smallRead.waiterCount + gitRead.waiterCount + fileSearch.waiterCount
         }
 
         var inFlight: Int {
-            ordinary.inFlight + fileSearch.inFlight
+            ordinary.inFlight + smallRead.inFlight + gitRead.inFlight + fileSearch.inFlight
         }
 
         var oldestWaiterAgeMilliseconds: UInt64? {
-            [ordinary.oldestWaiterAgeMilliseconds, fileSearch.oldestWaiterAgeMilliseconds]
-                .compactMap(\.self)
-                .max()
+            [
+                ordinary.oldestWaiterAgeMilliseconds,
+                smallRead.oldestWaiterAgeMilliseconds,
+                gitRead.oldestWaiterAgeMilliseconds,
+                fileSearch.oldestWaiterAgeMilliseconds
+            ]
+            .compactMap(\.self)
+            .max()
         }
 
         var cancelledWaiterCount: Int {
-            ordinary.cancelledWaiterCount + fileSearch.cancelledWaiterCount
+            ordinary.cancelledWaiterCount + smallRead.cancelledWaiterCount + gitRead.cancelledWaiterCount + fileSearch.cancelledWaiterCount
         }
 
         var isClosed: Bool {
-            ordinary.isClosed && fileSearch.isClosed
+            ordinary.isClosed && smallRead.isClosed && gitRead.isClosed && fileSearch.isClosed
         }
 
         var isIdle: Bool {
-            ordinary.isIdle && fileSearch.isIdle
+            ordinary.isIdle && smallRead.isIdle && gitRead.isIdle && fileSearch.isIdle
         }
     }
 #endif

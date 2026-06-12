@@ -183,6 +183,18 @@ import Foundation
             watcherBatchWillProcessHandler = handler
         }
 
+        func setWatcherActivationFailureForTesting(_ failurePoint: WatcherActivationFailurePoint?) {
+            watcherActivationFailurePointForTesting = failurePoint
+        }
+
+        func setFolderScanFailureCountForTesting(_ count: Int, folder: String) {
+            if count > 0 {
+                folderScanFailuresRemainingForTesting[folder] = count
+            } else {
+                folderScanFailuresRemainingForTesting.removeValue(forKey: folder)
+            }
+        }
+
         func setContentReadChunkHandlerForTesting(
             _ handler: (@Sendable (String) async -> Void)?
         ) {
@@ -202,6 +214,9 @@ import Foundation
             hasPendingOverflowRescan: Bool,
             overflowChangedIgnoreDirs: Set<String>,
             pendingScanTargets: [String: FSEventStreamEventId],
+            pendingQuietFolderScanTargets: Set<String>,
+            dirtyRecoveryScanTargets: Set<String>,
+            recoveryScanFailureCountByFolder: [String: Int],
             lastScannedEventIdByFolder: [String: FSEventStreamEventId],
             lastVerifiedAtByFolder: [String: TimeInterval],
             fileEventCountSinceLastScan: [String: Int]
@@ -211,6 +226,9 @@ import Foundation
                 hasPendingOverflowRescan,
                 overflowChangedIgnoreDirs,
                 pendingScanTargets,
+                pendingQuietFolderScanTargets,
+                dirtyRecoveryScanTargets,
+                recoveryScanFailureCountByFolder,
                 lastScannedEventIdByFolder,
                 lastVerifiedAtByFolder,
                 fileEventCountSinceLastScan

@@ -29,12 +29,10 @@ extension FileSystemService {
         do {
             scan = try listDirectoryWithIgnoreDetection(absFolder)
         } catch {
-            // Return empty result for non-existent or inaccessible paths
-            return ScanResult(
-                folderRel: relFolder,
-                children: [:],
-                ignoreFiles: (false, false, false)
-            )
+            // Recovery correctness depends on distinguishing an empty directory from
+            // an unreadable one. The actor fallback handles missing directories and
+            // retains failed targets as dirty instead of treating them as removals.
+            throw error
         }
 
         var children = [String: Bool]()
@@ -226,6 +224,20 @@ extension FileSystemService {
     // MARK: - Single-level scanning & removal
 
     func scanOneLevelAndDiff(_ folderRelPath: String) async throws -> [FileSystemDelta] {
+        #if DEBUG
+            if let remaining = folderScanFailuresRemainingForTesting[folderRelPath], remaining > 0 {
+                if remaining == 1 {
+                    folderScanFailuresRemainingForTesting.removeValue(forKey: folderRelPath)
+                } else {
+                    folderScanFailuresRemainingForTesting[folderRelPath] = remaining - 1
+                }
+                throw NSError(
+                    domain: "FileSystemServiceRecoveryTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Injected folder scan failure for \(folderRelPath)"]
+                )
+            }
+        #endif
         let fm = fm // Cache for multiple calls in this method
         let absFolder = fullPath(forRelativePath: folderRelPath)
         var isDir: ObjCBool = false
@@ -357,6 +369,57 @@ extension FileSystemService {
             }
         }
 
+        return deltas
+    }
+
+    /// Rebuilds the service's canonical path snapshot after bounded incremental
+    /// recovery attempts fail. Existing files are marked modified so downstream
+    /// content and codemap caches cannot survive an ambiguous recovery interval.
+    func reconcileEntireTreeAfterRecoveryFailure() async throws -> [FileSystemDelta] {
+        let actualItems = try await gatherPathsUsingEnumerator(
+            rootURL: rootURL,
+            skipSymlinks: skipSymlinks,
+            baseRelativePath: ""
+        )
+        let previousItems = visitedItems
+        let previousPaths = Set(previousItems.keys)
+        let actualPaths = Set(actualItems.keys)
+        let typeChangedPaths = Set(previousPaths.intersection(actualPaths).filter {
+            previousItems[$0] != actualItems[$0]
+        })
+
+        let removedPaths = previousPaths.subtracting(actualPaths).union(typeChangedPaths)
+            .sorted { lhs, rhs in
+                let lhsDepth = lhs.split(separator: "/").count
+                let rhsDepth = rhs.split(separator: "/").count
+                return lhsDepth == rhsDepth ? lhs > rhs : lhsDepth > rhsDepth
+            }
+        let addedPaths = actualPaths.subtracting(previousPaths).union(typeChangedPaths)
+        let addedFolders = addedPaths.filter { actualItems[$0] == true }.sorted { lhs, rhs in
+            let lhsDepth = lhs.split(separator: "/").count
+            let rhsDepth = rhs.split(separator: "/").count
+            return lhsDepth == rhsDepth ? lhs < rhs : lhsDepth < rhsDepth
+        }
+        let addedFiles = addedPaths.filter { actualItems[$0] == false }.sorted()
+        let retainedFiles = actualPaths.intersection(previousPaths).subtracting(typeChangedPaths)
+            .filter { actualItems[$0] == false }
+            .sorted()
+
+        var deltas: [FileSystemDelta] = []
+        deltas.reserveCapacity(removedPaths.count + addedPaths.count + retainedFiles.count)
+        for relativePath in removedPaths {
+            deltas.append(previousItems[relativePath] == true ? .folderRemoved(relativePath) : .fileRemoved(relativePath))
+        }
+        deltas.append(contentsOf: addedFolders.map(FileSystemDelta.folderAdded))
+        deltas.append(contentsOf: addedFiles.map(FileSystemDelta.fileAdded))
+        for relativePath in retainedFiles {
+            let modificationDate = try? await getFileModificationDate(atRelativePath: relativePath)
+            deltas.append(.fileModified(relativePath, modificationDate))
+        }
+
+        visitedPaths = actualPaths
+        visitedItems = actualItems
+        pathCompsCache.removeAll()
         return deltas
     }
 

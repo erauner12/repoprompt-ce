@@ -84,6 +84,12 @@ public struct MCPResponseDeliveryTraceEvent: Equatable, Sendable, CustomStringCo
     public let activeRequestCount: Int?
     public let responseInDeliveryCount: Int?
     public let terminalReason: String?
+    public let requestIdentity: MCPRequestTimelineIdentity?
+    public let providerActive: Bool?
+    public let networkScopeActive: Bool?
+    public let permitActive: Bool?
+    public let publicationPending: Bool?
+    public let terminalBarrier: Bool?
 
     public init(
         layer: String,
@@ -101,7 +107,13 @@ public struct MCPResponseDeliveryTraceEvent: Equatable, Sendable, CustomStringCo
         framedSHA256: String? = nil,
         activeRequestCount: Int? = nil,
         responseInDeliveryCount: Int? = nil,
-        terminalReason: String? = nil
+        terminalReason: String? = nil,
+        requestIdentity: MCPRequestTimelineIdentity? = nil,
+        providerActive: Bool? = nil,
+        networkScopeActive: Bool? = nil,
+        permitActive: Bool? = nil,
+        publicationPending: Bool? = nil,
+        terminalBarrier: Bool? = nil
     ) {
         self.layer = layer
         self.phase = phase
@@ -119,6 +131,47 @@ public struct MCPResponseDeliveryTraceEvent: Equatable, Sendable, CustomStringCo
         self.activeRequestCount = activeRequestCount
         self.responseInDeliveryCount = responseInDeliveryCount
         self.terminalReason = terminalReason
+        #if DEBUG
+            self.requestIdentity = MCPRequestTimelineIdentity(
+                jsonRPCRequestID: id,
+                connectionID: connectionID,
+                connectionGeneration: connectionGeneration,
+                appInvocationID: invocationID,
+                requestOrdinal: requestOrdinal
+            ).fillingMissingFields(from: requestIdentity)
+        #else
+            self.requestIdentity = requestIdentity
+        #endif
+        self.providerActive = providerActive
+        self.networkScopeActive = networkScopeActive
+        self.permitActive = permitActive
+        self.publicationPending = publicationPending
+        self.terminalBarrier = terminalBarrier
+    }
+
+    public var payload: [String: Any] {
+        [
+            "layer": layer,
+            "phase": phase,
+            "connection_id": connectionID ?? NSNull(),
+            "connection_generation": connectionGeneration ?? NSNull(),
+            "direction": direction?.rawValue ?? NSNull(),
+            "jsonrpc_request_id": id?.description ?? NSNull(),
+            "method": method ?? NSNull(),
+            "tool": tool ?? NSNull(),
+            "app_invocation_id": requestIdentity?.appInvocationID ?? invocationID ?? NSNull(),
+            "lifecycle_state": lifecycleState ?? NSNull(),
+            "request_ordinal": requestOrdinal ?? NSNull(),
+            "framed_byte_count": framedByteCount ?? NSNull(),
+            "active_request_count": activeRequestCount ?? NSNull(),
+            "response_in_delivery_count": responseInDeliveryCount ?? NSNull(),
+            "terminal_reason": terminalReason ?? NSNull(),
+            "provider_active": providerActive ?? NSNull(),
+            "network_scope_active": networkScopeActive ?? NSNull(),
+            "permit_active": permitActive ?? NSNull(),
+            "publication_pending": publicationPending ?? NSNull(),
+            "terminal_barrier": terminalBarrier ?? NSNull()
+        ]
     }
 
     public var description: String {
@@ -137,17 +190,30 @@ public struct MCPResponseDeliveryTraceEvent: Equatable, Sendable, CustomStringCo
         if let activeRequestCount { fields.append("active=\(activeRequestCount)") }
         if let responseInDeliveryCount { fields.append("in_delivery=\(responseInDeliveryCount)") }
         if let terminalReason { fields.append("terminal_reason=\(terminalReason)") }
+        if let providerActive { fields.append("provider_active=\(providerActive)") }
+        if let networkScopeActive { fields.append("network_scope_active=\(networkScopeActive)") }
+        if let permitActive { fields.append("permit_active=\(permitActive)") }
+        if let publicationPending { fields.append("publication_pending=\(publicationPending)") }
+        if let terminalBarrier { fields.append("terminal_barrier=\(terminalBarrier)") }
+        if let appInvocationID = requestIdentity?.appInvocationID, invocationID == nil {
+            fields.append("app_invocation_id=\(appInvocationID)")
+        }
         return fields.joined(separator: " ")
     }
 }
 
 public enum MCPResponseDeliveryTracer {
     private static let lock = NSLock()
+    #if DEBUG
+        private nonisolated(unsafe) static var debugEvents: [MCPResponseDeliveryTraceEvent] = []
+        private static let maximumDebugEvents = 20000
+    #endif
 
     public static var successTracingEnabled: Bool {
         #if DEBUG
             ProcessInfo.processInfo.environment["REPOPROMPT_MCP_RESPONSE_TRACE"] == "1"
                 || UserDefaults.standard.bool(forKey: "enableMCPResponseDeliveryTrace")
+                || UserDefaults.standard.bool(forKey: "enableAgentModePerfDiagnostics")
         #else
             UserDefaults.standard.bool(forKey: "enableMCPResponseDeliveryTrace")
         #endif
@@ -164,11 +230,65 @@ public enum MCPResponseDeliveryTracer {
         // than delaying the transport's required terminal exit.
         guard lock.try() else { return }
         defer { lock.unlock() }
+        #if DEBUG
+            if debugEvents.count < maximumDebugEvents {
+                debugEvents.append(event)
+            }
+        #endif
+        // Terminal events are emitted even with success tracing disabled, so
+        // this path runs during transport failure handling when stderr may
+        // already be closed. Best-effort raw write; never FileHandle.write,
+        // whose ObjC exception on a broken pipe would abort the process.
         BestEffortStderrWriter.writeNonBlocking(data, to: descriptor)
     }
 
+    #if DEBUG
+        public static func resetDebugEvents() {
+            lock.lock()
+            debugEvents.removeAll(keepingCapacity: true)
+            lock.unlock()
+        }
+
+        public static func debugEventSnapshot() -> [MCPResponseDeliveryTraceEvent] {
+            lock.lock()
+            defer { lock.unlock() }
+            return debugEvents
+        }
+    #endif
+
     public static func sha256Hex(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    public static func emitPreparedFrame(
+        layer: String,
+        phase: String,
+        prepared: JSONRPCBridgePreparedFrame,
+        terminalReason: String? = nil,
+        publicationPending: Bool? = nil,
+        terminalBarrier: Bool? = nil
+    ) {
+        guard terminalReason != nil || successTracingEnabled else { return }
+        let messages = prepared.messages.isEmpty ? [nil] : prepared.messages.map(Optional.some)
+        for message in messages {
+            emit(MCPResponseDeliveryTraceEvent(
+                layer: layer,
+                phase: phase,
+                connectionID: prepared.connectionID,
+                connectionGeneration: prepared.connectionGeneration,
+                direction: prepared.direction,
+                id: message?.id,
+                method: message?.method,
+                tool: message?.tool,
+                lifecycleState: message?.kind.rawValue,
+                requestOrdinal: message?.requestOrdinal,
+                framedByteCount: prepared.deliveryFrame?.count ?? prepared.framedByteCount,
+                framedSHA256: prepared.framedSHA256,
+                terminalReason: terminalReason,
+                publicationPending: publicationPending,
+                terminalBarrier: terminalBarrier
+            ))
+        }
     }
 
     public static func emitFrame(
@@ -251,6 +371,7 @@ public enum JSONRPCBridgeDeliveryDisposition: Equatable, Sendable {
 public struct JSONRPCBridgePreparedFrame: Equatable, Sendable {
     public let token: UUID
     public let direction: JSONRPCBridgeDirection
+    public let connectionID: String?
     public let connectionGeneration: UInt64
     public let disposition: JSONRPCBridgeDeliveryDisposition
     public let messages: [JSONRPCBridgeMessageMetadata]
@@ -261,6 +382,7 @@ public struct JSONRPCBridgePreparedFrame: Equatable, Sendable {
     public init(
         token: UUID,
         direction: JSONRPCBridgeDirection,
+        connectionID: String?,
         connectionGeneration: UInt64,
         disposition: JSONRPCBridgeDeliveryDisposition,
         messages: [JSONRPCBridgeMessageMetadata],
@@ -270,6 +392,7 @@ public struct JSONRPCBridgePreparedFrame: Equatable, Sendable {
     ) {
         self.token = token
         self.direction = direction
+        self.connectionID = connectionID
         self.connectionGeneration = connectionGeneration
         self.disposition = disposition
         self.messages = messages
@@ -447,6 +570,7 @@ public actor JSONRPCBridgeLedger {
     }
 
     private let configuration: Configuration
+    private let connectionID: String?
     private let traceSink: TraceSink?
     private var connectionGeneration: UInt64 = 0
     private var nextRequestOrdinal: UInt64 = 0
@@ -459,9 +583,11 @@ public actor JSONRPCBridgeLedger {
 
     public init(
         configuration: Configuration = .init(),
+        connectionID: String? = nil,
         traceSink: TraceSink? = nil
     ) {
         self.configuration = configuration
+        self.connectionID = connectionID
         self.traceSink = traceSink
     }
 
@@ -691,6 +817,7 @@ public actor JSONRPCBridgeLedger {
         let prepared = JSONRPCBridgePreparedFrame(
             token: token,
             direction: direction,
+            connectionID: connectionID,
             connectionGeneration: connectionGeneration,
             disposition: disposition,
             messages: messages,
@@ -956,6 +1083,7 @@ public actor JSONRPCBridgeLedger {
             traceSink(MCPResponseDeliveryTraceEvent(
                 layer: "proxy_ledger",
                 phase: phase,
+                connectionID: connectionID,
                 connectionGeneration: connectionGeneration,
                 direction: direction,
                 id: message?.id,

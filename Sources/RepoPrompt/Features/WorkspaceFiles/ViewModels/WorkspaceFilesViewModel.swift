@@ -984,6 +984,11 @@ class WorkspaceFilesViewModel: ObservableObject {
             let directFolderIDLookupCount: Int
             let directIDLookupMissCount: Int
             let canonicalResyncCount: Int
+            let indexRebuildCount: Int
+            let indexRebuildTotalDurationMS: Double
+            let indexRebuildTraversalDurationMS: Double
+            let indexRebuildVisitedFolderCount: Int
+            let indexRebuildVisitedFileCount: Int
         }
 
         private var appliedIndexProjectionHandledEventCount = 0
@@ -991,6 +996,11 @@ class WorkspaceFilesViewModel: ObservableObject {
         private var appliedIndexProjectionDirectFolderIDLookupCount = 0
         private var appliedIndexProjectionDirectIDLookupMissCount = 0
         private var appliedIndexProjectionCanonicalResyncCount = 0
+        private var appliedIndexProjectionIndexRebuildCount = 0
+        private var appliedIndexProjectionIndexRebuildTotalDurationMS: Double = 0
+        private var appliedIndexProjectionIndexRebuildTraversalDurationMS: Double = 0
+        private var appliedIndexProjectionIndexRebuildVisitedFolderCount = 0
+        private var appliedIndexProjectionIndexRebuildVisitedFileCount = 0
         private var appliedIndexProjectionWillHandleHandler: (@Sendable (UUID, UInt64) async -> Void)?
         private var appliedIndexProjectionStateObserver: ((AppliedIndexProjectionDiagnosticsSnapshot) -> Void)?
 
@@ -1014,7 +1024,12 @@ class WorkspaceFilesViewModel: ObservableObject {
                 directFileIDLookupCount: appliedIndexProjectionDirectFileIDLookupCount,
                 directFolderIDLookupCount: appliedIndexProjectionDirectFolderIDLookupCount,
                 directIDLookupMissCount: appliedIndexProjectionDirectIDLookupMissCount,
-                canonicalResyncCount: appliedIndexProjectionCanonicalResyncCount
+                canonicalResyncCount: appliedIndexProjectionCanonicalResyncCount,
+                indexRebuildCount: appliedIndexProjectionIndexRebuildCount,
+                indexRebuildTotalDurationMS: appliedIndexProjectionIndexRebuildTotalDurationMS,
+                indexRebuildTraversalDurationMS: appliedIndexProjectionIndexRebuildTraversalDurationMS,
+                indexRebuildVisitedFolderCount: appliedIndexProjectionIndexRebuildVisitedFolderCount,
+                indexRebuildVisitedFileCount: appliedIndexProjectionIndexRebuildVisitedFileCount
             )
         }
 
@@ -2397,7 +2412,7 @@ class WorkspaceFilesViewModel: ObservableObject {
                 rootShellLoadedPaths.insert(stdRootPath)
                 invalidateStaticSnapshot(forRootFullPath: rootFolderVM.standardizedFullPath)
 
-                await performPostCatalogRootWork(
+                try await performPostCatalogRootWork(
                     for: workspaceRootRecord,
                     workspace: workspace,
                     rootKind: rootKind
@@ -2524,18 +2539,14 @@ class WorkspaceFilesViewModel: ObservableObject {
         for rootRecord: WorkspaceRootRecord,
         workspace: WorkspaceModel,
         rootKind: RootKind
-    ) async {
+    ) async throws {
         let rootKey = rootKey(forPath: rootRecord.standardizedFullPath)
         guard workspaceFileContextRootsByRootKey[rootKey]?.id == rootRecord.id else { return }
         currentWorkspaceID = workspace.id
 
         let rootReplayIngressGeneration = advanceRootReplayIngressGeneration(forRootKey: rootKey)
         await workspaceFileContextStore.registerDeferredReplayRootGeneration(rootReplayIngressGeneration, forRootKey: rootKey)
-        do {
-            try await workspaceFileContextStore.startWatchingRoot(id: rootRecord.id)
-        } catch {
-            print("Failed to start watcher for root \(rootRecord.standardizedFullPath): \(error)")
-        }
+        try await workspaceFileContextStore.startWatchingRoot(id: rootRecord.id)
         guard workspaceFileContextRootsByRootKey[rootKey]?.id == rootRecord.id else { return }
 
         let partitionData = await selectionSliceCoordinator.loadSlices(
@@ -2931,6 +2942,12 @@ class WorkspaceFilesViewModel: ObservableObject {
             reindexFolderRecursively(rootFolder, into: &fileHierarchyIndex, rootKey: rootKey, stats: &stats)
             let reindexTraversalDurationMS = debugPerfElapsedMS(since: traversalStartMS)
 
+            let totalDurationMS = debugPerfElapsedMS(since: totalStartMS)
+            appliedIndexProjectionIndexRebuildCount += 1
+            appliedIndexProjectionIndexRebuildTotalDurationMS += totalDurationMS
+            appliedIndexProjectionIndexRebuildTraversalDurationMS += reindexTraversalDurationMS
+            appliedIndexProjectionIndexRebuildVisitedFolderCount += stats.visitedFolderCount
+            appliedIndexProjectionIndexRebuildVisitedFileCount += stats.visitedFileCount
             lastIndexRebuildPerfSample = IndexRebuildPerfSample(
                 rootKey: rootKey,
                 totalFolderKeysBefore: totalFolderKeysBefore,
@@ -2946,7 +2963,7 @@ class WorkspaceFilesViewModel: ObservableObject {
                 reindexTraversalDurationMS: reindexTraversalDurationMS,
                 reindexVisitedFolderCount: stats.visitedFolderCount,
                 reindexVisitedFileCount: stats.visitedFileCount,
-                totalDurationMS: debugPerfElapsedMS(since: totalStartMS)
+                totalDurationMS: totalDurationMS
             )
         #else
             reindexFolderRecursively(rootFolder, into: &fileHierarchyIndex, rootKey: rootKey)
@@ -11551,7 +11568,7 @@ extension WorkspaceFilesViewModel {
         }
 
         markdownPathSearchEntries = entries
-        markdownPathSearchIndex = await PathSearchIndex(paths: entries.map(\.queryPath))
+        markdownPathSearchIndex = await PathSearchIndex.build(paths: entries.map(\.queryPath))
         markdownPathSearchGeneration = generation
     }
 

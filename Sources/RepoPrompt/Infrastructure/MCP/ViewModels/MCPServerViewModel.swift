@@ -3621,136 +3621,53 @@ final class MCPServerViewModel: ObservableObject {
         lineCount: Int? = nil,
         lookupRootScope: WorkspaceLookupRootScope = .visibleWorkspace
     ) async throws -> (reply: ToolResultDTOs.ReadFileReply, shouldAutoSelect: Bool) {
+        try await MCPToolWorkCountDiagnostics.withReadFileInvocation { [self] in
+            try await readFileBody(
+                path: path,
+                startLine1Based: startLine1Based,
+                lineCount: lineCount,
+                lookupRootScope: lookupRootScope
+            )
+        }
+    }
+
+    private func readFileBody(
+        path: String,
+        startLine1Based: Int? = nil,
+        lineCount: Int? = nil,
+        lookupRootScope: WorkspaceLookupRootScope = .visibleWorkspace
+    ) async throws -> (reply: ToolResultDTOs.ReadFileReply, shouldAutoSelect: Bool) {
         try Task.checkCancellation()
         let store = promptVM.workspaceFileContextStore
         let readableService = WorkspaceReadableFileService(store: store)
-        try await readableService.awaitFreshnessForExplicitRequest(path, fallbackScope: lookupRootScope)
+
+        let rootRefsLookup = EditFlowPerf.begin(EditFlowPerf.Stage.ReadFile.rootRefsLookup)
+        let roots = await store.rootRefs(scope: lookupRootScope)
         try Task.checkCancellation()
-        let (roots, readableFile): ([WorkspaceRootRef], WorkspaceReadableFileHandle?) = try await EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.resolveReadableFile) {
-            let exactPathIssueDetection = EditFlowPerf.begin(EditFlowPerf.Stage.ReadFile.exactPathIssueDetection)
-            let exactPathIssue = await store.exactPathResolutionIssue(for: path, kind: .either, rootScope: lookupRootScope)
-            try Task.checkCancellation()
-            EditFlowPerf.end(
-                EditFlowPerf.Stage.ReadFile.exactPathIssueDetection,
-                exactPathIssueDetection,
-                EditFlowPerf.Dimensions(outcome: exactPathIssue == nil ? "noIssue" : "issue")
-            )
-            if let issue = exactPathIssue {
-                throw MCPError.invalidParams(PathResolutionIssueRenderer.message(for: issue))
-            }
+        EditFlowPerf.end(EditFlowPerf.Stage.ReadFile.rootRefsLookup, rootRefsLookup)
 
-            let rootRefsLookup = EditFlowPerf.begin(EditFlowPerf.Stage.ReadFile.rootRefsLookup)
-            let roots = await store.rootRefs(scope: lookupRootScope)
-            try Task.checkCancellation()
-            EditFlowPerf.end(EditFlowPerf.Stage.ReadFile.rootRefsLookup, rootRefsLookup)
+        try await readableService.awaitFreshnessForExplicitRequest(path, rootRefs: roots)
+        try Task.checkCancellation()
 
-            let exactCatalogShortcutState = EditFlowPerf.begin(EditFlowPerf.Stage.ReadFile.exactCatalogShortcut)
-            let exactCatalogHit = await readableService.resolveExactWorkspaceCatalogHit(path, rootScope: lookupRootScope)
-            try Task.checkCancellation()
-            EditFlowPerf.end(
-                EditFlowPerf.Stage.ReadFile.exactCatalogShortcut,
-                exactCatalogShortcutState,
-                EditFlowPerf.Dimensions(outcome: exactCatalogHit == nil ? "miss" : "matched")
+        let resolution = await EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.resolveReadableFile) {
+            await readableService.resolveReadFileRequest(
+                path,
+                profile: .mcpRead,
+                rootScope: lookupRootScope,
+                rootRefs: roots
             )
-            EditFlowPerf.lifecycleEvent(
-                EditFlowPerf.Lifecycle.ReadFile.exactCatalogShortcutResolved,
-                EditFlowPerf.Dimensions(outcome: exactCatalogHit == nil ? "miss" : "matched")
-            )
-            if let exactCatalogHit {
-                return (roots, WorkspaceReadableFileHandle.workspace(exactCatalogHit))
-            }
-
-            let folderResolutionStage = EditFlowPerf.begin(EditFlowPerf.Stage.ReadFile.folderResolution)
-            let folderResolution = await store.resolveFolderInput(path, rootScope: lookupRootScope, profile: .mcpRead)
-            try Task.checkCancellation()
-            EditFlowPerf.end(
-                EditFlowPerf.Stage.ReadFile.folderResolution,
-                folderResolutionStage,
-                EditFlowPerf.Dimensions(outcome: folderResolution.folder == nil ? "noFolder" : "folder")
-            )
-            EditFlowPerf.lifecycleEvent(
-                EditFlowPerf.Lifecycle.ReadFile.folderResolutionReturned,
-                EditFlowPerf.Dimensions(outcome: folderResolution.folder == nil ? "noFolder" : "folder")
-            )
-            if let folder = folderResolution.folder {
-                let displayPath = folderResolution.displayPath ?? ClientPathFormatter.displayAbsolutePath(fullPath: folder.standardizedFullPath, visibleRoots: roots)
-                throw MCPError.invalidParams("'\(displayPath)' is a folder; read_file requires a file path. Use get_file_tree or file_search to find specific files.")
-            }
-
-            let externalFolderGuard = EditFlowPerf.begin(EditFlowPerf.Stage.ReadFile.externalFolderGuard)
-            let externalFolderPath = readableService.resolveAlwaysReadableExternalFolderDisplayPath(path)
-            EditFlowPerf.end(
-                EditFlowPerf.Stage.ReadFile.externalFolderGuard,
-                externalFolderGuard,
-                EditFlowPerf.Dimensions(outcome: externalFolderPath == nil ? "noFolder" : "folder")
-            )
-            if let externalFolderPath {
-                throw MCPError.invalidParams("'\(externalFolderPath)' is a folder; read_file requires a file path. Use get_file_tree or file_search to find specific files.")
-            }
-
-            let readableServiceResolution = EditFlowPerf.begin(EditFlowPerf.Stage.ReadFile.readableServiceResolution)
-            let readableFile = await readableService.resolveReadableFile(path, profile: .mcpRead, rootScope: lookupRootScope)
-            try Task.checkCancellation()
-            EditFlowPerf.end(
-                EditFlowPerf.Stage.ReadFile.readableServiceResolution,
-                readableServiceResolution,
-                EditFlowPerf.Dimensions(outcome: {
-                    switch readableFile {
-                    case .some(.workspace):
-                        "workspace"
-                    case .some(.external):
-                        "external"
-                    case .none:
-                        "noCandidate"
-                    }
-                }())
-            )
-            EditFlowPerf.lifecycleEvent(
-                EditFlowPerf.Lifecycle.ReadFile.readableServiceResolutionReturned,
-                EditFlowPerf.Dimensions(outcome: {
-                    switch readableFile {
-                    case .some(.workspace):
-                        "workspace"
-                    case .some(.external):
-                        "external"
-                    case .none:
-                        "noCandidate"
-                    }
-                }())
-            )
-            return (roots, readableFile)
         }
         try Task.checkCancellation()
-        let full: String
-        let displayPath: String
-        let shouldAutoSelect: Bool
-        switch readableFile {
-        case let .workspace(file):
-            guard let workspaceContent = try await EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.workspaceContentLoad, operation: {
-                try await store.readContent(
-                    rootID: file.rootID,
-                    relativePath: file.standardizedRelativePath,
-                    workloadClass: .interactiveRead
-                )
-            }) else {
-                throw MCPError.internalError("content unavailable")
-            }
-            try Task.checkCancellation()
-            full = workspaceContent
-            displayPath = ClientPathFormatter.displayAbsolutePath(fullPath: file.standardizedFullPath, visibleRoots: roots)
-            shouldAutoSelect = true
-        case let .external(externalFile):
-            do {
-                full = try await readableService.readAlwaysReadableExternalFile(externalFile)
-                try Task.checkCancellation()
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                throw MCPError.invalidParams("Cannot read '\(externalFile.displayPath)': \(error.localizedDescription)")
-            }
-            displayPath = externalFile.displayPath
-            shouldAutoSelect = false
-        case nil:
+
+        let readableFile: WorkspaceReadableFileHandle
+        switch resolution {
+        case let .readable(handle):
+            readableFile = handle
+        case let .folder(displayPath):
+            throw MCPError.invalidParams("'\(displayPath)' is a folder; read_file requires a file path. Use get_file_tree or file_search to find specific files.")
+        case let .issue(issue):
+            throw MCPError.invalidParams(PathResolutionIssueRenderer.message(for: issue))
+        case .noCandidate:
             if readableService.isAlwaysReadableExternalPath(path) {
                 throw MCPError.invalidParams("File not found: '\(readableService.displayPath(forExternalPath: path))'.")
             }
@@ -3758,81 +3675,69 @@ final class MCPServerViewModel: ObservableObject {
             throw MCPError.invalidParams("Cannot read '\(path)'. \(msg)")
         }
 
-        try Task.checkCancellation()
-        // Preserve original line endings and total line count
-        let pairs = EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.splitPreservingLineEndings) {
-            String.splitContentPreservingAllLineEndings(full)
-        }
-        let total = pairs.count
-
-        // Validate parameter combinations
-        if let s1 = startLine1Based {
-            // Check for invalid parameter combinations
-            if s1 < 0, lineCount != nil {
-                throw MCPError.invalidParams("limit parameter is not allowed with negative start_line. Use start_line=-N to read the last N lines.")
+        let preparedContent: WorkspaceInteractiveReadPreparedContent
+        let displayPath: String
+        let shouldAutoSelect: Bool
+        let cacheHit: Bool
+        switch readableFile {
+        case let .workspace(file):
+            guard let snapshot = try await EditFlowPerf.measure(
+                EditFlowPerf.Stage.ReadFile.workspaceContentLoad,
+                operation: {
+                    try await store.interactiveReadSnapshot(for: file)
+                }
+            ) else {
+                throw MCPError.internalError("content unavailable")
             }
-            if s1 == 0 {
-                throw MCPError.invalidParams("start_line must be positive (1-based) or negative (tail-like behavior)")
-            }
-        }
-
-        // Determine slice range
-        let (first, lastExclusive): (Int, Int) = {
-            // Handle negative start_line (tail-like behavior)
-            if let s1 = startLine1Based, s1 < 0 {
-                // Negative start_line means "last N lines" (like tail -n)
-                let linesToRead = abs(s1)
-                let start = max(0, total - linesToRead)
-                return (start, total)
-            }
-
-            // Handle positive 1-based start line (default to 1 if only limit provided)
-            let s1 = startLine1Based ?? 1
-            let start0 = max(0, s1 - 1)
-            let end = (lineCount != nil && lineCount! >= 0)
-                ? min(total, start0 + lineCount!)
-                : total
-            return (start0, end)
-        }()
-
-        // If start is beyond file end, return empty content with a helpful message
-        if !(first < total || total == 0) {
-            return (
-                ToolResultDTOs.ReadFileReply(
-                    content: "",
-                    totalLines: total,
-                    firstLine: max(1, first + 1),
-                    lastLine: total,
-                    message: "Requested start_line exceeds file length.",
-                    displayPath: displayPath
-                ),
-                shouldAutoSelect
+            try Task.checkCancellation()
+            preparedContent = snapshot.preparedContent
+            cacheHit = snapshot.cacheHit
+            displayPath = ClientPathFormatter.displayAbsolutePath(
+                fullPath: file.standardizedFullPath,
+                visibleRoots: roots
             )
+            shouldAutoSelect = true
+        case let .external(externalFile):
+            do {
+                let full = try await readableService.readAlwaysReadableExternalFile(externalFile)
+                try Task.checkCancellation()
+                let splitState = EditFlowPerf.begin(EditFlowPerf.Stage.ReadFile.splitPreservingLineEndings)
+                preparedContent = await WorkspaceInteractiveReadProcessor.prepareOffActor(full)
+                EditFlowPerf.end(EditFlowPerf.Stage.ReadFile.splitPreservingLineEndings, splitState)
+                try Task.checkCancellation()
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw MCPError.invalidParams("Cannot read '\(externalFile.displayPath)': \(error.localizedDescription)")
+            }
+            cacheHit = false
+            displayPath = externalFile.displayPath
+            shouldAutoSelect = false
         }
 
-        try Task.checkCancellation()
-        let contentSlice = EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.buildSlice) {
-            if total == 0 { return "" }
-            let slice = pairs[first ..< lastExclusive]
-            return slice.map { $0.line + $0.ending }.joined()
-        }
-
-        try Task.checkCancellation()
-        // Prepare metadata for the displayed slice
-        let shownFirst = total == 0 ? 0 : (first + 1)
-        let shownLast = total == 0 ? 0 : lastExclusive
-
-        return (
-            ToolResultDTOs.ReadFileReply(
-                content: contentSlice,
-                totalLines: total,
-                firstLine: shownFirst,
-                lastLine: shownLast,
-                message: nil,
+        let preparedReply: MCPReadFileToolProjection.PreparedReply
+        do {
+            let sliceState = EditFlowPerf.begin(EditFlowPerf.Stage.ReadFile.buildSlice)
+            defer { EditFlowPerf.end(EditFlowPerf.Stage.ReadFile.buildSlice, sliceState) }
+            preparedReply = try await MCPReadFileToolProjection.makeBaseReply(
+                preparedContent: preparedContent,
+                startLine1Based: startLine1Based,
+                lineCount: lineCount,
                 displayPath: displayPath
-            ),
-            shouldAutoSelect
+            )
+        } catch WorkspaceInteractiveReadRangeError.limitWithNegativeStart {
+            throw MCPError.invalidParams("limit parameter is not allowed with negative start_line. Use start_line=-N to read the last N lines.")
+        } catch WorkspaceInteractiveReadRangeError.zeroStart {
+            throw MCPError.invalidParams("start_line must be positive (1-based) or negative (tail-like behavior)")
+        }
+        try Task.checkCancellation()
+
+        MCPToolWorkCountDiagnostics.recordReadFileResult(
+            returnedBytes: preparedReply.reply.content.utf8.count,
+            returnedLines: preparedReply.returnedLineCount,
+            cacheHit: cacheHit
         )
+        return (preparedReply.reply, shouldAutoSelect)
     }
 
     /// Performs a file action (create, delete, or move/rename)

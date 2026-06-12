@@ -1,3 +1,4 @@
+import Combine
 import CoreServices
 @testable import RepoPrompt
 import XCTest
@@ -84,6 +85,85 @@ final class FileSystemServiceRecoveryTests: XCTestCase {
             XCTAssertEqual(publication.lastPublishedWatcherAcceptedWatermark, watermark)
         }
 
+        func testDualRecoveryScanFailureBlocksWatermarkUntilFullResyncSucceeds() async throws {
+            let root = try temporaryRoots.makeRoot(suiteName: "FileSystemRecoveryFullResync")
+            let folderURL = root.appendingPathComponent("A", isDirectory: true)
+            try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+            try "initial".write(
+                to: folderURL.appendingPathComponent("initial.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+            let retryGate = SteppedBatchGate()
+            let service = try await FileSystemService(
+                path: root.path,
+                respectGitignore: false,
+                respectRepoIgnore: false,
+                respectCursorignore: false,
+                skipSymlinks: true,
+                enableHierarchicalIgnores: false,
+                testVisitedPaths: ["A", "A/initial.txt"],
+                testVisitedItems: ["A": true, "A/initial.txt": false],
+                isTestMode: true,
+                maxRecoveryScanAttemptsOverride: 2,
+                recoveryScanRetryBaseNanosecondsOverride: 1,
+                recoveryScanSleep: { _ in
+                    await retryGate.markStartedAndWaitForRelease()
+                }
+            )
+            let publications = LockedPublications()
+            let publisher = await service.publisherForChanges()
+            let cancellable = publisher.sink { publications.append($0) }
+            let flushCompleted = CompletionSignal()
+            let addedFileURL = folderURL.appendingPathComponent("recovered.txt")
+            try "recovered".write(to: addedFileURL, atomically: true, encoding: .utf8)
+            await service.setFolderScanFailureCountForTesting(4, folder: "A")
+
+            let flags = FSEventStreamEventFlags(
+                kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemIsFile
+            )
+            let acceptedPayload = await service.acceptWatcherPayloadForTesting([
+                (absolutePath: addedFileURL.path, flags: flags, eventId: 10)
+            ], scheduleDrain: false)
+            let accepted = try XCTUnwrap(acceptedPayload)
+            let flushTask = Task {
+                let sequence = await service.flushPendingEventsNow(
+                    throughAcceptedWatcherWatermark: accepted
+                )
+                await flushCompleted.mark()
+                return sequence
+            }
+
+            await retryGate.waitUntilStartCount(1)
+            let blockedState = await service.watcherStateForTesting()
+            let blockedPublication = await service.publicationStateForTesting()
+            let didCompleteWhileRecoveryWasDirty = await flushCompleted.isMarked()
+            XCTAssertFalse(didCompleteWhileRecoveryWasDirty)
+            XCTAssertEqual(blockedState.dirtyRecoveryScanTargets, ["A"])
+            XCTAssertEqual(blockedState.pendingScanTargets["A"], 10)
+            XCTAssertLessThan(blockedPublication.lastPublishedWatcherAcceptedWatermark, accepted)
+            XCTAssertTrue(publications.snapshot().isEmpty)
+
+            await retryGate.releaseAll()
+            let finalSequence = await flushTask.value
+            let finalState = await service.watcherStateForTesting()
+            let finalPublicationState = await service.publicationStateForTesting()
+            let fullResyncPublication = try XCTUnwrap(
+                publications.snapshot().last(where: { $0.requiresFullResync })
+            )
+
+            let didCompleteAfterFullResync = await flushCompleted.isMarked()
+            XCTAssertGreaterThan(finalSequence, 0)
+            XCTAssertTrue(didCompleteAfterFullResync)
+            XCTAssertTrue(finalState.dirtyRecoveryScanTargets.isEmpty)
+            XCTAssertTrue(finalState.pendingScanTargets.isEmpty)
+            XCTAssertEqual(finalPublicationState.lastPublishedWatcherAcceptedWatermark, accepted)
+            XCTAssertEqual(fullResyncPublication.source, .recoveryFullResync)
+            XCTAssertEqual(fullResyncPublication.watcherAcceptedWatermark, accepted)
+            XCTAssertTrue(fullResyncPublication.deltas.contains(.fileAdded("A/recovered.txt")))
+            withExtendedLifetime(cancellable) {}
+        }
+
         func testCarryOverFolderScansPreserveIntermediateWatermarkUnderContinuousChurn() async throws {
             let root = try temporaryRoots.makeRoot(suiteName: "FileSystemFolderScanFairness")
             let folders = ["A", "B", "C"]
@@ -166,6 +246,35 @@ final class FileSystemServiceRecoveryTests: XCTestCase {
             XCTAssertEqual(state.lastScannedEventIdByFolder["C"], 1)
             XCTAssertEqual(publication.lastPublishedWatcherAcceptedWatermark, latestWatermark)
             await service.setWatcherBatchWillProcessHandlerForTesting(nil)
+        }
+
+        private final class LockedPublications: @unchecked Sendable {
+            private let lock = NSLock()
+            private var publications: [FileSystemDeltaPublication] = []
+
+            func append(_ publication: FileSystemDeltaPublication) {
+                lock.lock()
+                publications.append(publication)
+                lock.unlock()
+            }
+
+            func snapshot() -> [FileSystemDeltaPublication] {
+                lock.lock()
+                defer { lock.unlock() }
+                return publications
+            }
+        }
+
+        private actor CompletionSignal {
+            private var marked = false
+
+            func mark() {
+                marked = true
+            }
+
+            func isMarked() -> Bool {
+                marked
+            }
         }
 
         private actor SteppedBatchGate {

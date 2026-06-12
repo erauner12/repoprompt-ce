@@ -53,9 +53,10 @@ actor FileSystemService {
     func publishFileSystemDeltas(
         _ deltas: [FileSystemDelta],
         source: FileSystemDeltaPublicationSource,
-        watcherAcceptedWatermark: FileSystemWatcherIngressMailbox.Watermark? = nil
+        watcherAcceptedWatermark: FileSystemWatcherIngressMailbox.Watermark? = nil,
+        requiresFullResync: Bool = false
     ) -> UInt64 {
-        guard !deltas.isEmpty || watcherAcceptedWatermark != nil || source == .watcherBarrierNoop else {
+        guard !deltas.isEmpty || watcherAcceptedWatermark != nil || requiresFullResync || source == .watcherBarrierNoop else {
             return lastServicePublicationSequence
         }
         nextServicePublicationSequence &+= 1
@@ -68,6 +69,7 @@ actor FileSystemService {
             servicePublicationSequence: servicePublicationSequence,
             source: source,
             watcherAcceptedWatermark: watcherAcceptedWatermark,
+            requiresFullResync: requiresFullResync,
             deltas: deltas
         )
         #if DEBUG || EDIT_FLOW_PERF
@@ -130,6 +132,14 @@ actor FileSystemService {
 
         /// Test-only gate invoked from the detached mutation worker immediately before filesystem I/O.
         var mutationIOWillBeginHandler: (@Sendable (FileSystemUncancellableMutation) async -> Void)?
+
+        enum WatcherActivationFailurePoint {
+            case streamCreation
+            case streamStart
+        }
+
+        var watcherActivationFailurePointForTesting: WatcherActivationFailurePoint?
+        var folderScanFailuresRemainingForTesting: [String: Int] = [:]
     #endif
 
     /// Request waiters are actor-owned and may be cancelled independently from detached filesystem I/O.
@@ -143,6 +153,9 @@ actor FileSystemService {
 
     /// The FSEvent stream reference
     var fseventStreamRef: FSEventStreamRef?
+    /// The last durable FSEvents journal cut. Captured before the initial crawl so
+    /// watcher startup can replay mutations that happen while the crawl is running.
+    var nextFSEventStreamStartEventID: FSEventStreamEventId
 
     /// Publishes ordered delta envelopes whenever changes or watcher progress occur.
     var changePublisher = PassthroughSubject<FileSystemDeltaPublication, Never>()
@@ -150,7 +163,24 @@ actor FileSystemService {
     var lastServicePublicationSequence: UInt64 = 0
     var lastPublishedWatcherAcceptedWatermark = FileSystemWatcherIngressMailbox.Watermark.zero
     #if DEBUG
+        struct FreshnessWorkDiagnosticsSnapshot: Equatable {
+            let flushCallCount: Int
+            let noopFlushCount: Int
+            let debounceCancellationCount: Int
+            let watcherBatchCount: Int
+            let watcherBatchEventCount: Int
+            let lastWatcherBatchSize: Int
+            let maxWatcherBatchSize: Int
+        }
+
         var lastPublishedDeltaCoalescingDiagnostics: PublishedDeltaCoalescingDiagnostics?
+        var freshnessFlushCallCount = 0
+        var freshnessNoopFlushCount = 0
+        var freshnessDebounceCancellationCount = 0
+        var freshnessWatcherBatchCount = 0
+        var freshnessWatcherBatchEventCount = 0
+        var freshnessLastWatcherBatchSize = 0
+        var freshnessMaxWatcherBatchSize = 0
     #endif
 
     /// Retained pointer to self (to avoid deallocation while FSEvent stream is active)
@@ -210,6 +240,11 @@ actor FileSystemService {
     var lastScannedEventIdByFolder: [String: FSEventStreamEventId] = [:]
     /// Cap-omitted folders that must be scanned by quiet follow-up watcher batches.
     var pendingQuietFolderScanTargets: Set<String> = []
+    /// Recovery targets that failed both parallel and immediate serial scanning.
+    /// Their accepted watcher cut remains unpublished until retry or full resync.
+    var dirtyRecoveryScanTargets: Set<String> = []
+    var recoveryScanFailureCountByFolder: [String: Int] = [:]
+    var recoveryScanRetryTask: Task<Void, Never>?
 
     /// Short-lived cache
     /// results during a directory walk to avoid repeated allocations.
@@ -236,6 +271,9 @@ actor FileSystemService {
 
     /// Maximum folders to scan in a single batch (bounds per-tick work)
     let maxFoldersPerBatch: Int
+    let maxRecoveryScanAttempts: Int
+    let recoveryScanRetryBaseNanoseconds: UInt64
+    let recoveryScanSleep: @Sendable (UInt64) async -> Void
 
     // MARK: - Safety-Net Verification
 
@@ -253,8 +291,8 @@ actor FileSystemService {
 
     // MARK: - Init
 
-    /// Initializes the FileSystemService for a given path, applying ignore rules, optionally skipping symlinks,
-    /// and immediately starting an FSEvents watcher to track changes in that path.
+    /// Initializes the FileSystemService for a given path, applying ignore rules and capturing
+    /// an FSEvents replay cut before the caller begins the initial crawl.
     init(
         path: String,
         respectGitignore: Bool = true,
@@ -273,11 +311,17 @@ actor FileSystemService {
         self.enableHierarchicalIgnores = enableHierarchicalIgnores
 
         watcherIngressMailbox = FileSystemWatcherIngressMailbox(maxQueuedRawEntries: Self.maxPendingRawEvents)
+        nextFSEventStreamStartEventID = FSEventsGetCurrentEventId()
 
         // Configure parallelism caps based on available cores
         let cores = ProcessInfo.processInfo.activeProcessorCount
         maxParallelScansPerActor = max(2, min(4, cores / 2))
         maxFoldersPerBatch = 256
+        maxRecoveryScanAttempts = 3
+        recoveryScanRetryBaseNanoseconds = 50_000_000
+        recoveryScanSleep = { nanoseconds in
+            try? await Task.sleep(nanoseconds: nanoseconds)
+        }
 
         // Load fresh ignore rules from manager, no caching done by manager
         ignoreRules = try await IgnoreRulesManager.shared.getIgnoreRules(
@@ -317,7 +361,12 @@ actor FileSystemService {
             fileManagerOverride: (any FileSystemProviding)? = nil,
             maxParallelScansOverride: Int? = nil,
             maxFoldersPerBatchOverride: Int? = nil,
-            maxPendingWatcherIngressEntriesOverride: Int? = nil
+            maxPendingWatcherIngressEntriesOverride: Int? = nil,
+            maxRecoveryScanAttemptsOverride: Int? = nil,
+            recoveryScanRetryBaseNanosecondsOverride: UInt64? = nil,
+            recoveryScanSleep: @escaping @Sendable (UInt64) async -> Void = { nanoseconds in
+                try? await Task.sleep(nanoseconds: nanoseconds)
+            }
         ) async throws {
             self.path = path
             rootURL = URL(fileURLWithPath: path).standardizedFileURL
@@ -333,11 +382,15 @@ actor FileSystemService {
             watcherIngressMailbox = FileSystemWatcherIngressMailbox(
                 maxQueuedRawEntries: maxPendingWatcherIngressEntriesOverride ?? Self.maxPendingRawEvents
             )
+            nextFSEventStreamStartEventID = FSEventsGetCurrentEventId()
 
             // Configure parallelism caps (allow test overrides)
             let cores = ProcessInfo.processInfo.activeProcessorCount
             maxParallelScansPerActor = maxParallelScansOverride ?? max(2, min(4, cores / 2))
             maxFoldersPerBatch = maxFoldersPerBatchOverride ?? 256
+            maxRecoveryScanAttempts = max(1, maxRecoveryScanAttemptsOverride ?? 3)
+            recoveryScanRetryBaseNanoseconds = recoveryScanRetryBaseNanosecondsOverride ?? 50_000_000
+            self.recoveryScanSleep = recoveryScanSleep
 
             // Use test data if provided
             if let paths = testVisitedPaths {

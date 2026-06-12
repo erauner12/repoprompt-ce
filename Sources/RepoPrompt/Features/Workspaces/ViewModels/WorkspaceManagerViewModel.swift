@@ -723,7 +723,7 @@ class WorkspaceManagerViewModel: ObservableObject {
     private(set) var isSwitchingWorkspace = false
     @Published private(set) var workspaceSearchReadinessState: WorkspaceSearchReadinessState = .idle
     private var workspaceHydrationGeneration: UInt64 = 0
-    private var postCatalogRootWorkTasks: [UInt64: [Task<Void, Never>]] = [:]
+    private var postCatalogRootWorkTasks: [UInt64: [Task<WorkspaceRootLoadFailure?, Never>]] = [:]
     private var returnToSystemAfterSwitchCancellationOperationID: UUID?
     private var committedWorkspaceSwitchOperationID: UUID?
     private var recoveringWorkspaceSwitchOperationID: UUID?
@@ -5365,16 +5365,40 @@ class WorkspaceManagerViewModel: ObservableObject {
         workspace: WorkspaceModel,
         generation: UInt64
     ) {
-        let task = Task { @MainActor [weak self] in
+        let task: Task<WorkspaceRootLoadFailure?, Never> = Task { @MainActor [weak self] in
             guard let self,
-                  isHydrationGenerationCurrent(generation, workspaceID: workspace.id) else { return }
-            await fileManager.performPostCatalogRootWork(
-                for: rootRecord,
-                workspace: workspace,
-                rootKind: .user
-            )
+                  isHydrationGenerationCurrent(generation, workspaceID: workspace.id) else { return nil }
+            do {
+                try await fileManager.performPostCatalogRootWork(
+                    for: rootRecord,
+                    workspace: workspace,
+                    rootKind: .user
+                )
+                return nil
+            } catch is CancellationError {
+                return nil
+            } catch {
+                guard isHydrationGenerationCurrent(generation, workspaceID: workspace.id) else { return nil }
+                return WorkspaceRootLoadFailure(
+                    rootPath: rootRecord.standardizedFullPath,
+                    kind: rootRecord.kind,
+                    errorDescription: error.localizedDescription
+                )
+            }
         }
         postCatalogRootWorkTasks[generation, default: []].append(task)
+    }
+
+    private func awaitPostCatalogRootWorkFailures(generation: UInt64) async -> [WorkspaceRootLoadFailure] {
+        let tasks = postCatalogRootWorkTasks.removeValue(forKey: generation) ?? []
+        var failures: [WorkspaceRootLoadFailure] = []
+        failures.reserveCapacity(tasks.count)
+        for task in tasks {
+            if let failure = await task.value {
+                failures.append(failure)
+            }
+        }
+        return failures
     }
 
     private func loadWorkspaceFolders(
@@ -5576,6 +5600,8 @@ class WorkspaceManagerViewModel: ObservableObject {
         if allPrimaryRootsVisibleSuccessfully, !Task.isCancelled {
             onAllPrimaryRootsVisible?()
         }
+        await failures.append(contentsOf: awaitPostCatalogRootWorkFailures(generation: hydrationGeneration))
+        guard isHydrationGenerationCurrent(hydrationGeneration, workspaceID: workspace.id) else { return }
         await workspaceSearchService.startKeepingFresh(with: fileManager.workspaceFileContextStore)
         #if DEBUG
             let searchCatalogSnapshotStartMS = WorkspaceRestorePerfLog.timestampMSIfEnabled()

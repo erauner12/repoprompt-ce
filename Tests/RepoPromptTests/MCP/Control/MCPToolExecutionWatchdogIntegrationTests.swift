@@ -965,12 +965,10 @@ import XCTest
                         )
                     }
                     queuedReadTask = activeQueuedReadTask
-                    let queuedAtLimiter = await Self.waitUntil {
-                        await manager.connectionLimiterSnapshotForTesting(
-                            connectionID: createdEndpoint.connectionID
-                        )?.waiterCount == 1
-                    }
-                    XCTAssertTrue(queuedAtLimiter)
+                    let queuedReadResponse = try await activeQueuedReadTask.value
+                    queuedReadTask = nil
+                    let queuedReadText = try Self.toolResultText(queuedReadResponse)
+                    XCTAssertTrue(queuedReadText.contains(fixture.contextA.sentinel), queuedReadText)
 
                     try await clock.advanceNext(expected: MCPTimeoutPolicy.boundedToolExecutionDeadline)
                     let timeoutResponse = try await activeManageTask.value
@@ -980,10 +978,6 @@ import XCTest
                     XCTAssertEqual(server.readFileAutoSelectionDiagnosticsSnapshot().canonicalWaiterCount, 0)
                     XCTAssertEqual(server.readFileAutoSelectionDiagnosticsSnapshot().canonicalWorkerCount, 1)
 
-                    let queuedReadResponse = try await activeQueuedReadTask.value
-                    queuedReadTask = nil
-                    let queuedReadText = try Self.toolResultText(queuedReadResponse)
-                    XCTAssertTrue(queuedReadText.contains(fixture.contextA.sentinel), queuedReadText)
                     let isTerminal = await manager.debugIsExecutionWatchdogTerminal(connectionID: createdEndpoint.connectionID)
                     XCTAssertFalse(isTerminal)
                     let events = recorder.snapshot().filter {
@@ -1075,12 +1069,10 @@ import XCTest
                         )
                     }
                     queuedReadTask = activeQueuedReadTask
-                    let queuedAtLimiter = await Self.waitUntil {
-                        await manager.connectionLimiterSnapshotForTesting(
-                            connectionID: endpoint.connectionID
-                        )?.waiterCount == 1
-                    }
-                    XCTAssertTrue(queuedAtLimiter)
+                    let queuedReadResponse = try await activeQueuedReadTask.value
+                    queuedReadTask = nil
+                    let queuedReadText = try Self.toolResultText(queuedReadResponse)
+                    XCTAssertTrue(queuedReadText.contains(fixture.contextA.sentinel), queuedReadText)
 
                     try await clock.advanceNext(expected: MCPTimeoutPolicy.boundedToolExecutionDeadline)
                     let timeoutResponse = try await activeFileActionTask.value
@@ -1091,10 +1083,6 @@ import XCTest
                     XCTAssertEqual(pendingWaiters, 0)
                     XCTAssertFalse(FileManager.default.fileExists(atPath: createdURL.path))
 
-                    let queuedReadResponse = try await activeQueuedReadTask.value
-                    queuedReadTask = nil
-                    let queuedReadText = try Self.toolResultText(queuedReadResponse)
-                    XCTAssertTrue(queuedReadText.contains(fixture.contextA.sentinel), queuedReadText)
                     let isTerminal = await manager.debugIsExecutionWatchdogTerminal(connectionID: endpoint.connectionID)
                     XCTAssertFalse(isTerminal)
                     let events = recorder.snapshot().filter {
@@ -1196,12 +1184,10 @@ import XCTest
                         )
                     }
                     queuedReadTask = activeQueuedReadTask
-                    let queuedAtLimiter = await Self.waitUntil {
-                        await manager.connectionLimiterSnapshotForTesting(
-                            connectionID: endpoint.connectionID
-                        )?.waiterCount == 1
-                    }
-                    XCTAssertTrue(queuedAtLimiter)
+                    let queuedReadResponse = try await activeQueuedReadTask.value
+                    queuedReadTask = nil
+                    let queuedReadText = try Self.toolResultText(queuedReadResponse)
+                    XCTAssertTrue(queuedReadText.contains(fixture.contextA.sentinel), queuedReadText)
 
                     try await clock.advanceNext(expected: MCPTimeoutPolicy.boundedToolExecutionDeadline)
                     let timeoutResponse = try await activeFileActionTask.value
@@ -1212,10 +1198,6 @@ import XCTest
                     XCTAssertEqual(pendingWaiters, 0)
                     XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), "old")
 
-                    let queuedReadResponse = try await activeQueuedReadTask.value
-                    queuedReadTask = nil
-                    let queuedReadText = try Self.toolResultText(queuedReadResponse)
-                    XCTAssertTrue(queuedReadText.contains(fixture.contextA.sentinel), queuedReadText)
                     let isTerminal = await manager.debugIsExecutionWatchdogTerminal(connectionID: endpoint.connectionID)
                     XCTAssertFalse(isTerminal)
                     let events = recorder.snapshot().filter {
@@ -1417,7 +1399,7 @@ import XCTest
             }
         }
 
-        func testUncooperativeDeadlineForceDisconnectsAndQueuedCallNeverEntersProvider() async throws {
+        func testUncooperativeSmallReadDeadlineForceDisconnectsAndCallBeyondCapacityNeverEntersProvider() async throws {
             try await MCPSharedServerTestLease.shared.withLease { lease in
                 let fixture = try await PersistentMCPTestFixture.make(lease: lease)
                 let clock = ExecutionWatchdogManualClock()
@@ -1426,8 +1408,7 @@ import XCTest
                 let manager = fixture.networkManager
                 MCPToolExecutionTracer.setTestSink { recorder.append($0) }
                 await manager.debugSetToolExecutionWatchdogEnvironment(clock.environment)
-                await manager.debugSetResolvedToolOperationOverride(toolName: MCPWindowToolName.manageSelection) {
-                    await MCPToolExecutionHandlerPhaseContext.report(.manageSelectionAutoSelectionDrain)
+                await manager.debugSetResolvedToolOperationOverride(toolName: MCPWindowToolName.readFile) {
                     await operationGate.enterAndWait()
                     return .null
                 }
@@ -1435,9 +1416,9 @@ import XCTest
                     let endpoint = try fixture.endpointA()
                     let first = Task {
                         try await endpoint.callTool(
-                            name: MCPWindowToolName.manageSelection,
+                            name: MCPWindowToolName.readFile,
                             arguments: [
-                                "op": "get",
+                                "path": fixture.contextA.fileURL.path,
                                 "context_id": fixture.contextA.tabID.uuidString
                             ]
                         )
@@ -1445,51 +1426,57 @@ import XCTest
                     try await clock.waitForSleeperCount(1)
                     try await operationGate.waitUntilEntered(count: 1)
 
-                    let queued = Task {
+                    let second = Task {
                         try await endpoint.callTool(
-                            name: MCPWindowToolName.manageSelection,
+                            name: MCPWindowToolName.readFile,
                             arguments: [
-                                "op": "get",
+                                "path": fixture.contextA.fileURL.path,
+                                "context_id": fixture.contextA.tabID.uuidString
+                            ]
+                        )
+                    }
+                    try await clock.waitForSleeperCount(2)
+                    try await operationGate.waitUntilEntered(count: 2)
+
+                    let queuedBeyondCapacity = Task {
+                        try await endpoint.callTool(
+                            name: MCPWindowToolName.readFile,
+                            arguments: [
+                                "path": fixture.contextA.fileURL.path,
                                 "context_id": fixture.contextA.tabID.uuidString
                             ]
                         )
                     }
                     try await clock.advanceNext(expected: MCPTimeoutPolicy.boundedToolExecutionDeadline)
-                    try await clock.waitForSleeperCount(1)
+                    try await clock.waitForSleeperCount(2)
+                    try await clock.advanceNext(expected: MCPTimeoutPolicy.boundedToolExecutionDeadline)
+                    try await clock.waitForSleeperCount(2)
                     try await clock.advanceNext(expected: MCPTimeoutPolicy.boundedToolCancellationCleanupGrace)
 
                     await Self.assertSocketClosed(first)
-                    await Self.assertSocketClosed(queued)
+                    await Self.assertSocketClosed(second)
+                    await Self.assertSocketClosed(queuedBeyondCapacity)
                     let enteredCount = await operationGate.enteredCount()
                     let isTerminal = await manager.debugIsExecutionWatchdogTerminal(connectionID: endpoint.connectionID)
-                    XCTAssertEqual(enteredCount, 1)
+                    XCTAssertEqual(enteredCount, MCPToolAdmissionPolicy.smallReadPerWindowLimit)
                     XCTAssertTrue(isTerminal)
 
                     let events = recorder.snapshot().filter {
-                        $0.connectionID == endpoint.connectionID && $0.toolName == MCPWindowToolName.manageSelection
+                        $0.connectionID == endpoint.connectionID && $0.toolName == MCPWindowToolName.readFile
                     }
                     XCTAssertFalse(events.contains { $0.phase == .handlerCompleted })
-                    for phase in [
-                        MCPToolExecutionTraceEvent.Phase.deadlineExpired,
-                        .cancellationRequested,
-                        .cleanupGraceExpired,
-                        .connectionForceDisconnectRequested
-                    ] {
-                        let event = try XCTUnwrap(events.first { $0.phase == phase })
-                        XCTAssertEqual(event.handlerPhase?.phase, .manageSelectionAutoSelectionDrain)
-                        XCTAssertEqual(event.handlerPhase?.transition, .started)
-                        XCTAssertGreaterThanOrEqual(event.handlerPhaseAgeMilliseconds ?? -1, 0)
-                    }
+                    XCTAssertTrue(events.contains { $0.phase == .cleanupGraceExpired })
+                    XCTAssertTrue(events.contains { $0.phase == .connectionForceDisconnectRequested })
 
                     await operationGate.release()
                     MCPToolExecutionTracer.setTestSink(nil)
-                    await manager.debugSetResolvedToolOperationOverride(toolName: MCPWindowToolName.manageSelection, operation: nil)
+                    await manager.debugSetResolvedToolOperationOverride(toolName: MCPWindowToolName.readFile, operation: nil)
                     await manager.debugResetToolExecutionWatchdogEnvironment()
                     await fixture.cleanup()
                 } catch {
                     await operationGate.release()
                     MCPToolExecutionTracer.setTestSink(nil)
-                    await manager.debugSetResolvedToolOperationOverride(toolName: MCPWindowToolName.manageSelection, operation: nil)
+                    await manager.debugSetResolvedToolOperationOverride(toolName: MCPWindowToolName.readFile, operation: nil)
                     await manager.debugResetToolExecutionWatchdogEnvironment()
                     await fixture.cleanup()
                     throw error

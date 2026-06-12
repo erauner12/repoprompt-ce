@@ -1508,11 +1508,7 @@ extension MCPServerViewModel {
     func resolveFileToolLookupContext(
         from metadata: RequestMetadata
     ) async -> WorkspaceLookupContext {
-        let purpose: MCPRunPurpose = if let connectionID = metadata.connectionID {
-            await ServerNetworkManager.shared.runPurpose(for: connectionID)
-        } else {
-            .unknown
-        }
+        let purpose = metadata.runPurpose ?? .unknown
         let resolved = try? resolveTabContextSnapshot(
             from: metadata,
             toolName: "file_tool_lookup_scope",
