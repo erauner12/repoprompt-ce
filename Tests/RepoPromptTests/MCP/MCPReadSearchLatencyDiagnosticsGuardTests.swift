@@ -36,6 +36,7 @@
             XCTAssertTrue(sibling.contains("\"lanes\""))
             XCTAssertTrue(sibling.contains("\"lane_count\""))
             XCTAssertTrue(sibling.contains("MCPConnectionCallLane.ordinary.rawValue"))
+            XCTAssertTrue(sibling.contains("MCPConnectionCallLane.control.rawValue"))
             XCTAssertTrue(sibling.contains("MCPConnectionCallLane.smallRead.rawValue"))
             XCTAssertTrue(sibling.contains("MCPConnectionCallLane.gitRead.rawValue"))
             XCTAssertTrue(sibling.contains("MCPConnectionCallLane.fileSearch.rawValue"))
@@ -473,13 +474,14 @@
                 XCTAssertEqual((autoSelection[key] as? NSNumber)?.intValue, 0, key)
             }
             let smallReadLaneLimit = ServerNetworkManager.smallReadCallLaneLimit
+            let controlLaneLimit = ServerNetworkManager.controlCallLaneLimit
             let gitReadLaneLimit = ServerNetworkManager.gitReadCallLaneLimit
             let fileSearchLaneLimit = ServerNetworkManager.fileSearchCallLaneLimit
-            let totalLaneLimit = 1 + smallReadLaneLimit + gitReadLaneLimit + fileSearchLaneLimit
+            let totalLaneLimit = 1 + controlLaneLimit + smallReadLaneLimit + gitReadLaneLimit + fileSearchLaneLimit
             let limiter = try XCTUnwrap(runtime["limiter"] as? [String: Any])
             XCTAssertEqual(limiter["found"] as? Bool, true)
             XCTAssertEqual(limiter["connection_id"] as? String, connectionID.uuidString)
-            XCTAssertEqual((limiter["lane_count"] as? NSNumber)?.intValue, 4)
+            XCTAssertEqual((limiter["lane_count"] as? NSNumber)?.intValue, MCPConnectionCallLane.allCases.count)
             XCTAssertEqual((limiter["limit"] as? NSNumber)?.intValue, totalLaneLimit)
             XCTAssertEqual((limiter["permits"] as? NSNumber)?.intValue, totalLaneLimit)
             XCTAssertEqual((limiter["active_permit_count"] as? NSNumber)?.intValue, 0)
@@ -488,9 +490,10 @@
             XCTAssertEqual(limiter["is_closed"] as? Bool, false)
             XCTAssertEqual(limiter["is_idle"] as? Bool, true)
             let lanes = try XCTUnwrap(limiter["lanes"] as? [String: Any])
-            XCTAssertEqual(Set(lanes.keys), ["ordinary", "small_read", "git_read", "file_search"])
+            XCTAssertEqual(Set(lanes.keys), Set(MCPConnectionCallLane.allCases.map(\.rawValue)))
             for (laneName, laneLimit) in [
                 ("ordinary", 1),
+                ("control", controlLaneLimit),
                 ("small_read", smallReadLaneLimit),
                 ("git_read", gitReadLaneLimit),
                 ("file_search", fileSearchLaneLimit)
