@@ -401,7 +401,9 @@ extension FileSystemService {
         )
         let previousItems = visitedItems
         var reconciledItems = actualItems
-        for (relativePath, wasDirectory) in previousItems where !wasDirectory && actualItems[relativePath] == nil {
+        for relativePath in explicitlyManagedIgnoredFilePaths
+            where previousItems[relativePath] == false && actualItems[relativePath] == nil
+        {
             let eligibility = await catalogRegularFileEligibility(relativePath: relativePath)
             if case .ineligible(.ignored) = eligibility {
                 reconciledItems[relativePath] = false

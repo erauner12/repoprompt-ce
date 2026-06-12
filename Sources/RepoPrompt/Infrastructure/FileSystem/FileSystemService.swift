@@ -151,6 +151,10 @@ actor FileSystemService {
     /// Tracks paths we know about, to detect additions/removals
     var visitedPaths = Set<String>()
 
+    /// Ignored regular files retained only because an explicit app/MCP request manages them.
+    /// Ordinary catalog files that later become ignored must not acquire this provenance.
+    var explicitlyManagedIgnoredFilePaths = Set<String>()
+
     /// True => directory, False => file
     var visitedItems = [String: Bool]()
 

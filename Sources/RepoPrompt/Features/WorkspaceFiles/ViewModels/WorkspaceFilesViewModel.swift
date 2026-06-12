@@ -2440,6 +2440,37 @@ class WorkspaceFilesViewModel: ObservableObject {
                 #endif
             } catch {
                 let tokenIsCurrent = isRootLoadTokenCurrent(loadToken)
+                let loadedRootIsCurrent = loadedWorkspaceRootRecord.map {
+                    workspaceFileContextRootsByRootKey[rootKey]?.id == $0.id
+                } ?? false
+                let shouldRetainLoadedRoot = error is FileSystemWatcherActivationError
+                    && tokenIsCurrent
+                    && loadedRootIsCurrent
+                    && attachedRootFolder != nil
+                if shouldRetainLoadedRoot, let attachedRootFolder {
+                    if refreshRootFolderStateAfterLoad {
+                        refreshRootFolderState()
+                    }
+                    isLoading = false
+                    folderBeingAdded = nil
+                    folderDidFinishLoadingPublisher.send(attachedRootFolder)
+                    #if DEBUG
+                        WorkspaceRestorePerfLog.event(
+                            "folderLoad.total",
+                            fields: [
+                                "workspaceID": WorkspaceRestorePerfLog.shortID(workspace.id),
+                                "rootKind": restorePerfRootKind,
+                                "rootName": restorePerfRootName,
+                                "outcome": "watcherErrorRetained",
+                                "duration": loadFolderTotalStartMS.map { WorkspaceRestorePerfLog.formatElapsedMS(since: $0) } ?? "notMeasured"
+                            ]
+                        )
+                    #endif
+                    print("Loaded folder without active watcher: \(error)")
+                    self.error = .failedToLoadFolder(error)
+                    throw error
+                }
+
                 let lifecycleIsCurrent = rootLoadLifecycleGeneration == loadToken.lifecycleGeneration
                 let currentRootGeneration = rootLoadGenerationByRootKey[rootKey]
                 let hasNewerRootLoadForKey = if lifecycleIsCurrent {

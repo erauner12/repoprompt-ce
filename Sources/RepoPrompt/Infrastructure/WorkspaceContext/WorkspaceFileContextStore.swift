@@ -4757,7 +4757,7 @@ actor WorkspaceFileContextStore {
             atRelativePath: oldPath,
             toRelativePath: newPath
         )
-        let destinationEligibility = await state.service.catalogRegularFileEligibility(relativePath: newPath)
+        let destinationEligibility = await state.service.registerExplicitlyManagedRegularFile(relativePath: newPath)
         let destinationManagedOnly: Bool
         switch destinationEligibility {
         case .eligible:
@@ -5109,7 +5109,7 @@ actor WorkspaceFileContextStore {
     ) async throws -> WorkspaceFileCatalogMaterializationResult {
         let state = try state(for: rootID)
         let standardizedRelativePath = StandardizedPath.relative(relativePath)
-        let eligibility = await state.service.catalogRegularFileEligibility(relativePath: standardizedRelativePath)
+        let eligibility = await state.service.registerExplicitlyManagedRegularFile(relativePath: standardizedRelativePath)
         switch eligibility {
         case .ineligible(.ignored):
             // A direct app/MCP write is an explicit request to manage this exact file.

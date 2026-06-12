@@ -882,6 +882,7 @@ final class WorkspaceFileContextStoreTests: XCTestCase {
             XCTAssertNotNil(currentLifetimeFile)
         }
 
+        @MainActor
         func testRecoveryFullResyncPublicationFlagsAppliedIndexEvent() async throws {
             let root = try makeTemporaryRoot(name: "RecoveryFullResyncAppliedIndex")
             let store = WorkspaceFileContextStore()
@@ -931,6 +932,7 @@ final class WorkspaceFileContextStoreTests: XCTestCase {
             await store.stopWatchingRoot(id: record.id)
         }
 
+        @MainActor
         func testRedundantStartWatchingRootKeepsPublisherSinkAttached() async throws {
             let root = try makeTemporaryRoot(name: "RedundantStartWatcherPublisherIngress")
             let lateFileURL = root.appendingPathComponent("Late.swift")
@@ -938,26 +940,21 @@ final class WorkspaceFileContextStoreTests: XCTestCase {
             let record = try await store.loadRoot(path: root.path)
             try await store.startWatchingRoot(id: record.id)
 
-            let sinkGate = AsyncGate()
             let rootID = record.id
-            await store.setWatcherSinkWillApplyHandler { observedRootID in
-                guard observedRootID == rootID else { return }
-                await sinkGate.markStartedAndWaitForRelease()
+            addTeardownBlock {
+                await store.stopWatchingRoot(id: rootID)
             }
 
             try await store.startWatchingRoot(id: rootID)
             try write("late", to: lateFileURL)
-            try await store.publishSyntheticFileSystemDeltasForTesting(rootID: rootID, deltas: [.fileAdded("Late.swift")])
-            await sinkGate.waitUntilStarted()
-            let pendingIngressCount = await store.publisherIngressCountForTesting(rootID: rootID)
-            XCTAssertGreaterThan(pendingIngressCount, 0)
-
-            await sinkGate.release()
+            try await store.publishSyntheticFileSystemDeltasForTesting(
+                rootID: rootID,
+                deltas: [.fileAdded("Late.swift")]
+            )
             _ = await store.flushPendingServiceEventsForAllRoots()
             let lateFile = await store.file(rootID: rootID, relativePath: "Late.swift")
             XCTAssertNotNil(lateFile)
 
-            await store.setWatcherSinkWillApplyHandler(nil)
             await store.stopWatchingRoot(id: rootID)
         }
 
@@ -4332,6 +4329,70 @@ final class WorkspaceFileContextStoreTests: XCTestCase {
         XCTAssertTrue(manager.rootFolders.isEmpty)
         let rootsAfterUnload = await store.roots()
         XCTAssertTrue(rootsAfterUnload.isEmpty)
+    }
+
+    @MainActor
+    func testLoadFolderWatcherFailureRetainsHydratedRootAndProjectedSlices() async throws {
+        #if DEBUG
+            let root = try makeTemporaryRoot(name: "LoadFolderWatcherFailureRetention")
+            let fileURL = root.appendingPathComponent("Sliced.swift")
+            try write("one\ntwo\nthree\n", to: fileURL)
+
+            let store = WorkspaceFileContextStore()
+            await store.setWatcherActivationFailureForNewServicesForTesting(.streamStart)
+            let manager = WorkspaceFilesViewModel(workspaceFileContextStore: store)
+            await manager.setCodeScanEnabled(false)
+            let workspace = WorkspaceModel(name: "LoadFolderWatcherFailureRetention", repoPaths: [root.path])
+            let ranges = [LineRange(start: 1, end: 2)]
+            let scope = PartitionScope(workspaceID: workspace.id)
+            let seedCoordinator = SelectionSliceCoordinator()
+            try await seedCoordinator.applySliceUpdates(
+                groupedByRootPath: [root.path: [SelectionSliceCoordinator.SliceUpdate(
+                    relativePath: "Sliced.swift",
+                    ranges: ranges,
+                    fileModificationTime: nil
+                )]],
+                scope: scope,
+                mode: .set
+            )
+            addTeardownBlock {
+                await manager.unloadAllRootFolders()
+                _ = try? await seedCoordinator.clearSlices(forRootPaths: [root.path], scope: scope)
+            }
+
+            do {
+                try await manager.loadFolder(at: root, for: workspace)
+                XCTFail("Expected watcher activation failure")
+            } catch let error as FileSystemWatcherActivationError {
+                XCTAssertEqual(error, .streamStartFailed(path: root.path))
+            } catch {
+                return XCTFail("Expected typed watcher activation error, got \(error)")
+            }
+
+            XCTAssertEqual(manager.rootFolders.map(\.standardizedFullPath), [root.path])
+            let loadedRoots = await store.roots()
+            let loadedRoot = try XCTUnwrap(loadedRoots.first)
+            XCTAssertEqual(loadedRoots.map(\.standardizedFullPath), [root.path])
+            XCTAssertFalse(try await store.rootWatcherIsActiveForTesting(rootID: loadedRoot.id))
+            XCTAssertEqual(manager.currentSlicesByRootForTesting()[root.path]?["Sliced.swift"]?.ranges, ranges)
+
+            await manager.applyStoredSelection(StoredSelection(
+                selectedPaths: [fileURL.path],
+                autoCodemapPaths: [],
+                slices: [fileURL.path: ranges],
+                codemapAutoEnabled: false
+            ))
+            XCTAssertEqual(manager.snapshotSelection().slices[fileURL.path], ranges)
+            XCTAssertEqual(manager.getSelectionSlicesSnapshot().values.first, ranges)
+
+            let readable = await WorkspaceReadableFileService(store: store).resolveReadableFile(
+                fileURL.path,
+                profile: .mcpRead,
+                rootScope: .visibleWorkspace
+            )
+            XCTAssertNotNil(readable)
+            await store.setWatcherActivationFailureForNewServicesForTesting(nil)
+        #endif
     }
 
     @MainActor

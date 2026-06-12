@@ -240,6 +240,40 @@ final class FileSystemServiceRecoveryTests: XCTestCase {
             XCTAssertTrue(fallbackDeltas.contains(.fileAdded("C/new.txt")))
         }
 
+        func testRecoveryFullResyncRemovesOrdinaryFileThatBecameIgnored() async throws {
+            let root = try temporaryRoots.makeRoot(suiteName: "FileSystemRecoveryNewlyIgnored")
+            try "visible".write(
+                to: root.appendingPathComponent("ordinary.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+
+            let service = try await FileSystemService(
+                path: root.path,
+                respectGitignore: true,
+                respectRepoIgnore: false,
+                respectCursorignore: false,
+                skipSymlinks: true,
+                enableHierarchicalIgnores: true,
+                testVisitedPaths: ["ordinary.txt"],
+                testVisitedItems: ["ordinary.txt": false],
+                isTestMode: false
+            )
+            try "*.txt\n".write(
+                to: root.appendingPathComponent(".gitignore"),
+                atomically: true,
+                encoding: .utf8
+            )
+            try await service.refreshIgnoreRules()
+
+            let deltas = try await service.reconcileEntireTreeAfterRecoveryFailure()
+            let state = await service.getTestState()
+
+            XCTAssertFalse(state.visitedPaths.contains("ordinary.txt"))
+            XCTAssertNil(state.visitedItems["ordinary.txt"])
+            XCTAssertTrue(deltas.contains(.fileRemoved("ordinary.txt")))
+        }
+
         func testRecoveryFullResyncPreservesExplicitlyManagedIgnoredFile() async throws {
             let root = try temporaryRoots.makeRoot(suiteName: "FileSystemRecoveryManagedIgnored")
             try "*.ignored\n".write(

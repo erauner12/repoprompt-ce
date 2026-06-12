@@ -154,6 +154,9 @@ extension FileSystemService {
             let relativePath = (rawRelativePath as NSString).standardizingPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             visitedPaths.insert(relativePath)
             visitedItems[relativePath] = false
+            if case .ineligible(.ignored) = eligibility {
+                explicitlyManagedIgnoredFilePaths.insert(relativePath)
+            }
         case .ineligible:
             break
         }
