@@ -53,6 +53,32 @@ final class PromptAgentAvailabilityRefreshTests: XCTestCase {
         XCTAssertTrue(ClaudeCodeGLMIntegration.isConfigured())
     }
 
+    func testPromptRefreshesAvailableAgentKindsWhenPreconfiguredZAIKeyLoadsWithStaleSecretPresenceMirror() async {
+        let restoredDefaults = preserveDefaults(Self.availabilityDefaultsKeys)
+        defer { restoreDefaults(restoredDefaults) }
+        resetAvailabilityDefaults(glmConfigured: true)
+
+        let apiSettings = makeViewModel()
+        let prompt = PromptViewModel(
+            fileManager: WorkspaceFilesViewModel(),
+            apiSettingsViewModel: apiSettings,
+            windowID: 999,
+            settingsManager: WindowSettingsManager(windowID: 999)
+        )
+
+        XCTAssertFalse(prompt.availableAgentKinds.contains(.claudeCodeGLM))
+
+        apiSettings.compatibleBackendSecretPresence[.glmZAI] = true
+        await apiSettings.loadStoredData(accessMode: .nonInteractive(reason: .test))
+        await drainMainQueue()
+
+        XCTAssertTrue(apiSettings.agentModeAvailabilityContext.zaiConfigured)
+        XCTAssertTrue(
+            prompt.availableAgentKinds.contains(.claudeCodeGLM),
+            "PromptViewModel should refresh IDE agent options even when the secret-presence mirror was already populated before startup key load."
+        )
+    }
+
     private static var availabilityDefaultsKeys: [String] {
         [
             "ClaudeCodeConnected",
@@ -91,6 +117,14 @@ final class PromptAgentAvailabilityRefreshTests: XCTestCase {
             keyManager: keyManager,
             loadStoredDataOnInit: false
         )
+    }
+
+    private func drainMainQueue() async {
+        let drained = expectation(description: "main queue drained")
+        DispatchQueue.main.async {
+            drained.fulfill()
+        }
+        await fulfillment(of: [drained], timeout: 1.0)
     }
 
     private func preserveDefaults(_ keys: [String]) -> [String: Any?] {

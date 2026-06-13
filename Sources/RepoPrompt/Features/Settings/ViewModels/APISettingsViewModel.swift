@@ -346,6 +346,7 @@ public class APISettingsViewModel: ObservableObject {
     private var hasLoadedStoredData = false
     private var isLoadingStoredData = false
     private var hasStoredZAIKey = false
+    private var lastPublishedClaudeCodeGLMSecretPresence: Bool?
 
     /// Current Claude Code-compatible backend configurations (GLM/Z.ai, Kimi, Custom), keyed by backend ID.
     ///
@@ -432,10 +433,11 @@ public class APISettingsViewModel: ObservableObject {
 
     @discardableResult
     private func publishClaudeCodeGLMAvailability() -> Bool {
-        let previousSecretPresent = compatibleBackendSecretPresence[.glmZAI] ?? false
+        let previousPublishedSecretPresent = lastPublishedClaudeCodeGLMSecretPresence
         let configuredDidChange = ClaudeCodeGLMIntegration.setConfigured(hasStoredZAIKey)
         compatibleBackendSecretPresence[.glmZAI] = hasStoredZAIKey
-        guard configuredDidChange || previousSecretPresent != hasStoredZAIKey else { return false }
+        guard configuredDidChange || previousPublishedSecretPresent != hasStoredZAIKey else { return false }
+        lastPublishedClaudeCodeGLMSecretPresence = hasStoredZAIKey
         NotificationCenter.default.post(name: .claudeCodeGLMAvailabilityChanged, object: nil)
         return true
     }
