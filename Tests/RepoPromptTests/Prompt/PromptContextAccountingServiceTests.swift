@@ -154,6 +154,61 @@ final class PromptContextAccountingServiceTests: XCTestCase {
         XCTAssertEqual(resolution.invalidPaths, [])
     }
 
+    func testCompleteCodemapResolutionBuildsSingleStaticPathSnapshot() async throws {
+        #if DEBUG
+            let root = try makeTemporaryRoot(name: "AccountingCompleteCodemapBatch")
+            let fileCount = 24
+            var observed: [WorkspaceObservedCodemapResult] = []
+            observed.reserveCapacity(fileCount)
+            for index in 0 ..< fileCount {
+                let fileURL = root.appendingPathComponent("File\(index).swift")
+                try write("struct File\(index) {}", to: fileURL)
+                observed.append(
+                    WorkspaceObservedCodemapResult(
+                        fullPath: fileURL.path,
+                        modificationDate: Date(),
+                        fileAPI: makeFileAPI(path: fileURL.path)
+                    )
+                )
+            }
+
+            let store = WorkspaceFileContextStore()
+            _ = try await store.loadRoot(path: root.path)
+            await store.applyObservedCodemapResults(observed)
+            let service = PromptContextAccountingService()
+            let selection = StoredSelection(
+                selectedPaths: [],
+                autoCodemapPaths: [],
+                slices: [:],
+                codemapAutoEnabled: false
+            )
+
+            EditFlowPerf.resetDebugCaptureForTesting()
+            defer { EditFlowPerf.resetDebugCaptureForTesting() }
+            switch EditFlowPerf.beginDebugCapture(label: "complete-codemap-batch", maxSamples: 200) {
+            case .started:
+                break
+            case .busy:
+                XCTFail("Performance capture should start")
+            }
+
+            let resolution = await service.resolveEntries(
+                selection: selection,
+                store: store,
+                codeMapUsage: .complete
+            )
+            let capture = EditFlowPerf.debugCaptureSnapshot(finish: true)
+            let snapshotBuildCount = capture.stages
+                .filter { $0.stageName == String(describing: EditFlowPerf.Stage.ReadFile.pathLookupStaticSnapshotBuild) }
+                .reduce(0) { $0 + $1.sampleCount }
+
+            XCTAssertEqual(resolution.entries.count, fileCount)
+            XCTAssertTrue(resolution.entries.allSatisfy { $0.mode == .codemap })
+            XCTAssertEqual(snapshotBuildCount, 1)
+            XCTAssertEqual(capture.droppedSampleCount, 0)
+        #endif
+    }
+
     private func makeTemporaryRoot(name: String) throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("RepoPromptTests", isDirectory: true)
