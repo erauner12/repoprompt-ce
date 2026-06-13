@@ -480,10 +480,6 @@ class PromptViewModel: ObservableObject {
         AgentModelCatalog.isValid(rawModel: rawModel, for: agent, availability: agentAvailabilityContext)
     }
 
-    private func handleClaudeCodeGLMAvailabilityChanged() {
-        handleAgentProviderAvailabilityChanged(reason: "claudeCodeGLMAvailabilityChanged")
-    }
-
     private func handleAgentProviderAvailabilityChanged(reason: String) {
         refreshAvailableAgentKinds()
         let normalizedContextBuilder = normalizedPersistedAgentSelection(
@@ -2197,13 +2193,6 @@ class PromptViewModel: ObservableObject {
                 syncSettingsFromSettingsManager()
             }
             .store(in: &cancellables)
-
-        NotificationCenter.default.publisher(for: .claudeCodeGLMAvailabilityChanged)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.handleClaudeCodeGLMAvailabilityChanged()
-            }
-            .store(in: &cancellables)
     }
 
     fileprivate func invalidateChatPromptEntriesCache() {
@@ -3588,17 +3577,16 @@ class PromptViewModel: ObservableObject {
                 self?.availableModels = models
             }
 
-        Publishers.MergeMany([
-            apiSettingsViewModel.$isClaudeCodeConnected.dropFirst().map { _ in () },
-            apiSettingsViewModel.$isCodexConnected.dropFirst().map { _ in () },
-            apiSettingsViewModel.$isOpenCodeConnected.dropFirst().map { _ in () },
-            apiSettingsViewModel.$isCursorConnected.dropFirst().map { _ in () }
-        ])
-        .receive(on: DispatchQueue.main)
-        .sink { [weak self] _ in
-            self?.handleAgentProviderAvailabilityChanged(reason: "agentProviderConnectionChanged")
-        }
-        .store(in: &apiSettingsCancellables)
+        // Level-triggered: the current availability is replayed on subscription, so a
+        // PromptViewModel wired after startup key load still initializes its agent
+        // picker correctly; later changes arrive deduplicated by value.
+        apiSettingsViewModel.$agentAvailability
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.handleAgentProviderAvailabilityChanged(reason: "agentAvailabilityChanged")
+            }
+            .store(in: &apiSettingsCancellables)
     }
 
     func setAPISettingsViewModel(_ viewModel: APISettingsViewModel) {

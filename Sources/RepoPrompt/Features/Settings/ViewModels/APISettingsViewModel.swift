@@ -346,7 +346,7 @@ public class APISettingsViewModel: ObservableObject {
     private var hasLoadedStoredData = false
     private var isLoadingStoredData = false
     private var hasStoredZAIKey = false
-    private var lastPublishedClaudeCodeGLMSecretPresence: Bool?
+    private var agentAvailabilityCancellable: AnyCancellable?
 
     /// Current Claude Code-compatible backend configurations (GLM/Z.ai, Kimi, Custom), keyed by backend ID.
     ///
@@ -374,6 +374,40 @@ public class APISettingsViewModel: ObservableObject {
             kimiConfigured: compatibleBackendIsActive(.kimi),
             customClaudeCompatibleConfigured: compatibleBackendIsActive(.custom)
         )
+    }
+
+    /// Published mirror of `agentModeAvailabilityContext`. Consumers subscribe to this
+    /// instead of listening for change notifications: `@Published` replays the current
+    /// value on subscription, so observers constructed after a state change still
+    /// initialize correctly, and duplicate emissions are filtered by value with
+    /// `removeDuplicates()` rather than by guessing on the producer side whether a
+    /// notification is "needed".
+    @Published private(set) var agentAvailability: AgentModelCatalog.AvailabilityContext = .none
+
+    private func refreshAgentAvailability() {
+        let next = agentModeAvailabilityContext
+        guard next != agentAvailability else { return }
+        agentAvailability = next
+    }
+
+    /// Safety net behind the explicit `refreshAgentAvailability()` calls: recompute
+    /// whenever any published input of the availability context changes, so mutation
+    /// paths without an explicit refresh still converge. The main-queue hop defers the
+    /// recompute past `@Published`'s willSet emission, when the new value is readable.
+    private func installAgentAvailabilityObservers() {
+        agentAvailabilityCancellable = Publishers.MergeMany([
+            $isClaudeCodeConnected.map { _ in () }.eraseToAnyPublisher(),
+            $isCodexConnected.map { _ in () }.eraseToAnyPublisher(),
+            $isOpenCodeConnected.map { _ in () }.eraseToAnyPublisher(),
+            $isCursorConnected.map { _ in () }.eraseToAnyPublisher(),
+            $claudeCodeCLIStatus.map { _ in () }.eraseToAnyPublisher(),
+            $compatibleBackendConfigs.map { _ in () }.eraseToAnyPublisher(),
+            $compatibleBackendSecretPresence.map { _ in () }.eraseToAnyPublisher()
+        ])
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] _ in
+            self?.refreshAgentAvailability()
+        }
     }
 
     var isCodexExecutableUnavailable: Bool {
@@ -431,15 +465,10 @@ public class APISettingsViewModel: ObservableObject {
         Task { await updateAvailableModels() }
     }
 
-    @discardableResult
-    private func publishClaudeCodeGLMAvailability() -> Bool {
-        let previousPublishedSecretPresent = lastPublishedClaudeCodeGLMSecretPresence
-        let configuredDidChange = ClaudeCodeGLMIntegration.setConfigured(hasStoredZAIKey)
+    private func refreshClaudeCodeGLMAvailability() {
+        ClaudeCodeGLMIntegration.setConfigured(hasStoredZAIKey)
         compatibleBackendSecretPresence[.glmZAI] = hasStoredZAIKey
-        guard configuredDidChange || previousPublishedSecretPresent != hasStoredZAIKey else { return false }
-        lastPublishedClaudeCodeGLMSecretPresence = hasStoredZAIKey
-        NotificationCenter.default.post(name: .claudeCodeGLMAvailabilityChanged, object: nil)
-        return true
+        refreshAgentAvailability()
     }
 
     // MARK: - Claude Code-compatible backends ------------------------------------------------
@@ -454,7 +483,6 @@ public class APISettingsViewModel: ObservableObject {
         accessMode: KeychainAccessMode = .nonInteractive(reason: .backgroundAvailabilityCheck)
     ) async {
         let previousAvailability = isClaudeFamilyModelProviderAvailable
-        let previousActiveBackends = Set(ClaudeCodeCompatibleBackendID.allCases.filter { compatibleBackendIsActive($0) })
         let store = compatibleBackendStore
         var configs: [ClaudeCodeCompatibleBackendID: ClaudeCodeCompatibleBackendConfig] = [:]
         var presence: [ClaudeCodeCompatibleBackendID: Bool] = [:]
@@ -468,10 +496,7 @@ public class APISettingsViewModel: ObservableObject {
         }
         compatibleBackendConfigs = configs
         compatibleBackendSecretPresence = presence
-        let currentActiveBackends = Set(ClaudeCodeCompatibleBackendID.allCases.filter { compatibleBackendIsActive($0) })
-        if previousActiveBackends != currentActiveBackends {
-            postCompatibleBackendAvailabilityChanged()
-        }
+        refreshAgentAvailability()
         await refreshClaudeFamilyModelAvailabilityIfNeeded(previousAvailability: previousAvailability)
     }
 
@@ -702,8 +727,8 @@ public class APISettingsViewModel: ObservableObject {
 
     /// Persists a Claude Code-compatible backend config and refreshes availability only if
     /// the active/enabled/valid state or model behavior actually changed. Text-field edits
-    /// (display name, slot-mapping IDs) are persisted without re-posting the availability
-    /// notification on every keystroke.
+    /// (display name, slot-mapping IDs) are persisted without queueing a Claude-family
+    /// model refresh on every keystroke.
     ///
     /// - Parameter config: The new config to persist (display name, base URL, auth, model behavior).
     @MainActor
@@ -723,7 +748,7 @@ public class APISettingsViewModel: ObservableObject {
             || previous.isValid != latest.isValid
             || modelBehaviorKind(previous.modelBehavior) != modelBehaviorKind(latest.modelBehavior)
         if materialStateChanged {
-            postCompatibleBackendAvailabilityChanged()
+            refreshAgentAvailability()
             queueClaudeFamilyModelAvailabilityRefreshIfNeeded(previousAvailability: previousAvailability)
         }
     }
@@ -745,7 +770,6 @@ public class APISettingsViewModel: ObservableObject {
         let previousAvailability = isClaudeFamilyModelProviderAvailable
         invalidateCompatibleBackendTestResult(for: id)
         let trimmed = secret.trimmingCharacters(in: .whitespacesAndNewlines)
-        let postedAvailabilityChange: Bool
         if id == .glmZAI {
             // Share the existing Z.ai API Provider key.
             try await keyManager.saveAPIKey(trimmed, for: .zAI)
@@ -753,18 +777,12 @@ public class APISettingsViewModel: ObservableObject {
             hasStoredZAIKey = !trimmed.isEmpty
             isZaiKeyValid = hasStoredZAIKey
             availableZAIModels = hasStoredZAIKey ? defaultZAIModels : []
-            postedAvailabilityChange = publishClaudeCodeGLMAvailability()
+            refreshClaudeCodeGLMAvailability()
+            await updateAvailableModels()
         } else {
             try await compatibleBackendStore.saveSecret(trimmed, for: id)
             compatibleBackendSecretPresence[id] = !trimmed.isEmpty
-            postedAvailabilityChange = false
-        }
-        if id != .glmZAI, !postedAvailabilityChange {
-            postCompatibleBackendAvailabilityChanged()
-        }
-        if id == .glmZAI {
-            await updateAvailableModels()
-        } else {
+            refreshAgentAvailability()
             await refreshClaudeFamilyModelAvailabilityIfNeeded(previousAvailability: previousAvailability)
         }
     }
@@ -777,28 +795,21 @@ public class APISettingsViewModel: ObservableObject {
     ) async throws {
         let previousAvailability = isClaudeFamilyModelProviderAvailable
         invalidateCompatibleBackendTestResult(for: id)
-        let postedAvailabilityChange: Bool
         if id == .glmZAI {
             try await keyManager.deleteAPIKey(for: .zAI)
             hasStoredZAIKey = false
             zaiApiKey = ""
             isZaiKeyValid = false
             availableZAIModels = []
-            postedAvailabilityChange = publishClaudeCodeGLMAvailability()
+            refreshClaudeCodeGLMAvailability()
             zaiCustomModel = ""
             UserDefaults.standard.removeObject(forKey: "customModelZAI")
-        } else {
-            try await compatibleBackendStore.deleteSecret(for: id)
-            compatibleBackendSecretPresence[id] = false
-            postedAvailabilityChange = false
-        }
-        if id != .glmZAI, !postedAvailabilityChange {
-            postCompatibleBackendAvailabilityChanged()
-        }
-        if id == .glmZAI {
             await updateAvailableModels()
             resetPreferredModelIfNeeded(for: .zAI)
         } else {
+            try await compatibleBackendStore.deleteSecret(for: id)
+            compatibleBackendSecretPresence[id] = false
+            refreshAgentAvailability()
             await refreshClaudeFamilyModelAvailabilityIfNeeded(previousAvailability: previousAvailability)
         }
     }
@@ -811,7 +822,7 @@ public class APISettingsViewModel: ObservableObject {
         invalidateCompatibleBackendTestResult(for: id)
         compatibleBackendStore.resetConfig(for: id)
         compatibleBackendConfigs[id] = compatibleBackendStore.config(for: id)
-        postCompatibleBackendAvailabilityChanged()
+        refreshAgentAvailability()
         queueClaudeFamilyModelAvailabilityRefreshIfNeeded(previousAvailability: previousAvailability)
     }
 
@@ -832,15 +843,8 @@ public class APISettingsViewModel: ObservableObject {
         return compatibleBackendStore.isConfigured(id)
     }
 
-    private func postCompatibleBackendAvailabilityChanged() {
-        // Reuse the existing .claudeCodeGLMAvailabilityChanged notification to keep pickers,
-        // recommendations, and agent-mode view models in sync for every compatible backend.
-        NotificationCenter.default.post(name: .claudeCodeGLMAvailabilityChanged, object: nil)
-    }
-
-    private func notifyClaudeCompatibleBackendRuntimeAvailabilityIfNeeded(previousStatus: ClaudeCodeCLIStatus) {
-        guard previousStatus.isKnownMissing != claudeCodeCLIStatus.isKnownMissing else { return }
-        postCompatibleBackendAvailabilityChanged()
+    private func notifyClaudeCompatibleBackendRuntimeAvailabilityIfNeeded(previousStatus _: ClaudeCodeCLIStatus) {
+        refreshAgentAvailability()
     }
 
     private func queueClaudeFamilyModelAvailabilityRefreshIfNeeded(previousAvailability: Bool) {
@@ -860,6 +864,8 @@ public class APISettingsViewModel: ObservableObject {
         self.aiQueriesService = aiQueriesService
         self.keyManager = keyManager
         installCLIConnectionObservers()
+        installAgentAvailabilityObservers()
+        refreshAgentAvailability()
         if loadStoredDataOnInit {
             Task {
                 await self.loadStoredDataIfNeeded()
@@ -1154,7 +1160,7 @@ public class APISettingsViewModel: ObservableObject {
         zaiApiKey = storedZAIKey
         isZaiKeyValid = hasStoredZAIKey
         availableZAIModels = isZaiKeyValid ? defaultZAIModels : []
-        publishClaudeCodeGLMAvailability()
+        refreshClaudeCodeGLMAvailability()
 
         customProviderApiKey = storedCustomProviderKey
 
@@ -1610,7 +1616,7 @@ public class APISettingsViewModel: ObservableObject {
                 zaiApiKey = trimmedKey
                 isZaiKeyValid = true
                 availableZAIModels = defaultZAIModels
-                publishClaudeCodeGLMAvailability()
+                refreshClaudeCodeGLMAvailability()
                 seedPreferredComposeModelIfMissing(AIModel.zaiGLM5, reason: "api_settings.validate_key.default_seed.zai")
             case .claudeCode:
                 break
@@ -1669,7 +1675,7 @@ public class APISettingsViewModel: ObservableObject {
             zaiApiKey = ""
             isZaiKeyValid = false
             availableZAIModels = []
-            publishClaudeCodeGLMAvailability()
+            refreshClaudeCodeGLMAvailability()
             zaiCustomModel = ""
             UserDefaults.standard.removeObject(forKey: "customModelZAI")
         case .claudeCode:
@@ -2060,12 +2066,12 @@ public class APISettingsViewModel: ObservableObject {
             zaiApiKey = trimmed
             isZaiKeyValid = true
             availableZAIModels = defaultZAIModels
-            publishClaudeCodeGLMAvailability()
+            refreshClaudeCodeGLMAvailability()
             await updateAvailableModels()
         } else {
             isZaiKeyValid = false
             availableZAIModels = []
-            publishClaudeCodeGLMAvailability()
+            refreshClaudeCodeGLMAvailability()
         }
         return ok
     }
