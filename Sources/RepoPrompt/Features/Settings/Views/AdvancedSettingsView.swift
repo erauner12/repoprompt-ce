@@ -32,6 +32,10 @@ struct AdvancedSettingsView: View {
         )
     }
 
+    private var canonicalURLPrefix: String {
+        "\(AppDeepLinkURLScheme.canonical)://"
+    }
+
     private var respectGitignoreBinding: Binding<Bool> {
         Binding(
             get: { globalSettings.respectGitignore() },
@@ -291,23 +295,23 @@ struct AdvancedSettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     urlExampleRow(
                         title: "Open a folder",
-                        value: "repoprompt-ce://open//Users/example/Project"
+                        value: "\(canonicalURLPrefix)open//Users/example/Project"
                     )
                     urlExampleRow(
                         title: "Select files and prompt text",
-                        value: "repoprompt-ce://open//Users/example/Project?files=Sources/App.swift,README.md&prompt=Review%20the%20selected%20files"
+                        value: "\(canonicalURLPrefix)open//Users/example/Project?files=Sources/App.swift,README.md&prompt=Review%20the%20selected%20files"
                     )
                     urlExampleRow(
                         title: "Focus or create an ephemeral workspace",
-                        value: "repoprompt-ce://open//Users/example/Project?workspace=Review&focus=true&ephemeral=true"
+                        value: "\(canonicalURLPrefix)open//Users/example/Project?workspace=Review&focus=true&ephemeral=true"
                     )
                     urlExampleRow(
                         title: "Create a saved prompt",
-                        value: "repoprompt-ce://prompt?title=Review&content=Review%20the%20current%20selection&focus=true"
+                        value: "\(canonicalURLPrefix)prompt?title=Review&content=Review%20the%20current%20selection&focus=true"
                     )
                 }
 
-                Text("Supported opener parameters: workspace, files, prompt, focus, ephemeral, and persist. Use repoprompt-ce:// for external links; repoprompt:// may be handled by classic RepoPrompt when both apps are installed.")
+                Text("Supported opener parameters: workspace, files, prompt, focus, ephemeral, and persist. Use \(canonicalURLPrefix) for external links; \(AppDeepLinkURLScheme.legacy):// may be handled by classic RepoPrompt when both apps are installed.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
