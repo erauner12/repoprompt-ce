@@ -4494,6 +4494,20 @@ actor WorkspaceFileContextStore {
         await interactiveReadCache.clear()
     }
 
+    func readContentPrefix(
+        rootID: UUID,
+        relativePath: String,
+        maximumBytes: Int,
+        workloadClass: ContentReadWorkloadClass = .unspecified
+    ) async throws -> FileContentPrefix? {
+        let state = try state(for: rootID)
+        return try await state.service.loadContentPrefix(
+            ofRelativePath: StandardizedPath.relative(relativePath),
+            maximumBytes: maximumBytes,
+            workloadClass: workloadClass
+        )
+    }
+
     func readContent(
         rootID: UUID,
         relativePath: String,
