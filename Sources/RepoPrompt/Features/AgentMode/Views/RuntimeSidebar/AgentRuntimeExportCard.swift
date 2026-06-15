@@ -799,6 +799,8 @@ private struct AgentResolvedFilePreviewPopover: View {
                 isEditable: false,
                 isSpellCheckEnabled: false,
                 useMonospacedFont: true,
+                // Keep this wired to the coordinator: TextKitView avoids overwriting
+                // first-responder AppKit text unless its external update tick changes.
                 externalUpdateTick: previewCoordinator.contentRevision
             )
         }
