@@ -103,6 +103,95 @@ final class WorkspaceSelectionPersistenceTests: XCTestCase {
         XCTAssertEqual(decoded.composeTabs[0].promptText, "disk-field")
     }
 
+    func testDiskWriterVerifiesNewerDiskPayloadWithSingleFullWorkspaceDecode() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkspaceSelectionPersistenceTests-")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let url = tempDir.appendingPathComponent("workspace.json")
+        let writer = WorkspaceManagerViewModel.WorkspaceDiskWriter.shared
+        await writer.removeAllForTesting()
+
+        let workspaceID = UUID()
+        let tabID = UUID()
+        let disk = Self.workspace(
+            id: workspaceID,
+            tabID: tabID,
+            selection: Self.selection(count: 2),
+            dateModified: Date(timeIntervalSince1970: 300),
+            promptText: "disk-field"
+        )
+        try JSONEncoder().encode(disk).write(to: url, options: .atomic)
+        let incoming = Self.workspace(
+            id: workspaceID,
+            tabID: tabID,
+            selection: Self.selection(count: 3),
+            dateModified: Date(timeIntervalSince1970: 200),
+            promptText: "incoming-field"
+        )
+
+        WorkspaceManagerViewModel.WorkspaceDiskWriter.resetFullDecodeCountForTesting()
+        try await writer.enqueue(data: JSONEncoder().encode(incoming), url: url)
+        await writer.flush(url: url)
+
+        XCTAssertEqual(WorkspaceManagerViewModel.WorkspaceDiskWriter.fullDecodeCountSnapshotForTesting, 1)
+        let decoded = try JSONDecoder().decode(WorkspaceModel.self, from: Data(contentsOf: url))
+        XCTAssertEqual(decoded.composeTabs[0].promptText, "disk-field")
+    }
+
+    func testDiskWriterCoalescesOlderPendingPayloadWithoutFullWorkspaceDecode() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkspaceSelectionPersistenceTests-")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let url = tempDir.appendingPathComponent("workspace.json")
+        let writer = WorkspaceManagerViewModel.WorkspaceDiskWriter.shared
+        await writer.removeAllForTesting()
+        let gate = WorkspacePersistenceAsyncGate()
+        await writer.setAtomicWriteGateForTesting {
+            await gate.markStartedAndWaitForRelease()
+        }
+
+        let workspaceID = UUID()
+        let tabID = UUID()
+        let first = Self.workspace(
+            id: workspaceID,
+            tabID: tabID,
+            selection: Self.selection(count: 2),
+            dateModified: Date(timeIntervalSince1970: 300),
+            promptText: "first-field"
+        )
+        let newerPending = Self.workspace(
+            id: workspaceID,
+            tabID: tabID,
+            selection: Self.selection(count: 4),
+            dateModified: Date(timeIntervalSince1970: 400),
+            promptText: "newer-pending-field"
+        )
+        let older = Self.workspace(
+            id: workspaceID,
+            tabID: tabID,
+            selection: Self.selection(count: 3),
+            dateModified: Date(timeIntervalSince1970: 200),
+            promptText: "older-field"
+        )
+
+        try await writer.enqueue(data: JSONEncoder().encode(first), url: url)
+        await gate.waitUntilStarted()
+        try await writer.enqueue(data: JSONEncoder().encode(newerPending), url: url)
+        WorkspaceManagerViewModel.WorkspaceDiskWriter.resetFullDecodeCountForTesting()
+        try await writer.enqueue(data: JSONEncoder().encode(older), url: url)
+        await gate.release()
+        await writer.flush(url: url)
+        await writer.setAtomicWriteGateForTesting(nil)
+
+        XCTAssertEqual(WorkspaceManagerViewModel.WorkspaceDiskWriter.fullDecodeCountSnapshotForTesting, 0)
+        let decoded = try JSONDecoder().decode(WorkspaceModel.self, from: Data(contentsOf: url))
+        XCTAssertEqual(decoded.composeTabs[0].promptText, "newer-pending-field")
+    }
+
     func testDiskWriterFlushAndAtomicWriteTelemetryCarryDurabilityAttributionWithoutPaths() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("WorkspaceSelectionPersistenceTests-")
