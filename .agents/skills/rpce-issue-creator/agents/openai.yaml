@@ -1,0 +1,4 @@
+interface:
+  display_name: "RepoPrompt CE Issue Creator"
+  short_description: "Draft clear, maintainer-friendly GitHub issues"
+  default_prompt: "Use $rpce-issue-creator to draft a standardized RepoPrompt CE GitHub issue."
