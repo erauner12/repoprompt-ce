@@ -1222,7 +1222,7 @@ final class WorkspaceFileContextStoreTests: XCTestCase {
                 scheduleDrain: false
             )
             let accepted = try XCTUnwrap(acceptedPayload)
-            let barrierTask = Task {
+            let barrierTask = Task.detached {
                 let samples = await store.awaitAppliedIngressForAllRoots()
                 await barrierCompleted.mark()
                 return samples
@@ -1253,7 +1253,7 @@ final class WorkspaceFileContextStoreTests: XCTestCase {
                 await captureGate.markStartedAndWaitForRelease()
             }
 
-            let firstBarrierTask = Task {
+            let firstBarrierTask = Task.detached {
                 await store.awaitAppliedIngressForAllRoots()
             }
             await captureGate.waitUntilStarted()
@@ -1341,7 +1341,7 @@ final class WorkspaceFileContextStoreTests: XCTestCase {
                 guard observedRootID == rootID else { return }
                 await flushGate.markStartedAndWaitForRelease()
             }
-            let barrierTask = Task {
+            let barrierTask = Task.detached {
                 await store.awaitAppliedIngressForAllRoots()
             }
             await flushGate.waitUntilStarted()
