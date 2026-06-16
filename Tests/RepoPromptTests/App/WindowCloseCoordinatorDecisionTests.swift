@@ -131,8 +131,8 @@ final class WindowCloseCoordinatorLifecycleTests: XCTestCase {
         try await waitUntil("initial API settings load to settle", timeout: .seconds(15)) {
             window.apiSettingsViewModel.test_hasFinishedInitialStoredDataLoad
         }
-        window.apiSettingsViewModel.test_stopCodexModelsSubscription()
-        window.contextBuilderAgentViewModel.test_stopCodexModelsSubscription()
+        await window.apiSettingsViewModel.test_cancelAndDrainCodexModelsSubscription()
+        await window.contextBuilderAgentViewModel.test_cancelAndDrainCodexModelsSubscription()
         try await waitUntil("startup model subscribers to detach") {
             await pollingService.test_subscriberCount() == 0
         }

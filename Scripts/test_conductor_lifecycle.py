@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import io
 import json
 import os
@@ -74,7 +75,7 @@ class LifecycleTestCase(unittest.TestCase):
 
 class LifecycleQueueTests(LifecycleTestCase):
     def test_protocol_version_bump_replaces_older_daemons(self) -> None:
-        self.assertEqual(conductor.PROTOCOL_VERSION, 7)
+        self.assertEqual(conductor.PROTOCOL_VERSION, 9)
 
     def test_ensure_daemon_stops_and_replaces_idle_protocol_3_daemon(self) -> None:
         tmp, state = self.make_state()
@@ -602,6 +603,286 @@ class XCTestStallWatchdogTests(LifecycleTestCase):
         state.jobs[job.ticket] = job
         return job
 
+    def assert_fds_closed(self, fds: list[int]) -> None:
+        for fd in fds:
+            with self.assertRaises(OSError):
+                os.fstat(fd)
+
+    def test_output_transport_selection_is_pty_only_for_watchdog_non_list_tests(self) -> None:
+        tmp, state = self.make_state()
+        self.addCleanup(tmp.cleanup)
+        jobs = [
+            ("build", {}, "pipe"),
+            ("test", {}, "pipe"),
+            ("provider-test", {}, "pipe"),
+            ("test", {"list": True, "xctestStallSeconds": 5.0}, "pipe"),
+            ("test", {"xctestStallSeconds": 5.0}, "pty"),
+            ("provider-test", {"xctestStallSeconds": 5.0}, "pty"),
+            ("test", {"xctestStallSeconds": 5.0, "xctestStallWakeProbe": True}, "pty"),
+        ]
+
+        for index, (operation, args, expected) in enumerate(jobs):
+            with self.subTest(operation=operation, args=args):
+                job = self.make_job(state, f"transport-{index}", operation, args, ["build"], "running")
+                transport = state._create_process_output_transport(job)
+                try:
+                    self.assertEqual(transport.kind, expected)
+                finally:
+                    transport.close_all()
+
+    def test_process_output_transport_closes_native_pty_descriptors_idempotently(self) -> None:
+        transport = conductor.ProcessOutputTransport.create("pty")
+        fds = [transport.master_fd, transport.slave_fd]
+        self.assertTrue(all(isinstance(fd, int) for fd in fds))
+        process = mock.Mock(stdout=None)
+
+        transport.attach_process(process)
+        transport.close_reader()
+        transport.close_all()
+
+        self.assert_fds_closed([int(fd) for fd in fds if fd is not None])
+
+    def test_pty_eio_is_eof_without_waiting_for_popen_to_reap_child(self) -> None:
+        transport = conductor.ProcessOutputTransport(kind="pty", master_fd=123)
+        process = mock.Mock()
+
+        with mock.patch.object(conductor.os, "read", side_effect=OSError(errno.EIO, "fixture EIO")):
+            self.assertEqual(transport.read_chunk(process), b"")
+
+        process.poll.assert_not_called()
+        transport.master_fd = None
+
+    def test_output_relay_frames_split_multiple_crlf_unterminated_and_sgr_markers(self) -> None:
+        tmp, state = self.make_state()
+        self.addCleanup(tmp.cleanup)
+        job = self.make_watchdog_job(state)
+        job.progress_transport = "pty"
+        first = "-[RepoPromptTests.ExampleTests testOne]"
+        second = "-[RepoPromptTests.ExampleTests testTwo]"
+        chunks = [
+            b"\x1b[32mTest Ca",
+            (
+                f"se '{first}' started.\x1b[0m\r\n"
+                f"Test Case '{first}' passed (0.001 seconds).\n"
+                "Test Case '-[RepoPromptTests.ExampleTests test"
+            ).encode(),
+            (
+                "Two]' started.\n"
+                f"Test Case '{second}' skipped (0.001 seconds)."
+            ).encode(),
+            b"",
+        ]
+        transport = mock.Mock()
+        transport.read_chunk.side_effect = chunks
+        process = mock.Mock()
+        log = io.BytesIO()
+
+        state._read_process_output(job.ticket, process, log, transport)
+
+        self.assertEqual(log.getvalue(), b"".join(chunks[:-1]))
+        self.assertEqual(job.xctest_progress_sequence, 4)
+        self.assertEqual(job.xctest_last_progress_test, second)
+        self.assertEqual(job.xctest_last_progress_action, "skipped")
+        self.assertIsNone(job.xctest_current_test)
+        self.assertEqual(job.xctest_previous_test, second)
+        self.assertEqual(len(job.tail), 4)
+        self.assertTrue(job.tail[0].endswith("\r\n"))
+        self.assertFalse(job.tail[-1].endswith("\n"))
+        transport.close_reader.assert_called_once_with()
+
+    def test_watchdog_trigger_snapshot_is_immutable_after_later_progress(self) -> None:
+        tmp, state = self.make_state()
+        self.addCleanup(tmp.cleanup)
+        job = self.make_watchdog_job(state)
+        job.progress_transport = "pty"
+        test_name = "-[RepoPromptTests.ExampleTests testSnapshot]"
+        state._record_xctest_progress_locked(
+            job,
+            f"Test Case '{test_name}' started.\n",
+            observed_at=10.0,
+        )
+        claim = state._claim_xctest_stall_locked(job, observed_at=15.0)
+        self.assertIsNotNone(claim)
+        state._record_xctest_progress_locked(
+            job,
+            f"Test Case '{test_name}' passed (0.001 seconds).\n",
+            observed_at=16.0,
+        )
+
+        with mock.patch.object(state, "_xctest_process_snapshot_locked", return_value=(None, [])), mock.patch.object(
+            state,
+            "_capture_xctest_stall_diagnostics",
+            side_effect=lambda _job, diagnostic, _identity: diagnostic,
+        ), mock.patch.object(state, "_terminate_xctest_stalled_job"):
+            state._handle_xctest_stall(job.ticket, claim)
+
+        diagnostic = job.diagnostics[-1]
+        self.assertEqual(diagnostic["progressTransport"], "pty")
+        self.assertEqual(diagnostic["progressSequence"], 1)
+        self.assertEqual(diagnostic["lastProgressTest"], test_name)
+        self.assertEqual(diagnostic["lastProgressAction"], "started")
+        self.assertEqual(diagnostic["lastProgressObservedAt"], 10.0)
+        self.assertEqual(diagnostic["currentTest"], test_name)
+        self.assertIsNone(diagnostic["previousTest"])
+        self.assertEqual(job.xctest_progress_sequence, 2)
+        self.assertEqual(job.xctest_last_progress_action, "passed")
+        self.assertIsNone(job.xctest_current_test)
+
+    def test_buffered_xctest_marker_streams_on_pty_before_watchdog_capture(self) -> None:
+        tmp, state = self.make_state()
+        self.addCleanup(tmp.cleanup)
+        root = state.paths.repo_root
+        test_name = "-[RepoPromptTests.BufferedTests testStreamsBeforeStall]"
+        child_code = textwrap.dedent(
+            f"""\
+            import time
+            print("Test Case {test_name!r} started.")
+            time.sleep(30)
+            """
+        )
+        argv = [sys.executable, "-c", child_code]
+        job = self.make_job(
+            state,
+            "buffered-xctest-pty",
+            "test",
+            {"xctestStallSeconds": 0.1},
+            ["build"],
+            job_state="running",
+        )
+        job.timeout = 5.0
+        state.jobs[job.ticket] = job
+        state.active_lanes = {"build": job.ticket}
+        opened_fds: list[int] = []
+        real_openpty = os.openpty
+
+        def tracking_openpty() -> tuple[int, int]:
+            pair = real_openpty()
+            opened_fds.extend(pair)
+            return pair
+
+        def prepare(_request: dict) -> tuple[list[str], list[str], Path, dict[str, str], float]:
+            return argv, ["build"], root, os.environ.copy(), 5.0
+
+        with mock.patch.object(state.registry, "prepare", side_effect=prepare), mock.patch.object(
+            conductor.os, "openpty", side_effect=tracking_openpty
+        ), mock.patch.object(
+            state,
+            "_xctest_process_snapshot_locked",
+            return_value=(None, []),
+        ), mock.patch.object(
+            state,
+            "_capture_xctest_stall_diagnostics",
+            side_effect=lambda _job, diagnostic, _identity: diagnostic,
+        ):
+            state._run_job(job.ticket)
+
+        log = job.log_path.read_text(encoding="utf-8")
+        marker = f"Test Case '{test_name}' started."
+        watchdog_line = "XCTest progress stall watchdog triggered"
+        self.assertEqual(job.state, "failed")
+        self.assertEqual(job.exit_code, conductor.XCTEST_STALL_FAILURE_EXIT_CODE)
+        self.assertEqual(job.progress_transport, "pty")
+        self.assertGreater(job.xctest_progress_sequence, 0)
+        self.assertEqual(job.diagnostics[0]["lastProgressTest"], test_name)
+        self.assertEqual(job.diagnostics[0]["lastProgressAction"], "started")
+        self.assertEqual(job.diagnostics[0]["currentTest"], test_name)
+        self.assertLess(log.index(marker), log.index(watchdog_line))
+        self.assertFalse(state._process_tree_alive_locked(job))
+        self.assert_fds_closed(opened_fds)
+
+    def test_pty_descriptors_close_when_process_launch_fails(self) -> None:
+        tmp, state = self.make_state()
+        self.addCleanup(tmp.cleanup)
+        job = self.make_watchdog_job(state)
+        opened_fds: list[int] = []
+        real_openpty = os.openpty
+
+        def tracking_openpty() -> tuple[int, int]:
+            pair = real_openpty()
+            opened_fds.extend(pair)
+            return pair
+
+        with mock.patch.object(conductor.os, "openpty", side_effect=tracking_openpty), mock.patch.object(
+            conductor.subprocess,
+            "Popen",
+            side_effect=OSError("fixture launch failure"),
+        ), mock.patch.object(state, "_schedule_locked"), mock.patch.object(state, "_refresh_output_summary"):
+            state._run_job(job.ticket)
+
+        self.assertEqual(job.state, "failed")
+        self.assertIn("fixture launch failure", job.error or "")
+        self.assert_fds_closed(opened_fds)
+
+    def test_output_transport_cleanup_runs_for_success_timeout_and_cancellation(self) -> None:
+        for terminal_path in ["success", "timeout", "cancellation"]:
+            with self.subTest(terminal_path=terminal_path):
+                tmp, state = self.make_state()
+                self.addCleanup(tmp.cleanup)
+                job = self.make_watchdog_job(state)
+                job.ticket = f"cleanup-{terminal_path}"
+                job.log_path = state.paths.jobs_dir / f"{job.ticket}.log"
+                state.jobs = {job.ticket: job}
+                transport = mock.Mock()
+                transport.kind = "pty"
+                transport.popen_stdout = 101
+                transport.popen_stderr = 101
+                transport.read_chunk.return_value = b""
+                fake_process = mock.Mock(stdout=None)
+                fake_process.pid = os.getpid()
+                fake_process.poll.return_value = 0
+                if terminal_path == "success":
+                    fake_process.wait.return_value = 0
+                elif terminal_path == "timeout":
+                    fake_process.wait.side_effect = [
+                        subprocess.TimeoutExpired(["fixture"], 1.0),
+                        0,
+                    ]
+                else:
+                    def cancel_then_exit(*_args: object, **_kwargs: object) -> int:
+                        job.cancel_requested = True
+                        return 0
+
+                    fake_process.wait.side_effect = cancel_then_exit
+
+                with mock.patch.object(state, "_create_process_output_transport", return_value=transport), mock.patch.object(
+                    conductor.subprocess,
+                    "Popen",
+                    return_value=fake_process,
+                ), mock.patch.object(
+                    conductor,
+                    "process_table_snapshot",
+                    return_value={os.getpid(): (os.getppid(), "fixture-start")},
+                ), mock.patch.object(
+                    state,
+                    "_terminate_process_group_locked",
+                ), mock.patch.object(
+                    state,
+                    "_kill_process_group_locked",
+                ), mock.patch.object(
+                    state,
+                    "_process_tree_alive_locked",
+                    return_value=False,
+                ), mock.patch.object(
+                    state,
+                    "_wait_for_process_tree_exit_locked",
+                    return_value=False,
+                ), mock.patch.object(state, "_schedule_locked"), mock.patch.object(
+                    state,
+                    "_refresh_output_summary",
+                ):
+                    state._run_job(job.ticket)
+
+                transport.attach_process.assert_called_once_with(fake_process)
+                transport.close_reader.assert_called()
+                transport.close_all.assert_called_once_with()
+                if terminal_path == "success":
+                    self.assertEqual(job.state, "completed")
+                elif terminal_path == "timeout":
+                    self.assertTrue(job.timed_out)
+                    self.assertEqual(job.exit_code, 124)
+                else:
+                    self.assertEqual(job.state, "canceled")
+
     def test_watchdog_triggers_at_most_once_after_started_marker(self) -> None:
         tmp, state = self.make_state()
         self.addCleanup(tmp.cleanup)
@@ -883,6 +1164,54 @@ class XCTestStallWatchdogTests(LifecycleTestCase):
             )
         )
         self.assertIsNone(job.xctest_progress_deadline)
+
+    def test_test_list_cli_preserves_build_lane_and_package_roots(self) -> None:
+        tmp, state = self.make_state()
+        self.addCleanup(tmp.cleanup)
+        with mock.patch.object(conductor, "enqueue_and_maybe_wait", return_value=0) as enqueue:
+            code = conductor.handle_real_operation(state.paths, "test", ["--list"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(enqueue.call_args.args[2], {"list": True})
+
+        registry = conductor.OperationRegistry(state.paths.repo_root)
+        root_argv, root_lanes, root_cwd, _env, _timeout = registry.prepare(
+            {"operation": "test", "args": {"list": True}}
+        )
+        provider_argv, provider_lanes, provider_cwd, _env, _timeout = registry.prepare(
+            {"operation": "provider-test", "args": {"list": True}}
+        )
+
+        self.assertEqual(root_argv, ["swift", "test", "list"])
+        self.assertEqual(root_lanes, ["build"])
+        self.assertEqual(root_cwd, state.paths.repo_root)
+        self.assertEqual(provider_argv, ["swift", "test", "list"])
+        self.assertEqual(provider_lanes, ["build"])
+        self.assertEqual(
+            provider_cwd,
+            state.paths.repo_root / "Packages" / "RepoPromptAgentProviders",
+        )
+
+    def test_test_list_rejects_filters_and_stall_diagnostics(self) -> None:
+        tmp, state = self.make_state()
+        self.addCleanup(tmp.cleanup)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            conductor.handle_real_operation(state.paths, "test", ["--list", "--filter", "ExampleTests"])
+        with self.assertRaisesRegex(conductor.ConductorError, "cannot be combined"):
+            conductor.handle_real_operation(
+                state.paths,
+                "provider-test",
+                ["--list", "--xctest-stall-seconds", "10"],
+            )
+
+        registry = conductor.OperationRegistry(state.paths.repo_root)
+        with self.assertRaisesRegex(conductor.ConductorError, "cannot be combined with a filter"):
+            registry.prepare(
+                {
+                    "operation": "test",
+                    "args": {"list": True, "filter": "ExampleTests"},
+                }
+            )
 
     def test_test_cli_forwards_watchdog_options_and_requires_threshold(self) -> None:
         tmp, state = self.make_state()
