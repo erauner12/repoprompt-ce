@@ -437,14 +437,22 @@ public enum ClaudeCompatibleModelCatalog {
             description: "Routes Claude Code's \(slotName) model slot to \(backendModelID).",
             isPlaceholderDefault: false,
             isProviderDefault: isProviderDefault,
-            supportedEffortLevels: supportedEfforts(supportsXHigh: false).map(\.raw)
+            supportedEffortLevels: supportedEfforts(
+                supportsXHigh: ClaudeCompatibleModelNormalizer.supportsXHighEffort(backendModelID)
+            ).map(\.raw)
         )
     }
 
     private static func displayName(forBackendModelID modelID: String) -> String {
         switch modelID {
+        case "glm-4.5-air":
+            "GLM 4.5 Air"
         case "glm-4.7":
             "GLM 4.7"
+        case "glm-5.2":
+            "GLM 5.2"
+        case "glm-5.2[1m]":
+            "GLM 5.2 (1M)"
         case "glm-5-turbo":
             "GLM 5 Turbo"
         case "glm-5.1":

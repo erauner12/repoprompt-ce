@@ -2069,7 +2069,10 @@ enum AgentModelCatalog {
                 let specifier = ClaudeModelSpecifier(raw: option.rawValue)
                 let effortDisplayName = specifier.effortLevel?.displayName
                 let targetNameSuffix = effortDisplayName.map { "\(group.displayName) \($0)" } ?? option.displayName
-                let contextWindow = AgentModel.resolvedModel(forRaw: option.rawValue, agentKind: agent)?.contextWindowTokens
+                let contextWindow = ClaudeCompatibleModelCatalogAdapter.contextWindowTokens(
+                    forRequestedModelRaw: option.rawValue,
+                    agentKind: agent
+                ) ?? AgentModel.resolvedModel(forRaw: option.rawValue, agentKind: agent)?.contextWindowTokens
                 return DiscoveryStartTarget(
                     selectionID: selectionID,
                     modelRaw: option.rawValue,
@@ -2096,7 +2099,10 @@ enum AgentModelCatalog {
                 description: representative?.description,
                 available: true,
                 tags: tags,
-                contextWindowTokens: representativeModel?.contextWindowTokens,
+                contextWindowTokens: ClaudeCompatibleModelCatalogAdapter.contextWindowTokens(
+                    forRequestedModelRaw: group.baseModelRaw,
+                    agentKind: agent
+                ) ?? representativeModel?.contextWindowTokens,
                 supportedReasoningEfforts: [],
                 defaultReasoningEffort: nil,
                 startTargets: targets

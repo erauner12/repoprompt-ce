@@ -92,6 +92,16 @@ enum ClaudeCompatibleModelCatalogAdapter {
         optionMetadata(forRequestedModelRaw: rawModel, agentKind: agentKind)?.description
     }
 
+    static func contextWindowTokens(
+        forRequestedModelRaw rawModel: String?,
+        agentKind: AgentProviderKind
+    ) -> Int? {
+        guard let config = compatibleBackendConfig(for: agentKind),
+              let slotRaw = canonicalCompatibleBackendBaseRaw(rawModel, for: agentKind),
+              let backendModelID = backendModelID(forCanonicalSlotRaw: slotRaw, config: config) else { return nil }
+        return ClaudeCompatibleProviderRuntimeBridge.contextWindowTokens(forGLMBackendModelID: backendModelID)
+    }
+
     static func canonicalCompatibleBackendBaseRaw(_ rawModel: String?, for agentKind: AgentProviderKind) -> String? {
         guard let id = compatibleBackendID(for: agentKind),
               let config = compatibleBackendConfig(for: agentKind) else { return nil }
@@ -178,7 +188,14 @@ enum ClaudeCompatibleModelCatalogAdapter {
         }
         guard effort == .xhigh else { return true }
         if let agentKind, compatibleBackendID(for: agentKind) != nil {
-            return false
+            guard let baseModelRaw,
+                  let config = compatibleBackendConfig(for: agentKind),
+                  let canonicalSlot = canonicalCompatibleBackendBaseRaw(baseModelRaw, for: agentKind),
+                  let backendModelID = backendModelID(forCanonicalSlotRaw: canonicalSlot, config: config)
+            else {
+                return false
+            }
+            return ClaudeCompatibleProviderRuntimeBridge.supportsGLMXHighEffort(backendModelID: backendModelID)
         }
         guard let baseModelRaw else { return false }
         let normalized = baseModelRaw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -292,6 +309,24 @@ enum ClaudeCompatibleModelCatalogAdapter {
                 return claudeEffort(effort, isSupportedForBaseModelRaw: base, agentKind: agentKind)
             }
             return true
+        }
+    }
+
+    private static func backendModelID(
+        forCanonicalSlotRaw slotRaw: String,
+        config: ClaudeCodeCompatibleBackendConfig
+    ) -> String? {
+        guard case let .claudeSlotMapping(mapping) = config.modelBehavior else { return nil }
+        let normalized = mapping.normalized
+        switch slotRaw {
+        case AgentModel.claudeHaiku.rawValue:
+            return normalized.haiku
+        case AgentModel.claudeSonnet.rawValue:
+            return normalized.sonnet
+        case AgentModel.claudeOpus.rawValue:
+            return normalized.opus
+        default:
+            return nil
         }
     }
 

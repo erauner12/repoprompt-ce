@@ -59,8 +59,21 @@ final class ClaudeCompatiblePluginBridgeTests: XCTestCase {
         XCTAssertEqual(ClaudeCodeGLMIntegration.defaultRequestedModelRawValue, AgentModel.claudeSonnet.rawValue)
         XCTAssertEqual(ClaudeCodeGLMIntegration.haikuRequestedModelRawValue, AgentModel.claudeHaiku.rawValue)
         XCTAssertEqual(ClaudeCodeGLMIntegration.opusRequestedModelRawValue, AgentModel.claudeOpus.rawValue)
+        XCTAssertEqual(ClaudeCodeGLMIntegration.haikuEquivalentModelRawValue, "glm-4.5-air")
+        XCTAssertEqual(ClaudeCodeGLMIntegration.defaultModelRawValue, "glm-5.2[1m]")
+        XCTAssertEqual(ClaudeCodeGLMIntegration.opusEquivalentModelRawValue, "glm-5.2[1m]")
+        XCTAssertEqual(ClaudeCodeGLMIntegration.normalizedGLMModel("glm-4.7"), AgentModel.claudeHaiku.rawValue)
+        XCTAssertEqual(ClaudeCodeGLMIntegration.normalizedGLMModel("glm-5.2"), AgentModel.claudeSonnet.rawValue)
+        XCTAssertEqual(ClaudeCodeGLMIntegration.normalizedGLMModel("glm-5.2[1m]"), AgentModel.claudeSonnet.rawValue)
+        XCTAssertEqual(ClaudeCodeGLMIntegration.normalizedGLMModel("glm-5-turbo"), AgentModel.claudeSonnet.rawValue)
+        XCTAssertEqual(ClaudeCodeGLMIntegration.normalizedGLMModel("glm-5.1"), AgentModel.claudeOpus.rawValue)
 
-        let availability = AgentModelCatalog.AvailabilityContext(claudeCodeAvailable: true)
+        let availability = AgentModelCatalog.AvailabilityContext(
+            claudeCodeAvailable: true,
+            zaiConfigured: true,
+            kimiConfigured: true,
+            customClaudeCompatibleConfigured: true
+        )
         let snapshot = try XCTUnwrap(ClaudeCompatibleModelCatalogAdapter.catalogSnapshot(
             for: .claudeCode,
             availability: availability,
@@ -90,6 +103,43 @@ final class ClaudeCompatiblePluginBridgeTests: XCTestCase {
         XCTAssertTrue(discovery.models.contains { $0.id == "default" })
         XCTAssertTrue(discovery.models.contains { $0.id == "claude-fable-5" && $0.contextWindowTokens == 1_000_000 })
         XCTAssertTrue(discovery.models.contains { $0.id == "opus" })
+
+        let glmSnapshot = try XCTUnwrap(ClaudeCompatibleModelCatalogAdapter.catalogSnapshot(
+            for: .claudeCodeGLM,
+            availability: availability,
+            includeClaudeEffortVariants: true
+        ))
+        XCTAssertEqual(glmSnapshot.defaultModelRaw, AgentModel.claudeSonnet.rawValue)
+        XCTAssertTrue(glmSnapshot.options.contains { $0.rawValue == "sonnet:xhigh" })
+        XCTAssertTrue(glmSnapshot.options.contains { $0.rawValue == "opus:xhigh" })
+        XCTAssertFalse(glmSnapshot.options.contains { $0.rawValue == "haiku:xhigh" })
+        XCTAssertEqual(
+            ClaudeCompatibleModelCatalogAdapter.contextWindowTokens(
+                forRequestedModelRaw: "sonnet:xhigh",
+                agentKind: .claudeCodeGLM
+            ),
+            1_000_000
+        )
+        XCTAssertTrue(ClaudeCompatibleModelCatalogAdapter.claudeEffort(
+            .xhigh,
+            isSupportedForBaseModelRaw: AgentModel.claudeSonnet.rawValue,
+            agentKind: .claudeCodeGLM
+        ))
+        XCTAssertFalse(ClaudeCompatibleModelCatalogAdapter.claudeEffort(
+            .xhigh,
+            isSupportedForBaseModelRaw: AgentModel.claudeHaiku.rawValue,
+            agentKind: .claudeCodeGLM
+        ))
+        XCTAssertFalse(ClaudeCompatibleModelCatalogAdapter.claudeEffort(
+            .xhigh,
+            isSupportedForBaseModelRaw: AgentModel.kimiCode.rawValue,
+            agentKind: .kimiCode
+        ))
+        XCTAssertFalse(ClaudeCompatibleModelCatalogAdapter.claudeEffort(
+            .xhigh,
+            isSupportedForBaseModelRaw: AgentModel.customClaudeCompatible.rawValue,
+            agentKind: .customClaudeCompatible
+        ))
 
         let compatiblePluginOptions = [
             ClaudeCompatiblePluginModelOption(
@@ -129,6 +179,50 @@ final class ClaudeCompatiblePluginBridgeTests: XCTestCase {
             ClaudeCompatibleModelCatalogAdapter.modelOptions(from: [compatiblePluginOptions[2]], for: .customClaudeCompatible).map(\.rawValue),
             [AgentModel.customClaudeCompatible.rawValue]
         )
+    }
+
+    func testCustomSlotMappingUsesBackendModelIDForXHighAndContextSupport() throws {
+        let restore = installTemporaryCustomSlotMapping()
+        defer { restore() }
+
+        let availability = AgentModelCatalog.AvailabilityContext(
+            claudeCodeAvailable: true,
+            customClaudeCompatibleConfigured: true
+        )
+        let snapshot = try XCTUnwrap(ClaudeCompatibleModelCatalogAdapter.catalogSnapshot(
+            for: .customClaudeCompatible,
+            availability: availability,
+            includeClaudeEffortVariants: true
+        ))
+        XCTAssertTrue(snapshot.options.contains { $0.rawValue == "sonnet:xhigh" })
+        XCTAssertTrue(snapshot.options.contains { $0.rawValue == "opus:xhigh" })
+        XCTAssertFalse(snapshot.options.contains { $0.rawValue == "haiku:xhigh" })
+        XCTAssertEqual(
+            ClaudeCompatibleModelCatalogAdapter.contextWindowTokens(
+                forRequestedModelRaw: "sonnet:xhigh",
+                agentKind: .customClaudeCompatible
+            ),
+            1_000_000
+        )
+        XCTAssertNil(ClaudeCompatibleModelCatalogAdapter.contextWindowTokens(
+            forRequestedModelRaw: "opus:xhigh",
+            agentKind: .customClaudeCompatible
+        ))
+        XCTAssertTrue(ClaudeCompatibleModelCatalogAdapter.claudeEffort(
+            .xhigh,
+            isSupportedForBaseModelRaw: AgentModel.claudeSonnet.rawValue,
+            agentKind: .customClaudeCompatible
+        ))
+        XCTAssertFalse(ClaudeCompatibleModelCatalogAdapter.claudeEffort(
+            .xhigh,
+            isSupportedForBaseModelRaw: AgentModel.claudeHaiku.rawValue,
+            agentKind: .customClaudeCompatible
+        ))
+        XCTAssertFalse(ClaudeCompatibleModelCatalogAdapter.claudeEffort(
+            .xhigh,
+            isSupportedForBaseModelRaw: AgentModel.kimiCode.rawValue,
+            agentKind: .kimiCode
+        ))
     }
 
     /// XHigh eligibility is declared in three places: the provider package's
@@ -182,6 +276,42 @@ final class ClaudeCompatiblePluginBridgeTests: XCTestCase {
             6,
             "AI picker shares too few base raws with the provider catalog; the consistency check lost coverage"
         )
+    }
+
+    private func installTemporaryCustomSlotMapping() -> () -> Void {
+        let defaults = UserDefaults.standard
+        let store = ClaudeCodeCompatibleBackendStore.shared
+        let configsKey = ClaudeCodeCompatibleBackendStore.configsDefaultsKey
+        let configuredKey = store.configuredDefaultsKey(for: .custom)
+        let previousConfigs = defaults.data(forKey: configsKey)
+        let previousConfigured = defaults.object(forKey: configuredKey)
+
+        store.saveConfig(ClaudeCodeCompatibleBackendConfig(
+            id: .custom,
+            isEnabled: true,
+            displayName: "CC Custom GLM",
+            baseURL: "https://example.test/anthropic",
+            auth: .anthropicAPIKey,
+            modelBehavior: .claudeSlotMapping(.init(
+                haiku: "custom-fast",
+                sonnet: "glm-5.2[1m]",
+                opus: "glm-5.2"
+            ))
+        ))
+        _ = store.setConfigured(true, for: .custom)
+
+        return {
+            if let previousConfigs {
+                defaults.set(previousConfigs, forKey: configsKey)
+            } else {
+                defaults.removeObject(forKey: configsKey)
+            }
+            if let previousConfigured {
+                defaults.set(previousConfigured, forKey: configuredKey)
+            } else {
+                defaults.removeObject(forKey: configuredKey)
+            }
+        }
     }
 
     private func sourceFilesImportingProviderPackage(

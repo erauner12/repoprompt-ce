@@ -173,11 +173,13 @@ enum ClaudeCompatibleProviderRuntimeBridge {
 
     static func backendEnvironment(
         config: ClaudeCodeCompatibleBackendConfig,
-        apiKey: String
+        apiKey: String,
+        selectedBackendModelID: String? = nil
     ) -> [String: String] {
         RepoPromptClaudeCompatibleProvider.ClaudeCompatibleBackendEnvironmentBuilder.environment(
             config: pluginBackendConfig(from: config),
-            apiKey: apiKey
+            apiKey: apiKey,
+            selectedBackendModelID: selectedBackendModelID
         )
     }
 
@@ -325,6 +327,16 @@ enum ClaudeCompatibleProviderRuntimeBridge {
     static func noModelRawValue(for backendID: ClaudeCodeCompatibleBackendID) -> String {
         RepoPromptClaudeCompatibleProvider.ClaudeCompatibleModelNormalizer.noModelRawValue(
             for: pluginBackendID(for: backendID)
+        )
+    }
+
+    static func supportsGLMXHighEffort(backendModelID: String?) -> Bool {
+        RepoPromptClaudeCompatibleProvider.ClaudeCompatibleModelNormalizer.supportsXHighEffort(backendModelID)
+    }
+
+    static func contextWindowTokens(forGLMBackendModelID backendModelID: String?) -> Int? {
+        RepoPromptClaudeCompatibleProvider.ClaudeCompatibleModelNormalizer.contextWindowTokens(
+            forBackendModelID: backendModelID
         )
     }
 

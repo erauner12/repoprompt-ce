@@ -37,10 +37,26 @@ final class ClaudeCompatibleRuntimeSupportTests: XCTestCase {
         XCTAssertEqual(environment["ANTHROPIC_BASE_URL"], "https://api.z.ai/api/anthropic")
         XCTAssertEqual(environment["ANTHROPIC_AUTH_TOKEN"], "secret")
         XCTAssertEqual(environment["API_TIMEOUT_MS"], "3000000")
+        XCTAssertNil(environment["CLAUDE_CODE_AUTO_COMPACT_WINDOW"])
         XCTAssertEqual(environment["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "h")
         XCTAssertEqual(environment["ANTHROPIC_DEFAULT_SONNET_MODEL"], "s")
         XCTAssertEqual(environment["ANTHROPIC_DEFAULT_OPUS_MODEL"], "o")
         XCTAssertEqual(ClaudeCompatibleBackendEnvironmentBuilder.removedEnvironmentKeys(config: config), ["ANTHROPIC_API_KEY"])
+
+        let oneMillionEnvironment = ClaudeCompatibleBackendEnvironmentBuilder.environment(
+            config: ClaudeCompatibleBackendID.glmZAI.defaultPreset,
+            apiKey: "secret",
+            selectedBackendModelID: "glm-5.2[1m]"
+        )
+        XCTAssertEqual(oneMillionEnvironment["API_TIMEOUT_MS"], "3000000")
+        XCTAssertEqual(oneMillionEnvironment["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "1000000")
+        let haikuEnvironment = ClaudeCompatibleBackendEnvironmentBuilder.environment(
+            config: ClaudeCompatibleBackendID.glmZAI.defaultPreset,
+            apiKey: "secret",
+            selectedBackendModelID: "glm-4.5-air"
+        )
+        XCTAssertEqual(haikuEnvironment["API_TIMEOUT_MS"], "3000000")
+        XCTAssertNil(haikuEnvironment["CLAUDE_CODE_AUTO_COMPACT_WINDOW"])
 
         let resolver = ClaudeCompatibleLaunchEnvironmentResolver(
             backendConfigProvider: { id in
@@ -110,7 +126,7 @@ final class ClaudeCompatibleRuntimeSupportTests: XCTestCase {
             runtimeConfig: runtimeConfig,
             mcpConfigPath: "/tmp/mcp.json",
             launchEnvironment: .init(
-                effectiveModel: "sonnet",
+                effectiveModel: "sonnet:xhigh",
                 environmentOverrides: [:],
                 backendID: nil
             ),
@@ -155,7 +171,37 @@ final class ClaudeCompatibleRuntimeSupportTests: XCTestCase {
         let zai = ClaudeCompatibleModelCatalog.snapshot(pluginID: .zaiClaudeCode, includeEffortVariants: false)
         XCTAssertEqual(zai.defaultModelRaw, "sonnet")
         XCTAssertEqual(zai.options.map(\.rawValue), ["haiku", "sonnet", "opus"])
+        XCTAssertEqual(zai.options.first { $0.rawValue == "haiku" }?.displayName, "GLM 4.5 Air")
+        XCTAssertEqual(zai.options.first { $0.rawValue == "sonnet" }?.displayName, "GLM 5.2 (1M)")
+        XCTAssertEqual(zai.options.first { $0.rawValue == "opus" }?.displayName, "GLM 5.2 (1M)")
+        XCTAssertEqual(zai.options.first { $0.rawValue == "haiku" }?.supportedEffortLevels, ["low", "medium", "high", "max"])
+        XCTAssertEqual(zai.options.first { $0.rawValue == "sonnet" }?.supportedEffortLevels, ["low", "medium", "high", "max", "xhigh"])
+        XCTAssertEqual(zai.options.first { $0.rawValue == "opus" }?.supportedEffortLevels, ["low", "medium", "high", "max", "xhigh"])
         XCTAssertEqual(zai.options.first { $0.isProviderDefault }?.rawValue, "sonnet")
+
+        let expandedZai = ClaudeCompatibleModelCatalog.snapshot(pluginID: .zaiClaudeCode)
+        XCTAssertTrue(expandedZai.options.contains { $0.rawValue == "sonnet:xhigh" })
+        XCTAssertTrue(expandedZai.options.contains { $0.rawValue == "opus:xhigh" })
+        XCTAssertFalse(expandedZai.options.contains { $0.rawValue == "haiku:xhigh" })
+
+        XCTAssertEqual(ClaudeCompatibleBackendID.glmZAI.defaultPreset.modelBehavior, .claudeSlotMapping(.init(
+            haiku: "glm-4.5-air",
+            sonnet: "glm-5.2[1m]",
+            opus: "glm-5.2[1m]"
+        )))
+        XCTAssertEqual(ClaudeCompatibleModelNormalizer.normalizedRequestedModel("sonnet:xhigh"), "sonnet")
+        XCTAssertEqual(ClaudeCompatibleModelNormalizer.normalizedSlotModel("sonnet:xhigh", config: ClaudeCompatibleBackendID.glmZAI.defaultPreset), "sonnet")
+        XCTAssertEqual(ClaudeCompatibleModelNormalizer.normalizedSlotModel("glm-5.2[1m]:xhigh", config: ClaudeCompatibleBackendID.glmZAI.defaultPreset), "sonnet")
+        XCTAssertEqual(ClaudeCompatibleHeadlessRuntime.runtimeModelParam("opus:xhigh"), "opus")
+        XCTAssertEqual(ClaudeCompatibleModelNormalizer.normalizedGLMModel("glm-4.5-air", config: ClaudeCompatibleBackendID.glmZAI.defaultPreset), "haiku")
+        XCTAssertEqual(ClaudeCompatibleModelNormalizer.normalizedGLMModel("glm-4.7", config: ClaudeCompatibleBackendID.glmZAI.defaultPreset), "haiku")
+        XCTAssertEqual(ClaudeCompatibleModelNormalizer.normalizedGLMModel("glm-5.2", config: ClaudeCompatibleBackendID.glmZAI.defaultPreset), "sonnet")
+        XCTAssertEqual(ClaudeCompatibleModelNormalizer.normalizedGLMModel("glm-5.2[1m]", config: ClaudeCompatibleBackendID.glmZAI.defaultPreset), "sonnet")
+        XCTAssertEqual(ClaudeCompatibleModelNormalizer.normalizedGLMModel("glm-5-turbo", config: ClaudeCompatibleBackendID.glmZAI.defaultPreset), "sonnet")
+        XCTAssertEqual(ClaudeCompatibleModelNormalizer.normalizedGLMModel("glm-5.1", config: ClaudeCompatibleBackendID.glmZAI.defaultPreset), "opus")
+        XCTAssertTrue(ClaudeCompatibleModelNormalizer.supportsXHighEffort("glm-5.2"))
+        XCTAssertTrue(ClaudeCompatibleModelNormalizer.supportsXHighEffort("glm-5.2[1m]"))
+        XCTAssertEqual(ClaudeCompatibleModelNormalizer.contextWindowTokens(forBackendModelID: "glm-5.2[1m]"), 1_000_000)
 
         let kimi = ClaudeCompatibleModelCatalog.snapshot(pluginID: .kimiClaudeCode, includeEffortVariants: false)
         XCTAssertEqual(kimi.defaultModelRaw, "kimi-code")
@@ -168,5 +214,71 @@ final class ClaudeCompatibleRuntimeSupportTests: XCTestCase {
         XCTAssertEqual(custom.options.map(\.rawValue), ["custom-claude-compatible"])
         XCTAssertEqual(custom.options.first?.displayName, "CC Custom")
         XCTAssertEqual(custom.options.first?.isProviderDefault, true)
+    }
+
+    func testResolverStripsEncodedEffortAndValidatesXHighAgainstBackendModelID() async throws {
+        let config = ClaudeCompatibleBackendConfig(
+            id: .glmZAI,
+            isEnabled: true,
+            displayName: "CC Zai",
+            baseURL: "https://api.z.ai/api/anthropic",
+            auth: .anthropicAuthToken,
+            modelBehavior: .claudeSlotMapping(.init(
+                haiku: "glm-4.5-air",
+                sonnet: "glm-5.2[1m]",
+                opus: "glm-5.2"
+            ))
+        )
+        let resolver = ClaudeCompatibleLaunchEnvironmentResolver(
+            backendConfigProvider: { id in
+                id == .glmZAI ? config : id.defaultPreset
+            },
+            zaiSecretProvider: { "secret" },
+            backendSecretProvider: { _ in "secret" }
+        )
+
+        let sonnet = try await resolver.resolve(variant: .glm, requestedModel: "sonnet:xhigh")
+        XCTAssertEqual(sonnet.effectiveModel, "sonnet")
+        XCTAssertEqual(sonnet.environmentOverrides["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "1000000")
+
+        let opus = try await resolver.resolve(variant: .glm, requestedModel: "opus:xhigh")
+        XCTAssertEqual(opus.effectiveModel, "opus")
+        XCTAssertNil(opus.environmentOverrides["CLAUDE_CODE_AUTO_COMPACT_WINDOW"])
+
+        let haikuMax = try await resolver.resolve(variant: .glm, requestedModel: "haiku:max")
+        XCTAssertEqual(haikuMax.effectiveModel, "haiku")
+
+        do {
+            _ = try await resolver.resolve(variant: .glm, requestedModel: "haiku:xhigh")
+            XCTFail("Expected haiku:xhigh to be rejected when haiku maps to glm-4.5-air")
+        } catch ClaudeCompatibleProviderError.invalidConfiguration {
+            // Expected.
+        }
+
+        do {
+            _ = try await resolver.resolve(variant: .glm, requestedModel: "glm-4.5-air:xhigh")
+            XCTFail("Expected glm-4.5-air:xhigh to be rejected")
+        } catch ClaudeCompatibleProviderError.invalidConfiguration {
+            // Expected.
+        }
+    }
+
+    func testNoModelBackendRejectsEffortEncodedSelections() async throws {
+        let resolver = ClaudeCompatibleLaunchEnvironmentResolver(
+            backendConfigProvider: { id in id.defaultPreset },
+            zaiSecretProvider: { "secret" },
+            backendSecretProvider: { _ in "secret" }
+        )
+
+        let kimi = try await resolver.resolve(variant: .kimi, requestedModel: "kimi-code")
+        XCTAssertNil(kimi.effectiveModel)
+        XCTAssertTrue(kimi.suppressesEffortSettings)
+
+        do {
+            _ = try await resolver.resolve(variant: .kimi, requestedModel: "kimi-code:xhigh")
+            XCTFail("Expected no-model backend to reject effort-encoded selections")
+        } catch ClaudeCompatibleProviderError.invalidConfiguration {
+            // Expected.
+        }
     }
 }
