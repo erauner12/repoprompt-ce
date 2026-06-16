@@ -15,7 +15,74 @@
             super.tearDown()
         }
 
-        func testHiddenDispatcherRecognizesReadSearchCaptureOperations() throws {
+        @MainActor
+        func testRuntimeSnapshotHiddenOperationsExposeBoundedAggregateAndDispatcherContracts() async throws {
+            let sourceLabel = "testHiddenDispatcherRecognizesReadSearchCaptureOperations"
+            try XCTContext.runActivity(named: sourceLabel) { _ in
+                try scenarioHiddenDispatcherRecognizesReadSearchCaptureOperations()
+            }
+
+            let runtimeLabel = "testRuntimeSnapshotHiddenOperationValidatesBoundsAndReturnsAggregateShape"
+            try await scenarioRuntimeSnapshotHiddenOperationValidatesBoundsAndReturnsAggregateShape(caseLabel: runtimeLabel)
+        }
+
+        @MainActor
+        func testRuntimeSnapshotProjectsBoundedActiveCoalescedAndPendingBarrierState() async throws {
+            let sourceLabel = "testReadSearchBarrierDiagnosticsExposeBoundedPendingSuccessorState"
+            try XCTContext.runActivity(named: sourceLabel) { _ in
+                try scenarioReadSearchBarrierDiagnosticsExposeBoundedPendingSuccessorState()
+            }
+
+            let runtimeLabel = "testRuntimeSnapshotProjectsActiveAndCoalescedPendingBarrierState"
+            try await scenarioRuntimeSnapshotProjectsActiveAndCoalescedPendingBarrierState(caseLabel: runtimeLabel)
+        }
+
+        func testMCPDispatchAndCatalogRecorderInventoryPreservesSanitizedStageContracts() throws {
+            try withIsolatedCaptureCase("testSearchDTOBuildNestedRecorderCapturesOnlyCoarseSanitizedDimensions") {
+                scenarioSearchDTOBuildNestedRecorderCapturesOnlyCoarseSanitizedDimensions()
+            }
+            try withIsolatedCaptureCase("testNewReadDispatchStageRecorderCapturesToolDimensionAndFinishes") {
+                try scenarioNewReadDispatchStageRecorderCapturesToolDimensionAndFinishes()
+            }
+            try withIsolatedCaptureCase("testServiceToolLookupInnerAttributionRecorderUsesStaticEmptyDimensions") {
+                scenarioServiceToolLookupInnerAttributionRecorderUsesStaticEmptyDimensions()
+            }
+            try withIsolatedCaptureCase("testMCPWindowToolCatalogLifecycleAttributionRecorderUsesStaticEmptyDimensions") {
+                scenarioMCPWindowToolCatalogLifecycleAttributionRecorderUsesStaticEmptyDimensions()
+            }
+            try withIsolatedCaptureCase("testOuterEnvelopeRecorderCapturesCombinedToolAndSanitizedOutcomes") {
+                try scenarioOuterEnvelopeRecorderCapturesCombinedToolAndSanitizedOutcomes()
+            }
+        }
+
+        func testReadAutoSelectionRecorderInventoryPreservesSanitizedStageAndLifecycleContracts() throws {
+            try withIsolatedCaptureCase("testProviderReadRecorderCapturesTotalAndSanitizedAutoSelectOutcomes") {
+                try scenarioProviderReadRecorderCapturesTotalAndSanitizedAutoSelectOutcomes()
+            }
+            try withIsolatedCaptureCase("testProviderAutoSelectNestedRecorderCapturesRepresentativeSanitizedOutcomes") {
+                scenarioProviderAutoSelectNestedRecorderCapturesRepresentativeSanitizedOutcomes()
+            }
+            try withIsolatedCaptureCase("testReadFileAutoSelectionQueueRecorderCapturesSanitizedStagesAndLifecycle") {
+                try scenarioReadFileAutoSelectionQueueRecorderCapturesSanitizedStagesAndLifecycle()
+            }
+            try withIsolatedCaptureCase("testAcceptedFileAPIFilterInnerAttributionRecorderCapturesEmptyDimensions") {
+                try scenarioAcceptedFileAPIFilterInnerAttributionRecorderCapturesEmptyDimensions()
+            }
+            try withIsolatedCaptureCase("testAllCodemapFileAPIsActorBodyAttributionRecorderCapturesEmptyDimensions") {
+                try scenarioAllCodemapFileAPIsActorBodyAttributionRecorderCapturesEmptyDimensions()
+            }
+        }
+
+        func testStaleCaptureStateCannotContaminateSubsequentIntervalOrLifecycleCapture() throws {
+            try withIsolatedCaptureCase("testStaleIntervalFromFinishedCaptureDoesNotContaminateNextCapture") {
+                try scenarioStaleIntervalFromFinishedCaptureDoesNotContaminateNextCapture()
+            }
+            try withIsolatedCaptureCase("testStaleLifecycleCorrelationCannotContaminateNextCapture") {
+                try scenarioStaleLifecycleCorrelationCannotContaminateNextCapture()
+            }
+        }
+
+        private func scenarioHiddenDispatcherRecognizesReadSearchCaptureOperations() throws {
             let diagnostics = try diagnosticsSource()
             XCTAssertTrue(diagnostics.contains("mcp_read_search_capture_begin"))
             XCTAssertTrue(diagnostics.contains("mcp_read_search_capture_snapshot"))
@@ -386,7 +453,7 @@
         }
 
         @MainActor
-        func testRuntimeSnapshotHiddenOperationValidatesBoundsAndReturnsAggregateShape() async throws {
+        private func scenarioRuntimeSnapshotHiddenOperationValidatesBoundsAndReturnsAggregateShape(caseLabel: String) async throws {
             let manager = ServerNetworkManager.shared
             let connectionID = UUID()
             _ = await manager.debugInstallConnectionLimiterForTesting(connectionID: connectionID)
@@ -423,10 +490,10 @@
                     "root_limit": .int(1)
                 ]
             )
-            let payload = try debugDiagnosticsPayload(result)
-            XCTAssertEqual(payload["ok"] as? Bool, true)
-            XCTAssertEqual(payload["op"] as? String, "mcp_read_search_runtime_snapshot")
-            let runtime = try XCTUnwrap(payload["runtime"] as? [String: Any])
+            let payload = try debugDiagnosticsPayload(result, caseLabel: caseLabel)
+            XCTAssertEqual(payload["ok"] as? Bool, true, caseLabel)
+            XCTAssertEqual(payload["op"] as? String, "mcp_read_search_runtime_snapshot", caseLabel)
+            let runtime = try XCTUnwrap(payload["runtime"] as? [String: Any], caseLabel)
             XCTAssertEqual(runtime["consistency"] as? String, "best_effort")
             XCTAssertEqual((runtime["window_count"] as? NSNumber)?.intValue, 1)
             let observers = try XCTUnwrap(runtime["observers"] as? [String: Any])
@@ -514,11 +581,11 @@
                     "root_limit": .int(1)
                 ]
             )
-            let missingPayload = try debugDiagnosticsPayload(missingResult)
-            let missingRuntime = try XCTUnwrap(missingPayload["runtime"] as? [String: Any])
-            let missingLimiter = try XCTUnwrap(missingRuntime["limiter"] as? [String: Any])
-            XCTAssertEqual(missingLimiter["found"] as? Bool, false)
-            XCTAssertEqual(missingLimiter["connection_id"] as? String, missingConnectionID.uuidString)
+            let missingPayload = try debugDiagnosticsPayload(missingResult, caseLabel: caseLabel)
+            let missingRuntime = try XCTUnwrap(missingPayload["runtime"] as? [String: Any], caseLabel)
+            let missingLimiter = try XCTUnwrap(missingRuntime["limiter"] as? [String: Any], caseLabel)
+            XCTAssertEqual(missingLimiter["found"] as? Bool, false, caseLabel)
+            XCTAssertEqual(missingLimiter["connection_id"] as? String, missingConnectionID.uuidString, caseLabel)
 
             for invalidArguments: [String: Value] in [
                 [
@@ -538,15 +605,15 @@
                     connectionID: connectionID,
                     arguments: invalidArguments
                 )
-                let invalidPayload = try debugDiagnosticsPayload(invalidResult)
-                XCTAssertEqual(invalidPayload["ok"] as? Bool, false)
-                XCTAssertEqual(invalidPayload["op"] as? String, "mcp_read_search_runtime_snapshot")
-                XCTAssertEqual(invalidPayload["code"] as? String, "invalid_params")
+                let invalidPayload = try debugDiagnosticsPayload(invalidResult, caseLabel: caseLabel)
+                XCTAssertEqual(invalidPayload["ok"] as? Bool, false, caseLabel)
+                XCTAssertEqual(invalidPayload["op"] as? String, "mcp_read_search_runtime_snapshot", caseLabel)
+                XCTAssertEqual(invalidPayload["code"] as? String, "invalid_params", caseLabel)
             }
         }
 
         @MainActor
-        func testRuntimeSnapshotProjectsActiveAndCoalescedPendingBarrierState() async throws {
+        private func scenarioRuntimeSnapshotProjectsActiveAndCoalescedPendingBarrierState(caseLabel: String) async throws {
             let manager = ServerNetworkManager.shared
             let previousAutoStart = GlobalSettingsStore.shared.mcpAutoStart()
             GlobalSettingsStore.shared.setMCPAutoStart(false, commit: false)
@@ -651,13 +718,13 @@
                     coalescedBarrier: coalescedBarrier
                 )
 
-                let payload = try debugDiagnosticsPayload(result)
-                let runtime = try XCTUnwrap(payload["runtime"] as? [String: Any])
-                let windows = try XCTUnwrap(runtime["windows"] as? [[String: Any]])
-                let windowPayload = try XCTUnwrap(windows.first)
-                let roots = try XCTUnwrap(windowPayload["roots"] as? [[String: Any]])
-                let rootPayload = try XCTUnwrap(roots.first)
-                let barrier = try XCTUnwrap(rootPayload["barrier"] as? [String: Any])
+                let payload = try debugDiagnosticsPayload(result, caseLabel: caseLabel)
+                let runtime = try XCTUnwrap(payload["runtime"] as? [String: Any], caseLabel)
+                let windows = try XCTUnwrap(runtime["windows"] as? [[String: Any]], caseLabel)
+                let windowPayload = try XCTUnwrap(windows.first, caseLabel)
+                let roots = try XCTUnwrap(windowPayload["roots"] as? [[String: Any]], caseLabel)
+                let rootPayload = try XCTUnwrap(roots.first, caseLabel)
+                let barrier = try XCTUnwrap(rootPayload["barrier"] as? [String: Any], caseLabel)
                 XCTAssertEqual((barrier["launch_count"] as? NSNumber)?.intValue, 1)
                 XCTAssertEqual((barrier["join_count"] as? NSNumber)?.intValue, 1)
                 XCTAssertEqual((barrier["successor_count"] as? NSNumber)?.intValue, 1)
@@ -690,7 +757,7 @@
             }
         }
 
-        func testSearchDTOBuildNestedRecorderCapturesOnlyCoarseSanitizedDimensions() {
+        private func scenarioSearchDTOBuildNestedRecorderCapturesOnlyCoarseSanitizedDimensions() {
             _ = startedCapture(label: "search-dto-build-decomposition", maxSamples: 100)
             let stages: [(StaticString, String)] = [
                 (EditFlowPerf.Stage.Search.dtoRootRefSnapshotLookup, "EditFlow.Search.DTOBuild.RootRefSnapshotLookup"),
@@ -731,7 +798,7 @@
             })
         }
 
-        func testNewReadDispatchStageRecorderCapturesToolDimensionAndFinishes() throws {
+        private func scenarioNewReadDispatchStageRecorderCapturesToolDimensionAndFinishes() throws {
             _ = startedCapture(label: "dispatch-decomposition", maxSamples: 100)
             EditFlowPerf.measure(
                 EditFlowPerf.Stage.MCPToolCall.serviceToolLookup,
@@ -747,7 +814,7 @@
             XCTAssertEqual(aggregate.sampleCount, 1)
         }
 
-        func testServiceToolLookupInnerAttributionRecorderUsesStaticEmptyDimensions() {
+        private func scenarioServiceToolLookupInnerAttributionRecorderUsesStaticEmptyDimensions() {
             _ = startedCapture(label: "service-tool-lookup-inner", maxSamples: 100)
             for stage in [
                 EditFlowPerf.Stage.MCPToolCall.serviceToolLookupServiceToolsAwait,
@@ -781,7 +848,7 @@
             XCTAssertTrue(snapshot.stages.allSatisfy { $0.sampleCount == 1 })
         }
 
-        func testMCPWindowToolCatalogLifecycleAttributionRecorderUsesStaticEmptyDimensions() {
+        private func scenarioMCPWindowToolCatalogLifecycleAttributionRecorderUsesStaticEmptyDimensions() {
             _ = startedCapture(label: "window-tool-catalog-lifecycle", maxSamples: 100)
             for stage in [
                 EditFlowPerf.Stage.MCPWindowToolCatalog.construction,
@@ -819,7 +886,7 @@
             XCTAssertTrue(snapshot.stages.allSatisfy { $0.sampleCount == 1 })
         }
 
-        func testOuterEnvelopeRecorderCapturesCombinedToolAndSanitizedOutcomes() throws {
+        private func scenarioOuterEnvelopeRecorderCapturesCombinedToolAndSanitizedOutcomes() throws {
             _ = startedCapture(label: "outer-envelope", maxSamples: 100)
             EditFlowPerf.measure(
                 EditFlowPerf.Stage.MCPToolCall.preLimiterEnvelope,
@@ -868,7 +935,7 @@
             )
         }
 
-        func testProviderReadRecorderCapturesTotalAndSanitizedAutoSelectOutcomes() throws {
+        private func scenarioProviderReadRecorderCapturesTotalAndSanitizedAutoSelectOutcomes() throws {
             _ = startedCapture(label: "provider-read-decomposition", maxSamples: 100)
             EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.providerTotal) {}
             EditFlowPerf.measure(
@@ -895,7 +962,7 @@
             XCTAssertTrue(autoSelectRows.allSatisfy { !$0.sanitizedDimensions.contains("/") && !$0.sanitizedDimensions.contains("payload") })
         }
 
-        func testProviderAutoSelectNestedRecorderCapturesRepresentativeSanitizedOutcomes() {
+        private func scenarioProviderAutoSelectNestedRecorderCapturesRepresentativeSanitizedOutcomes() {
             _ = startedCapture(label: "provider-auto-select-decomposition", maxSamples: 100)
             let samples: [(StaticString, String)] = [
                 (EditFlowPerf.Stage.ReadFile.AutoSelect.eligibilityResolution, "eligible"),
@@ -926,7 +993,7 @@
             })
         }
 
-        func testReadFileAutoSelectionQueueRecorderCapturesSanitizedStagesAndLifecycle() throws {
+        private func scenarioReadFileAutoSelectionQueueRecorderCapturesSanitizedStagesAndLifecycle() throws {
             _ = startedCapture(label: "read-file-auto-selection-queue", maxSamples: 100)
             let correlation = try XCTUnwrap(EditFlowPerf.makeLifecycleCorrelationIfActive())
             let samples: [StaticString] = [
@@ -963,7 +1030,7 @@
             XCTAssertTrue(snapshot.lifecycleEvents.allSatisfy { !$0.sanitizedDimensions.contains("/") })
         }
 
-        func testAcceptedFileAPIFilterInnerAttributionRecorderCapturesEmptyDimensions() throws {
+        private func scenarioAcceptedFileAPIFilterInnerAttributionRecorderCapturesEmptyDimensions() throws {
             _ = startedCapture(label: "accepted-file-api-filter-inner", maxSamples: 100)
             let stages: [(StaticString, String)] = [
                 (EditFlowPerf.Stage.ReadFile.AutoSelect.AcceptedFileAPIFilter.pathGrouping, "EditFlow.ReadFile.AutoSelect.AcceptedFileAPIFilter.PathGrouping"),
@@ -985,7 +1052,7 @@
             }
         }
 
-        func testAllCodemapFileAPIsActorBodyAttributionRecorderCapturesEmptyDimensions() throws {
+        private func scenarioAllCodemapFileAPIsActorBodyAttributionRecorderCapturesEmptyDimensions() throws {
             _ = startedCapture(label: "all-codemap-file-apis-actor-body", maxSamples: 100)
             let stages: [(StaticString, String)] = [
                 (EditFlowPerf.Stage.ReadFile.AutoSelect.AllCodemapFileAPIs.actorBodyTotal, "EditFlow.ReadFile.AutoSelect.AllCodemapFileAPIs.ActorBodyTotal"),
@@ -1028,7 +1095,7 @@
             XCTAssertFalse(EditFlowPerf.isDebugCaptureActive)
         }
 
-        func testStaleIntervalFromFinishedCaptureDoesNotContaminateNextCapture() throws {
+        private func scenarioStaleIntervalFromFinishedCaptureDoesNotContaminateNextCapture() throws {
             _ = startedCapture(label: "capture-a", maxSamples: 100)
             let staleState = try XCTUnwrap(EditFlowPerf.begin(EditFlowPerf.Stage.MCPToolCall.providerExecution))
             _ = EditFlowPerf.debugCaptureSnapshot(finish: true)
@@ -1176,7 +1243,7 @@
             XCTAssertEqual(snapshot.lifecycleEvents.count, 100)
         }
 
-        func testStaleLifecycleCorrelationCannotContaminateNextCapture() throws {
+        private func scenarioStaleLifecycleCorrelationCannotContaminateNextCapture() throws {
             _ = startedCapture(label: "timeline-a", maxSamples: 100)
             let staleCorrelation = try XCTUnwrap(EditFlowPerf.makeLifecycleCorrelationIfActive())
             _ = EditFlowPerf.debugCaptureSnapshot(finish: true)
@@ -1281,7 +1348,7 @@
             await service.stopWatchingForChanges()
         }
 
-        func testReadSearchBarrierDiagnosticsExposeBoundedPendingSuccessorState() throws {
+        private func scenarioReadSearchBarrierDiagnosticsExposeBoundedPendingSuccessorState() throws {
             let store = try source("Sources/RepoPrompt/Infrastructure/WorkspaceContext/WorkspaceFileContextStore.swift")
             for hook in [
                 "ScopedIngressBarrierRootFlightState",
@@ -1557,29 +1624,71 @@
             }
         }
 
-        private func startedCapture(label: String, maxSamples: Int) -> EditFlowPerf.DebugCaptureSnapshot {
+        private func withIsolatedCaptureCase(
+            _ caseLabel: String,
+            _ body: () throws -> Void
+        ) rethrows {
+            EditFlowPerf.resetDebugCaptureForTesting()
+            defer { EditFlowPerf.resetDebugCaptureForTesting() }
+            try XCTContext.runActivity(named: caseLabel) { _ in
+                try body()
+            }
+        }
+
+        private func startedCapture(
+            label: String,
+            maxSamples: Int,
+            failureLabel: String? = nil,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) -> EditFlowPerf.DebugCaptureSnapshot {
             switch EditFlowPerf.beginDebugCapture(label: label, maxSamples: maxSamples) {
             case let .started(snapshot):
                 return snapshot
             case .busy:
-                XCTFail("Capture should start.")
-                fatalError("Capture should start.")
+                let message = [failureLabel, "Capture should start."]
+                    .compactMap(\.self)
+                    .joined(separator: ": ")
+                XCTFail(message, file: file, line: line)
+                fatalError(message)
             }
         }
 
-        private func assertPermittedLabel(_ value: String, file: StaticString = #filePath, line: UInt = #line) {
+        private func assertPermittedLabel(
+            _ value: String,
+            caseLabel: String? = nil,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) {
             let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
-            XCTAssertLessThanOrEqual(value.unicodeScalars.count, 64, file: file, line: line)
-            XCTAssertTrue(value.unicodeScalars.allSatisfy(allowed.contains), "Unexpected unsafe label: \(value)", file: file, line: line)
+            let prefix = caseLabel.map { $0 + ": " } ?? ""
+            XCTAssertLessThanOrEqual(value.unicodeScalars.count, 64, prefix + value, file: file, line: line)
+            XCTAssertTrue(
+                value.unicodeScalars.allSatisfy(allowed.contains),
+                prefix + "Unexpected unsafe label: \(value)",
+                file: file,
+                line: line
+            )
         }
 
-        private func debugDiagnosticsPayload(_ result: CallTool.Result) throws -> [String: Any] {
+        private func debugDiagnosticsPayload(
+            _ result: CallTool.Result,
+            caseLabel: String? = nil,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) throws -> [String: Any] {
             let text = result.content.compactMap { content -> String? in
                 if case let .text(text, _, _) = content { return text }
                 return nil
             }.joined()
-            let data = try XCTUnwrap(text.data(using: .utf8))
-            return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let message = caseLabel ?? ""
+            let data = try XCTUnwrap(text.data(using: .utf8), message, file: file, line: line)
+            return try XCTUnwrap(
+                JSONSerialization.jsonObject(with: data) as? [String: Any],
+                message,
+                file: file,
+                line: line
+            )
         }
 
         private func diagnosticsSource() throws -> String {

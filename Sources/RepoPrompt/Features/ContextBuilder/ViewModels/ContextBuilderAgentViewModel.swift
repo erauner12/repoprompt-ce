@@ -1051,8 +1051,11 @@ final class ContextBuilderAgentViewModel: ObservableObject {
             codexModelsSubscriptionTask != nil
         }
 
-        func test_stopCodexModelsSubscription() {
-            stopCodexModelsSubscription()
+        func test_cancelAndDrainCodexModelsSubscription() async {
+            let task = codexModelsSubscriptionTask
+            task?.cancel()
+            codexModelsSubscriptionTask = nil
+            await task?.value
         }
     #endif
 

@@ -501,74 +501,82 @@ final class TabContextRoutingTests: XCTestCase {
         )
     }
 
-    func testDisabledActiveTabCompatibilityGuidanceMentionsBindContext() {
-        let message = MCPServerViewModel.activeTabCompatibilityDisabledMessage(toolName: "workspace_context")
-        XCTAssertTrue(message.contains("bind_context"), message)
-        XCTAssertTrue(message.contains("context_id"), message)
-        XCTAssertTrue(message.contains("disabled"), message)
-    }
+    func testRoutingRecoveryGuidanceDistinguishesLegacyBindingFromAgentModeRestart() {
+        do {
+            let caseLabel = "testDisabledActiveTabCompatibilityGuidanceMentionsBindContext"
+            let message = MCPServerViewModel.activeTabCompatibilityDisabledMessage(toolName: "workspace_context")
+            XCTAssertTrue(message.contains("bind_context"), caseLabel + ": " + message)
+            XCTAssertTrue(message.contains("context_id"), caseLabel + ": " + message)
+            XCTAssertTrue(message.contains("disabled"), caseLabel + ": " + message)
+        }
 
-    func testAgentModeRoutingRecoveryDoesNotRecommendRejectedExplicitContextOverrides() {
-        for message in [
-            MCPServerViewModel.tabContextRoutingErrorMessage(
-                toolName: "context_builder",
-                runPurpose: .agentModeRun
-            ),
-            MCPServerViewModel.runScopedActiveTabCompatibilityMessage(
-                toolName: "context_builder",
-                runPurpose: .agentModeRun
+        do {
+            let caseLabel = "testAgentModeRoutingRecoveryDoesNotRecommendRejectedExplicitContextOverrides"
+            for message in [
+                MCPServerViewModel.tabContextRoutingErrorMessage(
+                    toolName: "context_builder",
+                    runPurpose: .agentModeRun
+                ),
+                MCPServerViewModel.runScopedActiveTabCompatibilityMessage(
+                    toolName: "context_builder",
+                    runPurpose: .agentModeRun
+                )
+            ] {
+                XCTAssertTrue(message.contains("Retry"), caseLabel + ": " + message)
+                XCTAssertTrue(message.contains("restart this Agent Mode run"), caseLabel + ": " + message)
+                XCTAssertFalse(message.contains("bind_context"), caseLabel + ": " + message)
+                XCTAssertFalse(message.contains("context_id"), caseLabel + ": " + message)
+            }
+
+            let ordinary = MCPServerViewModel.tabContextRoutingErrorMessage(
+                toolName: "workspace_context",
+                runPurpose: .unknown
             )
-        ] {
-            XCTAssertTrue(message.contains("Retry"), message)
-            XCTAssertTrue(message.contains("restart this Agent Mode run"), message)
-            XCTAssertFalse(message.contains("bind_context"), message)
-            XCTAssertFalse(message.contains("context_id"), message)
+            XCTAssertTrue(ordinary.contains("bind_context"), caseLabel + ": " + ordinary)
+            XCTAssertTrue(ordinary.contains("context_id"), caseLabel + ": " + ordinary)
         }
-
-        let ordinary = MCPServerViewModel.tabContextRoutingErrorMessage(
-            toolName: "workspace_context",
-            runPurpose: .unknown
-        )
-        XCTAssertTrue(ordinary.contains("bind_context"), ordinary)
-        XCTAssertTrue(ordinary.contains("context_id"), ordinary)
     }
 
-    func testConnectionManagerRoutingPoliciesKeepRunScopedToolsOutOfLegacyGenericBinding() {
-        XCTAssertFalse(ServerNetworkManager.shouldUseGenericTabBindingCompatibility(for: "agent_run"))
-        XCTAssertFalse(ServerNetworkManager.shouldUseGenericTabBindingCompatibility(for: "ask_oracle"))
-        XCTAssertFalse(ServerNetworkManager.shouldUseGenericTabBindingCompatibility(for: "context_builder"))
-        XCTAssertTrue(ServerNetworkManager.shouldUseGenericTabBindingCompatibility(for: "legacy_tool"))
-        XCTAssertTrue(ServerNetworkManager.shouldRehydrateContextID(for: "context_builder"))
-        XCTAssertTrue(ServerNetworkManager.shouldRehydrateLegacyTabID(for: "context_builder"))
-    }
-
-    func testConnectionManagerSkipsRoutinePerCallRunScopedTabRebindFallbackOnlyForCanonicalAgentModeLookups() {
-        for toolName in ["read_file", "file_search"] {
-            XCTAssertTrue(ServerNetworkManager.shouldSkipPerCallRunScopedTabRebindFallback(
-                toolName: toolName,
-                purpose: .agentModeRun
-            ))
+    func testConnectionManagerRunScopedCompatibilityPoliciesPreserveCanonicalLookupRules() {
+        do {
+            let caseLabel = "testConnectionManagerRoutingPoliciesKeepRunScopedToolsOutOfLegacyGenericBinding"
+            XCTAssertFalse(ServerNetworkManager.shouldUseGenericTabBindingCompatibility(for: "agent_run"), caseLabel)
+            XCTAssertFalse(ServerNetworkManager.shouldUseGenericTabBindingCompatibility(for: "ask_oracle"), caseLabel)
+            XCTAssertFalse(ServerNetworkManager.shouldUseGenericTabBindingCompatibility(for: "context_builder"), caseLabel)
+            XCTAssertTrue(ServerNetworkManager.shouldUseGenericTabBindingCompatibility(for: "legacy_tool"), caseLabel)
+            XCTAssertTrue(ServerNetworkManager.shouldRehydrateContextID(for: "context_builder"), caseLabel)
+            XCTAssertTrue(ServerNetworkManager.shouldRehydrateLegacyTabID(for: "context_builder"), caseLabel)
         }
 
-        for toolName in ["workspace_context", "agent_run"] {
-            XCTAssertFalse(ServerNetworkManager.shouldSkipPerCallRunScopedTabRebindFallback(
-                toolName: toolName,
-                purpose: .agentModeRun
-            ))
-        }
+        do {
+            let caseLabel = "testConnectionManagerSkipsRoutinePerCallRunScopedTabRebindFallbackOnlyForCanonicalAgentModeLookups"
+            for toolName in ["read_file", "file_search"] {
+                XCTAssertTrue(ServerNetworkManager.shouldSkipPerCallRunScopedTabRebindFallback(
+                    toolName: toolName,
+                    purpose: .agentModeRun
+                ), caseLabel + ": " + toolName)
+            }
 
-        for purpose in [MCPRunPurpose.discoverRun, .unknown] {
-            for toolName in ["read_file", "file_search", "workspace_context", "agent_run"] {
+            for toolName in ["workspace_context", "agent_run"] {
                 XCTAssertFalse(ServerNetworkManager.shouldSkipPerCallRunScopedTabRebindFallback(
                     toolName: toolName,
-                    purpose: purpose
-                ))
+                    purpose: .agentModeRun
+                ), caseLabel + ": " + toolName)
             }
-        }
 
-        XCTAssertTrue(ServerNetworkManager.shouldUseGenericTabBindingCompatibility(for: "legacy_tool"))
-        XCTAssertTrue(ServerNetworkManager.shouldInjectLegacyTabIDForCompatibility(for: "context_builder"))
-        XCTAssertFalse(ServerNetworkManager.shouldUseGenericTabBindingCompatibility(for: "workspace_context"))
+            for purpose in [MCPRunPurpose.discoverRun, .unknown] {
+                for toolName in ["read_file", "file_search", "workspace_context", "agent_run"] {
+                    XCTAssertFalse(ServerNetworkManager.shouldSkipPerCallRunScopedTabRebindFallback(
+                        toolName: toolName,
+                        purpose: purpose
+                    ), caseLabel + ": \(purpose) \(toolName)")
+                }
+            }
+
+            XCTAssertTrue(ServerNetworkManager.shouldUseGenericTabBindingCompatibility(for: "legacy_tool"), caseLabel)
+            XCTAssertTrue(ServerNetworkManager.shouldInjectLegacyTabIDForCompatibility(for: "context_builder"), caseLabel)
+            XCTAssertFalse(ServerNetworkManager.shouldUseGenericTabBindingCompatibility(for: "workspace_context"), caseLabel)
+        }
     }
 
     func testBindContextParticipatesInHiddenWindowRoutingWithoutImplicitPublicInjection() {
