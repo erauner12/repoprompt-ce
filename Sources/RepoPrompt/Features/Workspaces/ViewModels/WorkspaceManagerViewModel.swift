@@ -83,21 +83,42 @@ private struct WorkspaceFileCachedLoadResult {
 final class WorkspaceFileDecodeCache: @unchecked Sendable {
     static let shared = WorkspaceFileDecodeCache()
 
-    private let lock = NSLock()
-    private var cachedWorkspacesByKey: [WorkspaceFileDecodeCacheKey: WorkspaceModel] = [:]
-    private var scheduledNormalizationSaveKeys: Set<WorkspaceFileDecodeCacheKey> = []
+    private struct CacheEntry {
+        var workspace: WorkspaceModel
+        var estimatedCost: Int
+        var lastAccessOrdinal: UInt64
+    }
 
-    private init() {}
+    private static let defaultMaxEntryCount = 128
+    private static let defaultMaxEstimatedCost = 64 * 1024 * 1024
+
+    private let lock = NSLock()
+    private var cachedWorkspacesByKey: [WorkspaceFileDecodeCacheKey: CacheEntry] = [:]
+    private var scheduledNormalizationSaveKeys: Set<WorkspaceFileDecodeCacheKey> = []
+    private var totalEstimatedCost = 0
+    private var accessOrdinal: UInt64 = 0
+    private var maxEntryCount: Int
+    private var maxEstimatedCost: Int
+
+    private init(
+        maxEntryCount: Int = WorkspaceFileDecodeCache.defaultMaxEntryCount,
+        maxEstimatedCost: Int = WorkspaceFileDecodeCache.defaultMaxEstimatedCost
+    ) {
+        self.maxEntryCount = max(1, maxEntryCount)
+        self.maxEstimatedCost = max(1, maxEstimatedCost)
+    }
 
     fileprivate func loadWorkspace(at fileURL: URL) throws -> WorkspaceFileCachedLoadResult {
         let keyBeforeRead = try metadataKey(for: fileURL)
         lock.lock()
         if let cached = cachedWorkspacesByKey[keyBeforeRead] {
+            let nextOrdinal = nextAccessOrdinalLocked()
+            cachedWorkspacesByKey[keyBeforeRead]?.lastAccessOrdinal = nextOrdinal
             lock.unlock()
             return WorkspaceFileCachedLoadResult(
-                workspace: cached,
+                workspace: cached.workspace,
                 cacheHit: true,
-                composeTabsNormalized: cached.normalizationRequiresSave,
+                composeTabsNormalized: cached.workspace.normalizationRequiresSave,
                 cacheKey: keyBeforeRead
             )
         }
@@ -105,6 +126,7 @@ final class WorkspaceFileDecodeCache: @unchecked Sendable {
 
         let standardizedURL = URL(fileURLWithPath: keyBeforeRead.standardizedPath)
         let data = try Data(contentsOf: standardizedURL)
+        let estimatedCost = data.count
         var workspace = try JSONDecoder().decode(WorkspaceModel.self, from: data)
         let decodedRequiresSave = workspace.normalizationRequiresSave
         let normalized = workspace.normalizeComposeTabInvariants()
@@ -115,7 +137,7 @@ final class WorkspaceFileDecodeCache: @unchecked Sendable {
            keyAfterRead == keyBeforeRead
         {
             lock.lock()
-            cachedWorkspacesByKey[keyBeforeRead] = workspace
+            insertLocked(workspace, for: keyBeforeRead, estimatedCost: estimatedCost)
             lock.unlock()
         }
 
@@ -125,6 +147,48 @@ final class WorkspaceFileDecodeCache: @unchecked Sendable {
             composeTabsNormalized: normalizationRequiresSave,
             cacheKey: keyBeforeRead
         )
+    }
+
+    private func nextAccessOrdinalLocked() -> UInt64 {
+        accessOrdinal &+= 1
+        return accessOrdinal
+    }
+
+    private func insertLocked(_ workspace: WorkspaceModel, for key: WorkspaceFileDecodeCacheKey, estimatedCost: Int) {
+        if let existing = cachedWorkspacesByKey[key] {
+            totalEstimatedCost -= existing.estimatedCost
+        }
+        let boundedEstimatedCost = max(1, estimatedCost)
+        cachedWorkspacesByKey[key] = CacheEntry(
+            workspace: workspace,
+            estimatedCost: boundedEstimatedCost,
+            lastAccessOrdinal: nextAccessOrdinalLocked()
+        )
+        totalEstimatedCost += boundedEstimatedCost
+        trimToBudgetLocked()
+    }
+
+    private func removeCachedWorkspaceLocked(for key: WorkspaceFileDecodeCacheKey) {
+        if let removed = cachedWorkspacesByKey.removeValue(forKey: key) {
+            totalEstimatedCost -= removed.estimatedCost
+        }
+    }
+
+    private func removeCachedWorkspacesLocked(where shouldRemove: (WorkspaceFileDecodeCacheKey) -> Bool) {
+        for key in Array(cachedWorkspacesByKey.keys) where shouldRemove(key) {
+            removeCachedWorkspaceLocked(for: key)
+        }
+    }
+
+    private func trimToBudgetLocked() {
+        while cachedWorkspacesByKey.count > maxEntryCount ||
+            (totalEstimatedCost > maxEstimatedCost && cachedWorkspacesByKey.count > 1)
+        {
+            guard let keyToEvict = cachedWorkspacesByKey.min(by: { lhs, rhs in
+                lhs.value.lastAccessOrdinal < rhs.value.lastAccessOrdinal
+            })?.key else { break }
+            removeCachedWorkspaceLocked(for: keyToEvict)
+        }
     }
 
     fileprivate func metadataKey(for fileURL: URL) throws -> WorkspaceFileDecodeCacheKey {
@@ -160,23 +224,53 @@ final class WorkspaceFileDecodeCache: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         scheduledNormalizationSaveKeys.remove(key)
-        cachedWorkspacesByKey = cachedWorkspacesByKey.filter { $0.key.standardizedPath != key.standardizedPath }
+        removeCachedWorkspacesLocked { $0.standardizedPath == key.standardizedPath }
     }
 
     func invalidate(url: URL) {
         let standardizedPath = url.standardizedFileURL.path
         lock.lock()
         defer { lock.unlock() }
-        cachedWorkspacesByKey = cachedWorkspacesByKey.filter { $0.key.standardizedPath != standardizedPath }
+        removeCachedWorkspacesLocked { $0.standardizedPath == standardizedPath }
         scheduledNormalizationSaveKeys = scheduledNormalizationSaveKeys.filter { $0.standardizedPath != standardizedPath }
     }
 
     #if DEBUG
+        var cachedEntryCountForTesting: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return cachedWorkspacesByKey.count
+        }
+
+        var estimatedCostForTesting: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return totalEstimatedCost
+        }
+
+        func setBudgetForTesting(maxEntryCount: Int, maxEstimatedCost: Int) {
+            lock.lock()
+            defer { lock.unlock() }
+            self.maxEntryCount = max(1, maxEntryCount)
+            self.maxEstimatedCost = max(1, maxEstimatedCost)
+            trimToBudgetLocked()
+        }
+
+        func resetBudgetForTesting() {
+            lock.lock()
+            defer { lock.unlock() }
+            maxEntryCount = Self.defaultMaxEntryCount
+            maxEstimatedCost = Self.defaultMaxEstimatedCost
+            trimToBudgetLocked()
+        }
+
         func removeAllForTesting() {
             lock.lock()
             defer { lock.unlock() }
             cachedWorkspacesByKey.removeAll()
             scheduledNormalizationSaveKeys.removeAll()
+            totalEstimatedCost = 0
+            accessOrdinal = 0
         }
     #endif
 }
