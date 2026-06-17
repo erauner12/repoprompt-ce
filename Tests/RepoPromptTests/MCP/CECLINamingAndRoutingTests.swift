@@ -3,22 +3,26 @@ import Foundation
 import XCTest
 
 final class CECLINamingAndRoutingTests: XCTestCase {
-    func testCanonicalCEPathCommandNames() {
-        #if DEBUG
-            XCTAssertEqual(CLIPathInstaller.cliCommandName, "rpce-cli-debug")
-            XCTAssertEqual(CLIPathInstaller.claudeRPCommandName, "claude-rpce-debug")
-        #else
-            XCTAssertEqual(CLIPathInstaller.cliCommandName, "rpce-cli")
-            XCTAssertEqual(CLIPathInstaller.claudeRPCommandName, "claude-rpce")
-        #endif
-    }
+    func testCanonicalCECLICommandsAndStableConfigUseCEIdentity() {
+        do {
+            let caseLabel = "testCanonicalCEPathCommandNames"
+            #if DEBUG
+                XCTAssertEqual(CLIPathInstaller.cliCommandName, "rpce-cli-debug", caseLabel)
+                XCTAssertEqual(CLIPathInstaller.claudeRPCommandName, "claude-rpce-debug", caseLabel)
+            #else
+                XCTAssertEqual(CLIPathInstaller.cliCommandName, "rpce-cli", caseLabel)
+                XCTAssertEqual(CLIPathInstaller.claudeRPCommandName, "claude-rpce", caseLabel)
+            #endif
+        }
 
-    func testConfigExporterUsesCEOwnedStablePath() {
-        let path = MCPConfigExportService.stableWrapperConfigURL.path
-        XCTAssertTrue(path.contains("Library/Application Support/RepoPrompt CE/MCP"), path)
-        #if DEBUG
-            XCTAssertTrue(CLIPathInstaller.test_claudeRPScriptContent().contains(path))
-        #endif
+        do {
+            let caseLabel = "testConfigExporterUsesCEOwnedStablePath"
+            let path = MCPConfigExportService.stableWrapperConfigURL.path
+            XCTAssertTrue(path.contains("Library/Application Support/RepoPrompt CE/MCP"), caseLabel + ": " + path)
+            #if DEBUG
+                XCTAssertTrue(CLIPathInstaller.test_claudeRPScriptContent().contains(path), caseLabel)
+            #endif
+        }
     }
 
     func testUserSpaceSymlinkPathUsesApplicationSupport() {

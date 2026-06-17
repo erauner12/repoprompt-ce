@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import dataclasses
+import errno
 import fcntl
 import hashlib
 import json
@@ -34,7 +35,7 @@ from typing import Any, Deque, Dict, List, Optional, Sequence, Tuple
 
 from debug_app_process import ProcessIdentityError, matching_processes, terminate_matching_processes
 
-PROTOCOL_VERSION = 7
+PROTOCOL_VERSION = 9
 TERMINAL_STATES = {"completed", "failed", "canceled"}
 LANE_NAMES = {"build", "debugArtifact", "liveApp", "release", "style"}
 LOG_TAIL_LINES = 30
@@ -128,8 +129,8 @@ Operation commands:
   ./conductor swift-build --product RepoPrompt|repoprompt-mcp|all
   ./conductor build
   ./conductor package debug|release
-  ./conductor test [--filter <filter>] [--xctest-stall-seconds <seconds>] [--xctest-stall-wake-probe]
-  ./conductor provider-test [--filter <filter>] [--xctest-stall-seconds <seconds>] [--xctest-stall-wake-probe]
+  ./conductor test [--list | --filter <filter>] [--xctest-stall-seconds <seconds>] [--xctest-stall-wake-probe]
+  ./conductor provider-test [--list | --filter <filter>] [--xctest-stall-seconds <seconds>] [--xctest-stall-wake-probe]
   ./conductor install-debug-cli
   ./conductor debug-cli-status
   ./conductor run [-- <app args...>]                  # FIFO coordinated run
@@ -176,16 +177,102 @@ class ConductorError(Exception):
 XCTEST_PROGRESS_RE = re.compile(
     r"^Test Case '(.+)' (started|passed|failed|skipped)(?: \([^)]*\))?\.\s*$"
 )
+XCTEST_ANSI_SGR_RE = re.compile(r"\x1b\[[0-9:;]*m")
 
 
 @dataclasses.dataclass(frozen=True)
 class XCTestStallClaim:
+    progress_transport: str
     progress_sequence: int
+    last_progress_test: Optional[str]
+    last_progress_action: Optional[str]
+    last_progress_observed_at: Optional[float]
     threshold_seconds: float
     current_test: Optional[str]
     previous_test: Optional[str]
     wake_probe: bool
     triggered_at: float
+
+
+@dataclasses.dataclass
+class ProcessOutputTransport:
+    kind: str
+    master_fd: Optional[int] = None
+    slave_fd: Optional[int] = None
+    pipe_stream: Optional[Any] = None
+    close_lock: threading.Lock = dataclasses.field(default_factory=threading.Lock, repr=False)
+
+    @classmethod
+    def create(cls, kind: str) -> "ProcessOutputTransport":
+        if kind == "pipe":
+            return cls(kind="pipe")
+        if kind != "pty":
+            raise ValueError(f"unsupported process output transport: {kind}")
+        master_fd, slave_fd = os.openpty()
+        return cls(kind="pty", master_fd=master_fd, slave_fd=slave_fd)
+
+    @property
+    def popen_stdout(self) -> Any:
+        return self.slave_fd if self.kind == "pty" else subprocess.PIPE
+
+    @property
+    def popen_stderr(self) -> Any:
+        return self.slave_fd if self.kind == "pty" else subprocess.STDOUT
+
+    def attach_process(self, process: subprocess.Popen[bytes]) -> None:
+        if self.kind == "pty":
+            self.close_slave()
+            return
+        if process.stdout is None:
+            raise ConductorError("pipe-backed process did not expose stdout")
+        with self.close_lock:
+            self.pipe_stream = process.stdout
+
+    def read_chunk(self, process: subprocess.Popen[bytes]) -> bytes:
+        with self.close_lock:
+            master_fd = self.master_fd
+            pipe_stream = self.pipe_stream
+        if self.kind == "pipe":
+            if pipe_stream is None:
+                return b""
+            return pipe_stream.readline()
+        if master_fd is None:
+            return b""
+        try:
+            return os.read(master_fd, 64 * 1024)
+        except OSError as exc:
+            if exc.errno == errno.EIO:
+                return b""
+            if exc.errno == errno.EBADF:
+                with self.close_lock:
+                    if self.master_fd is None:
+                        return b""
+            raise
+
+    def close_slave(self) -> None:
+        with self.close_lock:
+            slave_fd = self.slave_fd
+            self.slave_fd = None
+        if slave_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(slave_fd)
+
+    def close_reader(self) -> None:
+        with self.close_lock:
+            master_fd = self.master_fd
+            pipe_stream = self.pipe_stream
+            self.master_fd = None
+            self.pipe_stream = None
+        if master_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(master_fd)
+        if pipe_stream is not None:
+            with contextlib.suppress(OSError):
+                pipe_stream.close()
+
+    def close_all(self) -> None:
+        self.close_slave()
+        self.close_reader()
 
 
 def is_xctest_process_command(command: str) -> bool:
@@ -806,6 +893,8 @@ class Job:
     state: str = "queued"
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
+    process_started_at: Optional[float] = None
+    process_finished_at: Optional[float] = None
     process_pid: Optional[int] = None
     process_pgid: Optional[int] = None
     process_start: Optional[str] = None
@@ -818,10 +907,14 @@ class Job:
     superseded_by_operation: Optional[str] = None
     timed_out: bool = False
     measurement_invalid: bool = False
+    progress_transport: Optional[str] = None
     xctest_progress_sequence: int = 0
     xctest_progress_deadline: Optional[float] = None
     xctest_current_test: Optional[str] = None
     xctest_previous_test: Optional[str] = None
+    xctest_last_progress_test: Optional[str] = None
+    xctest_last_progress_action: Optional[str] = None
+    xctest_last_progress_observed_at: Optional[float] = None
     xctest_watchdog_triggered: bool = False
     xctest_process_finished: bool = False
     diagnostics: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
@@ -830,6 +923,12 @@ class Job:
     tail: Deque[str] = dataclasses.field(default_factory=lambda: deque(maxlen=LOG_TAIL_LINES))
 
     def to_payload(self, include_tail: bool = True, include_summary: bool = True) -> Dict[str, Any]:
+        queue_wait_seconds = None
+        if self.started_at is not None:
+            queue_wait_seconds = max(0.0, self.started_at - self.created_at)
+        execution_seconds = None
+        if self.process_started_at is not None and self.process_finished_at is not None:
+            execution_seconds = max(0.0, self.process_finished_at - self.process_started_at)
         payload: Dict[str, Any] = {
             "ticket": self.ticket,
             "requestKey": self.request_key,
@@ -845,6 +944,13 @@ class Job:
             "startedAtISO": iso_timestamp(self.started_at),
             "finishedAt": self.finished_at,
             "finishedAtISO": iso_timestamp(self.finished_at),
+            "queuedAt": self.created_at,
+            "processStartedAt": self.process_started_at,
+            "processStartedAtISO": iso_timestamp(self.process_started_at),
+            "processFinishedAt": self.process_finished_at,
+            "processFinishedAtISO": iso_timestamp(self.process_finished_at),
+            "queueWaitSeconds": queue_wait_seconds,
+            "executionSeconds": execution_seconds,
             "logPath": str(self.log_path),
             "processPID": self.process_pid,
             "processPGID": self.process_pgid,
@@ -855,9 +961,14 @@ class Job:
             "supersededByTicket": self.superseded_by_ticket,
             "supersededByOperation": self.superseded_by_operation,
             "timedOut": self.timed_out,
+            "measurementInvalid": self.measurement_invalid,
+            "progressTransport": self.progress_transport,
+            "progressSequence": self.xctest_progress_sequence,
+            "lastProgressTest": self.xctest_last_progress_test,
+            "lastProgressAction": self.xctest_last_progress_action,
+            "lastProgressObservedAt": self.xctest_last_progress_observed_at,
+            "diagnosticPaths": [str(path) for path in self.diagnostic_paths],
         }
-        if self.measurement_invalid:
-            payload["measurementInvalid"] = True
         if self.diagnostics:
             payload["diagnostics"] = list(self.diagnostics)
         if include_summary and self.output_summary is not None:
@@ -999,12 +1110,16 @@ class OperationRegistry:
             return [script("package_app.sh"), config], lanes, cwd, env, effective_timeout
         if operation == "test":
             argv = ["swift", "test"]
-            if args.get("filter"):
+            if args.get("list"):
+                argv.append("list")
+            elif args.get("filter"):
                 argv.extend(["--filter", str(args["filter"])])
             return argv, ["build"], cwd, env, effective_timeout
         if operation == "provider-test":
             argv = ["swift", "test"]
-            if args.get("filter"):
+            if args.get("list"):
+                argv.append("list")
+            elif args.get("filter"):
                 argv.extend(["--filter", str(args["filter"])])
             return argv, ["build"], self.repo_root / "Packages" / "RepoPromptAgentProviders", env, effective_timeout
         if operation == "install-debug-cli":
@@ -1053,8 +1168,13 @@ class OperationRegistry:
 
     @staticmethod
     def _validate_xctest_stall_options(args: Dict[str, Any]) -> None:
+        list_mode = bool(args.get("list"))
         raw_seconds = args.get("xctestStallSeconds")
         wake_probe = bool(args.get("xctestStallWakeProbe"))
+        if list_mode and args.get("filter"):
+            raise ConductorError("test list mode cannot be combined with a filter")
+        if list_mode and (raw_seconds is not None or wake_probe):
+            raise ConductorError("test list mode cannot be combined with XCTest stall diagnostics")
         if raw_seconds is None:
             if wake_probe:
                 raise ConductorError("--xctest-stall-wake-probe requires --xctest-stall-seconds")
@@ -1515,6 +1635,7 @@ class DaemonState:
     def _run_job(self, ticket: str) -> None:
         job: Optional[Job] = None
         process: Optional[subprocess.Popen[bytes]] = None
+        output_transport: Optional[ProcessOutputTransport] = None
         watchdog: Optional[threading.Thread] = None
         try:
             with self.lock:
@@ -1540,16 +1661,20 @@ class DaemonState:
                     self._append_tail_locked(job, start_line)
                 log_file.write(start_line.encode("utf-8", errors="replace"))
                 log_file.flush()
+                output_transport = self._create_process_output_transport(job)
+                job.progress_transport = output_transport.kind
                 process = subprocess.Popen(
                     argv,
                     cwd=str(cwd),
                     env=env,
                     stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
+                    stdout=output_transport.popen_stdout,
+                    stderr=output_transport.popen_stderr,
                     start_new_session=True,
                 )
+                output_transport.attach_process(process)
                 with self.condition:
+                    job.process_started_at = now()
                     job.process_pid = process.pid
                     with contextlib.suppress(OSError):
                         job.process_pgid = os.getpgid(process.pid)
@@ -1565,7 +1690,7 @@ class DaemonState:
 
                 reader = threading.Thread(
                     target=self._read_process_output,
-                    args=(job.ticket, process, log_file),
+                    args=(job.ticket, process, log_file, output_transport),
                     daemon=True,
                 )
                 reader.start()
@@ -1624,6 +1749,8 @@ class DaemonState:
                             self._append_system_line_locked(job, job.error + "\n")
                     if exit_code == 0:
                         exit_code = 124
+                with self.condition:
+                    job.process_finished_at = now()
                 if job.cancel_requested:
                     with self.condition:
                         if self._process_tree_alive_locked(job):
@@ -1640,8 +1767,11 @@ class DaemonState:
                             if descendants_alive:
                                 raise ConductorError("canceled job descendants remained alive after SIGKILL escalation")
                 reader.join(timeout=2.0)
-                if process.stdout is not None:
-                    process.stdout.close()
+                if reader.is_alive():
+                    output_transport.close_reader()
+                    reader.join(timeout=2.0)
+                else:
+                    output_transport.close_reader()
                 with self.condition:
                     job.xctest_process_finished = True
                     self.condition.notify_all()
@@ -1665,6 +1795,8 @@ class DaemonState:
                     job.finished_at = now()
                     self._append_system_line_locked(job, f"daemon runner error: {exc}\n")
         finally:
+            if output_transport is not None:
+                output_transport.close_all()
             refresh_after_release = False
             with self.condition:
                 if job is not None:
@@ -1679,21 +1811,48 @@ class DaemonState:
             if job is not None and refresh_after_release:
                 threading.Thread(target=self._refresh_output_summary, args=(job,), daemon=True).start()
 
-    def _read_process_output(self, ticket: str, process: subprocess.Popen[bytes], log_file: Any) -> None:
-        assert process.stdout is not None
+    @staticmethod
+    def _take_complete_output_lines(pending: bytearray, chunk: bytes) -> List[bytes]:
+        pending.extend(chunk)
+        lines: List[bytes] = []
         while True:
-            chunk = process.stdout.readline()
-            if not chunk:
-                break
-            log_file.write(chunk)
-            log_file.flush()
-            text = chunk.decode("utf-8", errors="replace")
-            with self.condition:
-                job = self.jobs.get(ticket)
-                if job:
-                    self._append_tail_locked(job, text)
-                    self._record_xctest_progress_locked(job, text)
-                    self.condition.notify_all()
+            newline = pending.find(b"\n")
+            if newline < 0:
+                return lines
+            end = newline + 1
+            lines.append(bytes(pending[:end]))
+            del pending[:end]
+
+    def _submit_process_output_line(self, ticket: str, line: bytes) -> None:
+        text = line.decode("utf-8", errors="replace")
+        with self.condition:
+            job = self.jobs.get(ticket)
+            if job:
+                self._append_tail_locked(job, text)
+                self._record_xctest_progress_locked(job, text)
+                self.condition.notify_all()
+
+    def _read_process_output(
+        self,
+        ticket: str,
+        process: subprocess.Popen[bytes],
+        log_file: Any,
+        output_transport: ProcessOutputTransport,
+    ) -> None:
+        pending = bytearray()
+        try:
+            while True:
+                chunk = output_transport.read_chunk(process)
+                if not chunk:
+                    break
+                log_file.write(chunk)
+                log_file.flush()
+                for line in self._take_complete_output_lines(pending, chunk):
+                    self._submit_process_output_line(ticket, line)
+        finally:
+            if pending:
+                self._submit_process_output_line(ticket, bytes(pending))
+            output_transport.close_reader()
 
     def _finalize_process_exit_locked(self, job: Job, exit_code: int) -> None:
         if job.cancel_requested:
@@ -1720,7 +1879,15 @@ class DaemonState:
             job.result_summary = job.error
 
     def _xctest_watchdog_enabled(self, job: Job) -> bool:
-        return job.operation in {"test", "provider-test"} and job.args.get("xctestStallSeconds") is not None
+        return (
+            job.operation in {"test", "provider-test"}
+            and not bool(job.args.get("list"))
+            and job.args.get("xctestStallSeconds") is not None
+        )
+
+    def _create_process_output_transport(self, job: Job) -> ProcessOutputTransport:
+        kind = "pty" if self._xctest_watchdog_enabled(job) else "pipe"
+        return ProcessOutputTransport.create(kind)
 
     def _record_xctest_progress_locked(
         self,
@@ -1732,9 +1899,11 @@ class DaemonState:
             return False
         matched = False
         timestamp = time.monotonic() if observed_at is None else observed_at
+        progress_observed_at = now() if observed_at is None else observed_at
         threshold = float(job.args["xctestStallSeconds"])
         for raw_line in text.splitlines():
-            marker = XCTEST_PROGRESS_RE.match(raw_line.strip())
+            matchable_line = XCTEST_ANSI_SGR_RE.sub("", raw_line.rstrip("\r\n")).strip()
+            marker = XCTEST_PROGRESS_RE.match(matchable_line)
             if marker is None:
                 continue
             test_name, action = marker.groups()
@@ -1743,6 +1912,9 @@ class DaemonState:
             matched = True
             job.xctest_progress_sequence += 1
             job.xctest_progress_deadline = timestamp + threshold
+            job.xctest_last_progress_test = test_name
+            job.xctest_last_progress_action = action
+            job.xctest_last_progress_observed_at = progress_observed_at
             if action == "started":
                 if job.xctest_current_test and job.xctest_current_test != test_name:
                     job.xctest_previous_test = job.xctest_current_test
@@ -1768,7 +1940,11 @@ class DaemonState:
         job.measurement_invalid = True
         job.error = "XCTest progress stall watchdog invalidated this measurement"
         return XCTestStallClaim(
+            progress_transport=job.progress_transport or "pty",
             progress_sequence=job.xctest_progress_sequence,
+            last_progress_test=job.xctest_last_progress_test,
+            last_progress_action=job.xctest_last_progress_action,
+            last_progress_observed_at=job.xctest_last_progress_observed_at,
             threshold_seconds=float(job.args["xctestStallSeconds"]),
             current_test=job.xctest_current_test,
             previous_test=job.xctest_previous_test,
@@ -1941,6 +2117,11 @@ class DaemonState:
                 "kind": "xctest-progress-stall",
                 "capturedAt": now(),
                 "thresholdSeconds": claim.threshold_seconds,
+                "progressTransport": claim.progress_transport,
+                "progressSequence": claim.progress_sequence,
+                "lastProgressTest": claim.last_progress_test,
+                "lastProgressAction": claim.last_progress_action,
+                "lastProgressObservedAt": claim.last_progress_observed_at,
                 "currentTest": claim.current_test,
                 "previousTest": claim.previous_test,
                 "wakeProbeRequested": claim.wake_probe,
@@ -3535,7 +3716,9 @@ def handle_real_operation(paths: Paths, operation: str, argv: List[str]) -> int:
         args["config"] = ns.config
     elif operation in {"test", "provider-test"}:
         parser = argparse.ArgumentParser(prog=f"conductor {operation}")
-        parser.add_argument("--filter")
+        mode = parser.add_mutually_exclusive_group()
+        mode.add_argument("--list", action="store_true")
+        mode.add_argument("--filter")
         parser.add_argument("--xctest-stall-seconds", type=float)
         parser.add_argument("--xctest-stall-wake-probe", action="store_true")
         ns = parser.parse_args(rest)
@@ -3545,6 +3728,10 @@ def handle_real_operation(paths: Paths, operation: str, argv: List[str]) -> int:
             raise ConductorError("--xctest-stall-seconds must be greater than zero")
         if ns.xctest_stall_wake_probe and ns.xctest_stall_seconds is None:
             raise ConductorError("--xctest-stall-wake-probe requires --xctest-stall-seconds")
+        if ns.list and (ns.xctest_stall_seconds is not None or ns.xctest_stall_wake_probe):
+            raise ConductorError("--list cannot be combined with XCTest stall diagnostics")
+        if ns.list:
+            args["list"] = True
         if ns.filter:
             args["filter"] = ns.filter
         if ns.xctest_stall_seconds is not None:
