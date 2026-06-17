@@ -208,23 +208,19 @@ private struct SearchContentResult {
 
 private struct SearchLineIndex {
     let lineRanges: [NSRange]
-    let lineStartsUTF16: [Int]
     let lineStartsUTF8: [Int]
 
     init(content: String) {
         let nsContent = content as NSString
         guard !content.isEmpty else {
             lineRanges = []
-            lineStartsUTF16 = []
             lineStartsUTF8 = []
             return
         }
 
         var ranges: [NSRange] = []
-        var startsUTF16: [Int] = []
         var startsUTF8: [Int] = []
         ranges.reserveCapacity(32)
-        startsUTF16.reserveCapacity(32)
         startsUTF8.reserveCapacity(32)
 
         var lineStartUTF16 = 0
@@ -235,7 +231,6 @@ private struct SearchLineIndex {
         var index = scalars.startIndex
 
         func appendLine(endingAtUTF16 endUTF16: Int) {
-            startsUTF16.append(lineStartUTF16)
             startsUTF8.append(lineStartUTF8)
             ranges.append(NSRange(location: lineStartUTF16, length: endUTF16 - lineStartUTF16))
         }
@@ -266,18 +261,28 @@ private struct SearchLineIndex {
         }
 
         if lineStartUTF16 < nsContent.length {
-            startsUTF16.append(lineStartUTF16)
             startsUTF8.append(lineStartUTF8)
             ranges.append(NSRange(location: lineStartUTF16, length: nsContent.length - lineStartUTF16))
         }
 
         lineRanges = ranges
-        lineStartsUTF16 = startsUTF16
         lineStartsUTF8 = startsUTF8
     }
 
     func lineNumber(forUTF16Offset offset: Int) -> Int {
-        lineNumber(forOffset: offset, starts: lineStartsUTF16)
+        guard !lineRanges.isEmpty else { return -1 }
+
+        var lo = 0
+        var hi = lineRanges.count - 1
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if lineRanges[mid].location <= offset {
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        return max(0, min(lo - 1, lineRanges.count - 1))
     }
 
     func lineNumber(forUTF8Offset offset: Int) -> Int {

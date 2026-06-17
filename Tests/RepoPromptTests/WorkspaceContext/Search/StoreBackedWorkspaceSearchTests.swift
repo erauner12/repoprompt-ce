@@ -908,6 +908,35 @@ final class StoreBackedWorkspaceSearchTests: XCTestCase {
             XCTAssertTrue((countOnly.matches ?? []).isEmpty)
         }
 
+        func testRegexContentSearchMapsUTF8OffsetsToUnicodeLineNumbersAndMaterializesLines() async throws {
+            let root = try makeTemporaryRoot(name: "UnicodeRegexLineLookup")
+            let fileURL = root.appendingPathComponent("Unicode.swift")
+            try write("🙂 first\né second needle\r\nthird needle\n", to: fileURL)
+            let store = WorkspaceFileContextStore()
+            _ = try await store.loadRoot(path: root.path)
+
+            let result = try await StoreBackedWorkspaceSearch.search(
+                pattern: "needle",
+                mode: .content,
+                isRegex: true,
+                caseInsensitive: false,
+                maxPaths: 10,
+                maxMatches: 10,
+                contextLines: 1,
+                rootScope: .visibleWorkspace,
+                store: store,
+                workspaceManager: nil
+            )
+            let matches = try XCTUnwrap(result.matches)
+
+            XCTAssertEqual(matches.map(\.lineNumber), [1, 2])
+            XCTAssertEqual(matches.map(\.lineText), ["é second needle", "third needle"])
+            XCTAssertEqual(matches[0].contextBefore, ["🙂 first"])
+            XCTAssertEqual(matches[0].contextAfter, ["third needle"])
+            XCTAssertEqual(matches[1].contextBefore, ["é second needle"])
+            XCTAssertNil(matches[1].contextAfter)
+        }
+
         func testCancelledScopedContentSearchDrainsCacheFlight() async throws {
             let root = try makeTemporaryRoot(name: "CancelledContentSearch")
             let fileURL = root.appendingPathComponent("A.swift")
