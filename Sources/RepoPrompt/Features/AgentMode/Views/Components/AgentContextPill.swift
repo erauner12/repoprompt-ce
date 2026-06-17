@@ -26,19 +26,16 @@ struct AgentContextPill: View {
         runtimeVM.snapshot.effectiveContextWindowTokens
     }
 
-    private var fileCount: Int {
-        AgentContextExportResolver.displayFileCount(
-            resolvedModel: nil,
-            sourceSelection: currentExportSourceSelection
-        )
+    private struct ContextSummary: Equatable {
+        let fileCount: Int
     }
 
-    private var currentExportSourceSelection: StoredSelection {
+    private func makeContextSummary() -> ContextSummary {
         let requestedTabID = currentTabID ?? promptManager.activeComposeTabID
         let selectionSnapshot = requestedTabID.flatMap {
             selectionCoordinator.selectionSnapshot(for: $0, flushPendingUIIfActive: false)
         }
-        return AgentContextExportSourceBuilder.makeSource(
+        let selection = AgentContextExportSourceBuilder.makeSource(
             AgentContextExportSourceBuildRequest(
                 requestedTabID: requestedTabID,
                 activeComposeTabID: promptManager.activeComposeTabID,
@@ -49,17 +46,23 @@ struct AgentContextPill: View {
                 worktreeBindingsProvider: worktreeBindingsProvider
             )
         ).selection
+        return ContextSummary(
+            fileCount: AgentContextExportResolver.displayFileCount(
+                resolvedModel: nil,
+                sourceSelection: selection
+            )
+        )
     }
 
     private var selectionTokens: Int? {
         runtimeVM.snapshot.selectionTokens
     }
 
-    private var fileSummaryText: String {
-        "\(fileCount) file\(fileCount == 1 ? "" : "s")"
+    private func fileSummaryText(_ summary: ContextSummary) -> String {
+        "\(summary.fileCount) file\(summary.fileCount == 1 ? "" : "s")"
     }
 
-    private var contextUsageTooltip: String {
+    private func contextUsageTooltip(_ summary: ContextSummary) -> String {
         var lines: [String] = []
 
         if let usedTokens = estimatedUsedTokens,
@@ -74,7 +77,7 @@ struct AgentContextPill: View {
             lines.append("Context usage unavailable")
         }
 
-        lines.append("Selected: \(fileSummaryText)")
+        lines.append("Selected: \(fileSummaryText(summary))")
         if let selectionTokens {
             lines.append("Selection: \(AgentContextIndicator.formatTokens(selectionTokens)) tokens")
         }
@@ -87,11 +90,12 @@ struct AgentContextPill: View {
             let _ = AgentModePerfDiagnostics.increment("ui.body.statusPills.context")
         #endif
         let cornerRadius = AgentPillMetrics.cornerRadius()
+        let contextSummary = makeContextSummary()
         Button {
             showPopover.toggle()
         } label: {
             HStack(spacing: 6) {
-                Text(fileSummaryText)
+                Text(fileSummaryText(contextSummary))
                     .font(fontPreset.swiftUIFont(sizeAtNormal: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -112,14 +116,14 @@ struct AgentContextPill: View {
             )
         }
         .buttonStyle(.plain)
-        .hoverTooltip(contextUsageTooltip, .top)
+        .hoverTooltip(contextUsageTooltip(contextSummary), .top)
         .popover(isPresented: $showPopover, arrowEdge: .bottom) {
-            contextPopoverContent
+            contextPopoverContent(contextSummary)
         }
     }
 
     @ViewBuilder
-    private var contextPopoverContent: some View {
+    private func contextPopoverContent(_ summary: ContextSummary) -> some View {
         // Width grows with the font scale so the export card never feels
         // pinched at Large/Extra Large.
         let popoverWidth = fontPreset.scaledClamped(360, max: 480)
@@ -138,7 +142,7 @@ struct AgentContextPill: View {
                     Text("Selected")
                         .font(fontPreset.swiftUIFont(sizeAtNormal: 10))
                         .foregroundStyle(.tertiary)
-                    Text("\(fileCount) files")
+                    Text("\(summary.fileCount) files")
                         .font(fontPreset.swiftUIFont(sizeAtNormal: 12, weight: .semibold))
                 }
             }
@@ -149,7 +153,7 @@ struct AgentContextPill: View {
                 promptManager: promptManager,
                 tokenCounter: promptManager.tokenCountingViewModel,
                 selectionCoordinator: selectionCoordinator,
-                fileCount: fileCount,
+                fileCount: summary.fileCount,
                 selectionTokens: selectionTokens,
                 currentTabID: currentTabID,
                 activeAgentSessionID: activeAgentSessionID,
