@@ -97,8 +97,9 @@ enum ClaudeCompatibleModelCatalogAdapter {
         agentKind: AgentProviderKind
     ) -> Int? {
         guard let config = compatibleBackendConfig(for: agentKind),
-              let slotRaw = canonicalCompatibleBackendBaseRaw(rawModel, for: agentKind),
-              let backendModelID = backendModelID(forCanonicalSlotRaw: slotRaw, config: config) else { return nil }
+              let baseRaw = canonicalCompatibleBackendBaseRaw(rawModel, for: agentKind) else { return nil }
+        let backendModelID = directBackendModelID(forCanonicalBaseRaw: baseRaw, agentKind: agentKind)
+            ?? backendModelID(forCanonicalSlotRaw: baseRaw, config: config)
         return ClaudeCompatibleProviderRuntimeBridge.contextWindowTokens(forGLMBackendModelID: backendModelID)
     }
 
@@ -114,6 +115,12 @@ enum ClaudeCompatibleModelCatalogAdapter {
         case .claudeSlotMapping:
             let specifier = ClaudeModelSpecifier(raw: rawModel)
             let base = specifier.baseModel
+            if id == .glmZAI,
+               let base,
+               ClaudeCompatibleProviderRuntimeBridge.isDirectSelectableGLMModel(base)
+            {
+                return base.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            }
             return ClaudeCodeGLMIntegration.normalizedSlotModel(
                 base,
                 config: config
@@ -137,6 +144,13 @@ enum ClaudeCompatibleModelCatalogAdapter {
         let specifier = ClaudeModelSpecifier(raw: rawModel)
         guard let baseModel = specifier.baseModel else {
             return rawModel
+        }
+        if ClaudeCompatibleProviderRuntimeBridge.isDirectSelectableGLMModel(baseModel) {
+            let directBase = baseModel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if let effort = specifier.effortLevel {
+                return ClaudeModelSpecifier.encodedRaw(baseModelRaw: directBase, effort: effort)
+            }
+            return directBase
         }
         guard let mappedBaseModel = ClaudeCodeGLMIntegration.normalizedGLMModel(baseModel) else {
             return rawModel
@@ -190,11 +204,12 @@ enum ClaudeCompatibleModelCatalogAdapter {
         if let agentKind, compatibleBackendID(for: agentKind) != nil {
             guard let baseModelRaw,
                   let config = compatibleBackendConfig(for: agentKind),
-                  let canonicalSlot = canonicalCompatibleBackendBaseRaw(baseModelRaw, for: agentKind),
-                  let backendModelID = backendModelID(forCanonicalSlotRaw: canonicalSlot, config: config)
+                  let canonicalBase = canonicalCompatibleBackendBaseRaw(baseModelRaw, for: agentKind)
             else {
                 return false
             }
+            let backendModelID = directBackendModelID(forCanonicalBaseRaw: canonicalBase, agentKind: agentKind)
+                ?? backendModelID(forCanonicalSlotRaw: canonicalBase, config: config)
             return ClaudeCompatibleProviderRuntimeBridge.supportsGLMXHighEffort(backendModelID: backendModelID)
         }
         guard let baseModelRaw else { return false }
@@ -300,16 +315,25 @@ enum ClaudeCompatibleModelCatalogAdapter {
         case .claudeSlotMapping:
             guard let canonical = canonicalCompatibleBackendModelRaw(rawModel, for: agentKind) else { return false }
             let canonicalSpecifier = ClaudeModelSpecifier(raw: canonical)
-            guard let base = canonicalSpecifier.baseModel,
-                  [AgentModel.claudeHaiku.rawValue, AgentModel.claudeSonnet.rawValue, AgentModel.claudeOpus.rawValue].contains(base)
-            else {
-                return false
-            }
+            guard let base = canonicalSpecifier.baseModel else { return false }
+            let validSlotBase = [AgentModel.claudeHaiku.rawValue, AgentModel.claudeSonnet.rawValue, AgentModel.claudeOpus.rawValue].contains(base)
+            let validDirectBase = directBackendModelID(forCanonicalBaseRaw: base, agentKind: agentKind) != nil
+            guard validSlotBase || validDirectBase else { return false }
             if let effort = canonicalSpecifier.effortLevel {
                 return claudeEffort(effort, isSupportedForBaseModelRaw: base, agentKind: agentKind)
             }
             return true
         }
+    }
+
+    private static func directBackendModelID(
+        forCanonicalBaseRaw baseRaw: String,
+        agentKind: AgentProviderKind
+    ) -> String? {
+        guard agentKind == .claudeCodeGLM,
+              ClaudeCompatibleProviderRuntimeBridge.isDirectSelectableGLMModel(baseRaw)
+        else { return nil }
+        return baseRaw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     private static func backendModelID(

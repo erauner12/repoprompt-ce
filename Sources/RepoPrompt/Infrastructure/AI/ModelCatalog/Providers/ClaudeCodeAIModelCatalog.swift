@@ -145,11 +145,17 @@ enum ClaudeCodeAIModelCatalog {
         case .noModel:
             return [.claudeCodeModel(specifier: compatibleBackendSpecifier(backendID: backendID, requestedModelRaw: nil))]
         case .claudeSlotMapping:
-            return [
+            var models: [AIModel] = [
                 .claudeCodeModel(specifier: compatibleBackendSpecifier(backendID: backendID, requestedModelRaw: AgentModel.claudeHaiku.rawValue)),
                 .claudeCodeModel(specifier: compatibleBackendSpecifier(backendID: backendID, requestedModelRaw: AgentModel.claudeSonnet.rawValue)),
                 .claudeCodeModel(specifier: compatibleBackendSpecifier(backendID: backendID, requestedModelRaw: AgentModel.claudeOpus.rawValue))
             ]
+            if backendID == .glmZAI {
+                models.append(contentsOf: ClaudeCompatibleProviderRuntimeBridge.directSelectableGLMModelRawValues.map {
+                    .claudeCodeModel(specifier: compatibleBackendSpecifier(backendID: backendID, requestedModelRaw: $0))
+                })
+            }
+            return models
         }
     }
 
@@ -325,6 +331,20 @@ enum ClaudeCodeAIModelCatalog {
         case let .claudeSlotMapping(mapping):
             let normalizedMapping = mapping.normalized
             let slot = requestedModelRaw ?? AgentModel.claudeSonnet.rawValue
+            if backendID == .glmZAI,
+               let requestedModelRaw,
+               ClaudeCompatibleProviderRuntimeBridge.isDirectSelectableGLMModel(requestedModelRaw)
+            {
+                let backendDisplayName = displayName(forBackendModelID: requestedModelRaw)
+                let groupName = config.normalizedDisplayName
+                return CompatibleBackendModelDescriptor(
+                    backendID: backendID,
+                    requestedModelRaw: requestedModelRaw,
+                    groupDisplayName: groupName,
+                    optionDisplayName: backendDisplayName,
+                    modelDisplayName: "\(groupName) \(backendDisplayName)"
+                )
+            }
             let optionName: String
             let backendModelID: String
             switch slot {
@@ -346,8 +366,8 @@ enum ClaudeCodeAIModelCatalog {
                 backendID: backendID,
                 requestedModelRaw: slot,
                 groupDisplayName: groupName,
-                optionDisplayName: "\(optionName) - \(backendDisplayName)",
-                modelDisplayName: "\(groupName) \(optionName)"
+                optionDisplayName: "\(backendDisplayName) — \(optionName)",
+                modelDisplayName: "\(groupName) \(backendDisplayName) — \(optionName)"
             )
         }
     }

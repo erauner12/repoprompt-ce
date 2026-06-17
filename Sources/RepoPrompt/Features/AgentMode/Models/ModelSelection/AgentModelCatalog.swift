@@ -1027,7 +1027,18 @@ enum AgentModelCatalog {
 
     private static func claudeBaseModelKey(_ rawModel: String, agentKind: AgentProviderKind) -> String {
         if let normalized = ClaudeCompatibleModelCatalogAdapter.canonicalCompatibleBackendModelRaw(rawModel, for: agentKind) {
-            return ClaudeModelSpecifier(raw: normalized).baseModel ?? normalized
+            let base = ClaudeModelSpecifier(raw: normalized).baseModel ?? normalized
+            if agentKind == .claudeCodeGLM,
+               ClaudeCompatibleProviderRuntimeBridge.isDirectSelectableGLMModel(base)
+            {
+                return "direct:\(base.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
+            }
+            if agentKind == .claudeCodeGLM,
+               [AgentModel.claudeHaiku.rawValue, AgentModel.claudeSonnet.rawValue, AgentModel.claudeOpus.rawValue].contains(base)
+            {
+                return "slot:\(base.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
+            }
+            return base
         }
         return rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
     }

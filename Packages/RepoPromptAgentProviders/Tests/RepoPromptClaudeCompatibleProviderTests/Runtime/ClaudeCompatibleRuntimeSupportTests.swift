@@ -170,10 +170,13 @@ final class ClaudeCompatibleRuntimeSupportTests: XCTestCase {
 
         let zai = ClaudeCompatibleModelCatalog.snapshot(pluginID: .zaiClaudeCode, includeEffortVariants: false)
         XCTAssertEqual(zai.defaultModelRaw, "sonnet")
-        XCTAssertEqual(zai.options.map(\.rawValue), ["haiku", "sonnet", "opus"])
-        XCTAssertEqual(zai.options.first { $0.rawValue == "haiku" }?.displayName, "GLM 4.5 Air")
-        XCTAssertEqual(zai.options.first { $0.rawValue == "sonnet" }?.displayName, "GLM 5.2 (1M)")
-        XCTAssertEqual(zai.options.first { $0.rawValue == "opus" }?.displayName, "GLM 5.2 (1M)")
+        XCTAssertEqual(zai.options.map(\.rawValue), ["haiku", "sonnet", "opus", "glm-4.7", "glm-5-turbo", "glm-5.1"])
+        XCTAssertEqual(zai.options.first { $0.rawValue == "haiku" }?.displayName, "GLM 4.5 Air — Haiku")
+        XCTAssertEqual(zai.options.first { $0.rawValue == "sonnet" }?.displayName, "GLM 5.2 (1M) — Sonnet")
+        XCTAssertEqual(zai.options.first { $0.rawValue == "opus" }?.displayName, "GLM 5.2 (1M) — Opus")
+        XCTAssertEqual(zai.options.first { $0.rawValue == "glm-4.7" }?.displayName, "GLM 4.7")
+        XCTAssertEqual(zai.options.first { $0.rawValue == "glm-5-turbo" }?.displayName, "GLM 5 Turbo")
+        XCTAssertEqual(zai.options.first { $0.rawValue == "glm-5.1" }?.displayName, "GLM 5.1")
         XCTAssertEqual(zai.options.first { $0.rawValue == "haiku" }?.supportedEffortLevels, ["low", "medium", "high", "max"])
         XCTAssertEqual(zai.options.first { $0.rawValue == "sonnet" }?.supportedEffortLevels, ["low", "medium", "high", "max", "xhigh"])
         XCTAssertEqual(zai.options.first { $0.rawValue == "opus" }?.supportedEffortLevels, ["low", "medium", "high", "max", "xhigh"])
@@ -182,7 +185,13 @@ final class ClaudeCompatibleRuntimeSupportTests: XCTestCase {
         let expandedZai = ClaudeCompatibleModelCatalog.snapshot(pluginID: .zaiClaudeCode)
         XCTAssertTrue(expandedZai.options.contains { $0.rawValue == "sonnet:xhigh" })
         XCTAssertTrue(expandedZai.options.contains { $0.rawValue == "opus:xhigh" })
+        XCTAssertTrue(expandedZai.options.contains { $0.rawValue == "glm-4.7:max" })
+        XCTAssertTrue(expandedZai.options.contains { $0.rawValue == "glm-5-turbo:max" })
+        XCTAssertTrue(expandedZai.options.contains { $0.rawValue == "glm-5.1:max" })
         XCTAssertFalse(expandedZai.options.contains { $0.rawValue == "haiku:xhigh" })
+        XCTAssertFalse(expandedZai.options.contains { $0.rawValue == "glm-4.7:xhigh" })
+        XCTAssertFalse(expandedZai.options.contains { $0.rawValue == "glm-5-turbo:xhigh" })
+        XCTAssertFalse(expandedZai.options.contains { $0.rawValue == "glm-5.1:xhigh" })
 
         XCTAssertEqual(ClaudeCompatibleBackendID.glmZAI.defaultPreset.modelBehavior, .claudeSlotMapping(.init(
             haiku: "glm-4.5-air",
@@ -199,6 +208,10 @@ final class ClaudeCompatibleRuntimeSupportTests: XCTestCase {
         XCTAssertEqual(ClaudeCompatibleModelNormalizer.normalizedGLMModel("glm-5.2[1m]", config: ClaudeCompatibleBackendID.glmZAI.defaultPreset), "sonnet")
         XCTAssertEqual(ClaudeCompatibleModelNormalizer.normalizedGLMModel("glm-5-turbo", config: ClaudeCompatibleBackendID.glmZAI.defaultPreset), "sonnet")
         XCTAssertEqual(ClaudeCompatibleModelNormalizer.normalizedGLMModel("glm-5.1", config: ClaudeCompatibleBackendID.glmZAI.defaultPreset), "opus")
+        XCTAssertTrue(ClaudeCompatibleModelNormalizer.isDirectSelectableGLMModel("glm-5-turbo:max"))
+        XCTAssertTrue(ClaudeCompatibleModelNormalizer.isDirectSelectableGLMModel("glm-5.1"))
+        XCTAssertEqual(ClaudeCompatibleModelNormalizer.directSelectableGLMSlotRawValue(for: "glm-5-turbo:max"), "sonnet")
+        XCTAssertEqual(ClaudeCompatibleModelNormalizer.directSelectableGLMSlotRawValue(for: "glm-5.1"), "opus")
         XCTAssertTrue(ClaudeCompatibleModelNormalizer.supportsXHighEffort("glm-5.2"))
         XCTAssertTrue(ClaudeCompatibleModelNormalizer.supportsXHighEffort("glm-5.2[1m]"))
         XCTAssertEqual(ClaudeCompatibleModelNormalizer.contextWindowTokens(forBackendModelID: "glm-5.2[1m]"), 1_000_000)
@@ -247,6 +260,38 @@ final class ClaudeCompatibleRuntimeSupportTests: XCTestCase {
 
         let haikuMax = try await resolver.resolve(variant: .glm, requestedModel: "haiku:max")
         XCTAssertEqual(haikuMax.effectiveModel, "haiku")
+
+        let directTurbo = try await resolver.resolve(variant: .glm, requestedModel: "glm-5-turbo:max")
+        XCTAssertEqual(directTurbo.effectiveModel, "sonnet")
+        XCTAssertEqual(directTurbo.environmentOverrides["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "glm-4.5-air")
+        XCTAssertEqual(directTurbo.environmentOverrides["ANTHROPIC_DEFAULT_SONNET_MODEL"], "glm-5-turbo")
+        XCTAssertEqual(directTurbo.environmentOverrides["ANTHROPIC_DEFAULT_OPUS_MODEL"], "glm-5.2")
+        XCTAssertNil(directTurbo.environmentOverrides["CLAUDE_CODE_AUTO_COMPACT_WINDOW"])
+
+        let directGLM51 = try await resolver.resolve(variant: .glm, requestedModel: "glm-5.1")
+        XCTAssertEqual(directGLM51.effectiveModel, "opus")
+        XCTAssertEqual(directGLM51.environmentOverrides["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "glm-4.5-air")
+        XCTAssertEqual(directGLM51.environmentOverrides["ANTHROPIC_DEFAULT_SONNET_MODEL"], "glm-5.2[1m]")
+        XCTAssertEqual(directGLM51.environmentOverrides["ANTHROPIC_DEFAULT_OPUS_MODEL"], "glm-5.1")
+        XCTAssertEqual(config.modelBehavior, .claudeSlotMapping(.init(
+            haiku: "glm-4.5-air",
+            sonnet: "glm-5.2[1m]",
+            opus: "glm-5.2"
+        )))
+
+        do {
+            _ = try await resolver.resolve(variant: .glm, requestedModel: "glm-5-turbo:xhigh")
+            XCTFail("Expected glm-5-turbo:xhigh to be rejected")
+        } catch ClaudeCompatibleProviderError.invalidConfiguration {
+            // Expected.
+        }
+
+        do {
+            _ = try await resolver.resolve(variant: .glm, requestedModel: "glm-5.1:xhigh")
+            XCTFail("Expected glm-5.1:xhigh to be rejected")
+        } catch ClaudeCompatibleProviderError.invalidConfiguration {
+            // Expected.
+        }
 
         do {
             _ = try await resolver.resolve(variant: .glm, requestedModel: "haiku:xhigh")

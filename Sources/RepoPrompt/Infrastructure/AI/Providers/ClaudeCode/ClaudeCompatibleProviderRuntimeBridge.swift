@@ -368,6 +368,18 @@ enum ClaudeCompatibleProviderRuntimeBridge {
         RepoPromptClaudeCompatibleProvider.ClaudeCompatibleModelNormalizer.supportedModelRawValues
     }
 
+    static var directSelectableGLMModelRawValues: [String] {
+        RepoPromptClaudeCompatibleProvider.ClaudeCompatibleModelNormalizer.directSelectableGLMModelRawValues
+    }
+
+    static func isDirectSelectableGLMModel(_ rawModel: String?) -> Bool {
+        RepoPromptClaudeCompatibleProvider.ClaudeCompatibleModelNormalizer.isDirectSelectableGLMModel(rawModel)
+    }
+
+    static func directSelectableGLMSlotRawValue(for rawModel: String?) -> String? {
+        RepoPromptClaudeCompatibleProvider.ClaudeCompatibleModelNormalizer.directSelectableGLMSlotRawValue(for: rawModel)
+    }
+
     private static func pluginRuntimeMode(for toolContext: MCPIntegrationHelper.CLIToolContext) -> ClaudeCompatiblePluginRuntimeMode {
         switch toolContext {
         case .agentRun, .terminal, .promptOnly:

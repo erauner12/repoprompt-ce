@@ -405,11 +405,15 @@ public enum ClaudeCompatibleModelCatalog {
             )]
         case let .claudeSlotMapping(mapping):
             let normalized = mapping.normalized
-            return [
+            var options = [
                 compatibleSlotOption(slotRaw: haikuRaw, backendModelID: normalized.haiku, slotName: "Haiku"),
                 compatibleSlotOption(slotRaw: sonnetRaw, backendModelID: normalized.sonnet, slotName: "Sonnet", isProviderDefault: true),
                 compatibleSlotOption(slotRaw: opusRaw, backendModelID: normalized.opus, slotName: "Opus")
             ]
+            if backendID == .glmZAI {
+                options.append(contentsOf: directGLMOptions())
+            }
+            return options
         }
     }
 
@@ -433,7 +437,7 @@ public enum ClaudeCompatibleModelCatalog {
     ) -> ClaudeCompatibleModelOption {
         ClaudeCompatibleModelOption(
             rawValue: slotRaw,
-            displayName: displayName(forBackendModelID: backendModelID),
+            displayName: "\(displayName(forBackendModelID: backendModelID)) — \(slotName)",
             description: "Routes Claude Code's \(slotName) model slot to \(backendModelID).",
             isPlaceholderDefault: false,
             isProviderDefault: isProviderDefault,
@@ -441,6 +445,21 @@ public enum ClaudeCompatibleModelCatalog {
                 supportsXHigh: ClaudeCompatibleModelNormalizer.supportsXHighEffort(backendModelID)
             ).map(\.raw)
         )
+    }
+
+    private static func directGLMOptions() -> [ClaudeCompatibleModelOption] {
+        ClaudeCompatibleModelNormalizer.directSelectableGLMModelRawValues.map { rawValue in
+            ClaudeCompatibleModelOption(
+                rawValue: rawValue,
+                displayName: displayName(forBackendModelID: rawValue),
+                description: "Runs \(rawValue) directly for this session without changing configured Claude Code slot mappings.",
+                isPlaceholderDefault: false,
+                isProviderDefault: false,
+                supportedEffortLevels: supportedEfforts(
+                    supportsXHigh: ClaudeCompatibleModelNormalizer.supportsXHighEffort(rawValue)
+                ).map(\.raw)
+            )
+        }
     }
 
     private static func displayName(forBackendModelID modelID: String) -> String {

@@ -244,6 +244,42 @@ public extension ClaudeCompatibleBackendConfig {
             return mapping.isValid
         }
     }
+
+    func withSlotOverride(slot: String, backendModelID: String) -> ClaudeCompatibleBackendConfig {
+        guard case let .claudeSlotMapping(mapping) = modelBehavior else { return self }
+        let normalizedMapping = mapping.normalized
+        let overrideBehavior: ClaudeCompatibleBackendModelBehavior
+        switch slot.lowercased() {
+        case ClaudeCompatibleModelNormalizer.haikuRequestedModelRawValue:
+            overrideBehavior = .claudeSlotMapping(ClaudeCompatibleSlotMapping(
+                haiku: backendModelID,
+                sonnet: normalizedMapping.sonnet,
+                opus: normalizedMapping.opus
+            ))
+        case ClaudeCompatibleModelNormalizer.defaultRequestedModelRawValue:
+            overrideBehavior = .claudeSlotMapping(ClaudeCompatibleSlotMapping(
+                haiku: normalizedMapping.haiku,
+                sonnet: backendModelID,
+                opus: normalizedMapping.opus
+            ))
+        case ClaudeCompatibleModelNormalizer.opusRequestedModelRawValue:
+            overrideBehavior = .claudeSlotMapping(ClaudeCompatibleSlotMapping(
+                haiku: normalizedMapping.haiku,
+                sonnet: normalizedMapping.sonnet,
+                opus: backendModelID
+            ))
+        default:
+            return self
+        }
+        return ClaudeCompatibleBackendConfig(
+            id: id,
+            isEnabled: isEnabled,
+            displayName: displayName,
+            baseURL: baseURL,
+            auth: auth,
+            modelBehavior: overrideBehavior
+        )
+    }
 }
 
 struct ClaudeCompatibleEffortEncodedModel: Equatable {
@@ -335,6 +371,11 @@ public enum ClaudeCompatibleModelNormalizer {
     public static let defaultSentinelRawValue = "default"
     public static let kimiNoModelRawValue = "kimi-code"
     public static let customNoModelRawValue = "custom-claude-compatible"
+    public static let directSelectableGLMModelRawValues: [String] = [
+        "glm-4.7",
+        "glm-5-turbo",
+        "glm-5.1"
+    ]
 
     public static let supportedModelRawValues: [String] = [
         haikuEquivalentModelRawValue,
@@ -347,6 +388,25 @@ public enum ClaudeCompatibleModelNormalizer {
 
     public static func normalizedRequestedModel(_ rawModel: String?) -> String? {
         ClaudeCompatibleEffortEncodedModel(raw: rawModel).baseModel
+    }
+
+    public static func isDirectSelectableGLMModel(_ rawModel: String?) -> Bool {
+        guard let normalized = normalizedRequestedModel(rawModel)?.lowercased() else { return false }
+        return directSelectableGLMModelRawValues.contains(normalized)
+    }
+
+    public static func directSelectableGLMSlotRawValue(for rawModel: String?) -> String? {
+        guard let normalized = normalizedRequestedModel(rawModel)?.lowercased() else { return nil }
+        switch normalized {
+        case "glm-4.7":
+            return haikuRequestedModelRawValue
+        case "glm-5-turbo":
+            return defaultRequestedModelRawValue
+        case "glm-5.1":
+            return opusRequestedModelRawValue
+        default:
+            return nil
+        }
     }
 
     public static func isGLMModel(
@@ -546,6 +606,7 @@ public struct ClaudeCompatibleLaunchEnvironmentResolver: Sendable {
         let requestedSpecifier = ClaudeCompatibleEffortEncodedModel(raw: requestedModel)
         let effectiveModel: String?
         let selectedBackendModelID: String?
+        let environmentConfig: ClaudeCompatibleBackendConfig
         switch config.modelBehavior {
         case .noModel:
             guard !requestedSpecifier.hasEffort,
@@ -555,7 +616,22 @@ public struct ClaudeCompatibleLaunchEnvironmentResolver: Sendable {
             }
             effectiveModel = nil
             selectedBackendModelID = nil
+            environmentConfig = config
         case .claudeSlotMapping:
+            if config.id == .glmZAI,
+               let directBackendModelID = requestedSpecifier.baseModel?.lowercased(),
+               let directSlot = ClaudeCompatibleModelNormalizer.directSelectableGLMSlotRawValue(for: directBackendModelID)
+            {
+                if requestedSpecifier.effortRaw == "xhigh",
+                   !ClaudeCompatibleModelNormalizer.supportsXHighEffort(directBackendModelID)
+                {
+                    throw ClaudeCompatibleProviderError.invalidConfiguration(detail: "Unsupported \(config.normalizedDisplayName) model selection.")
+                }
+                effectiveModel = directSlot
+                selectedBackendModelID = directBackendModelID
+                environmentConfig = config.withSlotOverride(slot: directSlot, backendModelID: directBackendModelID)
+                break
+            }
             guard let slot = ClaudeCompatibleModelNormalizer.normalizedSlotModel(
                 requestedModel,
                 config: config
@@ -571,6 +647,7 @@ public struct ClaudeCompatibleLaunchEnvironmentResolver: Sendable {
             }
             effectiveModel = slot
             selectedBackendModelID = backendModelID
+            environmentConfig = config
         }
 
         let rawSecret: String? = if backendID == .glmZAI {
@@ -585,7 +662,7 @@ public struct ClaudeCompatibleLaunchEnvironmentResolver: Sendable {
         return ClaudeCompatibleLaunchEnvironment(
             effectiveModel: effectiveModel,
             environmentOverrides: ClaudeCompatibleBackendEnvironmentBuilder.environment(
-                config: config,
+                config: environmentConfig,
                 apiKey: apiKey,
                 selectedBackendModelID: selectedBackendModelID
             ),

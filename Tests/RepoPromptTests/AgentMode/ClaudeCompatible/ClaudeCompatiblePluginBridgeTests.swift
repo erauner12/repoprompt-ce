@@ -104,15 +104,36 @@ final class ClaudeCompatiblePluginBridgeTests: XCTestCase {
         XCTAssertTrue(discovery.models.contains { $0.id == "claude-fable-5" && $0.contextWindowTokens == 1_000_000 })
         XCTAssertTrue(discovery.models.contains { $0.id == "opus" })
 
+        let glmBaseSnapshot = try XCTUnwrap(ClaudeCompatibleModelCatalogAdapter.catalogSnapshot(
+            for: .claudeCodeGLM,
+            availability: availability,
+            includeClaudeEffortVariants: false
+        ))
+        XCTAssertEqual(glmBaseSnapshot.defaultModelRaw, AgentModel.claudeSonnet.rawValue)
+        XCTAssertEqual(glmBaseSnapshot.options.first { $0.rawValue == "sonnet" }?.displayName, "GLM 5.2 (1M) — Sonnet")
+        XCTAssertEqual(glmBaseSnapshot.options.first { $0.rawValue == "opus" }?.displayName, "GLM 5.2 (1M) — Opus")
+        XCTAssertTrue(glmBaseSnapshot.options.contains { $0.rawValue == "glm-4.7" && $0.displayName == "GLM 4.7" })
+        XCTAssertTrue(glmBaseSnapshot.options.contains { $0.rawValue == "glm-5-turbo" && $0.displayName == "GLM 5 Turbo" })
+        XCTAssertTrue(glmBaseSnapshot.options.contains { $0.rawValue == "glm-5.1" && $0.displayName == "GLM 5.1" })
+
         let glmSnapshot = try XCTUnwrap(ClaudeCompatibleModelCatalogAdapter.catalogSnapshot(
             for: .claudeCodeGLM,
             availability: availability,
             includeClaudeEffortVariants: true
         ))
-        XCTAssertEqual(glmSnapshot.defaultModelRaw, AgentModel.claudeSonnet.rawValue)
         XCTAssertTrue(glmSnapshot.options.contains { $0.rawValue == "sonnet:xhigh" })
         XCTAssertTrue(glmSnapshot.options.contains { $0.rawValue == "opus:xhigh" })
+        XCTAssertTrue(glmSnapshot.options.contains { $0.rawValue == "glm-4.7:max" })
+        XCTAssertTrue(glmSnapshot.options.contains { $0.rawValue == "glm-5-turbo:max" })
+        XCTAssertTrue(glmSnapshot.options.contains { $0.rawValue == "glm-5.1:max" })
         XCTAssertFalse(glmSnapshot.options.contains { $0.rawValue == "haiku:xhigh" })
+        XCTAssertFalse(glmSnapshot.options.contains { $0.rawValue == "glm-4.7:xhigh" })
+        XCTAssertFalse(glmSnapshot.options.contains { $0.rawValue == "glm-5-turbo:xhigh" })
+        XCTAssertFalse(glmSnapshot.options.contains { $0.rawValue == "glm-5.1:xhigh" })
+        XCTAssertEqual(ClaudeCompatibleModelCatalogAdapter.canonicalClaudeGLMModelRaw("glm-5-turbo"), "glm-5-turbo")
+        XCTAssertEqual(ClaudeCompatibleModelCatalogAdapter.canonicalClaudeGLMModelRaw("glm-5.1:max"), "glm-5.1:max")
+        XCTAssertEqual(ClaudeCompatibleModelCatalogAdapter.canonicalClaudeGLMModelRaw("glm-4.7"), "glm-4.7")
+        XCTAssertEqual(ClaudeCompatibleModelCatalogAdapter.canonicalClaudeGLMModelRaw("glm-5.2"), AgentModel.claudeSonnet.rawValue)
         XCTAssertEqual(
             ClaudeCompatibleModelCatalogAdapter.contextWindowTokens(
                 forRequestedModelRaw: "sonnet:xhigh",
@@ -120,6 +141,36 @@ final class ClaudeCompatiblePluginBridgeTests: XCTestCase {
             ),
             1_000_000
         )
+        XCTAssertTrue(ClaudeCompatibleModelCatalogAdapter.isValid(
+            rawModel: "glm-5-turbo:max",
+            for: .claudeCodeGLM,
+            availability: availability
+        ) ?? false)
+        XCTAssertFalse(ClaudeCompatibleModelCatalogAdapter.isValid(
+            rawModel: "glm-5-turbo:xhigh",
+            for: .claudeCodeGLM,
+            availability: availability
+        ) ?? true)
+        XCTAssertTrue(ClaudeCompatibleModelCatalogAdapter.isValid(
+            rawModel: "glm-5.1",
+            for: .claudeCodeGLM,
+            availability: availability
+        ) ?? false)
+        XCTAssertFalse(ClaudeCompatibleModelCatalogAdapter.isValid(
+            rawModel: "glm-5.1:xhigh",
+            for: .claudeCodeGLM,
+            availability: availability
+        ) ?? true)
+        XCTAssertFalse(AgentModelCatalog.modelOptionIsSelected(
+            optionRaw: "glm-5-turbo",
+            selectedRaw: AgentModel.claudeSonnet.rawValue,
+            agentKind: .claudeCodeGLM
+        ))
+        XCTAssertFalse(AgentModelCatalog.modelOptionIsSelected(
+            optionRaw: "glm-5.1",
+            selectedRaw: AgentModel.claudeOpus.rawValue,
+            agentKind: .claudeCodeGLM
+        ))
         XCTAssertTrue(ClaudeCompatibleModelCatalogAdapter.claudeEffort(
             .xhigh,
             isSupportedForBaseModelRaw: AgentModel.claudeSonnet.rawValue,
@@ -262,18 +313,25 @@ final class ClaudeCompatiblePluginBridgeTests: XCTestCase {
             claudeCodeAvailable: true,
             zaiConfigured: true
         )
+        let baseSnapshot = try XCTUnwrap(ClaudeCompatibleModelCatalogAdapter.catalogSnapshot(
+            for: .claudeCodeGLM,
+            availability: availability,
+            includeClaudeEffortVariants: false
+        ))
         let snapshot = try XCTUnwrap(ClaudeCompatibleModelCatalogAdapter.catalogSnapshot(
             for: .claudeCodeGLM,
             availability: availability,
             includeClaudeEffortVariants: true
         ))
 
-        XCTAssertEqual(snapshot.defaultModelRaw, AgentModel.claudeSonnet.rawValue)
+        XCTAssertEqual(baseSnapshot.defaultModelRaw, AgentModel.claudeSonnet.rawValue)
         XCTAssertTrue(snapshot.options.contains { $0.rawValue == "sonnet:xhigh" })
         XCTAssertTrue(snapshot.options.contains { $0.rawValue == "opus:xhigh" })
-        XCTAssertFalse(snapshot.options.contains { $0.displayName.contains("GLM 5 Turbo") })
-        XCTAssertFalse(snapshot.options.contains { $0.displayName.contains("GLM 5.1") })
-        XCTAssertTrue(snapshot.options.contains { $0.displayName.contains("GLM 5.2") })
+        XCTAssertTrue(baseSnapshot.options.contains { $0.rawValue == "glm-4.7" && $0.displayName == "GLM 4.7" })
+        XCTAssertTrue(baseSnapshot.options.contains { $0.rawValue == "glm-5-turbo" && $0.displayName == "GLM 5 Turbo" })
+        XCTAssertTrue(baseSnapshot.options.contains { $0.rawValue == "glm-5.1" && $0.displayName == "GLM 5.1" })
+        XCTAssertTrue(baseSnapshot.options.contains { $0.rawValue == "sonnet" && $0.displayName == "GLM 5.2 (1M) — Sonnet" })
+        XCTAssertTrue(baseSnapshot.options.contains { $0.rawValue == "opus" && $0.displayName == "GLM 5.2 (1M) — Opus" })
         XCTAssertEqual(
             ClaudeCompatibleModelCatalogAdapter.contextWindowTokens(
                 forRequestedModelRaw: "sonnet:xhigh",
