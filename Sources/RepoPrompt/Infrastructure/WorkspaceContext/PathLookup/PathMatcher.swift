@@ -377,20 +377,11 @@ enum PathMatcher {
             }
 
             // 2) Gather candidate roots (string-only, avoid URL bridging)
-            var candidateRoots = getCandidateRoots(forFullPath: standardizedPath, snapshot: snapshot)
+            let candidateRoots = getCandidateRoots(forFullPath: standardizedPath, snapshot: snapshot)
 
             if Self.isLoggingEnabled {
                 print("Full path: \(standardizedPath)")
-                print("Candidate roots (std): \(candidateRoots)")
-            }
-
-            // If none matched by simple prefix, try symlink-resolved comparisons
-            if candidateRoots.isEmpty {
-                let resolvedFull = (standardizedPath as NSString).resolvingSymlinksInPath
-                candidateRoots = getCandidateRoots(forFullPath: resolvedFull, snapshot: snapshot)
-                if Self.isLoggingEnabled {
-                    print("Candidate roots (resolved): \(candidateRoots)")
-                }
+                print("Candidate roots (std/resolved): \(candidateRoots)")
             }
 
             // If no candidate root matches, allow a conservative, parent-qualified suffix fallback.
@@ -1575,10 +1566,10 @@ enum PathMatcher {
         let fullStd = StandardizedPath.absolute(fullPath)
         let fullRes = (fullStd as NSString).resolvingSymlinksInPath
         var out = Set<String>()
-        out.reserveCapacity(snapshot.rootFolders.count)
-        for root in snapshot.rootFolders {
-            let rStd = root.fullPath
-            let rRes = (rStd as NSString).resolvingSymlinksInPath
+        out.reserveCapacity(snapshot.rootPathCache.entries.count)
+        for root in snapshot.rootPathCache.entries {
+            let rStd = root.standardizedPath
+            let rRes = root.resolvedPath
             if isUnder(fullStd, root: rStd) || isUnder(fullRes, root: rStd) ||
                 isUnder(fullStd, root: rRes) || isUnder(fullRes, root: rRes)
             {

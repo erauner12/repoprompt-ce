@@ -16,6 +16,25 @@ struct PathMatchCacheIdentity: Hashable {
     let snapshotID: UInt64
 }
 
+struct PathMatchRootPathCache {
+    struct Entry {
+        let standardizedPath: String
+        let resolvedPath: String
+    }
+
+    let entries: [Entry]
+
+    init(rootFolders: [FolderRecord]) {
+        entries = rootFolders.map { root in
+            let standardizedPath = StandardizedPath.absolute(root.fullPath)
+            return Entry(
+                standardizedPath: standardizedPath,
+                resolvedPath: (standardizedPath as NSString).resolvingSymlinksInPath
+            )
+        }
+    }
+}
+
 /// Static part of the snapshot (expensive to build, cached).
 /// Immutable, cross-actor-safe snapshot used by PathMatcher and PathMatchWorker.
 /// All references to UI/ViewModel types are stripped; uses frozen records only.
@@ -23,6 +42,7 @@ struct StaticPathMatchData {
     let filesByFullPath: [String: FileRecord]
     let foldersByFullPath: [String: FolderRecord]
     let rootFolders: [FolderRecord]
+    let rootPathCache: PathMatchRootPathCache
 
     // Case-insensitive dictionaries (no duplicates in original maps)
     let filesByLowerFullPath: [String: FileRecord]
@@ -48,6 +68,7 @@ struct StaticPathMatchData {
         self.filesByFullPath = filesByFullPath
         self.foldersByFullPath = foldersByFullPath
         self.rootFolders = rootFolders
+        rootPathCache = PathMatchRootPathCache(rootFolders: rootFolders)
         cacheIdentity = PathMatchCacheIdentity(scopeID: cacheScopeID, snapshotID: id)
         self.id = id
 
@@ -80,6 +101,7 @@ struct PathMatchSnapshot {
     let filesByFullPath: [String: FileRecord]
     let foldersByFullPath: [String: FolderRecord]
     let rootFolders: [FolderRecord]
+    let rootPathCache: PathMatchRootPathCache
 
     // Case-insensitive dictionaries copied from StaticPathMatchData or computed on the fly
     let filesByLowerFullPath: [String: FileRecord]
@@ -106,6 +128,7 @@ struct PathMatchSnapshot {
         filesByFullPath = staticData.filesByFullPath
         foldersByFullPath = staticData.foldersByFullPath
         rootFolders = staticData.rootFolders
+        rootPathCache = staticData.rootPathCache
         filesByLowerFullPath = staticData.filesByLowerFullPath
         foldersByLowerFullPath = staticData.foldersByLowerFullPath
         self.selectedFileFullPaths = selectedFileFullPaths
@@ -180,6 +203,7 @@ struct PathMatchSnapshot {
         self.filesByFullPath = normalizedFilesByFullPath
         self.foldersByFullPath = normalizedFoldersByFullPath
         self.rootFolders = normalizedRootFolders
+        rootPathCache = PathMatchRootPathCache(rootFolders: normalizedRootFolders)
 
         // Duplicate-safe "first wins" build to avoid traps on case-sensitive filesystems
         var filesLower: [String: FileRecord] = [:]

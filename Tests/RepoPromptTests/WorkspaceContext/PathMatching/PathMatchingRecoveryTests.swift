@@ -2,6 +2,32 @@
 import XCTest
 
 final class PathMatchingRecoveryTests: XCTestCase {
+    func testRootSymlinkResolutionCacheIsSnapshotScoped() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PathMatchingRecoveryTests-\(UUID().uuidString)", isDirectory: true)
+        let targetA = tempRoot.appendingPathComponent("target-a", isDirectory: true)
+        let targetB = tempRoot.appendingPathComponent("target-b", isDirectory: true)
+        let link = tempRoot.appendingPathComponent("linked-root")
+        try FileManager.default.createDirectory(at: targetA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: targetB, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: targetA)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let resolvedTargetA = (StandardizedPath.absolute(targetA.path) as NSString).resolvingSymlinksInPath
+        let snapshotA = makeSnapshot(files: [("Sources/App.swift", link.path)])
+        XCTAssertEqual(snapshotA.rootPathCache.entries.first?.standardizedPath, StandardizedPath.absolute(link.path))
+        XCTAssertEqual(snapshotA.rootPathCache.entries.first?.resolvedPath, resolvedTargetA)
+
+        try FileManager.default.removeItem(at: link)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: targetB)
+
+        let resolvedTargetB = (StandardizedPath.absolute(targetB.path) as NSString).resolvingSymlinksInPath
+        let snapshotB = makeSnapshot(files: [("Sources/App.swift", link.path)])
+        XCTAssertEqual(snapshotB.rootPathCache.entries.first?.standardizedPath, StandardizedPath.absolute(link.path))
+        XCTAssertEqual(snapshotB.rootPathCache.entries.first?.resolvedPath, resolvedTargetB)
+        XCTAssertEqual(snapshotA.rootPathCache.entries.first?.resolvedPath, resolvedTargetA)
+    }
+
     func testAliasAndAbsoluteResolutionStayScopedToTheMatchingRoot() {
         let snapshot = makeSnapshot(files: [
             ("src/App.swift", "/Users/test/web"),
