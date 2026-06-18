@@ -113,15 +113,19 @@ Status groups are evaluated top-down: `Needs you` > `Blocked` > `Working` > `Don
 - `Done`: run state is `.completed` or `.cancelled`.
 - `Idle`: run state is `.idle` or no higher-priority group applies.
 
-Blocked's conflicted-merge signal should come from cheap metadata such as active worktree merge summaries. Within-group sorting should also use cheap metadata, e.g. attention age or activity/last-modified dates, not transcript loads. Persisted-only rows may still appear as `Blocked`, `Done`, or `Idle` from persisted metadata, but they must not contribute to live `Needs you` or `Working` counts.
+Blocked's conflicted-merge signal should come from cheap metadata such as active worktree merge summaries. V1 sorting is read-only display order within existing groups: `Last updated` is the default, with `Name` and `Priority` as additional sort modes. Sorting should use cheap metadata, e.g. attention age, structured priority/attention data, display name, or activity/last-modified dates, not transcript loads. Sorting must not change group membership, row state, Coordinator relationship, or persisted session state. Persisted-only rows may still appear as `Blocked`, `Done`, or `Idle` from persisted metadata, but they must not contribute to live `Needs you` or `Working` counts.
 
 ### 12. Coordinator rail is optional; inbox stands alone
 
 The v1 dashboard is inbox-centric. If no Coordinator is selected or detected, the dashboard still renders the grouped active-workspace inbox and shows an empty/choose-Coordinator state in the rail area. If multiple auto-detected Coordinator candidates exist, v1 picks the most recent candidate within the highest-ranked matching precedence tier until the user selects a different per-window, workspace-keyed Coordinator. The Coordinator/session rail is in-surface Dashboard navigation, not the app-level Agent Mode ↔ Dashboard surface switcher; it should not contain Agent Mode as a rail item.
 
-### 13. Drawer stays sourced; full logs stay in Agent Mode
+### 13. Inspector stays sourced; full logs stay in Agent Mode
 
 The v1 inspector / trailing detail column shows sourced summaries only: status, pending interaction, blocker, worktree/merge, route, and MCP/session metadata. Full transcript, raw log, file, and diff inspection remain in Agent Mode via `Open agent chat`. A dashboard-native full-log toggle is a follow-up unless backed by a sourced activity projection.
+
+### 14. Future board mode yields side panes before content
+
+The v1 surface remains the read-only grouped list. A future Board/List toggle belongs to Layer 2/3 once dispatch/write interactions exist. In that future board mode, the board is the protected region: the inspector / trailing detail column should collapse first, then Coordinator chat should collapse to a rail, while board columns preserve a usable minimum width and may scroll horizontally. Below the width where two board columns can fit, the board should fall back to the existing List view rather than rendering a cramped board.
 
 ## Risks / Trade-offs
 

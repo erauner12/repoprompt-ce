@@ -206,6 +206,37 @@ Required decisions:
 - Are directives just user messages, structured commands, or a new control-plane envelope?
 - Does the dashboard act only on current-window Coordinator sessions, or can it route directives cross-window?
 
+## Board/List and Coordinator Interaction Model
+
+The v1 observation surface stays list-first. A future Board/List toggle belongs to Layer 2/3, after the dashboard has a deliberate write-path story.
+
+### Board/List toggle
+
+- **List mode** remains the calm read-only triage default: grouped status, lightweight sorting, sourced summaries, and deep links.
+- **Board mode** is an opt-in pipeline/dispatch view once actions and directives exist. It is useful for denser at-scale visibility, workstream flow, and dispatch state, but its natural interactions are writes.
+- The toggle should not replace v1 grouping semantics. It is a view mode over sourced row/session state, not a second source of truth.
+
+### Board ordering and drag interactions
+
+Board columns sort by the active sort mode by default. Once Layer 2 write semantics exist, dragging a card may switch that column to a persisted custom order. Re-applying a sort resets the column back to sorted order.
+
+Dragging is explicitly deferred from v1 because it implies a write: drag-to-reorder persists display/order state, drag-to-dispatch changes ownership or assignment, and drag-to-change-column changes status semantics. V1 therefore keeps sorting read-only and does not expose drag ordering.
+
+### Board responsive behavior
+
+In future board mode, the board is the protected content region. The inspector / trailing detail column should collapse first, then Coordinator chat should collapse to a rail, while board columns preserve a usable minimum width and may scroll horizontally. Below the width where two board columns can fit, the board should fall back to the existing List view rather than rendering a cramped board.
+
+### Coordinator chat as command log
+
+The end-state Coordinator chat should read as an auditable command log: user directives, Coordinator acknowledgments, spawned/steered work, and clarification requests should be visible as sourced conversational history. V1 may show Coordinator context but does not provide a live directive composer.
+
+### Mechanism options for future action surfaces
+
+These are implementation options to evaluate when Layer 2 is scoped, not v1 commitments:
+
+- MCP Apps / elicitation-style agent-rendered widgets for structured approve/reject/respond controls.
+- AG-UI-style synchronization for keeping agent-rendered action state and dashboard UI state aligned.
+
 ## Cross-Window Decision
 
 This is the hardest end-state fork.

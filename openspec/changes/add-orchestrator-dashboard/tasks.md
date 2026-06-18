@@ -40,8 +40,10 @@
 - [ ] 5.4 Ensure persisted-only rows never contribute to live `Needs you` or `Working` counts in v1.
 - [ ] 5.5 Map Blocked from `.failed` run state or conflicted worktree/merge attention.
 - [ ] 5.6 Map Working from current-window live `.running`, Done from `.completed`/`.cancelled`, and Idle from `.idle` when no higher-priority group applies.
-- [ ] 5.7 Implement deterministic within-group sorting from cheap metadata such as attention age, activity date, last modified date, or completion date.
-- [ ] 5.8 Add snapshot adapter tests for grouping, counts, stale-row count exclusion, and sorting.
+- [ ] 5.7 Implement read-only sort controls for `Last updated` (default), `Name`, and `Priority`.
+- [ ] 5.8 Ensure sorting only reorders rows within existing status groups and never changes group membership, run state, pending state, Coordinator relationship, or persisted session state.
+- [ ] 5.9 Ensure v1 does not expose drag-to-reorder, drag-to-dispatch, or drag-to-change-status interactions.
+- [ ] 5.10 Add snapshot adapter tests for grouping, counts, stale-row count exclusion, and sort-mode behavior.
 
 ## 6. Pending interaction summaries
 

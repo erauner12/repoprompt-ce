@@ -149,10 +149,26 @@ The system SHALL group dashboard rows by testable, structured status rules.
 - **WHEN** a session run state is `.idle` and no higher-priority group applies
 - **THEN** the dashboard SHALL group that row under `Idle`.
 
-#### Scenario: Rows are sorted within groups
+#### Scenario: Rows use default read-only sort
 - **WHEN** rows are displayed within a status group
-- **THEN** the dashboard SHALL sort them deterministically using cheap metadata such as attention age, activity date, last modified date, or completion date
+- **THEN** the dashboard SHALL sort rows within that group by `Last updated` by default
+- **AND** it SHALL use cheap metadata such as attention age, activity date, last modified date, or completion date
 - **AND** it SHALL NOT require per-row transcript loads solely to sort rows.
+
+#### Scenario: User changes read-only sort
+- **WHEN** the user selects `Last updated`, `Name`, or `Priority` sorting
+- **THEN** the dashboard SHALL reorder rows only within their existing status groups
+- **AND** it SHALL NOT change a row's group, run state, pending state, Coordinator relationship, or persisted session state.
+
+#### Scenario: Priority sort has limited source data
+- **WHEN** `Priority` sorting is selected
+- **THEN** the dashboard SHALL use structured priority or attention metadata already present in the dashboard projection when available
+- **AND** rows without structured priority data SHALL remain ordered by a deterministic fallback
+- **AND** the dashboard SHALL NOT infer priority from assistant prose or session titles.
+
+#### Scenario: Drag ordering is unavailable in v1
+- **WHEN** the v1 dashboard renders grouped rows
+- **THEN** it SHALL NOT provide drag-to-reorder, drag-to-dispatch, or drag-to-change-status interactions.
 
 #### Scenario: High-priority groups are non-empty
 - **WHEN** `Needs you`, `Blocked`, or `Working` groups contain rows
