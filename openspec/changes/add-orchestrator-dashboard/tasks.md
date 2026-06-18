@@ -75,7 +75,8 @@
 - [ ] 9.3 Add Board/List view switching where Board is the v1 default and List renders the same snapshot as an alternate.
 - [ ] 9.4 Add responsive behavior: inspector yields before the board, Coordinator chat may collapse to a rail, high-priority columns remain visible when possible, lower-priority columns may de-emphasize/collapse with visible counts, board columns preserve usable width or scroll horizontally, and widths below two usable board columns fall back to List.
 - [ ] 9.5 Add progressive disclosure from count to card/row, optional sourced inspector summaries, and Agent Mode; keep full raw logs, transcripts, files, and diffs in Agent Mode for v1.
-- [ ] 9.6 Add UI previews or smoke states for board-default, board-card-selected, inspector-collapsed, list view, sort menu, empty workspace, active, needs-user, blocked, MCP-off, MCP-empty, MCP-active, filtered, zero-Coordinator, stale/persisted-only card/row, lower-priority column collapsed/de-emphasized, and multiple-Coordinator most-recent states.
+- [ ] 9.6 Keep the Coordinator rail focused on Coordinator identity/selection and optional read-only context; do not add a separate by-agent roster or `Agents` tab in v1.
+- [ ] 9.7 Add UI previews or smoke states for board-default, board-card-selected, inspector-collapsed, list view, sort menu, empty workspace, active, needs-user, blocked, MCP-off, MCP-empty, MCP-active, filtered, zero-Coordinator, stale/persisted-only card/row, lower-priority column collapsed/de-emphasized, and multiple-Coordinator most-recent states.
 
 ## 10. Validation
 

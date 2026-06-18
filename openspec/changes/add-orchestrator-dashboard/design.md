@@ -29,6 +29,7 @@ The dashboard should therefore be a read-only projection over existing state, no
 - Inventing a universal `PendingDecision` protocol.
 - Parsing assistant prose or session titles to infer meaning.
 - Cross-workspace or cross-window aggregation.
+- A separate Coordinator-rail agent roster or "agents in Coordinator context" surface in v1; the board/list is the human-facing active-workspace fleet view.
 - Objective labels, title-derived workstream chips, PR/check metadata, external MCP error triage, or detailed active-scope visualization in v1.
 
 ## Decisions
@@ -117,7 +118,7 @@ Blocked's conflicted-merge signal should come from cheap metadata such as active
 
 ### 12. Coordinator rail is optional; board/list workspace stands alone
 
-The v1 dashboard is board-first, with List as an alternate and narrow-width fallback. If no Coordinator is selected or detected, the dashboard still renders the grouped active-workspace board or list and shows an empty/choose-Coordinator state in the rail area. If multiple auto-detected Coordinator candidates exist, v1 picks the most recent candidate within the highest-ranked matching precedence tier until the user selects a different per-window, workspace-keyed Coordinator. The Coordinator/session rail is in-surface Dashboard navigation, not the app-level Agent Mode ↔ Dashboard surface switcher; it should not contain Agent Mode as a rail item.
+The v1 dashboard is board-first, with List as an alternate and narrow-width fallback. If no Coordinator is selected or detected, the dashboard still renders the grouped active-workspace board or list and shows an empty/choose-Coordinator state in the rail area. If multiple auto-detected Coordinator candidates exist, v1 picks the most recent candidate within the highest-ranked matching precedence tier until the user selects a different per-window, workspace-keyed Coordinator. The Coordinator/session rail is in-surface Dashboard navigation for Coordinator identity/selection and optional read-only context, not the app-level Agent Mode ↔ Dashboard surface switcher; it should not contain Agent Mode as a rail item, and it should not host a separate by-agent roster of workspace sessions in v1.
 
 ### 13. Inspector stays sourced; full logs stay in Agent Mode
 

@@ -84,7 +84,8 @@ The system SHALL identify the dashboard Coordinator using explicit precedence.
 #### Scenario: No Coordinator is found
 - **WHEN** no Coordinator can be selected or detected
 - **THEN** the dashboard SHALL still render the grouped active-workspace board or list
-- **AND** the Coordinator rail SHALL show an empty or choose-Coordinator state rather than blocking the dashboard.
+- **AND** the Coordinator rail SHALL show an empty or choose-Coordinator state rather than blocking the dashboard
+- **AND** the rail SHALL NOT render a separate by-agent roster of workspace sessions in v1.
 
 #### Scenario: Multiple Coordinator candidates exist
 - **WHEN** multiple auto-detected Coordinator candidates match
@@ -273,6 +274,11 @@ The system SHALL provide compact MCP client/tool-call awareness without replacin
 
 ### Requirement: Progressive disclosure
 The system SHALL keep the dashboard calm by default and expose detail only through deliberate user action.
+
+#### Scenario: Coordinator rail avoids duplicate fleet views
+- **WHEN** the dashboard renders the Coordinator rail in v1
+- **THEN** the rail SHALL focus on Coordinator identity, selection, and optional read-only context
+- **AND** it SHALL NOT provide a separate `Agents` tab, agent roster, or "agents in current Coordinator context" surface that duplicates the board/list fleet view.
 
 #### Scenario: Dashboard first renders
 - **WHEN** the dashboard first renders

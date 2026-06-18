@@ -232,6 +232,12 @@ The end-state Coordinator chat should read as an auditable command log: user dir
 
 An ephemeral coordinator-chat display (clearable, read-only, no composer) is a candidate v1 addition; the directive composer remains Layer 2. This is parked, not specced in detail — decide it after the read-only dashboard is built, from experience rather than in advance.
 
+### Future agent roster/context views
+
+The prototype's Coordinator-rail `Agents` tab is not a v1 commitment. The board/list remains the human-facing fleet view, and a Coordinator can enumerate available models or sessions through MCP tools (`agent_manage.list_agents` for the catalog, `agent_manage.list_sessions` for sessions).
+
+If a "who is working" view is needed later, it should be a future board/list grouping mode over the same `OrchestratorDashboardSnapshot`, not a second Coordinator-rail fleet surface. If a "sessions referenced by the current Coordinator context" view is needed later, it depends on Layer 3 directive/context modeling plus Layer 4 activity/provenance records; do not infer it from prose or session titles.
+
 ### Mechanism options for future action surfaces
 
 These are implementation options to evaluate when Layer 2 is scoped, not v1 commitments:
