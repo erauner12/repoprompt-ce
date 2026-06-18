@@ -230,6 +230,8 @@ In v1 board mode, the board is the protected content region. The inspector / tra
 
 The end-state Coordinator chat should read as an auditable command log: user directives, Coordinator acknowledgments, spawned/steered work, and clarification requests should be visible as sourced conversational history. V1 may show Coordinator context but does not provide a live directive composer.
 
+An ephemeral coordinator-chat display (clearable, read-only, no composer) is a candidate v1 addition; the directive composer remains Layer 2. This is parked, not specced in detail — decide it after the read-only dashboard is built, from experience rather than in advance.
+
 ### Mechanism options for future action surfaces
 
 These are implementation options to evaluate when Layer 2 is scoped, not v1 commitments:
