@@ -18,7 +18,7 @@ The dashboard should therefore be a read-only projection over existing state, no
 - Render all dashboard regions from one `OrchestratorDashboardSnapshot` projection.
 - Compose that projection from two independent upstream categories: Agent Mode state, including current-window live state plus active-workspace session metadata; and `MCPServerViewModel.dashboard`.
 - Scope v1 to active-workspace rows with current-window live-state enrichment.
-- Show Coordinator context when selected or detected, keep the inbox useful without a Coordinator, group session rows by total run-state-aware rules, render read-only pending interaction prompts, compact MCP awareness, and deep links to Agent Mode.
+- Show Coordinator context when selected or detected, keep the board/list workspace useful without a Coordinator, group session cards/rows by total run-state-aware rules, render read-only pending interaction prompts, compact MCP awareness, and deep links to Agent Mode.
 - Use coarse observation and diff-before-publish behavior so streaming transcript/token deltas do not churn the dashboard.
 
 **Non-Goals:**
@@ -113,19 +113,19 @@ Status groups are evaluated top-down: `Needs you` > `Blocked` > `Working` > `Don
 - `Done`: run state is `.completed` or `.cancelled`.
 - `Idle`: run state is `.idle` or no higher-priority group applies.
 
-Blocked's conflicted-merge signal should come from cheap metadata such as active worktree merge summaries. V1 sorting is read-only display order within existing groups: `Last updated` is the default, with `Name` and `Priority` as additional sort modes. Sorting should use cheap metadata, e.g. attention age, structured priority/attention data, display name, or activity/last-modified dates, not transcript loads. Sorting must not change group membership, row state, Coordinator relationship, or persisted session state. Persisted-only rows may still appear as `Blocked`, `Done`, or `Idle` from persisted metadata, but they must not contribute to live `Needs you` or `Working` counts.
+Blocked's conflicted-merge signal should come from cheap metadata such as active worktree merge summaries. V1 sorting is read-only display order within existing groups: `Last updated` is the default, with `Name` and `Priority` as additional sort modes. Sorting applies to both board cards and list rows, should use cheap metadata, e.g. attention age, structured priority/attention data, display name, or activity/last-modified dates, and must not require transcript loads. Sorting must not change group membership, card/row state, Coordinator relationship, or persisted session state. Persisted-only cards/rows may still appear as `Blocked`, `Done`, or `Idle` from persisted metadata, but they must not contribute to live `Needs you` or `Working` counts and should render with a stale/persisted-only visual treatment instead of live actionable styling.
 
-### 12. Coordinator rail is optional; inbox stands alone
+### 12. Coordinator rail is optional; board/list workspace stands alone
 
-The v1 dashboard is inbox-centric. If no Coordinator is selected or detected, the dashboard still renders the grouped active-workspace inbox and shows an empty/choose-Coordinator state in the rail area. If multiple auto-detected Coordinator candidates exist, v1 picks the most recent candidate within the highest-ranked matching precedence tier until the user selects a different per-window, workspace-keyed Coordinator. The Coordinator/session rail is in-surface Dashboard navigation, not the app-level Agent Mode ↔ Dashboard surface switcher; it should not contain Agent Mode as a rail item.
+The v1 dashboard is board-first, with List as an alternate and narrow-width fallback. If no Coordinator is selected or detected, the dashboard still renders the grouped active-workspace board or list and shows an empty/choose-Coordinator state in the rail area. If multiple auto-detected Coordinator candidates exist, v1 picks the most recent candidate within the highest-ranked matching precedence tier until the user selects a different per-window, workspace-keyed Coordinator. The Coordinator/session rail is in-surface Dashboard navigation, not the app-level Agent Mode ↔ Dashboard surface switcher; it should not contain Agent Mode as a rail item.
 
 ### 13. Inspector stays sourced; full logs stay in Agent Mode
 
 The v1 inspector / trailing detail column shows sourced summaries only: status, pending interaction, blocker, worktree/merge, route, and MCP/session metadata. Full transcript, raw log, file, and diff inspection remain in Agent Mode via `Open agent chat`. A dashboard-native full-log toggle is a follow-up unless backed by a sourced activity projection.
 
-### 14. Future board mode yields side panes before content
+### 14. Board-first v1 keeps List as alternate and fallback
 
-The v1 surface remains the read-only grouped list. A future Board/List toggle belongs to Layer 2/3 once dispatch/write interactions exist. In that future board mode, the board is the protected region: the inspector / trailing detail column should collapse first, then Coordinator chat should collapse to a rail, while board columns preserve a usable minimum width and may scroll horizontally. Below the width where two board columns can fit, the board should fall back to the existing List view rather than rendering a cramped board.
+The v1 surface defaults to a read-only status board. List remains a first-class alternate view and the responsive fallback when board columns cannot fit. Board and List render the same `OrchestratorDashboardSnapshot`, grouping, sorting, stale-row semantics, route availability, and read-only action constraints. High-priority columns (`Needs you`, `Blocked`, `Working`) should be visible by default when non-empty; lower-priority columns (`Done`, `Idle`) remain available but may be de-emphasized, horizontally scrolled, or collapsed with visible counts when space is constrained. The board is the protected region: the inspector / trailing detail column should collapse first, then Coordinator chat may collapse to a rail, while board columns preserve a usable minimum width and may scroll horizontally. Below the width where two board columns can fit, the board falls back to List rather than rendering a cramped board. Drag ordering, dispatch, status changes, inline approvals/retries, and Coordinator directives remain Layer 2/3 follow-ups.
 
 ## Risks / Trade-offs
 

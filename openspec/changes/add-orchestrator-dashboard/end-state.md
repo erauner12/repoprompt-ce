@@ -31,7 +31,7 @@ The read-only projection already covered by `add-mcp-dashboard-consumer` and `ad
 
 User capability:
 
-- View grouped sessions.
+- View grouped sessions in a board-first status view, with List as an alternate/fallback.
 - See live attention/working state for current-window sessions.
 - See stale/persisted-only rows without false live urgency.
 - See compact MCP state.
@@ -208,23 +208,23 @@ Required decisions:
 
 ## Board/List and Coordinator Interaction Model
 
-The v1 observation surface stays list-first. A future Board/List toggle belongs to Layer 2/3, after the dashboard has a deliberate write-path story.
+V1 is board-first, not board-only. The observation layer defaults to a read-only status board because the board better communicates parallel workstreams and pipeline state, while List remains a first-class alternate and the narrow-width fallback.
 
 ### Board/List toggle
 
-- **List mode** remains the calm read-only triage default: grouped status, lightweight sorting, sourced summaries, and deep links.
-- **Board mode** is an opt-in pipeline/dispatch view once actions and directives exist. It is useful for denser at-scale visibility, workstream flow, and dispatch state, but its natural interactions are writes.
-- The toggle should not replace v1 grouping semantics. It is a view mode over sourced row/session state, not a second source of truth.
+- **Board mode** is the v1 default presentation: grouped status columns, lightweight sorting, sourced summaries, and deep links. It is read-only in v1.
+- **List mode** is a first-class alternate for calm triage, scanning, and narrow layouts. It renders the same sourced rows, groups, sorting, stale-row rules, and deep-link constraints as the board.
+- The toggle does not replace v1 grouping semantics. It is a view mode over sourced row/session state, not a second source of truth.
 
 ### Board ordering and drag interactions
 
-Board columns sort by the active sort mode by default. Once Layer 2 write semantics exist, dragging a card may switch that column to a persisted custom order. Re-applying a sort resets the column back to sorted order.
+V1 board columns sort by the active sort mode by default. Once Layer 2 write semantics exist, dragging a card may switch that column to a persisted custom order. Re-applying a sort resets the column back to sorted order.
 
-Dragging is explicitly deferred from v1 because it implies a write: drag-to-reorder persists display/order state, drag-to-dispatch changes ownership or assignment, and drag-to-change-column changes status semantics. V1 therefore keeps sorting read-only and does not expose drag ordering.
+Dragging is explicitly deferred from v1 because it implies a write: drag-to-reorder persists display/order state, drag-to-dispatch changes ownership or assignment, and drag-to-change-column changes status semantics. V1 therefore keeps board/list sorting read-only and does not expose drag ordering.
 
 ### Board responsive behavior
 
-In future board mode, the board is the protected content region. The inspector / trailing detail column should collapse first, then Coordinator chat should collapse to a rail, while board columns preserve a usable minimum width and may scroll horizontally. Below the width where two board columns can fit, the board should fall back to the existing List view rather than rendering a cramped board.
+In v1 board mode, the board is the protected content region. The inspector / trailing detail column should collapse first, then Coordinator chat may collapse to a rail, while board columns preserve a usable minimum width and may scroll horizontally. Below the width where two board columns can fit, the board should fall back to the existing List view rather than rendering a cramped board.
 
 ### Coordinator chat as command log
 
@@ -263,7 +263,7 @@ Pros:
 Cons:
 
 - Cross-window fleet control remains partial.
-- Inline actions may disappear or degrade for sessions visible in the inbox.
+- Inline actions may disappear or degrade for sessions visible in the board/list workspace.
 - Conversational Coordinator is only fully useful when the Coordinator lives in the current window.
 
 ### Option B — Route actions to owning windows

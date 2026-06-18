@@ -20,7 +20,7 @@
 - [ ] 3.1 Implement user-selected Coordinator state as per-window ephemeral state keyed by active workspace ID.
 - [ ] 3.2 Implement Orchestrate workflow candidate detection only when launch/first-request workflow metadata is already available without per-row transcript churn.
 - [ ] 3.3 Implement MCP-originated lineage-root-with-children candidate detection.
-- [ ] 3.4 Implement zero-candidate inbox-only behavior with empty/choose-Coordinator rail state.
+- [ ] 3.4 Implement zero-candidate board/list behavior with empty/choose-Coordinator rail state.
 - [ ] 3.5 Implement multiple-candidate behavior by selecting the most recent candidate within the highest-ranked matching precedence tier unless a user-selected Coordinator exists.
 - [ ] 3.6 Add tests for Coordinator identity precedence and ambiguity handling.
 
@@ -37,11 +37,11 @@
 - [ ] 5.1 Implement dashboard status groups: Needs you, Blocked, Working, Done, Idle.
 - [ ] 5.2 Evaluate groups top-down: Needs you, Blocked, Working, Done, Idle.
 - [ ] 5.3 Map Needs you from current-window live `.waitingForUser`, `.waitingForQuestion`, and `.waitingForApproval`; use MCP pending interactions only as prompt/detail enrichment.
-- [ ] 5.4 Ensure persisted-only rows never contribute to live `Needs you` or `Working` counts in v1.
+- [ ] 5.4 Ensure persisted-only cards/rows never contribute to live `Needs you` or `Working` counts in v1 and render with stale/persisted-only treatment.
 - [ ] 5.5 Map Blocked from `.failed` run state or conflicted worktree/merge attention.
 - [ ] 5.6 Map Working from current-window live `.running`, Done from `.completed`/`.cancelled`, and Idle from `.idle` when no higher-priority group applies.
-- [ ] 5.7 Implement read-only sort controls for `Last updated` (default), `Name`, and `Priority`.
-- [ ] 5.8 Ensure sorting only reorders rows within existing status groups and never changes group membership, run state, pending state, Coordinator relationship, or persisted session state.
+- [ ] 5.7 Implement read-only sort controls for `Last updated` (default), `Name`, and `Priority` across board cards and list rows.
+- [ ] 5.8 Ensure sorting only reorders cards/rows within existing status groups and never changes group membership, run state, pending state, Coordinator relationship, or persisted session state.
 - [ ] 5.9 Ensure v1 does not expose drag-to-reorder, drag-to-dispatch, or drag-to-change-status interactions.
 - [ ] 5.10 Add snapshot adapter tests for grouping, counts, stale-row count exclusion, and sort-mode behavior.
 
@@ -70,10 +70,12 @@
 
 ## 9. Dashboard UI shell
 
-- [ ] 9.1 Build the Orchestrator Dashboard shell with top counts, optional Coordinator rail, grouped inbox, optional inspector / trailing detail column, MCP footer, and filter affordance.
-- [ ] 9.2 Keep the main inbox calm by default: no full transcripts, full logs, diffs, file viewers, or streaming tool feeds.
-- [ ] 9.3 Add progressive disclosure from count to row, optional sourced inspector summaries, and Agent Mode; keep full raw logs, transcripts, files, and diffs in Agent Mode for v1.
-- [ ] 9.4 Add UI previews or smoke states for empty workspace, active, needs-user, blocked, MCP-off, MCP-empty, MCP-active, filtered, zero-Coordinator inbox-only, and multiple-Coordinator most-recent states.
+- [ ] 9.1 Build the Orchestrator Dashboard shell with top counts, optional Coordinator rail, board-first status columns/cards, List view alternate/fallback, optional inspector / trailing detail column, MCP footer, and filter affordance.
+- [ ] 9.2 Keep the main board/list content calm by default: no full transcripts, full logs, diffs, file viewers, streaming tool feeds, or write controls.
+- [ ] 9.3 Add Board/List view switching where Board is the v1 default and List renders the same snapshot as an alternate.
+- [ ] 9.4 Add responsive behavior: inspector yields before the board, Coordinator chat may collapse to a rail, high-priority columns remain visible when possible, lower-priority columns may de-emphasize/collapse with visible counts, board columns preserve usable width or scroll horizontally, and widths below two usable board columns fall back to List.
+- [ ] 9.5 Add progressive disclosure from count to card/row, optional sourced inspector summaries, and Agent Mode; keep full raw logs, transcripts, files, and diffs in Agent Mode for v1.
+- [ ] 9.6 Add UI previews or smoke states for board-default, board-card-selected, inspector-collapsed, list view, sort menu, empty workspace, active, needs-user, blocked, MCP-off, MCP-empty, MCP-active, filtered, zero-Coordinator, stale/persisted-only card/row, lower-priority column collapsed/de-emphasized, and multiple-Coordinator most-recent states.
 
 ## 10. Validation
 

@@ -59,7 +59,7 @@ The system SHALL scope v1 dashboard rows to the active workspace and live run-st
 
 #### Scenario: Session live state belongs to another window
 - **WHEN** a session is known from active-workspace persisted metadata but has no current-window live state
-- **THEN** the dashboard SHALL render the row as stale/persisted-only in v1
+- **THEN** the dashboard SHALL render the card or row as stale/persisted-only in v1
 - **AND** it SHALL NOT present stale persisted data as live status.
 
 ### Requirement: Coordinator selection
@@ -83,7 +83,7 @@ The system SHALL identify the dashboard Coordinator using explicit precedence.
 
 #### Scenario: No Coordinator is found
 - **WHEN** no Coordinator can be selected or detected
-- **THEN** the dashboard SHALL still render the grouped active-workspace inbox
+- **THEN** the dashboard SHALL still render the grouped active-workspace board or list
 - **AND** the Coordinator rail SHALL show an empty or choose-Coordinator state rather than blocking the dashboard.
 
 #### Scenario: Multiple Coordinator candidates exist
@@ -91,12 +91,40 @@ The system SHALL identify the dashboard Coordinator using explicit precedence.
 - **THEN** the dashboard SHALL use the most recent candidate within the highest-ranked matching precedence tier in v1
 - **AND** a valid user-selected Coordinator SHALL override that automatic choice.
 
+### Requirement: Board-first dashboard layout
+The system SHALL present v1 as a read-only status board by default, with a list view as an alternate and responsive fallback.
+
+#### Scenario: Dashboard first opens
+- **WHEN** the user opens the Orchestrator Dashboard in v1
+- **THEN** the dashboard SHALL show a board view by default
+- **AND** status groups SHALL render as board columns containing session cards
+- **AND** the board SHALL derive columns and cards from the same `OrchestratorDashboardSnapshot` grouping and row projection used by other dashboard regions.
+
+#### Scenario: User switches to list view
+- **WHEN** the user chooses List view
+- **THEN** the dashboard SHALL render the same sourced rows and status groups in a list presentation
+- **AND** the list SHALL preserve the same grouping, sorting, stale-row, deep-link, and read-only action constraints as the board.
+
+#### Scenario: Board cannot fit available width
+- **WHEN** the dashboard viewport cannot fit at least two usable board columns
+- **THEN** the dashboard SHALL fall back to the List view rather than rendering a cramped board.
+
+#### Scenario: Board side panes compete for width
+- **WHEN** the board, Coordinator rail/chat, and inspector compete for horizontal space
+- **THEN** the inspector / trailing detail column SHALL yield before the board
+- **AND** Coordinator chat MAY collapse to a rail before board columns are reduced below their usable minimum
+- **AND** the board MAY scroll horizontally to preserve usable column width.
+
+#### Scenario: Board remains read-only in v1
+- **WHEN** the v1 board renders session cards
+- **THEN** it SHALL NOT provide drag-to-reorder, drag-to-dispatch, drag-to-change-status, inline approval, inline retry, or Coordinator directive submission.
+
 ### Requirement: Session row projection
-The system SHALL project dashboard session rows from structured session and live-state data.
+The system SHALL project dashboard session rows/cards from structured session and live-state data.
 
 #### Scenario: Session row renders
-- **WHEN** a session appears in the dashboard inbox
-- **THEN** the row SHALL derive identity, lineage, provider/model, worktree state, MCP origin, and run status from structured session metadata or live state.
+- **WHEN** a session appears as a dashboard card or list row
+- **THEN** the card or row SHALL derive identity, lineage, provider/model, worktree state, MCP origin, and run status from structured session metadata or live state.
 
 #### Scenario: Workflow labels are deferred
 - **WHEN** dashboard rows render in v1
@@ -128,10 +156,16 @@ The system SHALL group dashboard rows by testable, structured status rules.
 - **THEN** the dashboard SHALL group that row under `Needs you`
 - **AND** live MCP-controlled pending interaction data MAY enrich the row prompt/details when available.
 
-#### Scenario: Persisted-only row has active-looking stale run state
-- **WHEN** a row is known only from persisted metadata and has no current-window live state
+#### Scenario: Persisted-only card has active-looking stale run state
+- **WHEN** a card or row is known only from persisted metadata and has no current-window live state
 - **AND** its persisted run state is `.running`, `.waitingForUser`, `.waitingForQuestion`, or `.waitingForApproval`
-- **THEN** the dashboard SHALL NOT count that row as live `Working` or `Needs you` in v1.
+- **THEN** the dashboard SHALL NOT count that card or row as live `Working` or `Needs you` in v1.
+
+#### Scenario: Persisted-only card renders in board view
+- **WHEN** a persisted-only session appears in board view
+- **THEN** the dashboard SHALL visually mark the card as stale/persisted-only
+- **AND** it SHALL not present the card as a live actionable card
+- **AND** it SHALL preserve the same route/no-restore constraints used by list rows.
 
 #### Scenario: Session is blocked
 - **WHEN** a session has `.failed` run state or conflicted worktree/merge attention
@@ -150,33 +184,35 @@ The system SHALL group dashboard rows by testable, structured status rules.
 - **THEN** the dashboard SHALL group that row under `Idle`.
 
 #### Scenario: Rows use default read-only sort
-- **WHEN** rows are displayed within a status group
-- **THEN** the dashboard SHALL sort rows within that group by `Last updated` by default
+- **WHEN** cards or rows are displayed within a status group
+- **THEN** the dashboard SHALL sort cards or rows within that group by `Last updated` by default
 - **AND** it SHALL use cheap metadata such as attention age, activity date, last modified date, or completion date
 - **AND** it SHALL NOT require per-row transcript loads solely to sort rows.
 
 #### Scenario: User changes read-only sort
 - **WHEN** the user selects `Last updated`, `Name`, or `Priority` sorting
-- **THEN** the dashboard SHALL reorder rows only within their existing status groups
-- **AND** it SHALL NOT change a row's group, run state, pending state, Coordinator relationship, or persisted session state.
+- **THEN** the dashboard SHALL reorder cards or rows only within their existing status groups
+- **AND** it SHALL NOT change a card's or row's group, run state, pending state, Coordinator relationship, or persisted session state.
 
 #### Scenario: Priority sort has limited source data
 - **WHEN** `Priority` sorting is selected
 - **THEN** the dashboard SHALL use structured priority or attention metadata already present in the dashboard projection when available
-- **AND** rows without structured priority data SHALL remain ordered by a deterministic fallback
+- **AND** cards or rows without structured priority data SHALL remain ordered by a deterministic fallback
 - **AND** the dashboard SHALL NOT infer priority from assistant prose or session titles.
 
 #### Scenario: Drag ordering is unavailable in v1
-- **WHEN** the v1 dashboard renders grouped rows
+- **WHEN** the v1 dashboard renders grouped cards or rows
 - **THEN** it SHALL NOT provide drag-to-reorder, drag-to-dispatch, or drag-to-change-status interactions.
 
-#### Scenario: High-priority groups are non-empty
-- **WHEN** `Needs you`, `Blocked`, or `Working` groups contain rows
-- **THEN** the dashboard SHALL expand those groups by default.
+#### Scenario: High-priority board columns are non-empty
+- **WHEN** `Needs you`, `Blocked`, or `Working` groups contain cards
+- **THEN** the dashboard SHALL show those board columns by default when the board view is active.
 
-#### Scenario: Low-priority groups are non-empty
-- **WHEN** `Done` or `Idle` groups contain rows
-- **THEN** the dashboard SHALL collapse those groups by default with a `Show` affordance.
+#### Scenario: Lower-priority board columns are non-empty
+- **WHEN** `Done` or `Idle` groups contain cards
+- **THEN** the dashboard SHALL keep those columns available in board view
+- **AND** it MAY de-emphasize, horizontally scroll, or collapse lower-priority columns when space is constrained
+- **AND** it SHALL keep counts visible when a column is collapsed.
 
 ### Requirement: Pending interaction display
 The system SHALL display pending interactions as read-only prompts that deep-link to Agent Mode.
@@ -240,8 +276,8 @@ The system SHALL keep the dashboard calm by default and expose detail only throu
 
 #### Scenario: Dashboard first renders
 - **WHEN** the dashboard first renders
-- **THEN** it SHALL show summarized counts, groups, rows, Coordinator context when available, and compact MCP awareness
-- **AND** it SHALL NOT show full transcripts, full logs, diffs, file viewers, or continuously streaming tool feeds in the main inbox.
+- **THEN** it SHALL show summarized counts, status board columns/cards, Coordinator context when available, and compact MCP awareness
+- **AND** it SHALL NOT show full transcripts, full logs, diffs, file viewers, or continuously streaming tool feeds in the main board/list content.
 
 #### Scenario: User selects a row
 - **WHEN** the user selects a dashboard row
