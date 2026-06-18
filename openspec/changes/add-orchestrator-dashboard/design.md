@@ -8,7 +8,7 @@ RepoPrompt CE already has the raw data needed for a dashboard, but the data is s
 - `MCPServerViewModel.dashboard` exposes MCP connection/tool-call state through an existing dashboard subscription lifecycle; the `add-mcp-dashboard-consumer` prerequisite adds the named Orchestrator Dashboard consumer for this lifecycle.
 - `AgentSessionDeepLinkRoute` and `WindowState.routeToAgentSession` already provide the basis for opening existing Agent Mode sessions.
 
-The dashboard should therefore be a read-only projection over existing state, not a new runtime, protocol, or Agent UI replacement.
+The dashboard should therefore be a sourced projection over existing state plus one deliberately scoped v1 write path: sending an ordinary user message to a current-window live Coordinator session. It is not a new runtime, protocol, or Agent UI replacement.
 
 ## Goals / Non-Goals
 
@@ -19,13 +19,14 @@ The dashboard should therefore be a read-only projection over existing state, no
 - Compose that projection from two independent upstream categories: Agent Mode state, including current-window live state plus active-workspace session metadata; and `MCPServerViewModel.dashboard`.
 - Scope v1 to active-workspace rows with current-window live-state enrichment.
 - Show Coordinator context when selected or detected, keep the board/list workspace useful without a Coordinator, group session cards/rows by total run-state-aware rules, render read-only pending interaction prompts, compact MCP awareness, and deep links to Agent Mode.
+- Provide a Coordinator composer only when the selected/detected Coordinator is live in the current window; deliver each directive as an ordinary user message to that Coordinator session.
 - Use coarse observation and diff-before-publish behavior so streaming transcript/token deltas do not churn the dashboard.
 
 **Non-Goals:**
 
 - Replacing Agent Mode as the canonical deep-work surface.
 - Rendering full transcripts, file viewers, diffs, or full logs in the dashboard v1.
-- Adding dashboard-side approval/decline/retry/steering actions.
+- Adding dashboard-side approval/decline/retry actions, card drag/write interactions, cross-window directive routing, structured directive envelopes, or interrupt/steer semantics.
 - Inventing a universal `PendingDecision` protocol.
 - Parsing assistant prose or session titles to infer meaning.
 - Cross-workspace or cross-window aggregation.
@@ -94,7 +95,7 @@ struct DashboardPendingInteractionSummary {
 }
 ```
 
-If `openAgentChatRoute` is nil, the dashboard hides or disables `Open agent chat` / `Decide`. Dashboard-side responses and Coordinator directive transport are follow-ups.
+If `openAgentChatRoute` is nil, the dashboard hides or disables `Open agent chat` / `Decide`. Dashboard-side responses remain follow-ups. Coordinator directives are limited to the current-window composer defined below.
 
 ### 9. Deep links use existing Agent UI routing
 
@@ -118,15 +119,21 @@ Blocked's conflicted-merge signal should come from cheap metadata such as active
 
 ### 12. Coordinator rail is optional; board/list workspace stands alone
 
-The v1 dashboard is board-first, with List as an alternate and narrow-width fallback. If no Coordinator is selected or detected, the dashboard still renders the grouped active-workspace board or list and shows an empty/choose-Coordinator state in the rail area. If multiple auto-detected Coordinator candidates exist, v1 picks the most recent candidate within the highest-ranked matching precedence tier until the user selects a different per-window, workspace-keyed Coordinator. The Coordinator/session rail is in-surface Dashboard navigation for Coordinator identity/selection and optional read-only context, not the app-level Agent Mode ↔ Dashboard surface switcher; it should not contain Agent Mode as a rail item, and it should not host a separate by-agent roster of workspace sessions in v1.
+The v1 dashboard is board-first, with List as an alternate and narrow-width fallback. If no Coordinator is selected or detected, the dashboard still renders the grouped active-workspace board or list and shows an empty/choose-Coordinator state in the rail area. If multiple auto-detected Coordinator candidates exist, v1 picks the most recent candidate within the highest-ranked matching precedence tier until the user selects a different per-window, workspace-keyed Coordinator. The Coordinator/session rail is in-surface Dashboard navigation for Coordinator identity/selection, optional context, and the scoped Coordinator composer, not the app-level Agent Mode ↔ Dashboard surface switcher; it should not contain Agent Mode as a rail item, and it should not host a separate by-agent roster of workspace sessions in v1.
 
-### 13. Inspector stays sourced; full logs stay in Agent Mode
+### 13. Coordinator composer is the only v1 dashboard write path
+
+The v1 Coordinator composer is enabled only when the selected/detected Coordinator is live in the current window, using the same current-window liveness predicate as dashboard live enrichment. If no Coordinator is selected/detected, or if the Coordinator is persisted-only or owned by another window, the composer is disabled and the rail should provide an `Open agent chat` affordance when route data is available.
+
+A v1 directive is an ordinary user message delivered to the Coordinator session through the existing Agent Mode message path. V1 does not define a structured directive envelope, cross-window directive routing, dashboard-side interrupt/steer semantics, or direct mutation of child sessions. The composer may echo the user's sent directive into the rail transcript; Coordinator responses and child-session effects surface through normal coarse dashboard snapshot refresh rather than a live token stream in the rail. If the Coordinator is mid-run, v1 may queue the directive as the next turn or disable send; it must not implement dashboard-side interrupt or steering.
+
+### 14. Inspector stays sourced; full logs stay in Agent Mode
 
 The v1 inspector / trailing detail column shows sourced summaries only: status, pending interaction, blocker, worktree/merge, route, and MCP/session metadata. Full transcript, raw log, file, and diff inspection remain in Agent Mode via `Open agent chat`. A dashboard-native full-log toggle is a follow-up unless backed by a sourced activity projection.
 
-### 14. Board-first v1 keeps List as alternate and fallback
+### 15. Board-first v1 keeps List as alternate and fallback
 
-The v1 surface defaults to a read-only status board. List remains a first-class alternate view and the responsive fallback when board columns cannot fit. Board and List render the same `OrchestratorDashboardSnapshot`, grouping, sorting, stale-row semantics, route availability, and read-only action constraints. High-priority columns (`Needs you`, `Blocked`, `Working`) should be visible by default when non-empty; lower-priority columns (`Done`, `Idle`) remain available but may be de-emphasized, horizontally scrolled, or collapsed with visible counts when space is constrained. The board is the protected region: the inspector / trailing detail column should collapse first, then Coordinator chat may collapse to a rail, while board columns preserve a usable minimum width and may scroll horizontally. Below the width where two board columns can fit, the board falls back to List rather than rendering a cramped board. Drag ordering, dispatch, status changes, inline approvals/retries, and Coordinator directives remain Layer 2/3 follow-ups.
+The v1 surface defaults to a read-only status board. List remains a first-class alternate view and the responsive fallback when board columns cannot fit. Board and List render the same `OrchestratorDashboardSnapshot`, grouping, sorting, stale-row semantics, route availability, and read-only card/row action constraints. High-priority columns (`Needs you`, `Blocked`, `Working`) should be visible by default when non-empty; lower-priority columns (`Done`, `Idle`) remain available but may be de-emphasized, horizontally scrolled, or collapsed with visible counts when space is constrained. The board is the protected region: the inspector / trailing detail column should collapse first, then Coordinator chat may collapse to a rail, while board columns preserve a usable minimum width and may scroll horizontally. Below the width where two board columns can fit, the board falls back to List rather than rendering a cramped board. Drag ordering, dispatch, status changes, inline approvals/retries, structured directives, cross-window directives, and interrupt/steer semantics remain Layer 2/3 follow-ups.
 
 ## Risks / Trade-offs
 
@@ -140,10 +147,10 @@ The v1 surface defaults to a read-only status board. List remains a first-class 
 ## Migration Plan
 
 1. Add dashboard artifacts behind a non-default in-`.main` peer surface while Agent Mode remains the configured v1 landing surface.
-2. Build read-only snapshot projection and tests before UI action wiring.
+2. Build snapshot projection and tests before wiring the Coordinator composer.
 3. Add UI shell and deep links after snapshot behavior is stable.
 4. Consume the MCP dashboard consumer added by `add-mcp-dashboard-consumer` after compact projection tests are in place.
-5. Defer dashboard-side actions, Coordinator directive transport, objective labels, and cross-window/cross-workspace aggregation.
+5. Defer dashboard-side approval/retry actions, drag/dispatch/status mutations, structured directive transport, cross-window directives, objective labels, and cross-window/cross-workspace aggregation.
 
 Rollback is simple for v1: remove or hide the dashboard entry point; Agent Mode remains the default and canonical surface.
 

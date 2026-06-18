@@ -50,7 +50,7 @@
 - [ ] 6.1 Define dashboard pending summaries with `AgentRunMCPSnapshot.Interaction.Kind`, `AgentRunMCPSnapshot.Interaction.Detail`, and nullable `AgentSessionDeepLinkRoute`.
 - [ ] 6.2 Project prompt/detail summaries from live MCP-controlled `AgentRunMCPSnapshot.Interaction` values; leave broader non-MCP pending projection as a follow-up Agent Mode contract change.
 - [ ] 6.3 Hide or disable decision navigation when `openAgentChatRoute` cannot be resolved.
-- [ ] 6.4 Route users to Agent Mode for responses instead of executing dashboard-side actions.
+- [ ] 6.4 Route users to Agent Mode for pending-interaction responses instead of executing dashboard-side approval/retry actions.
 - [ ] 6.5 Add tests for pending interaction rendering, missing routes, and non-prose inference.
 
 ## 7. Deep-link behavior
@@ -68,18 +68,27 @@
 - [ ] 8.3 Project connected/idle/off client count, recent tool calls, and active/in-flight count as server/window-scoped MCP awareness that may not map one-to-one to visible rows.
 - [ ] 8.4 Add tests for MCP compact projection and MCP-off/empty states without retesting the shared consumer lifecycle owned by `add-mcp-dashboard-consumer`.
 
-## 9. Dashboard UI shell
+## 9. Coordinator composer
 
-- [ ] 9.1 Build the Orchestrator Dashboard shell with top counts, optional Coordinator rail, board-first status columns/cards, List view alternate/fallback, optional inspector / trailing detail column, MCP footer, and filter affordance.
-- [ ] 9.2 Keep the main board/list content calm by default: no full transcripts, full logs, diffs, file viewers, streaming tool feeds, or write controls.
-- [ ] 9.3 Add Board/List view switching where Board is the v1 default and List renders the same snapshot as an alternate.
-- [ ] 9.4 Add responsive behavior: inspector yields before the board, Coordinator chat may collapse to a rail, high-priority columns remain visible when possible, lower-priority columns may de-emphasize/collapse with visible counts, board columns preserve usable width or scroll horizontally, and widths below two usable board columns fall back to List.
-- [ ] 9.5 Add progressive disclosure from count to card/row, optional sourced inspector summaries, and Agent Mode; keep full raw logs, transcripts, files, and diffs in Agent Mode for v1.
-- [ ] 9.6 Keep the Coordinator rail focused on Coordinator identity/selection and optional read-only context; do not add a separate by-agent roster or `Agents` tab in v1.
-- [ ] 9.7 Add UI previews or smoke states for board-default, board-card-selected, inspector-collapsed, list view, sort menu, empty workspace, active, needs-user, blocked, MCP-off, MCP-empty, MCP-active, filtered, zero-Coordinator, stale/persisted-only card/row, lower-priority column collapsed/de-emphasized, and multiple-Coordinator most-recent states.
+- [ ] 9.1 Enable the Coordinator composer only when the selected/detected Coordinator has current-window live state.
+- [ ] 9.2 Disable the composer or show `Open agent chat` when no Coordinator exists, the Coordinator is persisted-only, or the Coordinator is owned by another window.
+- [ ] 9.3 Deliver submitted directives as ordinary user messages through the existing Agent Mode message path.
+- [ ] 9.4 Do not define structured directive envelopes, cross-window directive routing, dashboard-side interrupt/steer semantics, or direct child-session mutation in v1.
+- [ ] 9.5 Echo accepted user directives into the Coordinator rail transcript when appropriate, while surfacing Coordinator responses and child-session effects through normal coarse snapshot refresh.
+- [ ] 9.6 Add tests for composer enablement, unreachable Coordinator fallback, ordinary-message dispatch, and no direct board/session mutation.
 
-## 10. Validation
+## 10. Dashboard UI shell
 
-- [ ] 10.1 Run the focused unit tests added for snapshot projection, Coordinator identity, pending interactions, MCP projection, and deep links.
-- [ ] 10.2 Run the smallest relevant coordinated Swift validation lane for touched app/UI files.
-- [ ] 10.3 Run `openspec validate add-orchestrator-dashboard`.
+- [ ] 10.1 Build the Orchestrator Dashboard shell with top counts, optional Coordinator rail, board-first status columns/cards, List view alternate/fallback, optional inspector / trailing detail column, MCP footer, and filter affordance.
+- [ ] 10.2 Keep the main board/list content calm by default: no full transcripts, full logs, diffs, file viewers, streaming tool feeds, or card/row write controls.
+- [ ] 10.3 Add Board/List view switching where Board is the v1 default and List renders the same snapshot as an alternate.
+- [ ] 10.4 Add responsive behavior: inspector yields before the board, Coordinator chat may collapse to a rail, high-priority columns remain visible when possible, lower-priority columns may de-emphasize/collapse with visible counts, board columns preserve usable width or scroll horizontally, and widths below two usable board columns fall back to List.
+- [ ] 10.5 Add progressive disclosure from count to card/row, optional sourced inspector summaries, and Agent Mode; keep full raw logs, transcripts, files, and diffs in Agent Mode for v1.
+- [ ] 10.6 Keep the Coordinator rail focused on Coordinator identity/selection, optional context, and scoped current-window composer; do not add a separate by-agent roster or `Agents` tab in v1.
+- [ ] 10.7 Add UI previews or smoke states for board-default, board-card-selected, inspector-collapsed, list view, sort menu, Coordinator-composer enabled/disabled, empty workspace, active, needs-user, blocked, MCP-off, MCP-empty, MCP-active, filtered, zero-Coordinator, stale/persisted-only card/row, lower-priority column collapsed/de-emphasized, and multiple-Coordinator most-recent states.
+
+## 11. Validation
+
+- [ ] 11.1 Run the focused unit tests added for snapshot projection, Coordinator identity, Coordinator composer, pending interactions, MCP projection, and deep links.
+- [ ] 11.2 Run the smallest relevant coordinated Swift validation lane for touched app/UI files.
+- [ ] 11.3 Run `openspec validate add-orchestrator-dashboard`.

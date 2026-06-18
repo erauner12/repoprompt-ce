@@ -6,7 +6,7 @@ Related changes: `add-mcp-dashboard-consumer`, `add-orchestrator-dashboard`
 
 ## Goal
 
-Define the full Orchestrator system beyond the read-only dashboard v1 so the first slice is built with seams that can support later supervision, action, and Coordinator-directive flows.
+Define the full Orchestrator system beyond the board-first dashboard v1 so the first slice is built with seams that can support later supervision, action, and expanded Coordinator-directive flows.
 
 The end state is not just a dashboard. It is a control plane for a fleet of Agent Mode sessions, with Agent Mode remaining the canonical deep-work surface and the Orchestrator surface supervising, routing, and eventually directing work.
 
@@ -27,7 +27,7 @@ This is a control plane over Agent Mode, not a replacement for Agent Mode.
 
 ### Layer 1 — Observation
 
-The read-only projection already covered by `add-mcp-dashboard-consumer` and `add-orchestrator-dashboard`.
+The observation projection plus scoped current-window Coordinator composer already covered by `add-mcp-dashboard-consumer` and `add-orchestrator-dashboard`.
 
 User capability:
 
@@ -35,7 +35,8 @@ User capability:
 - See live attention/working state for current-window sessions.
 - See stale/persisted-only rows without false live urgency.
 - See compact MCP state.
-- Deep-link into Agent Mode for action.
+- Deep-link into Agent Mode for pending-interaction responses and deep detail.
+- Send ordinary user-message directives to a Coordinator session when that Coordinator is live in the current window.
 
 Primary contract:
 
@@ -43,7 +44,7 @@ Primary contract:
 
 ### Layer 2 — Action in place
 
-The first write path.
+The first broad dashboard action path beyond the v1 Coordinator composer.
 
 User capability:
 
@@ -51,7 +52,7 @@ User capability:
 
 Why it is separate from Layer 1:
 
-- Layer 1 reads and routes. Layer 2 writes into live Agent Mode interaction state.
+- Layer 1 observes, routes, and sends one scoped ordinary-message directive to a current-window live Coordinator. Layer 2 writes into other live Agent Mode interaction state.
 - Existing response methods are window/session-local and not universally exposed as a dashboard-facing API.
 - Cross-window action routing is unresolved: a session may appear in the dashboard as persisted/stale while its live interaction belongs to another window.
 
@@ -86,13 +87,13 @@ Why it is separate from Layer 2:
 Primary future change:
 
 ```text
-add-coordinator-directives
+extend-coordinator-directives
 ```
 
 Depends on:
 
 - Layer 1 Coordinator identity and row/session identity.
-- Layer 2 write-path primitives or an equivalent directive transport.
+- The v1 current-window ordinary-message composer, plus any Layer 2 write-path primitives needed for richer directive/action handling.
 - A product decision on whether directives can target only current-window Coordinators or can route to an owning window/session service.
 
 ### Layer 4 — Activity and provenance
@@ -138,9 +139,9 @@ Layer 1: Observation
 The two keystones are:
 
 1. **Activity/Event adapter** — unlocks most rich visual/provenance affordances.
-2. **Dashboard write path** — unlocks inline actions and is the prerequisite discipline for Coordinator directives.
+2. **Dashboard write path** — unlocks inline actions and richer Coordinator directive behavior beyond the v1 current-window ordinary-message composer.
 
-Do not build the conversational Coordinator before the dashboard has a deliberate write-path story. Otherwise a “directive box” becomes an ad hoc runtime channel.
+The v1 Coordinator composer is deliberately scoped: current-window live Coordinator only, ordinary user message only, no structured directive envelope, no cross-window routing, and no interrupt/steer semantics. Do not extend it beyond that without a deliberate write-path story; otherwise a “directive box” becomes an ad hoc runtime channel.
 
 ## Future OpenSpec Changes
 
@@ -186,25 +187,27 @@ Required decisions:
 - Whether action targets are represented by session ID + interaction ID, or by an owning-window/session handle.
 - How action failure is surfaced when the target session changes before the response lands.
 
-### `add-coordinator-directives`
+### `extend-coordinator-directives`
 
 Scope:
 
-- Define an addressable Coordinator model and directive transport.
-- Define how the Orchestrator surface sends a user directive to the Coordinator session.
-- Define what the Coordinator runtime is allowed to do with directives: spawn, steer, cancel, summarize, or request clarification.
+- Extend the v1 Coordinator composer beyond current-window ordinary user messages.
+- Define structured directive envelopes if plain user messages are insufficient.
+- Define what richer Coordinator runtime behavior is allowed: spawn, steer, cancel, summarize, interrupt, queue, or request clarification.
+- Define whether directives can target owning windows/session services instead of only the current-window Coordinator.
 
 Unlocks:
 
-- User↔Coordinator transcript in the dashboard.
-- “Direct the Coordinator…” input.
-- Coordinator-managed workstream steering.
+- Structured “Direct the Coordinator…” commands beyond ordinary user turns.
+- Cross-window Coordinator routing.
+- Coordinator-managed workstream steering with explicit runtime semantics.
 
 Required decisions:
 
 - Is the Coordinator an ordinary Agent Mode session with additional metadata, or a distinct orchestration runtime role?
-- Are directives just user messages, structured commands, or a new control-plane envelope?
+- Which directive types remain plain user messages, and which require structured commands or a new control-plane envelope?
 - Does the dashboard act only on current-window Coordinator sessions, or can it route directives cross-window?
+- What happens when the Coordinator is mid-run: queue, reject, interrupt, or steer?
 
 ## Board/List and Coordinator Interaction Model
 
@@ -228,9 +231,9 @@ In v1 board mode, the board is the protected content region. The inspector / tra
 
 ### Coordinator chat as command log
 
-The end-state Coordinator chat should read as an auditable command log: user directives, Coordinator acknowledgments, spawned/steered work, and clarification requests should be visible as sourced conversational history. V1 may show Coordinator context but does not provide a live directive composer.
+The end-state Coordinator chat should read as an auditable command log: user directives, Coordinator acknowledgments, spawned/steered work, and clarification requests should be visible as sourced conversational history. V1 includes a scoped composer only for Coordinators live in the current window. A v1 directive is an ordinary user message delivered through the existing Agent Mode message path.
 
-An ephemeral coordinator-chat display (clearable, read-only, no composer) is a candidate v1 addition; the directive composer remains Layer 2. This is parked, not specced in detail — decide it after the read-only dashboard is built, from experience rather than in advance.
+V1 does not define structured directive envelopes, cross-window directive routing, dashboard-side interrupt/steer semantics, or direct child-session mutation. Coordinator responses and child-session effects should surface through normal coarse dashboard snapshot refresh rather than a live token stream in the rail.
 
 ### Future agent roster/context views
 
@@ -402,7 +405,7 @@ Do not silently treat every parent-with-children as a Coordinator. Preserve the 
 
 Why:
 
-- Layer 3 directives require an addressable Coordinator, not a generic thread parent.
+- Layer 3 directive extensions require an addressable Coordinator, not a generic thread parent.
 
 ## What Stays Out Even in the End State
 
@@ -419,7 +422,7 @@ Why:
    - `add-mcp-dashboard-consumer`
    - `add-orchestrator-dashboard`
 
-2. Implement the read-only dashboard with forward-compatible identity hooks:
+2. Implement the board-first dashboard with forward-compatible identity hooks:
    - row/session/tab/workspace identity;
    - stable pending interaction IDs;
    - live vs persisted-only classification;
@@ -432,9 +435,9 @@ Why:
    - start current-window-only unless cross-window ownership is solved first;
    - degrade unsupported/unreachable sessions to deep-link-only.
 
-5. Plan and spec `add-coordinator-directives`:
-   - only after action/write-path semantics are deliberate;
-   - decide whether directives are messages, commands, or a new control envelope.
+5. Plan and spec `extend-coordinator-directives`:
+   - only after richer action/write-path semantics are deliberate;
+   - decide which future directives remain ordinary messages and which require structured commands or a new control envelope.
 
 ## Implementation Guidance for V1
 
@@ -452,6 +455,6 @@ The same audit confirmed the largest deferred source:
 - For Layer 2, is current-window-only action good enough, or must actions route to owning windows?
 - What is the minimal activity/event stream that unlocks useful chips without becoming a logging platform?
 - Should the Coordinator be modeled as an ordinary Agent Mode session with metadata, or as a distinct runtime role?
-- Are Coordinator directives plain user messages, structured commands, or a new control-plane envelope?
+- Which Coordinator directives can remain ordinary user messages, and which require structured commands or a new control-plane envelope?
 - What retention policy applies to activity/provenance records?
 - Which activity/event fields must be persisted versus rebuilt from existing session/transcript state?

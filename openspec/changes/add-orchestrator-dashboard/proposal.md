@@ -9,13 +9,14 @@ Users can already run multiple isolated Agent Mode sessions, often across worktr
 - Scope v1 to active-workspace rows with current-window live-state enrichment and keep Agent Mode as the default surface.
 - Show a Coordinator rail when a Coordinator can be selected or detected, plus a board-first grouped agent workspace with read-only within-group sorting, List view fallback/alternate, optional inspector / trailing detail column, compact MCP footer/popover, and deep links back to Agent Mode.
 - Keep the board/list as the only v1 human-facing fleet view; do not add a separate Coordinator-rail agent roster or "agents in Coordinator context" surface in v1.
+- Include one scoped v1 write path: a Coordinator composer that is enabled only for a current-window live Coordinator and sends ordinary user messages to that Coordinator session. Board/list cards, pending prompts, and inspector content remain read-only/deep-link-first.
 - Surface structured waiting/user-attention states read-only, enrich live MCP-controlled sessions with normalized interaction details when available, and deep-link users to Agent Mode for response.
 - Avoid heuristic labels and runtime rewrites: workflow is optional, objective is deferred, and workstream chips render only from structured data such as worktree binding metadata.
 
 ## Capabilities
 
 ### New Capabilities
-- `orchestrator-dashboard`: Provides a read-only, active-workspace dashboard for supervising active-workspace agent sessions through a single dashboard projection, board-first grouped status view, List fallback/alternate, optional Coordinator rail, MCP awareness, and Agent UI deep links. It does not add a separate by-agent roster in the Coordinator rail for v1.
+- `orchestrator-dashboard`: Provides an active-workspace dashboard for supervising active-workspace agent sessions through a single dashboard projection, board-first grouped status view, List fallback/alternate, optional Coordinator rail with current-window Coordinator composer, MCP awareness, and Agent UI deep links. Board/list cards and pending prompts remain read-only/deep-link-first, and v1 does not add a separate by-agent roster in the Coordinator rail.
 
 ### Modified Capabilities
 

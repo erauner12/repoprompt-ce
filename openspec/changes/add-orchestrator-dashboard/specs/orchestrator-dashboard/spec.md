@@ -118,7 +118,40 @@ The system SHALL present v1 as a read-only status board by default, with a list 
 
 #### Scenario: Board remains read-only in v1
 - **WHEN** the v1 board renders session cards
-- **THEN** it SHALL NOT provide drag-to-reorder, drag-to-dispatch, drag-to-change-status, inline approval, inline retry, or Coordinator directive submission.
+- **THEN** it SHALL NOT provide drag-to-reorder, drag-to-dispatch, drag-to-change-status, inline approval, inline retry, or direct child-session mutation.
+
+### Requirement: Coordinator composer
+The system SHALL provide a scoped Coordinator composer as the only v1 dashboard write path.
+
+#### Scenario: Coordinator is live in the current window
+- **WHEN** a Coordinator is selected or detected
+- **AND** the Coordinator session has current-window live state
+- **THEN** the dashboard SHALL enable a Coordinator composer in the Coordinator rail.
+
+#### Scenario: Coordinator is not reachable from the current window
+- **WHEN** no Coordinator is selected or detected
+- **OR** the resolved Coordinator is persisted-only or owned by another window
+- **THEN** the dashboard SHALL disable the Coordinator composer or replace it with an `Open agent chat` affordance when route data is available
+- **AND** it SHALL NOT restore, steal, or create a session solely to enable the composer.
+
+#### Scenario: User sends a Coordinator directive
+- **WHEN** the user submits text through the enabled Coordinator composer
+- **THEN** the dashboard SHALL deliver that text as an ordinary user message to the Coordinator session through the existing Agent Mode message path
+- **AND** it SHALL NOT wrap the directive in a new structured command envelope in v1.
+
+#### Scenario: Directive is displayed after send
+- **WHEN** a Coordinator directive is accepted by the dashboard
+- **THEN** the dashboard MAY echo the user's sent directive into the Coordinator rail transcript
+- **AND** Coordinator responses and child-session effects SHALL surface through the normal coarse dashboard snapshot refresh rather than a live token stream in the rail.
+
+#### Scenario: Coordinator is mid-run
+- **WHEN** the user attempts to send a directive while the Coordinator is mid-run
+- **THEN** the dashboard MAY queue the directive as the next ordinary user turn or disable send
+- **AND** it SHALL NOT implement dashboard-side interrupt or steering semantics in v1.
+
+#### Scenario: Board state remains protected
+- **WHEN** the Coordinator composer sends a directive
+- **THEN** the composer SHALL NOT directly mutate child session state, dispatch cards, approve pending interactions, retry sessions, or change board/list status groups.
 
 ### Requirement: Session row projection
 The system SHALL project dashboard session rows/cards from structured session and live-state data.
@@ -277,7 +310,7 @@ The system SHALL keep the dashboard calm by default and expose detail only throu
 
 #### Scenario: Coordinator rail avoids duplicate fleet views
 - **WHEN** the dashboard renders the Coordinator rail in v1
-- **THEN** the rail SHALL focus on Coordinator identity, selection, and optional read-only context
+- **THEN** the rail SHALL focus on Coordinator identity, selection, optional context, and the scoped Coordinator composer
 - **AND** it SHALL NOT provide a separate `Agents` tab, agent roster, or "agents in current Coordinator context" surface that duplicates the board/list fleet view.
 
 #### Scenario: Dashboard first renders
