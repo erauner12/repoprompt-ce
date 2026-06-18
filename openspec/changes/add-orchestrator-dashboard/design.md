@@ -14,7 +14,7 @@ The dashboard should therefore be a read-only projection over existing state, no
 
 **Goals:**
 
-- Add an opt-in Orchestrator Dashboard surface inside `.main` while preserving Agent Mode as the default.
+- Add a non-default Orchestrator Dashboard peer surface inside `.main` while preserving Agent Mode as the configured v1 landing surface.
 - Render all dashboard regions from one `OrchestratorDashboardSnapshot` projection.
 - Compose that projection from two independent upstream categories: Agent Mode state, including current-window live state plus active-workspace session metadata; and `MCPServerViewModel.dashboard`.
 - Scope v1 to active-workspace rows with current-window live-state enrichment.
@@ -35,7 +35,7 @@ The dashboard should therefore be a read-only projection over existing state, no
 
 ### 1. Dashboard surface lives inside `.main`
 
-`ContentViewModel.AppRootRoute` remains the binary workspace-entry gate (`.workspaceEntry` vs `.main`). The dashboard needs new window-scoped main-surface selection inside `.main`, and `ContentRootShellView.routedContent` should switch between existing Agent Mode and the dashboard within the `.main` branch. Once a real workspace is active, the user reaches the dashboard through a persistent peer surface switcher for Agent Mode ↔ Orchestrator Dashboard; the switcher does not appear in or bypass workspace-entry/onboarding. The switcher should be a macOS-native peer-surface control, such as a toolbar segmented control or equivalent adaptive switcher, never an iOS-style tab bar; the same surface choices should be available from the View menu so navigation is not stranded if toolbar chrome is hidden or customized.
+`ContentViewModel.AppRootRoute` remains the binary workspace-entry gate (`.workspaceEntry` vs `.main`). The dashboard needs new window-scoped main-surface selection inside `.main`, and `ContentRootShellView.routedContent` should switch between existing Agent Mode and the dashboard within the `.main` branch. Once a real workspace is active, the user reaches the dashboard through a persistent peer surface switcher for Agent Mode ↔ Orchestrator Dashboard; the switcher does not appear in or bypass workspace-entry/onboarding. The switcher should be a macOS-native peer-surface control, such as a toolbar segmented control or equivalent adaptive switcher, never an iOS-style tab bar; the same surface choices are reachable from the View menu so navigation is not stranded if toolbar chrome is hidden or customized.
 
 Alternatives considered:
 
@@ -134,7 +134,7 @@ The v1 inspector / trailing detail column shows sourced summaries only: status, 
 
 ## Migration Plan
 
-1. Add dashboard artifacts behind an opt-in in-`.main` surface while Agent Mode remains default.
+1. Add dashboard artifacts behind a non-default in-`.main` peer surface while Agent Mode remains the configured v1 landing surface.
 2. Build read-only snapshot projection and tests before UI action wiring.
 3. Add UI shell and deep links after snapshot behavior is stable.
 4. Consume the MCP dashboard consumer added by `add-mcp-dashboard-consumer` after compact projection tests are in place.

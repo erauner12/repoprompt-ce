@@ -4,7 +4,7 @@ Users can already run multiple isolated Agent Mode sessions, often across worktr
 
 ## What Changes
 
-- Add a new opt-in Orchestrator Dashboard surface inside the existing `.main` app experience.
+- Add a new non-default Orchestrator Dashboard peer surface inside the existing `.main` app experience.
 - Render the dashboard from a single `OrchestratorDashboardSnapshot` projection composed from the active window's Agent Mode state and `MCPServerViewModel.dashboard`, consuming the MCP dashboard consumer added by `add-mcp-dashboard-consumer`.
 - Scope v1 to active-workspace rows with current-window live-state enrichment and keep Agent Mode as the default surface.
 - Show a Coordinator rail when a Coordinator can be selected or detected, plus a grouped agent inbox, optional inspector / trailing detail column, compact MCP footer/popover, and deep links back to Agent Mode.

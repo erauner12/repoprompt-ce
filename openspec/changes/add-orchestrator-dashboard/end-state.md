@@ -283,7 +283,7 @@ V1 navigation rules:
 - A persistent top-level macOS-native surface switcher lets the user move between Agent Mode and Orchestrator Dashboard once a real workspace is active.
 - The switcher models Agent Mode and Orchestrator Dashboard as peer `.main` surfaces, not as a one-way dashboard button.
 - The switcher should render as a native macOS peer-surface control, such as a toolbar segmented control or equivalent adaptive switcher; it should never use an iOS-style tab bar.
-- The same surface choices should be reachable from the View menu so navigation remains available when toolbar chrome is hidden or customized.
+- The same surface choices are reachable from the View menu so navigation remains available when toolbar chrome is hidden or customized.
 - Surface selection is sticky per live window; switching workspaces in the same window keeps the selected surface unless workspace-entry gating takes over. Use `@SceneStorage` or equivalent scene-level state rather than relying only on system window restoration.
 - Coordinator selection has a different lifetime: it is keyed by active workspace, not by the window-level surface choice.
 - `AppLaunchConfiguration.forcedRootRoute == .main` continues to land on Agent Mode unless a future forced-surface knob is added.

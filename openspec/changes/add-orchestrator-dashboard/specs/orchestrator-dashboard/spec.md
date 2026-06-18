@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Dashboard surface
-The system SHALL provide an opt-in Orchestrator Dashboard surface inside the existing `.main` app experience.
+The system SHALL provide a non-default Orchestrator Dashboard peer surface inside the existing `.main` app experience.
 
 #### Scenario: Agent Mode remains default
 - **WHEN** a user opens the app into the `.main` route
