@@ -126,7 +126,7 @@ Depends on:
 Layer 1: Observation
    │
    ├──► Layer 4a: Activity/Event adapter
-   │       └─► unlocks workflow chips, PR/check chips, drawer activity, tool-call rollup
+   │       └─► unlocks workflow chips, PR/check chips, inspector activity, tool-call rollup
    │
    ├──► Layer 2: Action in place
    │       └─► unlocks Approve/Decline/Retry/Respond from dashboard
@@ -156,7 +156,7 @@ Unlocks:
 
 - Workflow chips.
 - PR/check chips.
-- Full-log or activity drawer.
+- Full-log or activity inspector.
 - Tool-call rollups.
 - More precise “what changed” explanations.
 
@@ -280,9 +280,11 @@ V1 navigation rules:
 - Workspace-entry/onboarding remains the gate before `.main`.
 - Opening/selecting a real workspace transitions into `.main`.
 - Agent Mode is the configured default landing surface in v1.
-- A persistent top-level surface switcher lets the user move between Agent Mode and Orchestrator Dashboard once a real workspace is active.
+- A persistent top-level macOS-native surface switcher lets the user move between Agent Mode and Orchestrator Dashboard once a real workspace is active.
 - The switcher models Agent Mode and Orchestrator Dashboard as peer `.main` surfaces, not as a one-way dashboard button.
-- Surface selection is sticky per live window; switching workspaces in the same window keeps the selected surface unless workspace-entry gating takes over.
+- The switcher should render as a native macOS peer-surface control, such as a toolbar segmented control or equivalent adaptive switcher; it should never use an iOS-style tab bar.
+- The same surface choices should be reachable from the View menu so navigation remains available when toolbar chrome is hidden or customized.
+- Surface selection is sticky per live window; switching workspaces in the same window keeps the selected surface unless workspace-entry gating takes over. Use `@SceneStorage` or equivalent scene-level state rather than relying only on system window restoration.
 - Coordinator selection has a different lifetime: it is keyed by active workspace, not by the window-level surface choice.
 - `AppLaunchConfiguration.forcedRootRoute == .main` continues to land on Agent Mode unless a future forced-surface knob is added.
 
@@ -344,6 +346,16 @@ Do not invent workflow/PR/tool-call chips from titles or prose. If v1 has no act
 Why:
 
 - Layer 4 should add a real source, not retrofit around heuristic labels.
+
+### Native macOS surface switcher
+
+The Agent Mode ↔ Orchestrator Dashboard switcher should stay separate from the Dashboard's in-surface Coordinator/session rail. The switcher belongs in app chrome such as toolbar/menu; the rail belongs inside the Dashboard leading column. Do not add Agent Mode as an item in the Dashboard rail.
+
+Why:
+
+- Prevents app-level mode switching from being conflated with Dashboard content navigation.
+- Keeps the Dashboard rail shallow and native-feeling.
+- Avoids sidebar-inside-sidebar navigation debt.
 
 ### Coordinator identity remains explicit
 

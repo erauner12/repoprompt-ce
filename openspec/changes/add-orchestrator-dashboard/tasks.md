@@ -2,9 +2,10 @@
 
 - [ ] 1.1 Add window-scoped main-surface selection state inside `.main`.
 - [ ] 1.2 Preserve Agent Mode as the configured default `.main` landing surface in v1.
-- [ ] 1.3 Add a persistent peer surface switcher for Agent Mode ↔ Orchestrator Dashboard that is available only after a real workspace is active.
-- [ ] 1.4 Preserve surface selection as sticky per live window while keeping Coordinator selection keyed by active workspace.
-- [ ] 1.5 Preserve `AppLaunchConfiguration.forcedRootRoute == .main` behavior so deterministic UI tests still land on Agent Mode unless a forced-surface knob is added.
+- [ ] 1.3 Add a persistent macOS-native peer surface switcher for Agent Mode ↔ Orchestrator Dashboard that is available only after a real workspace is active; reject iOS-style tab bars.
+- [ ] 1.4 Mirror Agent Mode and Orchestrator Dashboard choices in the View menu so navigation remains available when toolbar chrome is hidden or customized.
+- [ ] 1.5 Preserve surface selection as sticky per live window while keeping Coordinator selection keyed by active workspace; prefer `@SceneStorage` or equivalent scene-level state.
+- [ ] 1.6 Preserve `AppLaunchConfiguration.forcedRootRoute == .main` behavior so deterministic UI tests still land on Agent Mode unless a forced-surface knob is added.
 
 ## 2. Dashboard snapshot projection
 
@@ -67,9 +68,9 @@
 
 ## 9. Dashboard UI shell
 
-- [ ] 9.1 Build the Orchestrator Dashboard shell with top counts, optional Coordinator rail, grouped inbox, optional inspection drawer, MCP footer, and filter affordance.
+- [ ] 9.1 Build the Orchestrator Dashboard shell with top counts, optional Coordinator rail, grouped inbox, optional inspector / trailing detail column, MCP footer, and filter affordance.
 - [ ] 9.2 Keep the main inbox calm by default: no full transcripts, full logs, diffs, file viewers, or streaming tool feeds.
-- [ ] 9.3 Add progressive disclosure from count to row, optional sourced drawer summaries, and Agent Mode; keep full raw logs, transcripts, files, and diffs in Agent Mode for v1.
+- [ ] 9.3 Add progressive disclosure from count to row, optional sourced inspector summaries, and Agent Mode; keep full raw logs, transcripts, files, and diffs in Agent Mode for v1.
 - [ ] 9.4 Add UI previews or smoke states for empty workspace, active, needs-user, blocked, MCP-off, MCP-empty, MCP-active, filtered, zero-Coordinator inbox-only, and multiple-Coordinator most-recent states.
 
 ## 10. Validation

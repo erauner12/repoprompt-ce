@@ -16,6 +16,9 @@ The system SHALL provide an opt-in Orchestrator Dashboard surface inside the exi
 #### Scenario: Dashboard entry point is a peer surface switcher
 - **WHEN** a real workspace is active and the app is in `.main`
 - **THEN** the system SHALL provide a persistent top-level affordance for switching between Agent Mode and the Orchestrator Dashboard
+- **AND** the affordance SHALL use a macOS-native peer-surface control, such as a toolbar segmented control or equivalent adaptive surface switcher
+- **AND** it SHALL NOT use an iOS-style tab bar
+- **AND** the same surface choices SHALL be reachable from the View menu
 - **AND** the affordance SHALL model those views as peer `.main` surfaces rather than a one-way dashboard button or workspace-entry page.
 
 #### Scenario: Main surface selection is window-sticky
@@ -226,7 +229,7 @@ The system SHALL keep the dashboard calm by default and expose detail only throu
 
 #### Scenario: User selects a row
 - **WHEN** the user selects a dashboard row
-- **THEN** the dashboard MAY show a read-only inspection drawer with sourced status, pending interaction, blocker, worktree/merge, route, MCP, and session metadata summaries
+- **THEN** the dashboard MAY show a read-only inspector / trailing detail column with sourced status, pending interaction, blocker, worktree/merge, route, MCP, and session metadata summaries
 - **AND** it SHALL NOT expose a dashboard-native full raw log, transcript, file viewer, or diff viewer in v1.
 
 #### Scenario: User needs deep detail

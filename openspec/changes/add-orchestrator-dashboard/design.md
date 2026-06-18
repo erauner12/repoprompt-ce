@@ -35,7 +35,7 @@ The dashboard should therefore be a read-only projection over existing state, no
 
 ### 1. Dashboard surface lives inside `.main`
 
-`ContentViewModel.AppRootRoute` remains the binary workspace-entry gate (`.workspaceEntry` vs `.main`). The dashboard needs new window-scoped main-surface selection inside `.main`, and `ContentRootShellView.routedContent` should switch between existing Agent Mode and the dashboard within the `.main` branch. Once a real workspace is active, the user reaches the dashboard through a persistent peer surface switcher for Agent Mode ↔ Orchestrator Dashboard; the switcher does not appear in or bypass workspace-entry/onboarding.
+`ContentViewModel.AppRootRoute` remains the binary workspace-entry gate (`.workspaceEntry` vs `.main`). The dashboard needs new window-scoped main-surface selection inside `.main`, and `ContentRootShellView.routedContent` should switch between existing Agent Mode and the dashboard within the `.main` branch. Once a real workspace is active, the user reaches the dashboard through a persistent peer surface switcher for Agent Mode ↔ Orchestrator Dashboard; the switcher does not appear in or bypass workspace-entry/onboarding. The switcher should be a macOS-native peer-surface control, such as a toolbar segmented control or equivalent adaptive switcher, never an iOS-style tab bar; the same surface choices should be available from the View menu so navigation is not stranded if toolbar chrome is hidden or customized.
 
 Alternatives considered:
 
@@ -44,7 +44,7 @@ Alternatives considered:
 
 ### 2. Agent Mode remains default
 
-The default `.main` surface remains Agent Mode in v1. Treat this as the configured landing surface, not a permanent hard-coded product truth, so a future control-plane release can choose the dashboard as the landing surface without replacing the routing seam. `AppLaunchConfiguration.forcedRootRoute == .main` should continue to land on Agent Mode unless a future forced-surface test knob is added. User surface selection is sticky per window while the window is alive; Coordinator selection remains keyed by active workspace.
+The default `.main` surface remains Agent Mode in v1. Treat this as the configured landing surface, not a permanent hard-coded product truth, so a future control-plane release can choose the dashboard as the landing surface without replacing the routing seam. `AppLaunchConfiguration.forcedRootRoute == .main` should continue to land on Agent Mode unless a future forced-surface test knob is added. User surface selection is sticky per window while the window is alive; `@SceneStorage` or equivalent scene-level state is the likely implementation mechanism. Coordinator selection remains keyed by active workspace.
 
 ### 3. One render projection, two upstreams
 
@@ -117,11 +117,11 @@ Blocked's conflicted-merge signal should come from cheap metadata such as active
 
 ### 12. Coordinator rail is optional; inbox stands alone
 
-The v1 dashboard is inbox-centric. If no Coordinator is selected or detected, the dashboard still renders the grouped active-workspace inbox and shows an empty/choose-Coordinator state in the rail area. If multiple auto-detected Coordinator candidates exist, v1 picks the most recent candidate within the highest-ranked matching precedence tier until the user selects a different per-window, workspace-keyed Coordinator.
+The v1 dashboard is inbox-centric. If no Coordinator is selected or detected, the dashboard still renders the grouped active-workspace inbox and shows an empty/choose-Coordinator state in the rail area. If multiple auto-detected Coordinator candidates exist, v1 picks the most recent candidate within the highest-ranked matching precedence tier until the user selects a different per-window, workspace-keyed Coordinator. The Coordinator/session rail is in-surface Dashboard navigation, not the app-level Agent Mode ↔ Dashboard surface switcher; it should not contain Agent Mode as a rail item.
 
 ### 13. Drawer stays sourced; full logs stay in Agent Mode
 
-The v1 drawer shows sourced summaries only: status, pending interaction, blocker, worktree/merge, route, and MCP/session metadata. Full transcript, raw log, file, and diff inspection remain in Agent Mode via `Open agent chat`. A dashboard-native full-log toggle is a follow-up unless backed by a sourced activity projection.
+The v1 inspector / trailing detail column shows sourced summaries only: status, pending interaction, blocker, worktree/merge, route, and MCP/session metadata. Full transcript, raw log, file, and diff inspection remain in Agent Mode via `Open agent chat`. A dashboard-native full-log toggle is a follow-up unless backed by a sourced activity projection.
 
 ## Risks / Trade-offs
 
