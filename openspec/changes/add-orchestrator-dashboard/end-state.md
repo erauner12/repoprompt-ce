@@ -42,6 +42,8 @@ Primary contract:
 
 - `OrchestratorDashboardSnapshot` as the single dashboard render projection, composed from active-window Agent Mode state, active-workspace session metadata, and `MCPServerViewModel.dashboard`.
 
+Completion observation is in-process for v1. Unlike an external controller such as a CLI process driving RepoPrompt across a process boundary, the Orchestrator dashboard and Coordinator share the app runtime with child sessions. A child session completing is already represented as session state, and the dashboard observes that transition through the normal coarse snapshot refresh. V1 therefore does not need a Codex-style polling/wait loop or a separate completion callback channel for the dashboard to reflect progress; the snapshot is the observation loop.
+
 ### Layer 2 — Action in place
 
 The first broad dashboard action path beyond the v1 Coordinator composer.
@@ -201,6 +203,7 @@ Unlocks:
 - Structured “Direct the Coordinator…” commands beyond ordinary user turns.
 - Cross-window Coordinator routing.
 - Coordinator-managed workstream steering with explicit runtime semantics.
+- Selective Coordinator autonomy for transitions that prove safe and useful, such as low-risk follow-up after child-session completion.
 
 Required decisions:
 
@@ -208,6 +211,9 @@ Required decisions:
 - Which directive types remain plain user messages, and which require structured commands or a new control-plane envelope?
 - Does the dashboard act only on current-window Coordinator sessions, or can it route directives cross-window?
 - What happens when the Coordinator is mid-run: queue, reject, interrupt, or steer?
+- Should the Coordinator remain human-turn-driven, or can it autonomously act on observed child-session transitions such as completion, blockage, or review readiness?
+
+Autonomy is a deferred authority decision, not a v1 transport problem. V1 is human-driven by design: the user sends ordinary messages to a current-window live Coordinator, and the Coordinator acts within those turns. It does not self-drive by watching child-session completion and dispatching follow-up work on its own. Selective self-drive remains a desired end-state direction, but the system should earn it transition by transition rather than assume full autonomy up front. The open future question is who is authorized to act on observed transitions: the human through an explicit turn, or the Coordinator through selective autonomous follow-up. Decide this from usage of the v1 surface, especially whether per-transition confirmation feels reassuring or obstructive.
 
 ## Board/List and Coordinator Interaction Model
 
