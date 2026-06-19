@@ -4,15 +4,15 @@ import SwiftUI
 private struct CoordinatorSidebarMaterialView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
-        view.blendingMode = .behindWindow
-        view.state = .followsWindowActiveState
+        view.blendingMode = .withinWindow
+        view.state = .active
         view.material = .sidebar
         return view
     }
 
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.blendingMode = .behindWindow
-        nsView.state = .followsWindowActiveState
+        nsView.blendingMode = .withinWindow
+        nsView.state = .active
         nsView.material = .sidebar
     }
 }
@@ -911,9 +911,8 @@ private struct CoordinatorVisualMetrics {
 
 private enum CoordinatorStyle {
     static let cardFillOpacity = 0.35
-    static let panelFillOpacity = 0.04
-    static let groupedFillOpacity = 0.55
-    static let railCardFillOpacity = 0.35
+    static let groupedFillOpacity = 0.18
+    static let railCardFillOpacity = 0.16
     static let emptyColumnFillOpacity = 0.12
     static let statusChipFillOpacity = 0.04
     static let statusChipStrokeOpacity = 0.07
@@ -954,7 +953,6 @@ private enum CoordinatorSidebarPanelEdge {
 private extension View {
     func coordinatorSidebarPanel(edge: CoordinatorSidebarPanelEdge) -> some View {
         background(CoordinatorSidebarMaterialView())
-            .background(Color(nsColor: .controlBackgroundColor).opacity(CoordinatorStyle.panelFillOpacity))
             .overlay(alignment: edge.alignment) {
                 Rectangle()
                     .fill(CoordinatorStyle.panelSeam)
@@ -967,7 +965,7 @@ private extension View {
             .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.18))
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.10))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
