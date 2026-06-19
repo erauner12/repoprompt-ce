@@ -1,4 +1,4 @@
-# Orchestrator Dashboard UI Prototype Reference
+# Coordinator Mode UI Prototype Reference
 
 `RepoPrompt_Command_Center.html` is a standalone UI prototype exported from the design pass.
 

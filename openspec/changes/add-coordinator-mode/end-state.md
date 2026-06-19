@@ -1,18 +1,18 @@
-# Orchestrator End State: Control Plane Plan
+# Coordinator Mode End State: Control Plane Plan
 
 Status: planning
 Scope owner: Erauner team
-Related changes: `add-mcp-dashboard-consumer`, `add-orchestrator-dashboard`
+Related changes: `add-mcp-coordinator-mode-consumer`, `add-coordinator-mode`
 
 ## Goal
 
-Define the full Orchestrator system beyond the board-first dashboard v1 so the first slice is built with seams that can support later supervision, action, and expanded Coordinator-directive flows.
+Define the full Coordinator mode system beyond the board-first Coordinator view v1 so the first slice is built with seams that can support later supervision, action, and expanded Coordinator-directive flows.
 
-The end state is not just a dashboard. It is a control plane for a fleet of Agent Mode sessions, with Agent Mode remaining the canonical deep-work surface and the Orchestrator surface supervising, routing, and eventually directing work.
+The end state is not just a view. It is a control plane for a fleet of Agent Mode sessions, with Agent Mode remaining the canonical deep-work surface and the Coordinator view supervising, routing, and eventually directing work.
 
 ## North Star
 
-The Orchestrator surface should let a user:
+The Coordinator view should let a user:
 
 - see active and historical agent sessions in the active workspace;
 - understand what needs attention, what is blocked, what is working, and what is done;
@@ -27,7 +27,7 @@ This is a control plane over Agent Mode, not a replacement for Agent Mode.
 
 ### Layer 1 — Observation
 
-The observation projection plus scoped current-window Coordinator composer already covered by `add-mcp-dashboard-consumer` and `add-orchestrator-dashboard`.
+The observation projection plus scoped current-window Coordinator composer already covered by `add-mcp-coordinator-mode-consumer` and `add-coordinator-mode`.
 
 User capability:
 
@@ -40,35 +40,35 @@ User capability:
 
 Primary contract:
 
-- `OrchestratorDashboardSnapshot` as the single dashboard render projection, composed from active-window Agent Mode state, active-workspace session metadata, and `MCPServerViewModel.dashboard`.
+- `CoordinatorModeSnapshot` as the single Coordinator view render projection, composed from active-window Agent Mode state, active-workspace session metadata, and `MCPServerViewModel.dashboard`.
 
-Completion observation is in-process for v1. Unlike an external controller such as a CLI process driving RepoPrompt across a process boundary, the Orchestrator dashboard and Coordinator share the app runtime with child sessions. A child session completing is already represented as session state, and the dashboard observes that transition through the normal coarse snapshot refresh. V1 therefore does not need a Codex-style polling/wait loop or a separate completion callback channel for the dashboard to reflect progress; the snapshot is the observation loop.
+Completion observation is in-process for v1. Unlike an external controller such as a CLI process driving RepoPrompt across a process boundary, Coordinator mode and the Coordinator share the app runtime with child sessions. A child session completing is already represented as session state, and the Coordinator view observes that transition through the normal coarse snapshot refresh. V1 therefore does not need a Codex-style polling/wait loop or a separate completion callback channel for the Coordinator view to reflect progress; the snapshot is the observation loop.
 
 ### Layer 2 — Action in place
 
-The first broad dashboard action path beyond the v1 Coordinator composer.
+The first broad Coordinator view action path beyond the v1 Coordinator composer.
 
 User capability:
 
-- Approve, decline, retry, respond, or otherwise resolve structured pending interactions directly from the Orchestrator surface when the target session is reachable and the action can be safely normalized.
+- Approve, decline, retry, respond, or otherwise resolve structured pending interactions directly from the Coordinator view when the target session is reachable and the action can be safely normalized.
 
 Why it is separate from Layer 1:
 
 - Layer 1 observes, routes, and sends one scoped ordinary-message directive to a current-window live Coordinator. Layer 2 writes into other live Agent Mode interaction state.
-- Existing response methods are window/session-local and not universally exposed as a dashboard-facing API.
-- Cross-window action routing is unresolved: a session may appear in the dashboard as persisted/stale while its live interaction belongs to another window.
+- Existing response methods are window/session-local and not universally exposed as a Coordinator-view-facing API.
+- Cross-window action routing is unresolved: a session may appear in Coordinator mode as persisted/stale while its live interaction belongs to another window.
 
 Primary future change:
 
 ```text
-add-dashboard-actions
+add-coordinator-mode-actions
 ```
 
 Depends on:
 
 - Layer 1 snapshot and row identity.
 - A resolved cross-window policy.
-- A dashboard-facing pending-action contract over Agent Mode interaction state.
+- A Coordinator-view-facing pending-action contract over Agent Mode interaction state.
 
 ### Layer 3 — Conversational Coordinator
 
@@ -76,7 +76,7 @@ The control-plane signature interaction.
 
 User capability:
 
-- Read a user↔Coordinator thread in the Orchestrator surface.
+- Read a user↔Coordinator thread in the Coordinator view.
 - Send directives such as “investigate the failing checks,” “split this into two workstreams,” or “stop the stale child and summarize.”
 - Let the Coordinator spawn, steer, or summarize child agents according to explicit runtime rules.
 
@@ -132,7 +132,7 @@ Layer 1: Observation
    │       └─► unlocks workflow chips, PR/check chips, inspector activity, tool-call rollup
    │
    ├──► Layer 2: Action in place
-   │       └─► unlocks Approve/Decline/Retry/Respond from dashboard
+   │       └─► unlocks Approve/Decline/Retry/Respond from Coordinator mode
    │
    └──► Layer 3: Conversational Coordinator
            └─► depends on action/write-path or equivalent directive transport
@@ -141,7 +141,7 @@ Layer 1: Observation
 The two keystones are:
 
 1. **Activity/Event adapter** — unlocks most rich visual/provenance affordances.
-2. **Dashboard write path** — unlocks inline actions and richer Coordinator directive behavior beyond the v1 current-window ordinary-message composer.
+2. **Coordinator view write path** — unlocks inline actions and richer Coordinator directive behavior beyond the v1 current-window ordinary-message composer.
 
 The v1 Coordinator composer is deliberately scoped: current-window live Coordinator only, ordinary user message only, no structured directive envelope, no cross-window routing, and no interrupt/steer semantics. Do not extend it beyond that without a deliberate write-path story; otherwise a “directive box” becomes an ad hoc runtime channel.
 
@@ -153,7 +153,7 @@ Scope:
 
 - Define a per-session activity/provenance stream or index.
 - Include workflow launch metadata, run transitions, tool calls, artifact refs, PR/check associations, and durable source pointers.
-- Make activity cheap enough for dashboard summaries without transcript loads.
+- Make activity cheap enough for Coordinator view summaries without transcript loads.
 
 Unlocks:
 
@@ -169,12 +169,12 @@ Non-goals:
 - Raw provider log replacement.
 - Prose parsing for semantic state.
 
-### `add-dashboard-actions`
+### `add-coordinator-mode-actions`
 
 Scope:
 
-- Define a dashboard-facing action contract for resolving structured pending interactions.
-- Normalize supported actions without embedding Agent Mode UI internals in the dashboard.
+- Define a Coordinator-view-facing action contract for resolving structured pending interactions.
+- Normalize supported actions without embedding Agent Mode UI internals in Coordinator mode.
 - Decide how unsupported/unreachable actions degrade to deep-link-only behavior.
 
 Unlocks:
@@ -209,7 +209,7 @@ Required decisions:
 
 - Is the Coordinator an ordinary Agent Mode session with additional metadata, or a distinct orchestration runtime role?
 - Which directive types remain plain user messages, and which require structured commands or a new control-plane envelope?
-- Does the dashboard act only on current-window Coordinator sessions, or can it route directives cross-window?
+- Does Coordinator mode act only on current-window Coordinator sessions, or can it route directives cross-window?
 - What happens when the Coordinator is mid-run: queue, reject, interrupt, or steer?
 - Should the Coordinator remain human-turn-driven, or can it autonomously act on observed child-session transitions such as completion, blockage, or review readiness?
 
@@ -239,20 +239,20 @@ In v1 board mode, the board is the protected content region. The inspector / tra
 
 The end-state Coordinator chat should read as an auditable command log: user directives, Coordinator acknowledgments, spawned/steered work, and clarification requests should be visible as sourced conversational history. V1 includes a scoped composer only for Coordinators live in the current window. A v1 directive is an ordinary user message delivered through the existing Agent Mode message path.
 
-V1 does not define structured directive envelopes, cross-window directive routing, dashboard-side interrupt/steer semantics, or direct child-session mutation. Coordinator responses and child-session effects should surface through normal coarse dashboard snapshot refresh rather than a live token stream in the rail.
+V1 does not define structured directive envelopes, cross-window directive routing, Coordinator-view-side interrupt/steer semantics, or direct child-session mutation. Coordinator responses and child-session effects should surface through normal coarse Coordinator mode snapshot refresh rather than a live token stream in the rail.
 
 ### Future agent roster/context views
 
 The prototype's Coordinator-rail `Agents` tab is not a v1 commitment. The board/list remains the human-facing fleet view, and a Coordinator can enumerate available models or sessions through MCP tools (`agent_manage.list_agents` for the catalog, `agent_manage.list_sessions` for sessions).
 
-If a "who is working" view is needed later, it should be a future board/list grouping mode over the same `OrchestratorDashboardSnapshot`, not a second Coordinator-rail fleet surface. If a "sessions referenced by the current Coordinator context" view is needed later, it depends on Layer 3 directive/context modeling plus Layer 4 activity/provenance records; do not infer it from prose or session titles.
+If a "who is working" view is needed later, it should be a future board/list grouping mode over the same `CoordinatorModeSnapshot`, not a second Coordinator-rail fleet surface. If a "sessions referenced by the current Coordinator context" view is needed later, it depends on Layer 3 directive/context modeling plus Layer 4 activity/provenance records; do not infer it from prose or session titles.
 
 ### Mechanism options for future action surfaces
 
 These are implementation options to evaluate when Layer 2 is scoped, not v1 commitments:
 
 - MCP Apps / elicitation-style agent-rendered widgets for structured approve/reject/respond controls.
-- AG-UI-style synchronization for keeping agent-rendered action state and dashboard UI state aligned.
+- AG-UI-style synchronization for keeping agent-rendered action state and Coordinator view UI state aligned.
 
 ## Cross-Window Decision
 
@@ -269,7 +269,7 @@ Later layers cannot avoid it.
 
 ### Option A — Current-window control plane
 
-The dashboard can observe active-workspace metadata, but it can only act on sessions live in the current window. Other-window sessions remain stale/read-only and route the user to the owning context when possible.
+Coordinator mode can observe active-workspace metadata, but it can only act on sessions live in the current window. Other-window sessions remain stale/read-only and route the user to the owning context when possible.
 
 Pros:
 
@@ -285,12 +285,12 @@ Cons:
 
 ### Option B — Route actions to owning windows
 
-The dashboard can send actions/directives to the window that owns the live session.
+Coordinator mode can send actions/directives to the window that owns the live session.
 
 Pros:
 
 - Preserves multi-window UX while enabling central control.
-- Avoids making one dashboard window restore or steal sessions just to act.
+- Avoids making one Coordinator mode window restore or steal sessions just to act.
 
 Cons:
 
@@ -310,7 +310,7 @@ Pros:
 Cons:
 
 - Largest architectural change.
-- Risks turning the dashboard effort into an Agent Mode runtime rewrite.
+- Risks turning the Coordinator mode effort into an Agent Mode runtime rewrite.
 - Needs migration away from window-local assumptions.
 
 Recommended stance for now:
@@ -321,15 +321,15 @@ Recommended stance for now:
 
 ## Navigation Model
 
-The dashboard is not a workspace-entry page and not a subordinate Agent Mode panel. It is a peer surface inside `.main`.
+The Coordinator view is not a workspace-entry page and not a subordinate Agent Mode panel. It is a peer surface inside `.main`.
 
 V1 navigation rules:
 
 - Workspace-entry/onboarding remains the gate before `.main`.
 - Opening/selecting a real workspace transitions into `.main`.
 - Agent Mode is the configured default landing surface in v1.
-- A persistent top-level macOS-native surface switcher lets the user move between Agent Mode and Orchestrator Dashboard once a real workspace is active.
-- The switcher models Agent Mode and Orchestrator Dashboard as peer `.main` surfaces, not as a one-way dashboard button.
+- A persistent top-level macOS-native surface switcher lets the user move between Agent Mode and Coordinator mode once a real workspace is active.
+- The switcher models Agent Mode and Coordinator mode as peer `.main` surfaces, not as a one-way button.
 - The switcher should render as a native macOS peer-surface control, such as a toolbar segmented control or equivalent adaptive switcher; it should never use an iOS-style tab bar.
 - The same surface choices are reachable from the View menu so navigation remains available when toolbar chrome is hidden or customized.
 - Surface selection is sticky per live window; switching workspaces in the same window keeps the selected surface unless workspace-entry gating takes over. Use `@SceneStorage` or equivalent scene-level state rather than relying only on system window restoration.
@@ -338,7 +338,7 @@ V1 navigation rules:
 
 End-state implication:
 
-- “Which surface should a workspace open into?” is a configurable landing-surface decision, not a permanent route fact. V1 chooses Agent Mode for compatibility; a future control-plane release can choose the dashboard without replacing the `.main` surface-selection seam.
+- “Which surface should a workspace open into?” is a configurable landing-surface decision, not a permanent route fact. V1 chooses Agent Mode for compatibility; a future control-plane release can choose Coordinator mode without replacing the `.main` surface-selection seam.
 
 ## V1 Forward-Compatibility Hooks
 
@@ -346,7 +346,7 @@ These are cheap to preserve now and expensive to retrofit later.
 
 ### Stable row identity
 
-Every dashboard row should retain:
+Every Coordinator view row should retain:
 
 - session ID when available;
 - tab ID when available;
@@ -362,7 +362,7 @@ Why:
 
 ### Stable pending interaction identity
 
-`DashboardPendingInteractionSummary` should keep the underlying `AgentRunMCPSnapshot.Interaction.id` even though v1 only renders/deep-links.
+`CoordinatorModePendingInteractionSummary` should keep the underlying `AgentRunMCPSnapshot.Interaction.id` even though v1 only renders/deep-links.
 
 Why:
 
@@ -397,12 +397,12 @@ Why:
 
 ### Native macOS surface switcher
 
-The Agent Mode ↔ Orchestrator Dashboard switcher should stay separate from the Dashboard's in-surface Coordinator/session rail. The switcher belongs in app chrome such as toolbar/menu; the rail belongs inside the Dashboard leading column. Do not add Agent Mode as an item in the Dashboard rail.
+The Agent Mode ↔ Coordinator mode switcher should stay separate from the Coordinator view's in-surface Coordinator/session rail. The switcher belongs in app chrome such as toolbar/menu; the rail belongs inside the Coordinator Mode leading column. Do not add Agent Mode as an item in the Coordinator view rail.
 
 Why:
 
-- Prevents app-level mode switching from being conflated with Dashboard content navigation.
-- Keeps the Dashboard rail shallow and native-feeling.
+- Prevents app-level mode switching from being conflated with Coordinator view content navigation.
+- Keeps the Coordinator view rail shallow and native-feeling.
 - Avoids sidebar-inside-sidebar navigation debt.
 
 ### Coordinator identity remains explicit
@@ -419,16 +419,16 @@ Why:
 - Not a general observability/logging platform.
 - Not a PR management system.
 - Not a semantic parser over assistant prose.
-- Not a hidden orchestration runtime bolted onto dashboard UI.
+- Not a hidden orchestration runtime bolted onto Coordinator view UI.
 - Not a cross-window control plane until that architecture is explicitly chosen.
 
 ## Recommended Roadmap
 
 1. Land Layer 1 observation contracts:
-   - `add-mcp-dashboard-consumer`
-   - `add-orchestrator-dashboard`
+   - `add-mcp-coordinator-mode-consumer`
+   - `add-coordinator-mode`
 
-2. Implement the board-first dashboard with forward-compatible identity hooks:
+2. Implement the board-first Coordinator view with forward-compatible identity hooks:
    - row/session/tab/workspace identity;
    - stable pending interaction IDs;
    - live vs persisted-only classification;
@@ -437,7 +437,7 @@ Why:
 3. Plan and spec `add-agent-activity-stream`:
    - smallest useful activity slice should likely be workflow launch metadata plus run/tool-call summary events.
 
-4. Plan and spec `add-dashboard-actions`:
+4. Plan and spec `add-coordinator-mode-actions`:
    - start current-window-only unless cross-window ownership is solved first;
    - degrade unsupported/unreachable sessions to deep-link-only.
 

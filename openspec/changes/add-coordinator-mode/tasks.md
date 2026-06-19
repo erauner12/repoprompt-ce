@@ -2,17 +2,17 @@
 
 - [ ] 1.1 Add window-scoped main-surface selection state inside `.main`.
 - [ ] 1.2 Preserve Agent Mode as the configured default `.main` landing surface in v1.
-- [ ] 1.3 Add a persistent macOS-native peer surface switcher for Agent Mode ↔ Orchestrator Dashboard that is available only after a real workspace is active; reject iOS-style tab bars.
-- [ ] 1.4 Mirror Agent Mode and Orchestrator Dashboard choices in the View menu so navigation remains available when toolbar chrome is hidden or customized.
+- [ ] 1.3 Add a persistent macOS-native peer surface switcher for Agent Mode ↔ Coordinator mode that is available only after a real workspace is active; reject iOS-style tab bars.
+- [ ] 1.4 Mirror Agent Mode and Coordinator mode choices in the View menu so navigation remains available when toolbar chrome is hidden or customized.
 - [ ] 1.5 Preserve surface selection as sticky per live window while keeping Coordinator selection keyed by active workspace; prefer `@SceneStorage` or equivalent scene-level state.
 - [ ] 1.6 Preserve `AppLaunchConfiguration.forcedRootRoute == .main` behavior so deterministic UI tests still land on Agent Mode unless a forced-surface knob is added.
 
-## 2. Dashboard snapshot projection
+## 2. Coordinator view snapshot projection
 
-- [ ] 2.1 Define `OrchestratorDashboardSnapshot` as the single render contract for counts, groups, rows, Coordinator rail, pending summaries, MCP footer, and deep-link payloads.
-- [ ] 2.2 Implement a lazy, window-scoped `@MainActor` dashboard view model.
-- [ ] 2.3 Compose the snapshot from current-window Agent Mode live state, active-workspace session metadata, and `MCPServerViewModel.dashboard`, assuming `add-mcp-dashboard-consumer` has provided the named dashboard consumer.
-- [ ] 2.4 Add diff-before-publish/fingerprint behavior so streaming transcript or token deltas do not republish unchanged dashboard rows.
+- [ ] 2.1 Define `CoordinatorModeSnapshot` as the single render contract for counts, groups, rows, Coordinator rail, pending summaries, MCP footer, and deep-link payloads.
+- [ ] 2.2 Implement a lazy, window-scoped `@MainActor` Coordinator view model.
+- [ ] 2.3 Compose the snapshot from current-window Agent Mode live state, active-workspace session metadata, and `MCPServerViewModel.dashboard`, assuming the named MCP Coordinator mode consumer from `add-mcp-coordinator-mode-consumer`.
+- [ ] 2.4 Add diff-before-publish/fingerprint behavior so streaming transcript or token deltas do not republish unchanged Coordinator view rows.
 - [ ] 2.5 Represent stale/persisted-only rows for active-workspace sessions without current-window live state.
 
 ## 3. Coordinator identity
@@ -34,7 +34,7 @@
 
 ## 5. Status grouping and sorting
 
-- [ ] 5.1 Implement dashboard status groups: Needs you, Blocked, Working, Done, Idle.
+- [ ] 5.1 Implement Coordinator view status groups: Needs you, Blocked, Working, Done, Idle.
 - [ ] 5.2 Evaluate groups top-down: Needs you, Blocked, Working, Done, Idle.
 - [ ] 5.3 Map Needs you from current-window live `.waitingForUser`, `.waitingForQuestion`, and `.waitingForApproval`; use MCP pending interactions only as prompt/detail enrichment.
 - [ ] 5.4 Ensure persisted-only cards/rows never contribute to live `Needs you` or `Working` counts in v1 and render with stale/persisted-only treatment.
@@ -47,10 +47,10 @@
 
 ## 6. Pending interaction summaries
 
-- [ ] 6.1 Define dashboard pending summaries with `AgentRunMCPSnapshot.Interaction.Kind`, `AgentRunMCPSnapshot.Interaction.Detail`, and nullable `AgentSessionDeepLinkRoute`.
+- [ ] 6.1 Define Coordinator view pending summaries with `AgentRunMCPSnapshot.Interaction.Kind`, `AgentRunMCPSnapshot.Interaction.Detail`, and nullable `AgentSessionDeepLinkRoute`.
 - [ ] 6.2 Project prompt/detail summaries from live MCP-controlled `AgentRunMCPSnapshot.Interaction` values; leave broader non-MCP pending projection as a follow-up Agent Mode contract change.
 - [ ] 6.3 Hide or disable decision navigation when `openAgentChatRoute` cannot be resolved.
-- [ ] 6.4 Route users to Agent Mode for pending-interaction responses instead of executing dashboard-side approval/retry actions.
+- [ ] 6.4 Route users to Agent Mode for pending-interaction responses instead of executing Coordinator-view-side approval/retry actions.
 - [ ] 6.5 Add tests for pending interaction rendering, missing routes, and non-prose inference.
 
 ## 7. Deep-link behavior
@@ -63,23 +63,23 @@
 
 ## 8. MCP compact projection
 
-- [ ] 8.1 Consume the Orchestrator Dashboard MCP consumer provided by `add-mcp-dashboard-consumer`.
-- [ ] 8.2 Subscribe to MCP dashboard updates while the dashboard is visible and unsubscribe when hidden.
+- [ ] 8.1 Consume the Coordinator view MCP consumer provided by `add-mcp-coordinator-mode-consumer`.
+- [ ] 8.2 Subscribe to MCP updates while Coordinator mode is visible and unsubscribe when hidden.
 - [ ] 8.3 Project connected/idle/off client count, recent tool calls, and active/in-flight count as server/window-scoped MCP awareness that may not map one-to-one to visible rows.
-- [ ] 8.4 Add tests for MCP compact projection and MCP-off/empty states without retesting the shared consumer lifecycle owned by `add-mcp-dashboard-consumer`.
+- [ ] 8.4 Add tests for MCP compact projection and MCP-off/empty states without retesting the shared consumer lifecycle owned by `add-mcp-coordinator-mode-consumer`.
 
 ## 9. Coordinator composer
 
 - [ ] 9.1 Enable the Coordinator composer only when the selected/detected Coordinator has current-window live state.
 - [ ] 9.2 Disable the composer or show `Open agent chat` when no Coordinator exists, the Coordinator is persisted-only, or the Coordinator is owned by another window.
 - [ ] 9.3 Deliver submitted directives as ordinary user messages through the existing Agent Mode message path.
-- [ ] 9.4 Do not define structured directive envelopes, cross-window directive routing, dashboard-side interrupt/steer semantics, or direct child-session mutation in v1.
+- [ ] 9.4 Do not define structured directive envelopes, cross-window directive routing, Coordinator-view-side interrupt/steer semantics, or direct child-session mutation in v1.
 - [ ] 9.5 Echo accepted user directives into the Coordinator rail transcript when appropriate, while surfacing Coordinator responses and child-session effects through normal coarse snapshot refresh.
 - [ ] 9.6 Add tests for composer enablement, unreachable Coordinator fallback, ordinary-message dispatch, and no direct board/session mutation.
 
-## 10. Dashboard UI shell
+## 10. Coordinator view UI shell
 
-- [ ] 10.1 Build the Orchestrator Dashboard shell with top counts, optional Coordinator rail, board-first status columns/cards, List view alternate/fallback, optional inspector / trailing detail column, MCP footer, and filter affordance.
+- [ ] 10.1 Build the Coordinator view shell with top counts, optional Coordinator rail, board-first status columns/cards, List view alternate/fallback, optional inspector / trailing detail column, MCP footer, and filter affordance.
 - [ ] 10.2 Keep the main board/list content calm by default: no full transcripts, full logs, diffs, file viewers, streaming tool feeds, or card/row write controls.
 - [ ] 10.3 Add Board/List view switching where Board is the v1 default and List renders the same snapshot as an alternate.
 - [ ] 10.4 Add responsive behavior: inspector yields before the board, Coordinator chat may collapse to a rail, high-priority columns remain visible when possible, lower-priority columns may de-emphasize/collapse with visible counts, board columns preserve usable width or scroll horizontally, and widths below two usable board columns fall back to List.
@@ -91,4 +91,4 @@
 
 - [ ] 11.1 Run the focused unit tests added for snapshot projection, Coordinator identity, Coordinator composer, pending interactions, MCP projection, and deep links.
 - [ ] 11.2 Run the smallest relevant coordinated Swift validation lane for touched app/UI files.
-- [ ] 11.3 Run `openspec validate add-orchestrator-dashboard`.
+- [ ] 11.3 Run `openspec validate add-coordinator-mode`.
