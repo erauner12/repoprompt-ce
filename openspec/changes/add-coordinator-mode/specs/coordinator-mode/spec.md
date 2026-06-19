@@ -144,6 +144,12 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **THEN** the Coordinator view MAY echo the user's sent directive into the Coordinator rail transcript
 - **AND** Coordinator responses and child-session effects SHALL surface through the normal coarse Coordinator view snapshot refresh rather than a live token stream in the rail.
 
+#### Scenario: Coordinator rail transcript is cleared
+- **WHEN** the user clears the Coordinator rail chat display
+- **THEN** the Coordinator view SHALL reset only the rail's displayed transcript state
+- **AND** it SHALL NOT delete, truncate, or rewrite the underlying Coordinator session transcript
+- **AND** the Coordinator session SHALL continue to persist and archive through the existing Agent Mode session lifecycle.
+
 #### Scenario: Coordinator is mid-run
 - **WHEN** the user attempts to send a directive while the Coordinator is mid-run
 - **THEN** the Coordinator view MAY queue the directive as the next ordinary user turn or disable send
