@@ -107,13 +107,14 @@ struct CoordinatorModeView: View {
             }
 
             HStack(spacing: metrics.controlSpacing) {
-                Picker("Presentation", selection: $presentationMode) {
+                Picker("View", selection: $presentationMode) {
                     ForEach(PresentationMode.allCases) { mode in
                         Text(mode.displayName).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
                 .frame(width: metrics.controlWidth)
+                .accessibilityLabel("Presentation")
 
                 Picker("Sort", selection: $viewModel.sortMode) {
                     ForEach(CoordinatorModeSortMode.allCases, id: \.self) { mode in
@@ -216,7 +217,7 @@ struct CoordinatorModeView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(metrics.cardPadding)
-            .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius, fillOpacity: CoordinatorStyle.groupedFillOpacity)
+            .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius, fillOpacity: CoordinatorStyle.railCardFillOpacity)
 
             VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
                 Label("Read-only PR3 shell", systemImage: "lock")
@@ -228,7 +229,7 @@ struct CoordinatorModeView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(metrics.cardPadding)
-            .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius, fillOpacity: CoordinatorStyle.groupedFillOpacity)
+            .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius, fillOpacity: CoordinatorStyle.railCardFillOpacity)
 
             Spacer()
         }
@@ -267,11 +268,11 @@ struct CoordinatorModeView: View {
 
             if section.rows.isEmpty {
                 Text("No sessions")
-                    .font(metrics.body)
-                    .foregroundStyle(.secondary)
+                    .font(metrics.micro)
+                    .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(metrics.cardPadding)
-                    .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius, fillOpacity: CoordinatorStyle.groupedFillOpacity)
+                    .padding(metrics.emptyColumnPadding)
+                    .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius, fillOpacity: CoordinatorStyle.emptyColumnFillOpacity)
             } else {
                 ForEach(section.rows) { row in
                     sessionCard(row, metrics: metrics)
@@ -281,7 +282,7 @@ struct CoordinatorModeView: View {
         .padding(metrics.columnPadding)
         .background(
             RoundedRectangle(cornerRadius: metrics.columnCornerRadius, style: .continuous)
-                .fill(section.group.columnTint)
+                .fill(section.group.columnTint(isEmpty: section.rows.isEmpty))
         )
         .overlay(
             RoundedRectangle(cornerRadius: metrics.columnCornerRadius, style: .continuous)
@@ -296,6 +297,8 @@ struct CoordinatorModeView: View {
                     .font(metrics.cardTitle)
                     .foregroundStyle(.primary)
                     .lineLimit(2)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
                 Spacer(minLength: metrics.controlSpacing)
                 if row.isCoordinator {
                     Image(systemName: "crown")
@@ -358,6 +361,8 @@ struct CoordinatorModeView: View {
                     Text(row.title)
                         .font(metrics.cardTitle)
                         .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(1)
                     if row.isCoordinator {
                         Label("Coordinator", systemImage: "crown")
                             .labelStyle(.iconOnly)
@@ -575,9 +580,10 @@ struct CoordinatorModeView: View {
         }
         .padding(.horizontal, metrics.countPillHorizontalPadding)
         .padding(.vertical, metrics.countPillVerticalPadding)
-        .background(Capsule().fill(color.opacity(0.08)))
+        .foregroundStyle(.secondary)
+        .background(Capsule().fill(color.opacity(CoordinatorStyle.summaryPillFillOpacity)))
         .overlay(
-            Capsule().stroke(color.opacity(0.12), lineWidth: 0.5)
+            Capsule().stroke(color.opacity(CoordinatorStyle.summaryPillStrokeOpacity), lineWidth: 0.5)
         )
     }
 
@@ -586,11 +592,11 @@ struct CoordinatorModeView: View {
             .font(metrics.chip)
             .padding(.horizontal, metrics.miniPillHorizontalPadding)
             .padding(.vertical, metrics.miniPillVerticalPadding)
-            .background(Capsule().fill(color.opacity(0.09)))
+            .background(Capsule().fill(color.opacity(CoordinatorStyle.statusChipFillOpacity)))
             .overlay(
-                Capsule().stroke(color.opacity(0.13), lineWidth: 0.5)
+                Capsule().stroke(color.opacity(CoordinatorStyle.statusChipStrokeOpacity), lineWidth: 0.5)
             )
-            .foregroundStyle(color.opacity(0.85))
+            .foregroundStyle(.secondary)
     }
 
     private func inspectorGroup(
@@ -693,7 +699,7 @@ private struct CoordinatorVisualMetrics {
     }
 
     var countValue: Font {
-        fontPreset.swiftUIFont(sizeAtNormal: 13, weight: .semibold, design: .rounded).monospacedDigit()
+        fontPreset.swiftUIFont(sizeAtNormal: 12, weight: .medium, design: .rounded).monospacedDigit()
     }
 
     var searchFont: Font {
@@ -766,6 +772,10 @@ private struct CoordinatorVisualMetrics {
 
     var cardPadding: CGFloat {
         fontPreset.scaledClamped(12, max: 16)
+    }
+
+    var emptyColumnPadding: CGFloat {
+        fontPreset.scaledClamped(8, max: 10)
     }
 
     var columnPadding: CGFloat {
@@ -861,6 +871,12 @@ private enum CoordinatorStyle {
     static let cardFillOpacity = 0.35
     static let panelFillOpacity = 0.35
     static let groupedFillOpacity = 0.55
+    static let railCardFillOpacity = 0.38
+    static let emptyColumnFillOpacity = 0.12
+    static let summaryPillFillOpacity = 0.035
+    static let summaryPillStrokeOpacity = 0.06
+    static let statusChipFillOpacity = 0.04
+    static let statusChipStrokeOpacity = 0.07
 
     static var hairline: Color {
         Color.secondary.opacity(0.15)
@@ -938,8 +954,8 @@ private extension CoordinatorModeStatusGroup {
         }
     }
 
-    var columnTint: Color {
-        accentColor.opacity(self == .idle || self == .done ? 0.04 : 0.055)
+    func columnTint(isEmpty: Bool) -> Color {
+        accentColor.opacity(isEmpty ? 0.015 : (self == .idle || self == .done ? 0.04 : 0.055))
     }
 }
 
