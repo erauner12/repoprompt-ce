@@ -194,11 +194,10 @@ struct CoordinatorModeView: View {
         .padding(.horizontal, metrics.searchHorizontalPadding)
         .padding(.vertical, metrics.searchVerticalPadding)
         .frame(minHeight: metrics.searchControlHeight)
-        .background(Color.clear)
-        .cornerRadius(metrics.searchCornerRadius)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: metrics.searchCornerRadius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: metrics.searchCornerRadius)
-                .stroke(Color(NSColor.systemGray).opacity(0.75), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: metrics.searchCornerRadius, style: .continuous)
+                .stroke(CoordinatorStyle.hairline, lineWidth: 0.5)
         )
     }
 
@@ -229,6 +228,7 @@ struct CoordinatorModeView: View {
                 .hoverTooltip("Hide Coordinator Rail")
                 .accessibilityLabel("Hide Coordinator Rail")
             }
+            .coordinatorSidebarHeaderPill(cornerRadius: metrics.headerPillCornerRadius)
 
             Group {
                 switch rail.state {
@@ -266,7 +266,11 @@ struct CoordinatorModeView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(metrics.cardPadding)
-            .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius, fillOpacity: CoordinatorStyle.railCardFillOpacity)
+            .coordinatorCardBackground(
+                cornerRadius: metrics.cardCornerRadius,
+                fillOpacity: CoordinatorStyle.railCardFillOpacity,
+                strokeOpacity: 0
+            )
 
             VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
                 Label("Read-only PR3 shell", systemImage: "lock")
@@ -278,12 +282,16 @@ struct CoordinatorModeView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(metrics.cardPadding)
-            .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius, fillOpacity: CoordinatorStyle.railCardFillOpacity)
+            .coordinatorCardBackground(
+                cornerRadius: metrics.cardCornerRadius,
+                fillOpacity: CoordinatorStyle.railCardFillOpacity,
+                strokeOpacity: 0
+            )
 
             Spacer()
         }
         .padding(metrics.outerPadding)
-        .background(.regularMaterial)
+        .coordinatorSidebarPanel(edge: .trailing)
     }
 
     private func boardView(sections: [CoordinatorModeStatusSection], metrics: CoordinatorVisualMetrics) -> some View {
@@ -464,6 +472,7 @@ struct CoordinatorModeView: View {
                     .hoverTooltip("Hide Inspector")
                     .accessibilityLabel("Hide Inspector")
                 }
+                .coordinatorSidebarHeaderPill(cornerRadius: metrics.headerPillCornerRadius)
 
                 Text(row.title)
                     .font(metrics.inspectorTitle)
@@ -519,7 +528,7 @@ struct CoordinatorModeView: View {
             .padding(metrics.outerPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(.regularMaterial)
+        .coordinatorSidebarPanel(edge: .leading)
     }
 
     private func mcpFooter(_ awareness: CoordinatorModeMCPAwareness, metrics: CoordinatorVisualMetrics) -> some View {
@@ -791,7 +800,7 @@ private struct CoordinatorVisualMetrics {
     }
 
     var cardPadding: CGFloat {
-        fontPreset.scaledClamped(12, max: 16)
+        fontPreset.scaledClamped(10, max: 14)
     }
 
     var emptyColumnPadding: CGFloat {
@@ -827,7 +836,11 @@ private struct CoordinatorVisualMetrics {
     }
 
     var cardCornerRadius: CGFloat {
-        fontPreset.scaledClamped(12, max: 16)
+        fontPreset.scaledClamped(10, max: 14)
+    }
+
+    var headerPillCornerRadius: CGFloat {
+        fontPreset.scaledClamped(16, max: 20)
     }
 
     var columnCornerRadius: CGFloat {
@@ -881,15 +894,19 @@ private struct CoordinatorVisualMetrics {
 
 private enum CoordinatorStyle {
     static let cardFillOpacity = 0.35
-    static let panelFillOpacity = 0.35
+    static let panelFillOpacity = 0.08
     static let groupedFillOpacity = 0.55
-    static let railCardFillOpacity = 0.38
+    static let railCardFillOpacity = 0.35
     static let emptyColumnFillOpacity = 0.12
     static let statusChipFillOpacity = 0.04
     static let statusChipStrokeOpacity = 0.07
 
     static var hairline: Color {
         Color.secondary.opacity(0.15)
+    }
+
+    static var panelSeam: Color {
+        Color.secondary.opacity(0.10)
     }
 
     static var selectedFill: Color {
@@ -905,12 +922,45 @@ private enum CoordinatorStyle {
     }
 }
 
+private enum CoordinatorSidebarPanelEdge {
+    case leading
+    case trailing
+
+    var alignment: Alignment {
+        switch self {
+        case .leading: .leading
+        case .trailing: .trailing
+        }
+    }
+}
+
 private extension View {
+    func coordinatorSidebarPanel(edge: CoordinatorSidebarPanelEdge) -> some View {
+        background(.thinMaterial)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(CoordinatorStyle.panelFillOpacity))
+            .overlay(alignment: edge.alignment) {
+                Rectangle()
+                    .fill(CoordinatorStyle.panelSeam)
+                    .frame(width: 0.5)
+            }
+    }
+
+    func coordinatorSidebarHeaderPill(cornerRadius: CGFloat) -> some View {
+        padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(CoordinatorStyle.hairline, lineWidth: 0.5)
+            )
+    }
+
     func coordinatorCardBackground(
         cornerRadius: CGFloat,
         isSelected: Bool = false,
         isHovered: Bool = false,
-        fillOpacity: Double = CoordinatorStyle.cardFillOpacity
+        fillOpacity: Double = CoordinatorStyle.cardFillOpacity,
+        strokeOpacity: Double = 0.15
     ) -> some View {
         let neutralFill = fillOpacity > 0
             ? Color(nsColor: .controlBackgroundColor).opacity(fillOpacity)
@@ -918,9 +968,12 @@ private extension View {
         let resolvedFill = isSelected
             ? CoordinatorStyle.selectedFill
             : (isHovered ? Color(nsColor: .controlBackgroundColor).opacity(0.18) : neutralFill)
+        let neutralStroke = fillOpacity > 0 && strokeOpacity > 0
+            ? Color.secondary.opacity(strokeOpacity)
+            : Color.clear
         let resolvedStroke = isSelected
             ? CoordinatorStyle.selectedBorder
-            : (isHovered ? CoordinatorStyle.hoverBorder : (fillOpacity > 0 ? CoordinatorStyle.hairline : Color.clear))
+            : (isHovered ? CoordinatorStyle.hoverBorder : neutralStroke)
 
         return background(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
