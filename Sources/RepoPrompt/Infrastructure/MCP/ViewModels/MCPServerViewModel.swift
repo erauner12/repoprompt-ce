@@ -631,6 +631,7 @@ final class MCPServerViewModel: ObservableObject {
     enum DashboardConsumer: Hashable {
         case toolbarPopover
         case statusView
+        case coordinatorMode
     }
 
     @MainActor
@@ -1952,6 +1953,20 @@ final class MCPServerViewModel: ObservableObject {
         @MainActor
         func test_clearActiveToolSlot() {
             clearActiveToolSlot()
+        }
+
+        @MainActor
+        var test_hasDashboardTask: Bool {
+            dashboardTask != nil
+        }
+
+        @MainActor
+        var test_dashboardConsumerCount: Int {
+            dashboardConsumers.count
+        }
+
+        func test_dashboardSubscriberCount() async -> Int {
+            await service.test_dashboardSubscriberCount()
         }
     #endif
 
