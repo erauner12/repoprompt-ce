@@ -67,7 +67,8 @@ The system SHALL identify the Coordinator session using explicit precedence.
 
 #### Scenario: User-selected Coordinator exists
 - **WHEN** the user has selected a valid Coordinator session for the active workspace in the current window
-- **THEN** the Coordinator view SHALL use that session as Coordinator ahead of auto-detected candidates.
+- **THEN** the Coordinator view SHALL use that session as Coordinator ahead of auto-detected candidates
+- **AND** a future row/card selection affordance SHALL add explicit liveness and eligibility fall-through coverage before changing this precedence.
 
 #### Scenario: Orchestrate workflow candidate exists
 - **WHEN** no user-selected Coordinator exists and a parent session has launch or first-request workflow metadata of `Orchestrate`
@@ -76,6 +77,11 @@ The system SHALL identify the Coordinator session using explicit precedence.
 #### Scenario: MCP-originated lineage candidate exists
 - **WHEN** no user-selected Coordinator or Orchestrate workflow candidate exists and a parent session is both a lineage root with child sessions and MCP-originated
 - **THEN** the Coordinator view SHALL treat that parent session as a Coordinator candidate.
+
+#### Scenario: Detection uses off-window lineage metadata without rendering it
+- **WHEN** Coordinator detection has persisted or off-window lineage metadata for sessions that are not active-workspace rows in the current window
+- **THEN** the Coordinator view MAY use that metadata only to determine whether a visible parent is an Orchestrate or MCP-originated lineage Coordinator candidate
+- **AND** it SHALL NOT render those off-window or detection-only child sessions as Coordinator view rows solely because detection inspected them.
 
 #### Scenario: Plain lineage parent exists
 - **WHEN** a parent session has child sessions but is neither user-selected, Orchestrate-detected, nor MCP-originated
@@ -201,6 +207,12 @@ The system SHALL group Coordinator view rows by testable, structured status rule
 - **AND** its persisted run state is `.running`, `.waitingForUser`, `.waitingForQuestion`, or `.waitingForApproval`
 - **THEN** the Coordinator view SHALL NOT count that card or row as live `Working` or `Needs you` in v1.
 
+#### Scenario: Persisted-only card has blocked-looking stale metadata
+- **WHEN** a card or row is known only from persisted metadata and has no current-window live state
+- **AND** its persisted run state is `.failed` or its persisted merge/worktree metadata reports conflicted attention
+- **THEN** the Coordinator view SHALL render that card or row as stale/persisted-only rather than a live `Blocked` contributor
+- **AND** it SHALL NOT increment live Blocked top counts or place the stale row in the `Blocked` group solely from persisted-only blocked-looking metadata.
+
 #### Scenario: Persisted-only card renders in board view
 - **WHEN** a persisted-only session appears in board view
 - **THEN** the Coordinator view SHALL visually mark the card as stale/persisted-only
@@ -208,7 +220,7 @@ The system SHALL group Coordinator view rows by testable, structured status rule
 - **AND** it SHALL preserve the same route/no-restore constraints used by list rows.
 
 #### Scenario: Session is blocked
-- **WHEN** a session has `.failed` run state or conflicted worktree/merge attention
+- **WHEN** a current-window live session has `.failed` run state or conflicted worktree/merge attention
 - **THEN** the Coordinator view SHALL group that row under `Blocked`.
 
 #### Scenario: Session is working
@@ -302,13 +314,14 @@ The system SHALL provide compact MCP client/tool-call awareness without replacin
 - **WHEN** the Coordinator mode is not visible
 - **THEN** the system SHALL stop Coordinator-view-specific MCP update consumption.
 
-#### Scenario: MCP clients exist
-- **WHEN** MCP clients are connected, idle, or active
+#### Scenario: MCP clients or recent calls exist
+- **WHEN** MCP clients are connected, idle, or active, or the running MCP server has recent tool-call history
 - **THEN** the Coordinator view SHALL show compact client and in-flight/recent tool-call awareness
-- **AND** it SHALL allow MCP footer totals to include server/window-scoped clients or calls not represented by the active-workspace row list.
+- **AND** it SHALL allow MCP footer totals to include server/window-scoped clients or calls not represented by the active-workspace row list
+- **AND** recent-call history without connected clients SHALL use a history-aware idle presentation rather than the empty/off state.
 
 #### Scenario: MCP is off or empty
-- **WHEN** the MCP server is off or has no connected clients
+- **WHEN** the MCP server is off or has no connected clients and no recent tool-call history
 - **THEN** the Coordinator view SHALL show a compact empty/off state rather than a full status surface.
 
 ### Requirement: Progressive disclosure

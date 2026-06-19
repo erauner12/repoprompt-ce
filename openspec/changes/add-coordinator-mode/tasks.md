@@ -9,64 +9,66 @@
 
 ## 2. Coordinator view snapshot projection
 
-- [ ] 2.1 Define `CoordinatorModeSnapshot` as the single render contract for counts, groups, rows, Coordinator rail, pending summaries, MCP footer, and deep-link payloads.
-- [ ] 2.2 Implement a lazy, window-scoped `@MainActor` Coordinator view model.
-- [ ] 2.3 Compose the snapshot from current-window Agent Mode live state, active-workspace session metadata, and `MCPServerViewModel.dashboard`, assuming the named MCP Coordinator mode consumer from `add-mcp-coordinator-mode-consumer`.
-- [ ] 2.4 Add diff-before-publish/fingerprint behavior so streaming transcript or token deltas do not republish unchanged Coordinator view rows.
-- [ ] 2.5 Represent stale/persisted-only rows for active-workspace sessions without current-window live state.
+- [x] 2.1 Define `CoordinatorModeSnapshot` as the single render contract for counts, groups, rows, Coordinator rail, pending summaries, MCP footer, and deep-link payloads.
+- [x] 2.2 Implement a lazy, window-scoped `@MainActor` Coordinator view model.
+- [x] 2.3 Compose the snapshot from current-window Agent Mode live state, active-workspace session metadata, and `MCPServerViewModel.dashboard`, assuming the named MCP Coordinator mode consumer from `add-mcp-coordinator-mode-consumer`.
+- [x] 2.4 Add diff-before-publish/fingerprint behavior so streaming transcript or token deltas do not republish unchanged Coordinator view rows.
+- [x] 2.5 Represent stale/persisted-only rows for active-workspace sessions without current-window live state.
 
 ## 3. Coordinator identity
 
-- [ ] 3.1 Implement user-selected Coordinator state as per-window ephemeral state keyed by active workspace ID.
-- [ ] 3.2 Implement Orchestrate workflow candidate detection only when launch/first-request workflow metadata is already available without per-row transcript churn.
-- [ ] 3.3 Implement MCP-originated lineage-root-with-children candidate detection.
-- [ ] 3.4 Implement zero-candidate board/list behavior with empty/choose-Coordinator rail state.
-- [ ] 3.5 Implement multiple-candidate behavior by selecting the most recent candidate within the highest-ranked matching precedence tier unless a user-selected Coordinator exists.
-- [ ] 3.6 Add tests for Coordinator identity precedence and ambiguity handling.
+- [x] 3.1 Implement user-selected Coordinator state as per-window ephemeral state keyed by active workspace ID.
+- [x] 3.2 Implement Orchestrate workflow candidate detection only when launch/first-request workflow metadata is already available without per-row transcript churn.
+- [x] 3.3 Implement MCP-originated lineage-root-with-children candidate detection.
+- [x] 3.4 Implement zero-candidate board/list behavior with empty/choose-Coordinator rail state.
+- [x] 3.5 Implement multiple-candidate behavior by selecting the most recent candidate within the highest-ranked matching precedence tier unless a user-selected Coordinator exists.
+- [x] 3.6 Add tests for Coordinator identity precedence and ambiguity handling.
+
+Deferred selection affordance note: no v1 UI currently sets user selection from row/card visibility alone. When that UI is added, pair it with liveness and eligibility fall-through tests before changing selection precedence.
 
 ## 4. Session row projection
 
-- [ ] 4.1 Project session identity, lineage, provider/model, run state, MCP origin, worktree bindings, and merge attention from structured metadata/live state.
-- [ ] 4.2 Omit workflow labels in v1; leave workflow index/transcript lookup as follow-up unless needed for Coordinator detection without churn.
-- [ ] 4.3 Omit objective labels in v1.
-- [ ] 4.4 Optionally project workstream labels/chips from worktree/logical-root metadata when available and useful for the UI.
-- [ ] 4.5 Ensure session titles or assistant prose are not parsed to infer labels.
+- [x] 4.1 Project session identity, lineage, provider/model, run state, MCP origin, worktree bindings, and merge attention from structured metadata/live state.
+- [x] 4.2 Omit workflow labels in v1; leave workflow index/transcript lookup as follow-up unless needed for Coordinator detection without churn.
+- [x] 4.3 Omit objective labels in v1.
+- [x] 4.4 Optionally project workstream labels/chips from worktree/logical-root metadata when available and useful for the UI.
+- [x] 4.5 Ensure session titles or assistant prose are not parsed to infer labels.
 
 ## 5. Status grouping and sorting
 
-- [ ] 5.1 Implement Coordinator view status groups: Needs you, Blocked, Working, Done, Idle.
-- [ ] 5.2 Evaluate groups top-down: Needs you, Blocked, Working, Done, Idle.
-- [ ] 5.3 Map Needs you from current-window live `.waitingForUser`, `.waitingForQuestion`, and `.waitingForApproval`; use MCP pending interactions only as prompt/detail enrichment.
-- [ ] 5.4 Ensure persisted-only cards/rows never contribute to live `Needs you` or `Working` counts in v1 and render with stale/persisted-only treatment.
-- [ ] 5.5 Map Blocked from `.failed` run state or conflicted worktree/merge attention.
-- [ ] 5.6 Map Working from current-window live `.running`, Done from `.completed`/`.cancelled`, and Idle from `.idle` when no higher-priority group applies.
+- [x] 5.1 Implement Coordinator view status groups: Needs you, Blocked, Working, Done, Idle.
+- [x] 5.2 Evaluate groups top-down: Needs you, Blocked, Working, Done, Idle.
+- [x] 5.3 Map Needs you from current-window live `.waitingForUser`, `.waitingForQuestion`, and `.waitingForApproval`; use MCP pending interactions only as prompt/detail enrichment.
+- [x] 5.4 Ensure persisted-only cards/rows never contribute to live `Needs you` or `Working` counts in v1 and render with stale/persisted-only treatment.
+- [x] 5.5 Map Blocked from `.failed` run state or conflicted worktree/merge attention.
+- [x] 5.6 Map Working from current-window live `.running`, Done from `.completed`/`.cancelled`, and Idle from `.idle` when no higher-priority group applies.
 - [ ] 5.7 Implement read-only sort controls for `Last updated` (default), `Name`, and `Priority` across board cards and list rows.
-- [ ] 5.8 Ensure sorting only reorders cards/rows within existing status groups and never changes group membership, run state, pending state, Coordinator relationship, or persisted session state.
+- [x] 5.8 Ensure sorting only reorders cards/rows within existing status groups and never changes group membership, run state, pending state, Coordinator relationship, or persisted session state.
 - [ ] 5.9 Ensure v1 does not expose drag-to-reorder, drag-to-dispatch, or drag-to-change-status interactions.
-- [ ] 5.10 Add snapshot adapter tests for grouping, counts, stale-row count exclusion, and sort-mode behavior.
+- [x] 5.10 Add snapshot adapter tests for grouping, counts, stale-row count exclusion, and sort-mode behavior.
 
 ## 6. Pending interaction summaries
 
-- [ ] 6.1 Define Coordinator view pending summaries with `AgentRunMCPSnapshot.Interaction.Kind`, `AgentRunMCPSnapshot.Interaction.Detail`, and nullable `AgentSessionDeepLinkRoute`.
-- [ ] 6.2 Project prompt/detail summaries from live MCP-controlled `AgentRunMCPSnapshot.Interaction` values; leave broader non-MCP pending projection as a follow-up Agent Mode contract change.
+- [x] 6.1 Define Coordinator view pending summaries with `AgentRunMCPSnapshot.Interaction.Kind`, `AgentRunMCPSnapshot.Interaction.Detail`, and nullable `AgentSessionDeepLinkRoute`.
+- [x] 6.2 Project prompt/detail summaries from live MCP-controlled `AgentRunMCPSnapshot.Interaction` values; leave broader non-MCP pending projection as a follow-up Agent Mode contract change.
 - [ ] 6.3 Hide or disable decision navigation when `openAgentChatRoute` cannot be resolved.
 - [ ] 6.4 Route users to Agent Mode for pending-interaction responses instead of executing Coordinator-view-side approval/retry actions.
-- [ ] 6.5 Add tests for pending interaction rendering, missing routes, and non-prose inference.
+- [x] 6.5 Add tests for pending interaction rendering, missing routes, and non-prose inference.
 
 ## 7. Deep-link behavior
 
-- [ ] 7.1 Build row and pending-summary route payloads from active workspace, resolvable tab, and optional session ID.
+- [x] 7.1 Build row and pending-summary route payloads from active workspace, resolvable tab, and optional session ID.
 - [ ] 7.2 Use direct `WindowState.routeToAgentSession` for same-window navigation when possible.
 - [ ] 7.3 Use existing `AgentSessionDeepLinkRoute` / router behavior for cross-window or URL-style navigation as needed.
-- [ ] 7.4 Ensure persisted-only rows without route data do not create or restore sessions during rendering.
-- [ ] 7.5 Add tests for resolvable, unresolvable, and persisted-only no-restore route states.
+- [x] 7.4 Ensure persisted-only rows without route data do not create or restore sessions during rendering.
+- [x] 7.5 Add tests for resolvable, unresolvable, and persisted-only no-restore route states.
 
 ## 8. MCP compact projection
 
-- [ ] 8.1 Consume the Coordinator view MCP consumer provided by `add-mcp-coordinator-mode-consumer`.
-- [ ] 8.2 Subscribe to MCP updates while Coordinator mode is visible and unsubscribe when hidden.
-- [ ] 8.3 Project connected/idle/off client count, recent tool calls, and active/in-flight count as server/window-scoped MCP awareness that may not map one-to-one to visible rows.
-- [ ] 8.4 Add tests for MCP compact projection and MCP-off/empty states without retesting the shared consumer lifecycle owned by `add-mcp-coordinator-mode-consumer`.
+- [x] 8.1 Consume the Coordinator view MCP consumer provided by `add-mcp-coordinator-mode-consumer`.
+- [x] 8.2 Subscribe to MCP updates while Coordinator mode is visible and unsubscribe when hidden.
+- [x] 8.3 Project connected/idle/off client count, recent tool calls, active/in-flight count, and recent-call history without connected clients as server/window-scoped MCP awareness that may not map one-to-one to visible rows.
+- [x] 8.4 Add tests for MCP compact projection, MCP-off/empty states, and history-only recent-call state without retesting the shared consumer lifecycle owned by `add-mcp-coordinator-mode-consumer`.
 
 ## 9. Coordinator composer
 
@@ -90,5 +92,5 @@
 ## 11. Validation
 
 - [ ] 11.1 Run the focused unit tests added for snapshot projection, Coordinator identity, Coordinator composer, pending interactions, MCP projection, and deep links.
-- [ ] 11.2 Run the smallest relevant coordinated Swift validation lane for touched app/UI files.
-- [ ] 11.3 Run `openspec validate add-coordinator-mode`.
+- [x] 11.2 Run the smallest relevant coordinated Swift validation lane for touched app/UI files.
+- [x] 11.3 Run `openspec validate add-coordinator-mode`.

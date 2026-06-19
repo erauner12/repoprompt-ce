@@ -1,0 +1,192 @@
+import Foundation
+
+struct CoordinatorModeSnapshot: Equatable {
+    static let empty = CoordinatorModeSnapshot(
+        workspaceID: nil,
+        sortMode: .lastUpdated,
+        counts: .empty,
+        groups: CoordinatorModeStatusGroup.allCases.map { CoordinatorModeStatusSection(group: $0, rows: []) },
+        coordinatorRail: .empty,
+        pendingInteractions: [],
+        mcpAwareness: .off,
+        isEmpty: true
+    )
+
+    let workspaceID: UUID?
+    let sortMode: CoordinatorModeSortMode
+    let counts: CoordinatorModeCounts
+    let groups: [CoordinatorModeStatusSection]
+    let coordinatorRail: CoordinatorModeCoordinatorRail
+    let pendingInteractions: [CoordinatorModePendingInteractionSummary]
+    let mcpAwareness: CoordinatorModeMCPAwareness
+    let isEmpty: Bool
+
+    var fingerprint: CoordinatorModeSnapshotFingerprint {
+        CoordinatorModeSnapshotFingerprint(snapshot: self)
+    }
+}
+
+struct CoordinatorModeSnapshotFingerprint: Equatable {
+    fileprivate let snapshot: CoordinatorModeSnapshot
+}
+
+enum CoordinatorModeSortMode: String, CaseIterable, Equatable {
+    case lastUpdated
+    case name
+    case priority
+}
+
+struct CoordinatorModeCounts: Equatable {
+    static let empty = CoordinatorModeCounts(
+        totalRows: 0,
+        needsYou: 0,
+        blocked: 0,
+        working: 0,
+        done: 0,
+        idle: 0,
+        stalePersistedOnly: 0,
+        liveRows: 0
+    )
+
+    let totalRows: Int
+    let needsYou: Int
+    let blocked: Int
+    let working: Int
+    let done: Int
+    let idle: Int
+    let stalePersistedOnly: Int
+    let liveRows: Int
+}
+
+enum CoordinatorModeStatusGroup: String, CaseIterable, Equatable {
+    case needsYou
+    case blocked
+    case working
+    case done
+    case idle
+
+    var displayName: String {
+        switch self {
+        case .needsYou: "Needs you"
+        case .blocked: "Blocked"
+        case .working: "Working"
+        case .done: "Done"
+        case .idle: "Idle"
+        }
+    }
+}
+
+struct CoordinatorModeStatusSection: Equatable {
+    let group: CoordinatorModeStatusGroup
+    let rows: [CoordinatorModeRow]
+}
+
+struct CoordinatorModeRow: Identifiable, Equatable {
+    struct Workstream: Equatable {
+        let label: String
+        let branch: String?
+        let colorHex: String?
+    }
+
+    struct MergeAttention: Equatable {
+        let id: String
+        let status: AgentSessionWorktreeMergeOperation.Status
+        let conflictFileCount: Int
+        let updatedAt: Date
+    }
+
+    let id: UUID
+    let sessionID: UUID
+    let tabID: UUID?
+    let title: String
+    let providerName: String?
+    let modelName: String?
+    let runState: AgentSessionRunState
+    let statusGroup: CoordinatorModeStatusGroup
+    let parentSessionID: UUID?
+    let childSessionIDs: [UUID]
+    let isMCPOriginated: Bool
+    let isPersistedOnly: Bool
+    let isCoordinator: Bool
+    let updatedAt: Date
+    let priority: Int?
+    let workstream: Workstream?
+    let mergeAttention: MergeAttention?
+    let pendingInteraction: CoordinatorModePendingInteractionSummary?
+    let openAgentChatRoute: AgentSessionDeepLinkRoute?
+}
+
+struct CoordinatorModeCoordinatorRail: Equatable {
+    static let empty = CoordinatorModeCoordinatorRail(
+        state: .chooseCoordinator,
+        coordinatorSessionID: nil,
+        selectionSource: nil,
+        title: nil,
+        isLiveInCurrentWindow: false,
+        openAgentChatRoute: nil
+    )
+
+    enum State: Equatable {
+        case selected
+        case chooseCoordinator
+    }
+
+    enum SelectionSource: String, Equatable {
+        case userSelected
+        case orchestrateWorkflow
+        case mcpLineageRoot
+    }
+
+    let state: State
+    let coordinatorSessionID: UUID?
+    let selectionSource: SelectionSource?
+    let title: String?
+    let isLiveInCurrentWindow: Bool
+    let openAgentChatRoute: AgentSessionDeepLinkRoute?
+}
+
+struct CoordinatorModePendingInteractionSummary: Identifiable, Equatable {
+    let id: UUID
+    let sessionID: UUID
+    let kind: AgentRunMCPSnapshot.Interaction.Kind
+    let title: String?
+    let prompt: String?
+    let details: [AgentRunMCPSnapshot.Interaction.Detail]
+    let openAgentChatRoute: AgentSessionDeepLinkRoute?
+}
+
+struct CoordinatorModeMCPAwareness: Equatable {
+    static let off = CoordinatorModeMCPAwareness(
+        state: .off,
+        connectedClientCount: 0,
+        idleClientCount: 0,
+        activeClientCount: 0,
+        inFlightToolCallCount: 0,
+        recentToolCalls: []
+    )
+
+    enum State: Equatable {
+        case off
+        case empty
+        case idle
+        case active
+    }
+
+    struct RecentToolCall: Identifiable, Equatable {
+        var id: String {
+            "\(ordinal)-\(timestamp.timeIntervalSince1970)-\(clientName)-\(toolName)"
+        }
+
+        let ordinal: Int
+        let timestamp: Date
+        let toolName: String
+        let clientName: String
+    }
+
+    let state: State
+    let connectedClientCount: Int
+    let idleClientCount: Int
+    let activeClientCount: Int
+    let inFlightToolCallCount: Int
+    let recentToolCalls: [RecentToolCall]
+}

@@ -537,6 +537,7 @@ final class AgentModeViewModel: ObservableObject {
     private let workspaceFileContextStore: WorkspaceFileContextStore?
     weak var workspaceManager: WorkspaceManagerViewModel?
     private weak var mcpServer: MCPServerViewModel?
+    lazy var coordinatorModeViewModel: CoordinatorModeViewModel = makeCoordinatorModeViewModel()
     private let dataService = AgentSessionDataService.shared
     private var sidebarPrioritizedIndexBuilder: SidebarPrioritizedIndexBuilder = { request in
         try await AgentSessionDataService.shared.buildPrioritizedSidebarIndex(request)
@@ -9267,6 +9268,23 @@ final class AgentModeViewModel: ObservableObject {
             return false
         }
         return sessionListCacheReady
+    }
+
+    var coordinatorModeWindowID: Int {
+        windowID
+    }
+
+    var coordinatorModeActiveWorkspaceID: UUID? {
+        workspaceManager?.activeWorkspaceID ?? lastKnownWorkspaceSnapshot?.id
+    }
+
+    var coordinatorModeDashboard: MCPService.DashboardSnapshot? {
+        mcpServer?.dashboard
+    }
+
+    @MainActor
+    func setCoordinatorModeDashboardUpdatesVisible(_ visible: Bool) {
+        mcpServer?.setDashboardUpdatesVisible(visible, consumer: .coordinatorMode)
     }
 
     func sidebarAutoArchiveOwner(workspaceID: UUID) -> SessionIndexOwner? {

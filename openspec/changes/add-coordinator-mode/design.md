@@ -112,12 +112,12 @@ Consume the `MCPServerViewModel.DashboardConsumer.coordinatorMode` case added by
 Status groups are evaluated top-down: `Needs you` > `Blocked` > `Working` > `Done` > `Idle`.
 
 - `Needs you`: current-window live run state is `.waitingForUser`, `.waitingForQuestion`, or `.waitingForApproval`; MCP pending interaction data enriches prompt/details when available.
-- `Blocked`: run state is `.failed` or cheap metadata reports conflicted worktree/merge attention.
+- `Blocked`: current-window live run state is `.failed` or current-window live metadata reports conflicted worktree/merge attention.
 - `Working`: current-window live run state is `.running`.
 - `Done`: run state is `.completed` or `.cancelled`.
 - `Idle`: run state is `.idle` or no higher-priority group applies.
 
-Blocked's conflicted-merge signal should come from cheap metadata such as active worktree merge summaries. V1 sorting is read-only display order within existing groups: `Last updated` is the default, with `Name` and `Priority` as additional sort modes. Sorting applies to both board cards and list rows, should use cheap metadata, e.g. attention age, structured priority/attention data, display name, or activity/last-modified dates, and must not require transcript loads. Sorting must not change group membership, card/row state, Coordinator relationship, or persisted session state. Persisted-only cards/rows may still appear as `Blocked`, `Done`, or `Idle` from persisted metadata, but they must not contribute to live `Needs you` or `Working` counts and should render with a stale/persisted-only visual treatment instead of live actionable styling.
+Blocked's conflicted-merge signal should come from cheap metadata such as active worktree merge summaries, but only for current-window live rows. V1 sorting is read-only display order within existing groups: `Last updated` is the default, with `Name` and `Priority` as additional sort modes. Sorting applies to both board cards and list rows, should use cheap metadata, e.g. attention age, structured priority/attention data, display name, or activity/last-modified dates, and must not require transcript loads. Sorting must not change group membership, card/row state, Coordinator relationship, or persisted session state. Persisted-only cards/rows may still appear as `Done` or `Idle` from persisted metadata, but persisted-only failed/conflicted metadata renders as stale/persisted-only instead of contributing to live Blocked counts or the `Blocked` group. Persisted-only rows must not contribute to live `Needs you`, `Blocked`, or `Working` counts and should render with a stale/persisted-only visual treatment instead of live actionable styling.
 
 ### 12. Coordinator rail is optional; board/list workspace stands alone
 
