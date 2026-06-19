@@ -123,7 +123,9 @@ struct CoordinatorModeCoordinatorRail: Equatable {
         selectionSource: nil,
         title: nil,
         isLiveInCurrentWindow: false,
-        openAgentChatRoute: nil
+        openAgentChatRoute: nil,
+        isComposerEnabled: false,
+        isComposerSendEnabled: false
     )
 
     enum State: Equatable {
@@ -143,6 +145,19 @@ struct CoordinatorModeCoordinatorRail: Equatable {
     let title: String?
     let isLiveInCurrentWindow: Bool
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
+    let isComposerEnabled: Bool
+    let isComposerSendEnabled: Bool
+}
+
+struct CoordinatorModeRailTranscriptEntry: Identifiable, Equatable {
+    enum Role: String, Equatable {
+        case user
+    }
+
+    let id: UUID
+    let role: Role
+    let text: String
+    let createdAt: Date
 }
 
 struct CoordinatorModePendingInteractionSummary: Identifiable, Equatable {

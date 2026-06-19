@@ -819,6 +819,84 @@ final class AgentModeStopSubmitTargetTests: XCTestCase {
         XCTAssertEqual(cancelTarget?.expectedPendingUserInputRequestID, requestID)
     }
 
+    func testCoordinatorDirectiveDispatchesOrdinaryExistingSessionMessageWithoutMutatingChildSession() async throws {
+        let vm = makeViewModel()
+        let coordinatorTabID = UUID()
+        let childTabID = UUID()
+        let coordinatorSessionID = UUID()
+        let childSessionID = UUID()
+        vm.ensureSession(for: coordinatorTabID)
+        vm.ensureSession(for: childTabID)
+        let coordinatorSession = try XCTUnwrap(vm.sessions[coordinatorTabID])
+        let childSession = try XCTUnwrap(vm.sessions[childTabID])
+        coordinatorSession.hasLoadedPersistedState = true
+        coordinatorSession.selectedAgent = .codexExec
+        coordinatorSession.testInstallPersistentSessionBinding(sessionID: coordinatorSessionID)
+        childSession.hasLoadedPersistedState = true
+        childSession.selectedAgent = .codexExec
+        childSession.parentSessionID = coordinatorSessionID
+        childSession.testInstallPersistentSessionBinding(sessionID: childSessionID)
+
+        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+            "  coordinate the next child step  ",
+            coordinatorSessionID: coordinatorSessionID
+        )
+
+        XCTAssertEqual(result, .submitted)
+        XCTAssertEqual(coordinatorSession.items.filter { $0.kind == .user }.map(\.text), ["coordinate the next child step"])
+        XCTAssertTrue(childSession.items.isEmpty)
+        XCTAssertTrue(childSession.pendingInstructions.isEmpty)
+        XCTAssertEqual(childSession.parentSessionID, coordinatorSessionID)
+        XCTAssertEqual(childSession.activeAgentSessionID, childSessionID)
+    }
+
+    func testCoordinatorDirectiveRejectsActiveCoordinatorBeforeSteeringPath() async throws {
+        let recorder = StopSubmitSendRecorder()
+        let controller = StopSubmitNoopCodexController(recorder: recorder, hasActiveThread: true)
+        let vm = makeViewModel(codexController: controller)
+        let coordinatorTabID = UUID()
+        let coordinatorSessionID = UUID()
+        vm.ensureSession(for: coordinatorTabID)
+        let coordinatorSession = try XCTUnwrap(vm.sessions[coordinatorTabID])
+        coordinatorSession.hasLoadedPersistedState = true
+        coordinatorSession.selectedAgent = .codexExec
+        coordinatorSession.testInstallPersistentSessionBinding(sessionID: coordinatorSessionID)
+        coordinatorSession.runState = .running
+        coordinatorSession.runID = UUID()
+        coordinatorSession.beginRunAttempt(source: "test.runningCoordinator")
+
+        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+            "do not steer",
+            coordinatorSessionID: coordinatorSessionID
+        )
+
+        guard case let .blocked(message) = result else {
+            return XCTFail("Expected active Coordinator directive to be blocked")
+        }
+        XCTAssertFalse(message.isEmpty)
+        XCTAssertTrue(coordinatorSession.items.isEmpty)
+        XCTAssertTrue(coordinatorSession.pendingInstructions.isEmpty)
+        XCTAssertTrue(coordinatorSession.pendingClaudeSteeringInstructions.isEmpty)
+        XCTAssertTrue(coordinatorSession.pendingACPSteeringInstructions.isEmpty)
+        XCTAssertTrue(recorder.sentTexts().isEmpty)
+    }
+
+    func testCoordinatorDirectiveRejectsMissingLiveCoordinatorWithoutCreatingSession() async {
+        let vm = makeViewModel()
+        let existingTabIDs = Set(vm.sessions.keys)
+
+        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+            "unreachable",
+            coordinatorSessionID: UUID()
+        )
+
+        guard case let .blocked(message) = result else {
+            return XCTFail("Expected unreachable Coordinator directive to be blocked")
+        }
+        XCTAssertFalse(message.isEmpty)
+        XCTAssertEqual(Set(vm.sessions.keys), existingTabIDs)
+    }
+
     private func makeViewModel(
         onCancelTools: @escaping AgentModeViewModel.MCPRunToolCanceller = { _, _ in 0 },
         codexController: StopSubmitNoopCodexController? = nil

@@ -23,6 +23,8 @@ struct CoordinatorModeView: View {
     @State private var presentationMode: PresentationMode = .board
     @State private var selectedRowID: UUID?
     @State private var filterText = ""
+    @State private var coordinatorDirectiveDraft = ""
+    @State private var isSubmittingCoordinatorDirective = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -167,13 +169,10 @@ struct CoordinatorModeView: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Read-only PR3 shell", systemImage: "lock")
-                    .font(CoordinatorTypography.cardTitle)
-                Text("Composer, approvals, retries, drag dispatch, and status mutation intentionally stay out of this surface.")
-                    .font(CoordinatorTypography.body)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            if rail.isComposerEnabled {
+                coordinatorComposer(rail)
+            } else {
+                coordinatorComposerFallback(rail)
             }
 
             Spacer()
@@ -399,6 +398,114 @@ struct CoordinatorModeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color(nsColor: .controlBackgroundColor).opacity(CoordinatorStyle.panelFillOpacity))
+    }
+
+    private func coordinatorComposer(_ rail: CoordinatorModeCoordinatorRail) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Directive", systemImage: "paperplane")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Button("Clear Chat") {
+                    viewModel.clearCoordinatorRailTranscript()
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+                .disabled(viewModel.railTranscriptEntries.isEmpty)
+            }
+
+            if viewModel.railTranscriptEntries.isEmpty {
+                Text("Accepted directives appear here. Coordinator responses and child-session effects refresh through the board.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(viewModel.railTranscriptEntries) { entry in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(entry.role.displayName)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Text(entry.text)
+                                    .font(.caption)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .windowBackgroundColor)))
+                        }
+                    }
+                }
+                .frame(maxHeight: 160)
+            }
+
+            if !rail.isComposerSendEnabled {
+                Text("Coordinator is mid-run. Send directives when it reaches an ordinary turn boundary.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            TextField("Message the Coordinator", text: $coordinatorDirectiveDraft, axis: .vertical)
+                .lineLimit(2 ... 5)
+                .textFieldStyle(.roundedBorder)
+                .disabled(isSubmittingCoordinatorDirective || !rail.isComposerSendEnabled)
+                .onSubmit {
+                    submitCoordinatorDirective()
+                }
+
+            HStack {
+                if let notice = viewModel.composerNotice, !notice.isEmpty {
+                    Text(notice)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button(isSubmittingCoordinatorDirective ? "Sending…" : "Send") {
+                    submitCoordinatorDirective()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!canSubmitCoordinatorDirective)
+            }
+        }
+    }
+
+    private func coordinatorComposerFallback(_ rail: CoordinatorModeCoordinatorRail) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Coordinator composer unavailable", systemImage: "lock")
+                .font(.subheadline.weight(.semibold))
+            Text("The scoped composer is enabled only for a Coordinator with live state in this window.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if rail.openAgentChatRoute != nil {
+                openAgentChatButton(route: rail.openAgentChatRoute, title: "Open agent chat")
+            }
+        }
+    }
+
+    private var canSubmitCoordinatorDirective: Bool {
+        viewModel.snapshot.coordinatorRail.isComposerSendEnabled
+            && !isSubmittingCoordinatorDirective
+            && !coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func submitCoordinatorDirective() {
+        let draft = coordinatorDirectiveDraft
+        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !isSubmittingCoordinatorDirective
+        else { return }
+        isSubmittingCoordinatorDirective = true
+        Task { @MainActor in
+            let result = await viewModel.submitCoordinatorDirective(draft)
+            if result == .accepted {
+                coordinatorDirectiveDraft = ""
+            }
+            isSubmittingCoordinatorDirective = false
+        }
     }
 
     private func mcpFooter(_ awareness: CoordinatorModeMCPAwareness) -> some View {
@@ -641,6 +748,14 @@ private extension CoordinatorModeCoordinatorRail.SelectionSource {
     }
 }
 
+private extension CoordinatorModeRailTranscriptEntry.Role {
+    var displayName: String {
+        switch self {
+        case .user: "You"
+        }
+    }
+}
+
 private extension CoordinatorModeStatusGroup {
     var accentColor: Color {
         switch self {
@@ -814,7 +929,9 @@ private extension AgentSessionRunState {
                     selectionSource: .mcpLineageRoot,
                     title: "Coordinate PR stack",
                     isLiveInCurrentWindow: true,
-                    openAgentChatRoute: nil
+                    openAgentChatRoute: nil,
+                    isComposerEnabled: true,
+                    isComposerSendEnabled: false
                 ),
                 pendingInteractions: [],
                 mcpAwareness: CoordinatorModeMCPAwareness(

@@ -72,12 +72,12 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 
 ## 9. Coordinator composer
 
-- [ ] 9.1 Enable the Coordinator composer only when the selected/detected Coordinator has current-window live state.
-- [ ] 9.2 Disable the composer or show `Open agent chat` when no Coordinator exists, the Coordinator is persisted-only, or the Coordinator is owned by another window.
-- [ ] 9.3 Deliver submitted directives as ordinary user messages through the existing Agent Mode message path.
-- [ ] 9.4 Do not define structured directive envelopes, cross-window directive routing, Coordinator-view-side interrupt/steer semantics, or direct child-session mutation in v1.
-- [ ] 9.5 Echo accepted user directives into the Coordinator rail transcript when appropriate, while surfacing Coordinator responses and child-session effects through normal coarse snapshot refresh.
-- [ ] 9.6 Add tests for composer enablement, unreachable Coordinator fallback, ordinary-message dispatch, and no direct board/session mutation.
+- [x] 9.1 Enable the Coordinator composer only when the selected/detected Coordinator has current-window live state.
+- [x] 9.2 Disable the composer or show `Open agent chat` when no Coordinator exists, the Coordinator is persisted-only, or the Coordinator is owned by another window.
+- [x] 9.3 Deliver submitted directives as ordinary user messages through the existing Agent Mode message path.
+- [x] 9.4 Do not define structured directive envelopes, cross-window directive routing, Coordinator-view-side interrupt/steer semantics, or direct child-session mutation in v1.
+- [x] 9.5 Echo accepted user directives into the Coordinator rail transcript when appropriate, while surfacing Coordinator responses and child-session effects through normal coarse snapshot refresh.
+- [x] 9.6 Add tests for composer enablement, unreachable Coordinator fallback, ordinary-message dispatch, and no direct board/session mutation.
 
 ## 10. Coordinator view UI shell
 
@@ -91,6 +91,6 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 
 ## 11. Validation
 
-- [ ] 11.1 Run the focused unit tests added for snapshot projection, Coordinator identity, Coordinator composer, pending interactions, MCP projection, and deep links.
+- [x] 11.1 Run the focused unit tests added for snapshot projection, Coordinator identity, Coordinator composer, pending interactions, MCP projection, and deep links.
 - [x] 11.2 Run the smallest relevant coordinated Swift validation lane for touched app/UI files.
 - [x] 11.3 Run `openspec validate add-coordinator-mode`.
