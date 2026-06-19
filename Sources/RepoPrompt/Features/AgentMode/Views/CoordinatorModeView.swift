@@ -1,4 +1,21 @@
+import AppKit
 import SwiftUI
+
+private struct CoordinatorSidebarMaterialView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        view.material = .sidebar
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.blendingMode = .behindWindow
+        nsView.state = .followsWindowActiveState
+        nsView.material = .sidebar
+    }
+}
 
 struct CoordinatorModeView: View {
     enum PresentationMode: String, CaseIterable, Identifiable {
@@ -894,7 +911,7 @@ private struct CoordinatorVisualMetrics {
 
 private enum CoordinatorStyle {
     static let cardFillOpacity = 0.35
-    static let panelFillOpacity = 0.08
+    static let panelFillOpacity = 0.04
     static let groupedFillOpacity = 0.55
     static let railCardFillOpacity = 0.35
     static let emptyColumnFillOpacity = 0.12
@@ -936,7 +953,7 @@ private enum CoordinatorSidebarPanelEdge {
 
 private extension View {
     func coordinatorSidebarPanel(edge: CoordinatorSidebarPanelEdge) -> some View {
-        background(.thinMaterial)
+        background(CoordinatorSidebarMaterialView())
             .background(Color(nsColor: .controlBackgroundColor).opacity(CoordinatorStyle.panelFillOpacity))
             .overlay(alignment: edge.alignment) {
                 Rectangle()
@@ -948,7 +965,10 @@ private extension View {
     func coordinatorSidebarHeaderPill(cornerRadius: CGFloat) -> some View {
         padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.18))
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(CoordinatorStyle.hairline, lineWidth: 0.5)
