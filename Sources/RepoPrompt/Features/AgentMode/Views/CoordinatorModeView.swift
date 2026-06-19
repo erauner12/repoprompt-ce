@@ -37,41 +37,29 @@ struct CoordinatorModeView: View {
             let selectedRow = selectedRow(in: sections)
             let metrics = visualMetrics
             let useList = presentationMode == .list || proxy.size.width < 760
+            let forceList = useList && presentationMode == .board
             let showRail = proxy.size.width >= 900
             let showInspector = proxy.size.width >= 1120 && selectedRow != nil
 
-            VStack(spacing: 0) {
-                header(snapshot: snapshot, forceList: useList && presentationMode == .board, metrics: metrics)
-
-                Divider()
-
-                HStack(spacing: 0) {
-                    if showRail {
-                        coordinatorRail(snapshot.coordinatorRail, metrics: metrics)
-                            .frame(width: metrics.railWidth)
-                        Divider()
-                    }
-
-                    Group {
-                        if snapshot.isEmpty {
-                            emptyState(snapshot: snapshot, metrics: metrics)
-                        } else if useList {
-                            listView(sections: sections, metrics: metrics)
-                        } else {
-                            boardView(sections: sections, metrics: metrics)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                    if showInspector, let selectedRow {
-                        Divider()
-                        inspector(row: selectedRow, metrics: metrics)
-                            .frame(width: metrics.inspectorWidth)
-                    }
+            HStack(spacing: 0) {
+                if showRail {
+                    coordinatorRail(snapshot: snapshot, metrics: metrics)
+                        .frame(width: metrics.railWidth)
                 }
 
-                Divider()
-                mcpFooter(snapshot.mcpAwareness, metrics: metrics)
+                coordinatorContent(
+                    snapshot: snapshot,
+                    sections: sections,
+                    useList: useList,
+                    forceList: forceList,
+                    metrics: metrics
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if showInspector, let selectedRow {
+                    inspector(row: selectedRow, metrics: metrics)
+                        .frame(width: metrics.inspectorWidth)
+                }
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
@@ -86,57 +74,74 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func header(snapshot: CoordinatorModeSnapshot, forceList: Bool, metrics: CoordinatorVisualMetrics) -> some View {
-        VStack(spacing: metrics.headerVerticalSpacing) {
-            HStack(alignment: .center, spacing: metrics.headerHorizontalSpacing) {
-                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                    Text("Coordinator")
-                        .font(metrics.headerTitle)
-                    Text("Read-only mission control for this workspace")
-                        .font(metrics.body)
-                        .foregroundStyle(.secondary)
+    private func coordinatorContent(
+        snapshot: CoordinatorModeSnapshot,
+        sections: [CoordinatorModeStatusSection],
+        useList: Bool,
+        forceList: Bool,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(spacing: 0) {
+            boardControls(forceList: forceList, metrics: metrics)
+                .padding(.horizontal, metrics.outerPadding)
+                .padding(.vertical, metrics.headerPadding)
+                .background(.regularMaterial)
+
+            Group {
+                if snapshot.isEmpty {
+                    emptyState(snapshot: snapshot, metrics: metrics)
+                } else if useList {
+                    listView(sections: sections, metrics: metrics)
+                } else {
+                    boardView(sections: sections, metrics: metrics)
                 }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                Spacer()
+            Divider()
+            mcpFooter(snapshot.mcpAwareness, metrics: metrics)
+        }
+    }
 
-                countPill("Total", snapshot.counts.totalRows, color: .secondary, metrics: metrics)
-                countPill("Needs you", snapshot.counts.needsYou, color: .orange, metrics: metrics)
-                countPill("Blocked", snapshot.counts.blocked, color: .red, metrics: metrics)
-                countPill("Working", snapshot.counts.working, color: .blue, metrics: metrics)
-                countPill("Stale", snapshot.counts.stalePersistedOnly, color: .secondary, metrics: metrics)
+    private func boardControls(forceList: Bool, metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.controlSpacing) {
+            presentationPicker(metrics: metrics)
+            sortPicker(metrics: metrics)
+            filterSearchBox(metrics: metrics)
+                .frame(width: metrics.searchWidth)
+
+            if forceList {
+                forceListLabel(metrics: metrics)
             }
 
-            HStack(spacing: metrics.controlSpacing) {
-                Picker("View", selection: $presentationMode) {
-                    ForEach(PresentationMode.allCases) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: metrics.controlWidth)
-                .accessibilityLabel("Presentation")
+            Spacer(minLength: 0)
+        }
+    }
 
-                Picker("Sort", selection: $viewModel.sortMode) {
-                    ForEach(CoordinatorModeSortMode.allCases, id: \.self) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-                .frame(width: metrics.controlWidth)
-
-                filterSearchBox(metrics: metrics)
-                    .frame(width: metrics.searchWidth)
-
-                if forceList {
-                    Label("Board falls back to List at narrow widths", systemImage: "rectangle.split.2x1")
-                        .font(metrics.body)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
+    private func presentationPicker(metrics: CoordinatorVisualMetrics) -> some View {
+        Picker("View", selection: $presentationMode) {
+            ForEach(PresentationMode.allCases) { mode in
+                Text(mode.displayName).tag(mode)
             }
         }
-        .padding(.horizontal, metrics.outerPadding)
-        .padding(.vertical, metrics.headerPadding)
+        .pickerStyle(.segmented)
+        .frame(width: metrics.controlWidth)
+        .accessibilityLabel("Presentation")
+    }
+
+    private func sortPicker(metrics: CoordinatorVisualMetrics) -> some View {
+        Picker("Sort", selection: $viewModel.sortMode) {
+            ForEach(CoordinatorModeSortMode.allCases, id: \.self) { mode in
+                Text(mode.displayName).tag(mode)
+            }
+        }
+        .frame(width: metrics.controlWidth)
+    }
+
+    private func forceListLabel(metrics: CoordinatorVisualMetrics) -> some View {
+        Label("Board falls back to List at narrow widths", systemImage: "rectangle.split.2x1")
+            .font(metrics.body)
+            .foregroundStyle(.secondary)
     }
 
     private func filterSearchBox(metrics: CoordinatorVisualMetrics) -> some View {
@@ -180,15 +185,28 @@ struct CoordinatorModeView: View {
         )
     }
 
-    private func coordinatorRail(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
-        VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
-            Label("Coordinator rail", systemImage: "person.2.wave.2")
-                .font(metrics.sectionTitle)
+    private func coordinatorRail(
+        snapshot: CoordinatorModeSnapshot,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let rail = snapshot.coordinatorRail
+
+        return VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                Text("Coordinator")
+                    .font(metrics.headerTitle)
+                Text("Read-only mission control for this workspace")
+                    .font(metrics.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Group {
                 switch rail.state {
                 case .selected:
                     VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+                        Label("Coordinator rail", systemImage: "person.2.wave.2")
+                            .font(metrics.cardTitle)
                         Text(rail.title ?? "Agent Session")
                             .font(metrics.cardTitle)
                             .lineLimit(2)
@@ -206,6 +224,8 @@ struct CoordinatorModeView: View {
                     }
                 case .chooseCoordinator:
                     VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+                        Label("Coordinator rail", systemImage: "person.2.wave.2")
+                            .font(metrics.cardTitle)
                         Text("No Coordinator selected")
                             .font(metrics.cardTitle)
                         Text("The board still shows workspace sessions. Coordinator identity can be selected or auto-detected by structured lineage in later layers.")
@@ -234,7 +254,7 @@ struct CoordinatorModeView: View {
             Spacer()
         }
         .padding(metrics.outerPadding)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(CoordinatorStyle.panelFillOpacity))
+        .background(.regularMaterial)
     }
 
     private func boardView(sections: [CoordinatorModeStatusSection], metrics: CoordinatorVisualMetrics) -> some View {
@@ -412,7 +432,7 @@ struct CoordinatorModeView: View {
                     }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
-                    .help("Hide Inspector")
+                    .hoverTooltip("Hide Inspector")
                     .accessibilityLabel("Hide Inspector")
                 }
 
@@ -470,7 +490,7 @@ struct CoordinatorModeView: View {
             .padding(metrics.outerPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(CoordinatorStyle.panelFillOpacity))
+        .background(.regularMaterial)
     }
 
     private func mcpFooter(_ awareness: CoordinatorModeMCPAwareness, metrics: CoordinatorVisualMetrics) -> some View {
@@ -497,7 +517,7 @@ struct CoordinatorModeView: View {
         }
         .padding(.horizontal, metrics.outerPadding)
         .padding(.vertical, metrics.footerVerticalPadding)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(CoordinatorStyle.panelFillOpacity))
+        .background(.regularMaterial)
     }
 
     private func emptyState(snapshot: CoordinatorModeSnapshot, metrics: CoordinatorVisualMetrics) -> some View {
@@ -568,23 +588,6 @@ struct CoordinatorModeView: View {
                     .foregroundStyle(.secondary)
             }
         }
-    }
-
-    private func countPill(_ label: String, _ value: Int, color: Color, metrics: CoordinatorVisualMetrics) -> some View {
-        VStack(spacing: metrics.tightSpacing) {
-            Text("\(value)")
-                .font(metrics.countValue)
-            Text(label)
-                .font(metrics.micro)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, metrics.countPillHorizontalPadding)
-        .padding(.vertical, metrics.countPillVerticalPadding)
-        .foregroundStyle(.secondary)
-        .background(Capsule().fill(color.opacity(CoordinatorStyle.summaryPillFillOpacity)))
-        .overlay(
-            Capsule().stroke(color.opacity(CoordinatorStyle.summaryPillStrokeOpacity), lineWidth: 0.5)
-        )
     }
 
     private func statusChip(_ text: String, color: Color, metrics: CoordinatorVisualMetrics) -> some View {
@@ -698,10 +701,6 @@ private struct CoordinatorVisualMetrics {
         fontPreset.swiftUIFont(sizeAtNormal: 10, weight: .medium)
     }
 
-    var countValue: Font {
-        fontPreset.swiftUIFont(sizeAtNormal: 12, weight: .medium, design: .rounded).monospacedDigit()
-    }
-
     var searchFont: Font {
         fontPreset.swiftUIFont(sizeAtNormal: 13)
     }
@@ -731,14 +730,6 @@ private struct CoordinatorVisualMetrics {
     }
 
     var headerPadding: CGFloat {
-        fontPreset.scaledClamped(12, max: 16)
-    }
-
-    var headerVerticalSpacing: CGFloat {
-        fontPreset.scaledClamped(10, max: 14)
-    }
-
-    var headerHorizontalSpacing: CGFloat {
         fontPreset.scaledClamped(12, max: 16)
     }
 
@@ -788,14 +779,6 @@ private struct CoordinatorVisualMetrics {
 
     var footerVerticalPadding: CGFloat {
         fontPreset.scaledClamped(8, max: 11)
-    }
-
-    var countPillHorizontalPadding: CGFloat {
-        fontPreset.scaledClamped(10, max: 14)
-    }
-
-    var countPillVerticalPadding: CGFloat {
-        fontPreset.scaledClamped(6, max: 8)
     }
 
     var miniPillHorizontalPadding: CGFloat {
@@ -873,8 +856,6 @@ private enum CoordinatorStyle {
     static let groupedFillOpacity = 0.55
     static let railCardFillOpacity = 0.38
     static let emptyColumnFillOpacity = 0.12
-    static let summaryPillFillOpacity = 0.035
-    static let summaryPillStrokeOpacity = 0.06
     static let statusChipFillOpacity = 0.04
     static let statusChipStrokeOpacity = 0.07
 
