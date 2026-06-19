@@ -53,6 +53,12 @@ final class CoordinatorModeViewModel: ObservableObject {
         refresh()
     }
 
+    #if DEBUG
+        func testPublish(_ snapshot: CoordinatorModeSnapshot) {
+            self.snapshot = snapshot
+        }
+    #endif
+
     private func publishIfChanged(_ nextSnapshot: CoordinatorModeSnapshot) {
         let nextFingerprint = nextSnapshot.fingerprint
         guard lastPublishedFingerprint != nextFingerprint else { return }

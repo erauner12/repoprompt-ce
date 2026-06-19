@@ -6,6 +6,7 @@ struct ContentRootShellView: View {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var workspaceApprovalManager: WorkspaceApprovalManager
     @Binding var showWorkspaceSwitchOverlay: Bool
+    @Binding var mainSurfaceSelection: MainSurface
 
     var body: some View {
         ZStack {
@@ -55,6 +56,16 @@ struct ContentRootShellView: View {
                 onCreateOnboardingViewModelIfNeeded: { viewModel.ensureOnboardingViewModel() },
                 onContinueToMain: {
                     viewModel.continueFromOnboarding()
+                }
+            )
+        } else if viewModel.canSelectMainSurface, mainSurfaceSelection == .coordinatorMode {
+            CoordinatorModeView(
+                viewModel: viewModel.state.agentModeViewModel.coordinatorModeViewModel,
+                onOpenAgentChat: { route in
+                    mainSurfaceSelection = .agentMode
+                    Task { @MainActor in
+                        _ = await viewModel.state.routeToAgentSession(route)
+                    }
                 }
             )
         } else {

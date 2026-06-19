@@ -7,8 +7,24 @@ struct ContentViewToolbarContent: ToolbarContent {
     let recommendationWizardViewModel: RecommendationWizardViewModel?
     @Binding var showRecommendationsPopover: Bool
     @Binding var showMCPServerPopover: Bool
+    @Binding var mainSurfaceSelection: MainSurface
+    let isMainSurfaceSwitchingAvailable: Bool
 
     var body: some ToolbarContent {
+        ToolbarItem(placement: .automatic) {
+            if isMainSurfaceSwitchingAvailable {
+                Picker("Main Surface", selection: $mainSurfaceSelection) {
+                    ForEach(MainSurface.allCases) { surface in
+                        Label(surface.displayName, systemImage: surface.systemImage)
+                            .tag(surface)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 86)
+                .accessibilityLabel("Main surface")
+            }
+        }
+
         // Recommendation wizard button
         ToolbarItem(placement: .automatic) {
             if let wizardVM = recommendationWizardViewModel {

@@ -1,11 +1,11 @@
 ## 1. Main surface and entry point
 
-- [ ] 1.1 Add window-scoped main-surface selection state inside `.main`.
-- [ ] 1.2 Preserve Agent Mode as the configured default `.main` landing surface in v1.
-- [ ] 1.3 Add a persistent macOS-native peer surface switcher for Agent Mode ↔ Coordinator mode that is available only after a real workspace is active; reject iOS-style tab bars.
-- [ ] 1.4 Mirror Agent Mode and Coordinator mode choices in the View menu so navigation remains available when toolbar chrome is hidden or customized.
-- [ ] 1.5 Preserve surface selection as sticky per live window while keeping Coordinator selection keyed by active workspace; prefer `@SceneStorage` or equivalent scene-level state.
-- [ ] 1.6 Preserve `AppLaunchConfiguration.forcedRootRoute == .main` behavior so deterministic UI tests still land on Agent Mode unless a forced-surface knob is added.
+- [x] 1.1 Add window-scoped main-surface selection state inside `.main`.
+- [x] 1.2 Preserve Agent Mode as the configured default `.main` landing surface in v1.
+- [x] 1.3 Add a persistent macOS-native peer surface switcher for Agent Mode ↔ Coordinator mode that is available only after a real workspace is active; reject iOS-style tab bars.
+- [x] 1.4 Mirror Agent Mode and Coordinator mode choices in the View menu so navigation remains available when toolbar chrome is hidden or customized.
+- [x] 1.5 Preserve surface selection as sticky per live window while keeping Coordinator selection keyed by active workspace; prefer `@SceneStorage` or equivalent scene-level state.
+- [x] 1.6 Preserve `AppLaunchConfiguration.forcedRootRoute == .main` behavior so deterministic UI tests still land on Agent Mode unless a forced-surface knob is added.
 
 ## 2. Coordinator view snapshot projection
 
@@ -42,9 +42,9 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 5.4 Ensure persisted-only cards/rows never contribute to live `Needs you` or `Working` counts in v1 and render with stale/persisted-only treatment.
 - [x] 5.5 Map Blocked from `.failed` run state or conflicted worktree/merge attention.
 - [x] 5.6 Map Working from current-window live `.running`, Done from `.completed`/`.cancelled`, and Idle from `.idle` when no higher-priority group applies.
-- [ ] 5.7 Implement read-only sort controls for `Last updated` (default), `Name`, and `Priority` across board cards and list rows.
+- [x] 5.7 Implement read-only sort controls for `Last updated` (default), `Name`, and `Priority` across board cards and list rows.
 - [x] 5.8 Ensure sorting only reorders cards/rows within existing status groups and never changes group membership, run state, pending state, Coordinator relationship, or persisted session state.
-- [ ] 5.9 Ensure v1 does not expose drag-to-reorder, drag-to-dispatch, or drag-to-change-status interactions.
+- [x] 5.9 Ensure v1 does not expose drag-to-reorder, drag-to-dispatch, or drag-to-change-status interactions.
 - [x] 5.10 Add snapshot adapter tests for grouping, counts, stale-row count exclusion, and sort-mode behavior.
 
 ## 6. Pending interaction summaries
@@ -81,12 +81,12 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 
 ## 10. Coordinator view UI shell
 
-- [ ] 10.1 Build the Coordinator view shell with top counts, optional Coordinator rail, board-first status columns/cards, List view alternate/fallback, optional inspector / trailing detail column, MCP footer, and filter affordance.
-- [ ] 10.2 Keep the main board/list content calm by default: no full transcripts, full logs, diffs, file viewers, streaming tool feeds, or card/row write controls.
-- [ ] 10.3 Add Board/List view switching where Board is the v1 default and List renders the same snapshot as an alternate.
-- [ ] 10.4 Add responsive behavior: inspector yields before the board, Coordinator chat may collapse to a rail, high-priority columns remain visible when possible, lower-priority columns may de-emphasize/collapse with visible counts, board columns preserve usable width or scroll horizontally, and widths below two usable board columns fall back to List.
-- [ ] 10.5 Add progressive disclosure from count to card/row, optional sourced inspector summaries, and Agent Mode; keep full raw logs, transcripts, files, and diffs in Agent Mode for v1.
-- [ ] 10.6 Keep the Coordinator rail focused on Coordinator identity/selection, optional context, and scoped current-window composer; do not add a separate by-agent roster or `Agents` tab in v1.
+- [x] 10.1 Build the Coordinator view shell with top counts, optional Coordinator rail, board-first status columns/cards, List view alternate/fallback, optional inspector / trailing detail column, MCP footer, and filter affordance.
+- [x] 10.2 Keep the main board/list content calm by default: no full transcripts, full logs, diffs, file viewers, streaming tool feeds, or card/row write controls.
+- [x] 10.3 Add Board/List view switching where Board is the v1 default and List renders the same snapshot as an alternate.
+- [x] 10.4 Add responsive behavior: inspector yields before the board, Coordinator chat may collapse to a rail, high-priority columns remain visible when possible, lower-priority columns may de-emphasize/collapse with visible counts, board columns preserve usable width or scroll horizontally, and widths below two usable board columns fall back to List.
+- [x] 10.5 Add progressive disclosure from count to card/row, optional sourced inspector summaries, and Agent Mode; keep full raw logs, transcripts, files, and diffs in Agent Mode for v1.
+- [x] 10.6 Keep the Coordinator rail focused on Coordinator identity/selection, optional context, and scoped current-window composer; do not add a separate by-agent roster or `Agents` tab in v1.
 - [ ] 10.7 Add UI previews or smoke states for board-default, board-card-selected, inspector-collapsed, list view, sort menu, Coordinator-composer enabled/disabled, empty workspace, active, needs-user, blocked, MCP-off, MCP-empty, MCP-active, filtered, zero-Coordinator, stale/persisted-only card/row, lower-priority column collapsed/de-emphasized, and multiple-Coordinator most-recent states.
 
 ## 11. Validation
