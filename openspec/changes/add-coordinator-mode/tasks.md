@@ -88,6 +88,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.5 Add progressive disclosure from count to card/row, optional sourced inspector summaries, and Agent Mode; keep full raw logs, transcripts, files, and diffs in Agent Mode for v1.
 - [x] 10.6 Keep the Coordinator rail focused on Coordinator identity/selection, optional context, and scoped current-window composer; do not add a separate by-agent roster or `Agents` tab in v1.
 - [ ] 10.7 Add UI previews or smoke states for board-default, board-card-selected, inspector-collapsed, list view, sort menu, Coordinator-composer enabled/disabled, empty workspace, active, needs-user, blocked, MCP-off, MCP-empty, MCP-active, filtered, zero-Coordinator, stale/persisted-only card/row, lower-priority column collapsed/de-emphasized, and multiple-Coordinator most-recent states.
+- [x] 10.8 Bind the PR3 Coordinator shell to Agent Mode font-scale, search-field, chip, card, and subtle selection/hover chrome without changing snapshot or write-control behavior.
 
 ## 11. Validation
 
