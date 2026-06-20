@@ -10,8 +10,8 @@
 - [ ] 2.1 Verify the Coordinator v1 flow can reuse existing `agent_run.start`, `poll`, `wait`, and `steer` behavior without requiring a new native lifecycle subsystem.
 - [ ] 2.2 Map Coordinator active/actionable/terminal categories to existing Agent Mode and MCP-facing state vocabulary, including expired handles as terminal/untrackable outcomes.
 - [ ] 2.3 Use existing structured pending-interaction metadata to surface actionable state; keep Coordinator `respond` authorization and stale-interaction failure semantics deferred unless accepted.
-- [ ] 2.4 Use existing terminal output, status text, failure reason, summaries, or compact supervision outputs for Coordinator failure explanation and rollups.
-- [ ] 2.5 Add only Coordinator-delta contract tests: lifecycle category mapping, expired-handle handling, summary/failure diagnostics, and clean gating for unsupported Coordinator operations.
+- [ ] 2.4 Use existing terminal output, status text, failure reason, and compact failure diagnostics for Coordinator failure explanation and rollups.
+- [ ] 2.5 Add only Coordinator-delta contract tests: lifecycle category mapping, expired-handle handling, status/failure diagnostics, and clean gating for unsupported Coordinator operations.
 - [ ] 2.6 If implementation exposes duplicated MCP-specific parsing or `Value`-level coupling, file a follow-up for typed native facade extraction instead of making it a first Coordinator prerequisite.
 
 ## 3. Coordinator runtime identity, ownership, and launch
@@ -25,22 +25,24 @@
 ## 4. Coordinator role behavior and prompt contract
 
 - [ ] 4.1 Define the Coordinator-specific runtime prompt/instructions so the role classifies user input as conversational/status/advisory, coordination instruction, or workspace/code work request before acting.
-- [ ] 4.2 Ensure conversational/status/advisory input can be answered directly from Coordinator-visible lifecycle state, action records, summaries, bounded failure diagnostics, artifact references, and conversation history without spawning or steering another agent.
+- [ ] 4.2 Ensure conversational/status/advisory input can be answered directly from Coordinator-visible lifecycle state, action records, terminal output, status text, compact failure diagnostics, and conversation history without spawning or steering another agent.
 - [ ] 4.3 Ensure coordination instructions use lifecycle/control APIs and structured action records.
 - [ ] 4.4 Ensure workspace/code work requests are delegated to appropriately scoped Agent Mode sessions rather than handled through Coordinator tools directly.
-- [ ] 4.5 Add deterministic prompt assembly or routing/classification tests where possible; avoid brittle assertions on model-generated natural-language output.
+- [ ] 4.5 Teach the Coordinator prompt to continue polling or waiting on remaining delegated run handles after a multi-session wait returns the first actionable/terminal run, so detached sibling runs are not left unattended.
+- [ ] 4.6 Add deterministic prompt assembly or routing/classification tests where possible; avoid brittle assertions on model-generated natural-language output.
 
 ## 5. Coordinator scope and permissions
 
 - [ ] 5.1 Implement current-window active-workspace top-level fleet visibility for the Coordinator runtime.
-- [ ] 5.2 Bypass ordinary child-only `agent_manage.list_sessions` scoping for Coordinator connections so the model-visible fleet matches the Coordinator view projection, excluding the Coordinator runtime itself.
-- [ ] 5.3 Restrict the first Coordinator role toolset to lifecycle/control-plane capabilities: session/model listing, start/spawn, poll/status/wait, message/steer, and compact summarize/failure diagnostics.
+- [ ] 5.2 Bypass ordinary child-only `agent_manage.list_sessions` scoping for Coordinator connections so the model-visible fleet has membership parity with the Coordinator view's active-workspace top-level projection, excluding ordering, pagination, transient liveness differences, and the Coordinator runtime itself.
+- [ ] 5.3 Restrict the first Coordinator role toolset to lifecycle/control-plane capabilities: session/model listing, start/spawn, poll/status/wait, message/steer, and status/failure reporting from existing snapshot fields.
 - [ ] 5.4 Keep Coordinator access to `respond` unavailable until authorization and stale-interaction failure semantics are accepted; if accepted, audit it as a structured action record.
 - [ ] 5.5 Block direct tab focus, tab-scoped file read/search, file-selection mutation, worktree mutation, approval/decline, cancel, stop, and unbounded full-log/full-transcript read unless a later spec grants Coordinator access.
 - [ ] 5.6 Enforce whole-tool boundaries through MCP/Agent Mode tool policy and advertisement.
 - [ ] 5.7 Enforce op/arg-level boundaries inside `agent_run` / `agent_manage` dispatch for Coordinator connections, including `respond`, `cancel`, `stop_session`, `cleanup_sessions`, and worktree creation/binding args on `agent_run.start`.
 - [ ] 5.8 Ensure requests requiring direct workspace investigation or mutation are routed to delegated Agent Mode sessions rather than handled by Coordinator tools directly.
 - [ ] 5.9 Add focused permission tests for allowed lifecycle tools, Coordinator-specific list scope, rejected op/arg-level actions, and blocked tab/workspace mutation tools.
+- [ ] 5.10 Add membership-parity fixture coverage proving Coordinator list scope and Coordinator view projection include the same active-workspace top-level sessions, excluding ordering, pagination, transient liveness differences, and the Coordinator runtime itself.
 
 ## 6. Coordinator context, history, and projection invisibility
 
@@ -52,10 +54,10 @@
 ## 7. Instruction/action audit contract
 
 - [ ] 7.1 Define the structured Coordinator action record with source, target, action type, lifecycle handle, status, and failure fields.
-- [ ] 7.2 Implement the initial action verbs: list, start/spawn, poll/wait, message/steer, and summarize/export.
-- [ ] 7.3 Surface action delivery/completion/failure states from structured lifecycle state, pending interactions, bounded failure diagnostics, and artifact references without parsing assistant prose.
+- [ ] 7.2 Implement the initial action verbs: list, start/spawn, poll/wait, message/steer, and report status/failure.
+- [ ] 7.3 Surface action delivery/completion/failure states from structured lifecycle state, pending interactions, terminal output, status text, and compact failure diagnostics without parsing assistant prose.
 - [ ] 7.4 Support instructions that create one delegated run, sequential delegated runs, or multiple concurrent delegated runs by tracking each delegated run handle and action status separately.
-- [ ] 7.5 Ensure Coordinator v1 remains human-directed: observed session lifecycle changes may update sourced status/summaries, but must not trigger new higher-level directives without a later accepted autonomy spec.
+- [ ] 7.5 Ensure Coordinator v1 remains human-directed: observed session lifecycle changes may update sourced status/failure fields, but must not trigger new higher-level directives without a later accepted autonomy spec.
 - [ ] 7.6 Add tests for successful actions, failed delivery, terminal/actionable transitions, sequential and concurrent delegated-run tracking, no-autonomous-dispatch from background session changes, and unsupported higher-risk actions.
 
 ## 8. Coordinator view integration and instruction delivery

@@ -11,7 +11,7 @@ This change captures the architecture needed before implementation so the role i
 - Add a new `coordinator-role` capability describing the first real Coordinator runtime identity.
 - Define the Coordinator as a layer-above meta-agent, separate from Coordinator mode row/card projection.
 - Reuse existing `agent_run` / `agent_manage` lifecycle/control surfaces for v1 delegation instead of requiring a new native lifecycle subsystem.
-- Use a delegate-only first Coordinator capability boundary: list/supervise sessions, spawn/message/steer agents through explicit APIs, poll/wait for deterministic lifecycle state, and summarize/report compact failure diagnostics; do not directly focus tabs, read files, mutate selections, control worktrees, approve/decline, cancel/stop, or inspect full logs in v1.
+- Use a delegate-only first Coordinator capability boundary: list/supervise sessions, spawn/message/steer agents through explicit APIs, poll/wait for deterministic lifecycle state, and report status/failure from existing snapshot fields; do not directly focus tabs, read files, mutate selections, control worktrees, approve/decline, cancel/stop, or inspect full logs in v1.
 - Give the Coordinator current-window active-workspace top-level session visibility without applying the ordinary child-only agent filter.
 - Define Coordinator runtime ownership, launch/restore behavior, and the human-to-Coordinator instruction delivery path.
 - Require the Coordinator's identity marker to keep its context/history out of the supervised workspace fleet projection, even if storage reuses existing Agent session persistence.
@@ -34,4 +34,4 @@ None as a formal OpenSpec capability in this change. The existing in-flight `coo
 - MCP binding/tool policy: Coordinator scope requires current-window active-workspace top-level `list_sessions` visibility, whole-tool advertisement filtering, and op/arg-level guards for disallowed operations on otherwise-allowed tools.
 - Coordinator mode: must distinguish the temporary selected-session composer target from the real Coordinator runtime and define the real instruction delivery path.
 - Session projection: must exclude Coordinator-marked runtime state at the projection-input boundary so it is never shown as a supervised session.
-- Instruction/action control APIs: requires explicit list/spawn/poll/wait/steer/compact-summary behavior and auditable action records before implementation; higher-level directives remain deferred.
+- Instruction/action control APIs: requires explicit list/spawn/poll/wait/steer/status-reporting behavior and auditable action records before implementation; higher-level directives remain deferred.

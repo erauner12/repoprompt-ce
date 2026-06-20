@@ -43,13 +43,13 @@ The first Coordinator role SHALL use the existing `agent_run` and `agent_manage`
 
 #### Scenario: Pending interaction is visible
 - **WHEN** an Agent run/session requires user input, a question response, or an approval-like decision
-- **THEN** the Coordinator SHALL be able to surface structured pending-interaction metadata from existing snapshot/summary state
+- **THEN** the Coordinator SHALL be able to surface structured pending-interaction metadata from existing lifecycle snapshot state
 - **AND** Coordinator access to `respond` SHALL remain gated until authorization and stale-interaction failure semantics are accepted.
 
-#### Scenario: Summary and failure diagnostics are exposed
-- **WHEN** terminal output, status text, failure reason, summaries, or compact supervision outputs are available for a run/session
-- **THEN** the Coordinator SHALL be able to use those compact fields or references to explain status and failure
-- **AND** full logs, full transcripts, exported context, worktree metadata, and other broad artifact types SHALL remain gated or optional unless later Coordinator behavior requires them.
+#### Scenario: Status and failure diagnostics are exposed
+- **WHEN** terminal output, status text, failure reason, or compact failure diagnostics are available for a run/session
+- **THEN** the Coordinator SHALL be able to use those existing snapshot fields to explain status and failure
+- **AND** full logs, full transcripts, exported context, worktree metadata, compact-summary artifacts, and other broad artifact types SHALL remain gated or optional unless later Coordinator permissions grant them.
 
 #### Scenario: Native facade extraction is considered
 - **WHEN** implementation discovers duplicated MCP-specific lifecycle parsing or `Value`-level coupling
@@ -85,7 +85,7 @@ The Coordinator role SHALL use an explicit layer-above listing and control scope
 #### Scenario: Existing MCP child scope is insufficient
 - **WHEN** `agent_manage list_sessions` would normally scope an in-app agent caller to sessions whose parent is the caller
 - **THEN** the Coordinator connection SHALL bypass that child-only listing scope and enumerate the active-workspace top-level fleet instead
-- **AND** the Coordinator runtime's model-visible session list SHALL match the Coordinator view's active-workspace fleet projection, excluding the Coordinator runtime itself.
+- **AND** the Coordinator runtime's model-visible session list SHALL have membership parity with the Coordinator view's active-workspace top-level fleet projection, excluding ordering, pagination, transient liveness differences, and the Coordinator runtime itself.
 
 #### Scenario: Cross-window control is requested
 - **WHEN** a Coordinator behavior would observe or act beyond the current window's active workspace
@@ -101,7 +101,7 @@ The system SHALL define a Coordinator-specific role behavior contract for the ru
 - **AND** it SHALL NOT treat every user message as requiring a delegated Agent run.
 
 #### Scenario: Direct answer is sufficient
-- **WHEN** user input is conversational, advisory, or answerable from Coordinator-visible lifecycle state, action records, summaries, or artifact references
+- **WHEN** user input is conversational, advisory, or answerable from Coordinator-visible lifecycle state, action records, terminal output, status text, or failure diagnostics
 - **THEN** the Coordinator MAY answer directly without starting or steering another Agent run
 - **AND** it SHALL avoid inventing unavailable workspace details.
 
@@ -143,12 +143,12 @@ The first Coordinator role implementation SHALL use a delegate-only tool contrac
 
 #### Scenario: Coordinator observes session state
 - **WHEN** the Coordinator needs to understand workspace work in progress
-- **THEN** it SHALL use explicit session/model listing, lifecycle status, compact metadata, compact failure diagnostics, and artifact reference APIs
+- **THEN** it SHALL use explicit session/model listing, lifecycle status, compact metadata, terminal output, status text, and compact failure diagnostics
 - **AND** it SHALL NOT load full transcripts, files, diffs, or unbounded full logs as part of the first-version board supervision loop.
 
 #### Scenario: Coordinator directs agents
 - **WHEN** the Coordinator needs work performed by an agent
-- **THEN** it SHALL start, message, steer, poll, wait for, or request summaries from Agent runs/sessions through explicit lifecycle/control APIs
+- **THEN** it SHALL start, message, steer, poll, wait for, or report status/failure from Agent runs/sessions through explicit lifecycle/control APIs and snapshot fields
 - **AND** it SHALL leave tab focus, file reads/searches, file selection, and worktree context to the target agent session.
 
 #### Scenario: User instruction creates multiple delegated runs
@@ -156,7 +156,8 @@ The first Coordinator role implementation SHALL use a delegate-only tool contrac
 - **THEN** the Coordinator MAY start multiple delegated Agent runs through the accepted lifecycle/control APIs
 - **AND** it SHALL record each delegated run handle and action status separately
 - **AND** it SHALL observe each delegated run through deterministic lifecycle state rather than assistant prose
-- **AND** it SHALL summarize combined outcomes from lifecycle state, action records, and artifact references.
+- **AND** it SHALL continue polling or waiting on remaining delegated run handles after the first delegated run becomes actionable or terminal
+- **AND** it SHALL report combined outcomes from lifecycle state, action records, terminal output, status text, and compact failure diagnostics.
 
 #### Scenario: Respond capability is considered
 - **WHEN** the Coordinator needs to answer a pending interaction
@@ -175,7 +176,7 @@ The first Coordinator role implementation SHALL use a delegate-only tool contrac
 #### Scenario: Workspace investigation or mutation is requested
 - **WHEN** user intent requires direct codebase investigation, file reads/searches, file edits, selection changes, tab focus, or worktree mutation
 - **THEN** the first Coordinator role SHALL spawn or steer an appropriately scoped Agent Mode session to perform that work
-- **AND** the Coordinator SHALL observe the delegated session through lifecycle state, structured action status, and artifact references instead of using those workspace tools directly.
+- **AND** the Coordinator SHALL observe the delegated session through lifecycle state, structured action status, terminal output, status text, and compact failure diagnostics instead of using those workspace tools directly.
 
 ### Requirement: Coordinator context and history ownership
 The system SHALL keep Coordinator context, conversation history, and action/instruction logs invisible to the supervised workspace row projection.
@@ -200,12 +201,12 @@ The system SHALL represent first-version Coordinator role actions as structured,
 
 #### Scenario: First action set is used
 - **WHEN** the first Coordinator role implementation dispatches work
-- **THEN** it SHALL limit action types to the accepted initial set, expected to include list, start or spawn, poll or wait, message or steer, and summarize or export
+- **THEN** it SHALL limit action types to the accepted initial set, expected to include list, start or spawn, poll or wait, message or steer, and report status or failure
 - **AND** higher-risk actions SHALL remain unavailable until explicitly specified.
 
 #### Scenario: Session state changes without a user instruction
 - **WHEN** a supervised Agent run/session changes state after the user's last instruction
-- **THEN** the first Coordinator role MAY update status, summaries, and action records from sourced lifecycle state
+- **THEN** the first Coordinator role MAY update status fields and action records from sourced lifecycle state
 - **AND** it SHALL NOT issue new higher-level directives from observed session lifecycle changes unless a later accepted autonomy spec grants that behavior.
 
 #### Scenario: Action fails
