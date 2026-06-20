@@ -12,6 +12,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias InputProvider = @MainActor (_ sortMode: CoordinatorModeSortMode, _ selectedCoordinatorID: UUID?) -> CoordinatorModeSnapshotProjector.Input
     typealias DashboardVisibilityHandler = @MainActor (_ visible: Bool) -> Void
     typealias DirectiveSubmitter = @MainActor (_ text: String, _ coordinatorSessionID: UUID?, _ forceNewRuntime: Bool) async -> DirectiveSubmissionResult
+    typealias ChildDirectiveSubmitter = @MainActor (_ text: String, _ row: CoordinatorModeRow) async -> DirectiveSubmissionResult
     typealias CoordinatorResetHandler = @MainActor (_ coordinatorSessionID: UUID?) -> Void
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
@@ -29,6 +30,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let inputProvider: InputProvider
     private let dashboardVisibilityHandler: DashboardVisibilityHandler
     private let directiveSubmitter: DirectiveSubmitter
+    private let childDirectiveSubmitter: ChildDirectiveSubmitter
     private let coordinatorResetHandler: CoordinatorResetHandler
     private let projector: CoordinatorModeSnapshotProjector
     private var selectedCoordinatorIDByWorkspaceID: [UUID: UUID] = [:]
@@ -43,12 +45,16 @@ final class CoordinatorModeViewModel: ObservableObject {
         directiveSubmitter: @escaping DirectiveSubmitter = { _, _, _ in
             .rejected(message: "Coordinator composer is unavailable.")
         },
+        childDirectiveSubmitter: @escaping ChildDirectiveSubmitter = { _, _ in
+            .rejected(message: "Session replies are unavailable.")
+        },
         coordinatorResetHandler: @escaping CoordinatorResetHandler = { _ in },
         projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector()
     ) {
         self.inputProvider = inputProvider
         self.dashboardVisibilityHandler = dashboardVisibilityHandler
         self.directiveSubmitter = directiveSubmitter
+        self.childDirectiveSubmitter = childDirectiveSubmitter
         self.coordinatorResetHandler = coordinatorResetHandler
         self.projector = projector
     }
@@ -142,6 +148,26 @@ final class CoordinatorModeViewModel: ObservableObject {
             ))
         case let .rejected(message):
             composerNotice = message.isEmpty ? nil : message
+        }
+        return result
+    }
+
+    @discardableResult
+    func submitChildDirective(_ text: String, to row: CoordinatorModeRow) async -> DirectiveSubmissionResult {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return .rejected(message: "")
+        }
+        guard row.tabID != nil, !row.isPersistedOnly else {
+            return .rejected(message: "This session is not live in the current window.")
+        }
+        guard row.runState != .running else {
+            return .rejected(message: "This session is mid-run. Reply when it reaches a turn boundary.")
+        }
+
+        let result = await childDirectiveSubmitter(trimmed, row)
+        if result == .accepted {
+            refresh()
         }
         return result
     }
@@ -306,6 +332,16 @@ extension AgentModeViewModel {
             case let .blocked(message):
                 return .rejected(message: message)
             }
+        } childDirectiveSubmitter: { [weak self] text, row in
+            guard let self else {
+                return .rejected(message: "Session replies are unavailable.")
+            }
+            switch await submitChildDirectiveToAgentMode(text, row: row) {
+            case .submitted:
+                return .accepted
+            case let .blocked(message):
+                return .rejected(message: message)
+            }
         } coordinatorResetHandler: { [weak self] coordinatorSessionID in
             self?.clearCoordinatorRuntimeDemoTarget(preferredSessionID: coordinatorSessionID)
         }
@@ -337,6 +373,34 @@ extension AgentModeViewModel {
               target.expectedSourceAgentSessionID == runtime.sessionID
         else {
             return .blocked(message: "Coordinator composer is unavailable for this session state.")
+        }
+        return await submitUserTurnCreatingSessionIfNeeded(text: text, target: target) {
+            nil
+        }
+    }
+
+    @MainActor
+    func submitChildDirectiveToAgentMode(
+        _ text: String,
+        row: CoordinatorModeRow
+    ) async -> UserTurnSubmissionResult {
+        guard let tabID = row.tabID else {
+            return .blocked(message: "This session is not live in the current window.")
+        }
+        guard let session = sessions[tabID] else {
+            return .blocked(message: "This session is no longer available.")
+        }
+        guard session.activeAgentSessionID == row.sessionID else {
+            return .blocked(message: "This session changed before the reply could be sent.")
+        }
+        guard row.runState != .running else {
+            return .blocked(message: "This session is mid-run. Reply when it reaches a turn boundary.")
+        }
+        guard let target = makeComposerSubmitTarget(tabID: tabID, session: session),
+              target.route == .existingAgentSession,
+              target.expectedSourceAgentSessionID == row.sessionID
+        else {
+            return .blocked(message: "This session cannot receive a reply yet.")
         }
         return await submitUserTurnCreatingSessionIfNeeded(text: text, target: target) {
             nil
