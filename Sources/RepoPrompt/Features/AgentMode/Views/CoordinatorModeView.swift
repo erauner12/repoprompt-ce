@@ -79,7 +79,6 @@ struct CoordinatorModeView: View {
                         metrics: metrics
                     )
                 }
-                .navigationSplitViewStyle(.balanced)
             } else {
                 coordinatorContent(
                     snapshot: snapshot,
