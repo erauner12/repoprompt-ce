@@ -837,7 +837,7 @@ final class AgentModeStopSubmitTargetTests: XCTestCase {
         childSession.parentSessionID = coordinatorSessionID
         childSession.testInstallPersistentSessionBinding(sessionID: childSessionID)
 
-        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+        let result = await vm.submitDemoCoordinatorDirectiveAsAgentModeUserTurn(
             "  coordinate the next child step  ",
             coordinatorSessionID: coordinatorSessionID
         )
@@ -865,7 +865,7 @@ final class AgentModeStopSubmitTargetTests: XCTestCase {
         coordinatorSession.runID = UUID()
         coordinatorSession.beginRunAttempt(source: "test.runningCoordinator")
 
-        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+        let result = await vm.submitDemoCoordinatorDirectiveAsAgentModeUserTurn(
             "do not steer",
             coordinatorSessionID: coordinatorSessionID
         )
@@ -885,7 +885,7 @@ final class AgentModeStopSubmitTargetTests: XCTestCase {
         let vm = makeViewModel()
         let existingTabIDs = Set(vm.sessions.keys)
 
-        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+        let result = await vm.submitDemoCoordinatorDirectiveAsAgentModeUserTurn(
             "unreachable",
             coordinatorSessionID: UUID()
         )

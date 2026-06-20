@@ -152,7 +152,7 @@ extension AgentModeViewModel {
             guard let self else {
                 return .rejected(message: "Coordinator composer is unavailable.")
             }
-            switch await submitCoordinatorDirectiveToAgentMode(text, coordinatorSessionID: coordinatorSessionID) {
+            switch await submitDemoCoordinatorDirectiveAsAgentModeUserTurn(text, coordinatorSessionID: coordinatorSessionID) {
             case .submitted:
                 return .accepted
             case let .blocked(message):
@@ -161,8 +161,12 @@ extension AgentModeViewModel {
         }
     }
 
+    /// Layer 1 demo/manual fallback only: sends the rail composer text as an ordinary
+    /// Agent Mode user turn to the selected current-window Coordinator session.
+    /// Future real Coordinator runtime instruction delivery must use a distinct
+    /// transport/API, not this selected-session demo path.
     @MainActor
-    func submitCoordinatorDirectiveToAgentMode(
+    func submitDemoCoordinatorDirectiveAsAgentModeUserTurn(
         _ text: String,
         coordinatorSessionID: UUID
     ) async -> UserTurnSubmissionResult {
