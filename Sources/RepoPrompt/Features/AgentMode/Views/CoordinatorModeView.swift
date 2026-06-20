@@ -487,85 +487,93 @@ struct CoordinatorModeView: View {
     }
 
     private func inspector(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
-                HStack(spacing: metrics.controlSpacing) {
-                    Label("Inspector", systemImage: "sidebar.right")
-                        .font(metrics.bodyMedium)
-                    Spacer()
-                    Button {
-                        selectedRowID = nil
-                    } label: {
-                        Label("Hide Inspector", systemImage: "sidebar.right")
-                    }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .hoverTooltip("Hide Inspector")
-                    .accessibilityLabel("Hide Inspector")
+        VStack(spacing: 0) {
+            HStack {
+                Button {
+                    selectedRowID = nil
+                } label: {
+                    Image(systemName: "sidebar.right")
                 }
-                .coordinatorSidebarHeaderPill(cornerRadius: metrics.headerPillCornerRadius)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .hoverTooltip("Hide Inspector")
+                .accessibilityLabel("Hide Inspector")
 
-                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                    Text(row.title)
-                        .font(metrics.inspectorTitle)
-                        .lineLimit(3)
-
-                    Text(inspectorObjectSubtitle(for: row))
-                        .font(metrics.micro)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-                .padding(.bottom, metrics.tightSpacing)
-
-                inspectorGroup("Status", metrics: metrics) {
-                    keyValue("Group", row.statusGroup.displayName, metrics: metrics)
-                    keyValue("Run state", row.runState.displayName, metrics: metrics)
-                    keyValue("Updated", row.updatedAt.formatted(date: .abbreviated, time: .shortened), metrics: metrics)
-                    keyValue("Source", row.isPersistedOnly ? "Persisted metadata" : "Current window live state", metrics: metrics)
-                }
-
-                inspectorGroup("Session", metrics: metrics) {
-                    keyValue("Provider", row.providerName ?? "Unknown", metrics: metrics)
-                    keyValue("Model", row.modelName ?? "Unknown", metrics: metrics)
-                    keyValue("Children", "\(row.childSessionIDs.count)", metrics: metrics)
-                    keyValue("MCP originated", row.isMCPOriginated ? "Yes" : "No", metrics: metrics)
-                    if let workstream = row.workstream {
-                        keyValue("Workstream", workstream.label, metrics: metrics)
-                        if let branch = workstream.branch {
-                            keyValue("Branch", branch, metrics: metrics)
-                        }
-                    }
-                }
-
-                if let merge = row.mergeAttention {
-                    inspectorGroup("Merge attention", metrics: metrics) {
-                        keyValue("Status", merge.status.rawValue, metrics: metrics)
-                        keyValue("Conflicts", "\(merge.conflictFileCount)", metrics: metrics)
-                    }
-                }
-
-                if let pending = row.pendingInteraction {
-                    inspectorGroup("Pending interaction", metrics: metrics) {
-                        keyValue("Kind", pending.kind.displayLabel, metrics: metrics)
-                        if let title = pending.title {
-                            keyValue("Title", title, metrics: metrics)
-                        }
-                        if let prompt = pending.prompt {
-                            Text(prompt)
-                                .font(metrics.body)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        ForEach(pending.details, id: \.label) { detail in
-                            keyValue(detail.label, detail.value, metrics: metrics)
-                        }
-                    }
-                }
-
-                openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
+                Spacer(minLength: 0)
             }
-            .padding(metrics.outerPadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, metrics.outerPadding)
+            .frame(height: metrics.railTitlebarLaneHeight)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
+                    HStack(spacing: metrics.controlSpacing) {
+                        Label("Inspector", systemImage: "sidebar.right")
+                            .font(metrics.bodyMedium)
+                    }
+                    .coordinatorSidebarHeaderPill(cornerRadius: metrics.headerPillCornerRadius)
+
+                    VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                        Text(row.title)
+                            .font(metrics.inspectorTitle)
+                            .lineLimit(3)
+
+                        Text(inspectorObjectSubtitle(for: row))
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    .padding(.bottom, metrics.tightSpacing)
+
+                    inspectorGroup("Status", metrics: metrics) {
+                        keyValue("Group", row.statusGroup.displayName, metrics: metrics)
+                        keyValue("Run state", row.runState.displayName, metrics: metrics)
+                        keyValue("Updated", row.updatedAt.formatted(date: .abbreviated, time: .shortened), metrics: metrics)
+                        keyValue("Source", row.isPersistedOnly ? "Persisted metadata" : "Current window live state", metrics: metrics)
+                    }
+
+                    inspectorGroup("Session", metrics: metrics) {
+                        keyValue("Provider", row.providerName ?? "Unknown", metrics: metrics)
+                        keyValue("Model", row.modelName ?? "Unknown", metrics: metrics)
+                        keyValue("Children", "\(row.childSessionIDs.count)", metrics: metrics)
+                        keyValue("MCP originated", row.isMCPOriginated ? "Yes" : "No", metrics: metrics)
+                        if let workstream = row.workstream {
+                            keyValue("Workstream", workstream.label, metrics: metrics)
+                            if let branch = workstream.branch {
+                                keyValue("Branch", branch, metrics: metrics)
+                            }
+                        }
+                    }
+
+                    if let merge = row.mergeAttention {
+                        inspectorGroup("Merge attention", metrics: metrics) {
+                            keyValue("Status", merge.status.rawValue, metrics: metrics)
+                            keyValue("Conflicts", "\(merge.conflictFileCount)", metrics: metrics)
+                        }
+                    }
+
+                    if let pending = row.pendingInteraction {
+                        inspectorGroup("Pending interaction", metrics: metrics) {
+                            keyValue("Kind", pending.kind.displayLabel, metrics: metrics)
+                            if let title = pending.title {
+                                keyValue("Title", title, metrics: metrics)
+                            }
+                            if let prompt = pending.prompt {
+                                Text(prompt)
+                                    .font(metrics.body)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            ForEach(pending.details, id: \.label) { detail in
+                                keyValue(detail.label, detail.value, metrics: metrics)
+                            }
+                        }
+                    }
+
+                    openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
+                }
+                .padding(metrics.outerPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .coordinatorSidebarPanel(edge: .leading)
     }
