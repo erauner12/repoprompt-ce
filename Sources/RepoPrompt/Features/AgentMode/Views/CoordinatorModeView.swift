@@ -57,9 +57,10 @@ struct CoordinatorModeView: View {
             let sections = filteredSections(from: snapshot)
             let selectedRow = selectedRow(in: sections)
             let metrics = visualMetrics
-            let useList = presentationMode == .list || proxy.size.width < 760
-            let forceList = useList && presentationMode == .board
-            let railIsAvailable = proxy.size.width >= 900
+            let forceList = proxy.size.width < 540 && presentationMode == .board
+            let useList = presentationMode == .list || forceList
+            let railIsAvailable = proxy.size.width >= 980
+            let inspectorIsAvailable = proxy.size.width >= 1200
             coordinatorShell(
                 snapshot: snapshot,
                 sections: sections,
@@ -67,6 +68,7 @@ struct CoordinatorModeView: View {
                 useList: useList,
                 forceList: forceList,
                 railIsAvailable: railIsAvailable,
+                inspectorIsAvailable: inspectorIsAvailable,
                 metrics: metrics
             )
         }
@@ -89,6 +91,7 @@ struct CoordinatorModeView: View {
         useList: Bool,
         forceList: Bool,
         railIsAvailable: Bool,
+        inspectorIsAvailable: Bool,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         HStack(spacing: 0) {
@@ -105,11 +108,11 @@ struct CoordinatorModeView: View {
                 forceList: forceList,
                 metrics: metrics,
                 showRailToggle: railIsAvailable && !isCoordinatorRailVisible,
-                showInspectorToggle: railIsAvailable && selectedRow != nil && !isInspectorVisible
+                showInspectorToggle: inspectorIsAvailable && selectedRow != nil && !isInspectorVisible
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if railIsAvailable, isInspectorVisible, let selectedRow {
+            if inspectorIsAvailable, isInspectorVisible, let selectedRow {
                 inspector(row: selectedRow, metrics: metrics)
                     .frame(
                         minWidth: metrics.inspectorWidth,
@@ -299,7 +302,7 @@ struct CoordinatorModeView: View {
                     VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
                         Text("No Coordinator selected")
                             .font(metrics.cardTitle)
-                        Text(viewModel.isFreshCoordinatorRunPending ? "Next directive will start a new Codex Coordinator runtime." : "The board still shows workspace sessions. Coordinator identity can be selected or auto-detected by structured lineage in later layers.")
+                        Text(viewModel.isFreshCoordinatorRunPending ? "Next directive will start a new Codex Coordinator runtime." : "Send a directive to create the Coordinator runtime; the board will show only its delegated fleet.")
                             .font(metrics.body)
                             .foregroundStyle(viewModel.isFreshCoordinatorRunPending ? .primary : .secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -450,11 +453,6 @@ struct CoordinatorModeView: View {
                     .truncationMode(.tail)
                     .layoutPriority(1)
                 Spacer(minLength: metrics.controlSpacing)
-                if row.isCoordinator {
-                    Image(systemName: "crown")
-                        .font(.system(size: metrics.smallIconSize))
-                        .foregroundStyle(.yellow.opacity(0.8))
-                }
             }
 
             rowMetadata(row, metrics: metrics)
@@ -469,7 +467,6 @@ struct CoordinatorModeView: View {
 
             HStack(spacing: metrics.controlSpacing) {
                 openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
-                coordinatorSelectionButton(row, metrics: metrics)
             }
         }
         .padding(metrics.cardPadding)
@@ -517,12 +514,6 @@ struct CoordinatorModeView: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .layoutPriority(1)
-                    if row.isCoordinator {
-                        Label("Coordinator", systemImage: "crown")
-                            .labelStyle(.iconOnly)
-                            .font(.system(size: metrics.smallIconSize))
-                            .foregroundStyle(.yellow.opacity(0.8))
-                    }
                     if row.isPersistedOnly {
                         Text("stale")
                             .font(metrics.microMedium)
@@ -533,7 +524,6 @@ struct CoordinatorModeView: View {
             }
             Spacer()
             openAgentChatButton(route: row.openAgentChatRoute, title: "Open", metrics: metrics)
-            coordinatorSelectionButton(row, metrics: metrics)
         }
         .padding(.vertical, metrics.listRowVerticalPadding)
         .padding(.horizontal, metrics.listRowHorizontalPadding)
@@ -551,20 +541,6 @@ struct CoordinatorModeView: View {
         }
         .onHover { hovering in
             hoveredRowID = hovering ? row.id : (hoveredRowID == row.id ? nil : hoveredRowID)
-        }
-    }
-
-    @ViewBuilder
-    private func coordinatorSelectionButton(_ row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
-        if !row.isPersistedOnly, !row.isCoordinator {
-            Button("Use as Coordinator") {
-                viewModel.selectCoordinator(sessionID: row.sessionID)
-                selectedRowID = row.id
-                isCoordinatorRailVisible = true
-            }
-            .buttonStyle(.link)
-            .font(metrics.bodyMedium)
-            .accessibilityLabel("Use \(row.title) as Coordinator")
         }
     }
 
@@ -816,9 +792,9 @@ struct CoordinatorModeView: View {
             Image(systemName: snapshot.workspaceID == nil ? "folder.badge.questionmark" : "rectangle.3.group.bubble")
                 .font(.system(size: metrics.emptyStateIconSize))
                 .foregroundStyle(.secondary)
-            Text(snapshot.workspaceID == nil ? "Open a workspace" : "No agent sessions yet")
+            Text(snapshot.workspaceID == nil ? "Open a workspace" : "No delegated sessions yet")
                 .font(metrics.headerTitle)
-            Text("Coordinator mode renders active-workspace Agent Mode sessions when they exist.")
+            Text("The board shows only descendants delegated by the current Coordinator runtime.")
                 .font(metrics.sectionTitle)
                 .foregroundStyle(.secondary)
         }
@@ -1337,15 +1313,15 @@ private extension CoordinatorModeStatusGroup {
     var accentColor: Color {
         switch self {
         case .needsYou: .orange
-        case .blocked: .red
         case .working: .blue
+        case .blocked: .red
+        case .review: .purple
         case .done: .green
-        case .idle: .secondary
         }
     }
 
     func columnTint(isEmpty: Bool) -> Color {
-        accentColor.opacity(isEmpty ? 0.015 : (self == .idle || self == .done ? 0.04 : 0.055))
+        accentColor.opacity(isEmpty ? 0.015 : (self == .done ? 0.04 : 0.055))
     }
 }
 
@@ -1420,27 +1396,6 @@ private extension AgentSessionRunState {
             let blockedID = UUID()
             let rows = [
                 CoordinatorModeRow(
-                    id: coordinatorID,
-                    sessionID: coordinatorID,
-                    tabID: nil,
-                    title: "Coordinate PR stack",
-                    providerName: "codex",
-                    modelName: "gpt-5.1",
-                    runState: .running,
-                    statusGroup: .working,
-                    parentSessionID: nil,
-                    childSessionIDs: [childID, blockedID],
-                    isMCPOriginated: true,
-                    isPersistedOnly: false,
-                    isCoordinator: true,
-                    updatedAt: now,
-                    priority: 3,
-                    workstream: nil,
-                    mergeAttention: nil,
-                    pendingInteraction: nil,
-                    openAgentChatRoute: nil
-                ),
-                CoordinatorModeRow(
                     id: childID,
                     sessionID: childID,
                     tabID: nil,
@@ -1493,11 +1448,11 @@ private extension AgentSessionRunState {
                     totalRows: rows.count,
                     needsYou: 1,
                     blocked: 1,
-                    working: 1,
+                    working: 0,
+                    review: 0,
                     done: 0,
-                    idle: 0,
                     stalePersistedOnly: 1,
-                    liveRows: 2
+                    liveRows: 1
                 ),
                 groups: groups,
                 coordinatorRail: CoordinatorModeCoordinatorRail(

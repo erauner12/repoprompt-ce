@@ -4,97 +4,67 @@ import XCTest
 final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
     private let projector = CoordinatorModeSnapshotProjector()
 
-    func testCoordinatorIdentityUsesUserSelectionBeforeHighestRankedAutomaticCandidate() {
-        let workspaceID = uuid(90)
-        let userSelected = uuid(1)
-        let orchestrateOld = uuid(2)
-        let orchestrateNew = uuid(3)
-        let mcpLineage = uuid(4)
-        let childA = uuid(5)
-        let childB = uuid(6)
-        let childC = uuid(7)
+    func testBoardIncludesOnlyCurrentDemoCoordinatorDescendants() {
+        let coordinatorID = uuid(1)
+        let directChildID = uuid(2)
+        let nestedChildID = uuid(3)
+        let proofID = uuid(4)
+        let unrelatedID = uuid(5)
+        let previousCoordinatorID = uuid(6)
+        let previousChildID = uuid(7)
 
         let snapshot = projector.project(input(
-            workspaceID: workspaceID,
-            persisted: [
-                persisted(id: userSelected, tab: uuid(101), title: "Manual", updatedAt: date(10)),
-                persisted(id: orchestrateOld, tab: uuid(102), title: "Old Orchestrate", updatedAt: date(20), workflow: .orchestrate),
-                persisted(id: orchestrateNew, tab: uuid(103), title: "New Orchestrate", updatedAt: date(30), workflow: .orchestrate),
-                persisted(id: mcpLineage, tab: uuid(104), title: "MCP Parent", updatedAt: date(40), isMCP: true),
-                persisted(id: childA, tab: uuid(105), title: "Child A", updatedAt: date(11), parent: orchestrateOld),
-                persisted(id: childB, tab: uuid(106), title: "Child B", updatedAt: date(12), parent: orchestrateNew),
-                persisted(id: childC, tab: uuid(107), title: "Child C", updatedAt: date(13), parent: mcpLineage)
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(100), state: .idle),
+                live(id: directChildID, tab: uuid(102), title: "Delegate A", updatedAt: date(90), state: .waitingForApproval, parent: coordinatorID),
+                live(id: nestedChildID, tab: uuid(103), title: "Delegate B", updatedAt: date(80), state: .running, parent: directChildID),
+                live(id: proofID, tab: uuid(104), title: "Coordinator loopback proof", updatedAt: date(70), state: .completed, parent: coordinatorID),
+                live(id: unrelatedID, tab: uuid(105), title: "Unrelated", updatedAt: date(60), state: .running),
+                live(id: previousCoordinatorID, tab: uuid(106), title: "Coordinator Runtime Demo (cleared)", updatedAt: date(50), state: .completed),
+                live(id: previousChildID, tab: uuid(107), title: "Previous child", updatedAt: date(40), state: .running, parent: previousCoordinatorID)
             ],
-            selectedCoordinatorID: userSelected
+            demoCoordinatorIDs: [coordinatorID]
         ))
 
-        XCTAssertEqual(snapshot.coordinatorRail.coordinatorSessionID, userSelected)
-        XCTAssertEqual(snapshot.coordinatorRail.selectionSource, .userSelected)
+        XCTAssertEqual(snapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
+        XCTAssertEqual(snapshot.coordinatorRail.selectionSource, .demoRuntime)
+        XCTAssertEqual(Set(allRows(in: snapshot).map(\.sessionID)), [directChildID, nestedChildID])
+        XCTAssertFalse(allRows(in: snapshot).contains { $0.sessionID == coordinatorID })
+        XCTAssertFalse(allRows(in: snapshot).contains { $0.sessionID == proofID })
+        XCTAssertFalse(allRows(in: snapshot).contains { $0.sessionID == unrelatedID })
+        XCTAssertEqual(rows(in: snapshot, group: .needsYou).map(\.sessionID), [directChildID])
+        XCTAssertEqual(rows(in: snapshot, group: .working).map(\.sessionID), [nestedChildID])
+        XCTAssertEqual(allRows(in: snapshot).first { $0.sessionID == directChildID }?.childSessionIDs, [nestedChildID])
     }
 
-    func testCoordinatorIdentityChoosesMostRecentHighestPrecedenceCandidateAndIgnoresPlainLineage() {
-        let orchestrateOld = uuid(1)
-        let orchestrateNew = uuid(2)
-        let mcpLineage = uuid(3)
-        let plainParent = uuid(4)
+    func testManualSelectionCannotPromotePlainSessionAsCoordinator() {
+        let plainID = uuid(1)
+        let demoID = uuid(2)
 
-        let snapshot = projector.project(input(persisted: [
-            persisted(id: orchestrateOld, tab: uuid(101), title: "Old Orchestrate", updatedAt: date(10), workflow: .orchestrate),
-            persisted(id: orchestrateNew, tab: uuid(102), title: "New Orchestrate", updatedAt: date(20), workflow: .orchestrate),
-            persisted(id: mcpLineage, tab: uuid(103), title: "MCP Parent", updatedAt: date(30), isMCP: true),
-            persisted(id: plainParent, tab: uuid(104), title: "Plain Parent", updatedAt: date(40)),
-            persisted(id: uuid(5), tab: uuid(105), title: "Old Child", updatedAt: date(11), parent: orchestrateOld),
-            persisted(id: uuid(6), tab: uuid(106), title: "New Child", updatedAt: date(12), parent: orchestrateNew),
-            persisted(id: uuid(7), tab: uuid(107), title: "MCP Child", updatedAt: date(13), parent: mcpLineage),
-            persisted(id: uuid(8), tab: uuid(108), title: "Plain Child", updatedAt: date(14), parent: plainParent)
-        ]))
-
-        XCTAssertEqual(snapshot.coordinatorRail.coordinatorSessionID, orchestrateNew)
-        XCTAssertEqual(snapshot.coordinatorRail.selectionSource, .orchestrateWorkflow)
-    }
-
-    func testCoordinatorIdentityFallsBackToMCPLineageAndRendersChooseStateWhenAbsent() {
-        let mcpLineage = uuid(1)
-        let mcpSnapshot = projector.project(input(persisted: [
-            persisted(id: mcpLineage, tab: uuid(101), title: "MCP Parent", updatedAt: date(10), isMCP: true),
-            persisted(id: uuid(2), tab: uuid(102), title: "Child", updatedAt: date(11), parent: mcpLineage)
-        ]))
-        XCTAssertEqual(mcpSnapshot.coordinatorRail.coordinatorSessionID, mcpLineage)
-        XCTAssertEqual(mcpSnapshot.coordinatorRail.selectionSource, .mcpLineageRoot)
-
-        let plainSnapshot = projector.project(input(persisted: [
-            persisted(id: uuid(3), tab: uuid(103), title: "Plain Parent", updatedAt: date(10)),
-            persisted(id: uuid(4), tab: uuid(104), title: "Plain Child", updatedAt: date(11), parent: uuid(3))
-        ]))
-        XCTAssertEqual(plainSnapshot.coordinatorRail.state, .chooseCoordinator)
-        XCTAssertNil(plainSnapshot.coordinatorRail.coordinatorSessionID)
-    }
-
-    func testManualSelectionCanPromotePlainLiveSessionAsCoordinator() {
-        let sessionID = uuid(1)
-        let tabID = uuid(101)
-
-        let unselected = projector.project(input(live: [
-            live(id: sessionID, tab: tabID, title: "Plain Live Session", updatedAt: date(10), state: .idle)
-        ]))
-
-        XCTAssertEqual(unselected.coordinatorRail.state, .chooseCoordinator)
-        XCTAssertFalse(unselected.coordinatorRail.isComposerEnabled)
-
-        let selected = projector.project(input(
-            live: [live(id: sessionID, tab: tabID, title: "Plain Live Session", updatedAt: date(10), state: .idle)],
-            selectedCoordinatorID: sessionID
+        let plainSelected = projector.project(input(
+            live: [live(id: plainID, tab: uuid(101), title: "Plain Live Session", updatedAt: date(10), state: .idle)],
+            selectedCoordinatorID: plainID
         ))
 
-        XCTAssertEqual(selected.coordinatorRail.state, .selected)
-        XCTAssertEqual(selected.coordinatorRail.coordinatorSessionID, sessionID)
-        XCTAssertEqual(selected.coordinatorRail.selectionSource, .userSelected)
-        XCTAssertTrue(selected.coordinatorRail.isLiveInCurrentWindow)
-        XCTAssertTrue(selected.coordinatorRail.isComposerEnabled)
-        XCTAssertTrue(selected.coordinatorRail.isComposerSendEnabled)
+        XCTAssertEqual(plainSelected.coordinatorRail.state, .chooseCoordinator)
+        XCTAssertTrue(plainSelected.isEmpty)
+
+        let demoSelected = projector.project(input(
+            live: [
+                live(id: demoID, tab: uuid(102), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle),
+                live(id: uuid(3), tab: uuid(103), title: "Delegate", updatedAt: date(19), state: .running, parent: demoID)
+            ],
+            selectedCoordinatorID: demoID,
+            demoCoordinatorIDs: [demoID]
+        ))
+
+        XCTAssertEqual(demoSelected.coordinatorRail.state, .selected)
+        XCTAssertEqual(demoSelected.coordinatorRail.coordinatorSessionID, demoID)
+        XCTAssertEqual(demoSelected.coordinatorRail.selectionSource, .demoRuntime)
+        XCTAssertEqual(demoSelected.counts.totalRows, 1)
     }
 
-    func testComposerAvailabilityRequiresLiveCurrentWindowCoordinator() {
+    func testComposerAvailabilityRequiresLiveCurrentWindowDemoCoordinator() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
         let coordinatorTab = uuid(101)
@@ -102,12 +72,13 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
 
         let liveSnapshot = projector.project(input(
             persisted: [
-                persisted(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(10), isMCP: true),
+                persisted(id: coordinatorID, tab: coordinatorTab, title: "Coordinator Runtime Demo", updatedAt: date(10), isMCP: true),
                 persisted(id: childID, tab: childTab, title: "Child", updatedAt: date(9), parent: coordinatorID)
             ],
             live: [
-                live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(11), state: .idle, isMCP: true)
-            ]
+                live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator Runtime Demo", updatedAt: date(11), state: .idle, isMCP: true)
+            ],
+            demoCoordinatorIDs: [coordinatorID]
         ))
 
         XCTAssertEqual(liveSnapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
@@ -117,20 +88,24 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
 
         let runningSnapshot = projector.project(input(
             persisted: [
-                persisted(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(10), isMCP: true),
+                persisted(id: coordinatorID, tab: coordinatorTab, title: "Coordinator Runtime Demo", updatedAt: date(10), isMCP: true),
                 persisted(id: childID, tab: childTab, title: "Child", updatedAt: date(9), parent: coordinatorID)
             ],
             live: [
-                live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(12), state: .running, isMCP: true)
-            ]
+                live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator Runtime Demo", updatedAt: date(12), state: .running, isMCP: true)
+            ],
+            demoCoordinatorIDs: [coordinatorID]
         ))
         XCTAssertTrue(runningSnapshot.coordinatorRail.isComposerEnabled)
         XCTAssertFalse(runningSnapshot.coordinatorRail.isComposerSendEnabled)
 
-        let persistedOnlySnapshot = projector.project(input(persisted: [
-            persisted(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(10), isMCP: true),
-            persisted(id: childID, tab: childTab, title: "Child", updatedAt: date(9), parent: coordinatorID)
-        ]))
+        let persistedOnlySnapshot = projector.project(input(
+            persisted: [
+                persisted(id: coordinatorID, tab: coordinatorTab, title: "Coordinator Runtime Demo", updatedAt: date(10), isMCP: true),
+                persisted(id: childID, tab: childTab, title: "Child", updatedAt: date(9), parent: coordinatorID)
+            ],
+            demoCoordinatorIDs: [coordinatorID]
+        ))
 
         XCTAssertEqual(persistedOnlySnapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
         XCTAssertFalse(persistedOnlySnapshot.coordinatorRail.isLiveInCurrentWindow)
@@ -150,55 +125,83 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertFalse(snapshot.coordinatorRail.isComposerEnabled)
         XCTAssertFalse(snapshot.coordinatorRail.isComposerSendEnabled)
         XCTAssertNil(snapshot.coordinatorRail.openAgentChatRoute)
+        XCTAssertTrue(snapshot.isEmpty)
     }
 
-    func testGroupingCountsAndStaleActiveStatesDoNotCountAsLiveAttention() {
-        let liveNeeds = live(id: uuid(1), tab: uuid(101), title: "Live Needs", updatedAt: date(50), state: .waitingForApproval)
-        let liveWorking = live(id: uuid(2), tab: uuid(102), title: "Live Working", updatedAt: date(40), state: .running)
-        let staleWaiting = persisted(id: uuid(3), tab: uuid(103), title: "Stale Waiting", updatedAt: date(30), state: .waitingForUser)
-        let staleRunning = persisted(id: uuid(4), tab: uuid(104), title: "Stale Running", updatedAt: date(20), state: .running)
-        let failed = persisted(id: uuid(5), tab: uuid(105), title: "Failed", updatedAt: date(10), state: .failed)
-        let staleConflicted = persisted(
-            id: uuid(6),
-            tab: uuid(106),
-            title: "Stale Conflict",
-            updatedAt: date(8),
-            merges: [mergeSummary(id: "stale-conflict", status: .conflicted, conflicts: 1, updatedAt: date(8))]
+    func testGroupingCountsUseFiveBoardTaxonomy() {
+        let coordinatorID = uuid(1)
+        let needs = live(id: uuid(2), tab: uuid(102), title: "Needs", updatedAt: date(50), state: .waitingForApproval, parent: coordinatorID)
+        let working = live(id: uuid(3), tab: uuid(103), title: "Working", updatedAt: date(40), state: .running, parent: coordinatorID)
+        let blocked = live(id: uuid(4), tab: uuid(104), title: "Blocked", updatedAt: date(30), state: .failed, parent: coordinatorID)
+        let review = live(
+            id: uuid(5),
+            tab: uuid(105),
+            title: "Review",
+            updatedAt: date(20),
+            state: .completed,
+            parent: coordinatorID,
+            merges: [mergeSummary(id: "preview", status: .previewed, conflicts: 0, updatedAt: date(20))]
         )
-        let completed = persisted(id: uuid(7), tab: uuid(107), title: "Done", updatedAt: date(5), state: .completed)
+        let done = persisted(id: uuid(6), tab: uuid(106), title: "Done", updatedAt: date(10), state: .completed, parent: coordinatorID)
 
         let snapshot = projector.project(input(
-            persisted: [staleWaiting, staleRunning, failed, staleConflicted, completed],
-            live: [liveNeeds, liveWorking]
+            persisted: [done],
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(60), state: .idle),
+                needs,
+                working,
+                blocked,
+                review
+            ],
+            demoCoordinatorIDs: [coordinatorID]
         ))
 
-        XCTAssertEqual(snapshot.counts.totalRows, 7)
-        XCTAssertEqual(snapshot.counts.liveRows, 2)
+        XCTAssertEqual(
+            snapshot.groups.map(\.group),
+            [
+                CoordinatorModeStatusGroup.needsYou,
+                .working,
+                .blocked,
+                .review,
+                .done
+            ]
+        )
+        XCTAssertEqual(snapshot.counts.totalRows, 5)
+        XCTAssertEqual(snapshot.counts.liveRows, 4)
         XCTAssertEqual(snapshot.counts.needsYou, 1)
         XCTAssertEqual(snapshot.counts.working, 1)
-        XCTAssertEqual(snapshot.counts.blocked, 0)
-        XCTAssertEqual(snapshot.counts.stalePersistedOnly, 5)
-        XCTAssertEqual(rows(in: snapshot, group: .needsYou).map(\.sessionID), [liveNeeds.sessionID])
-        XCTAssertEqual(rows(in: snapshot, group: .working).map(\.sessionID), [liveWorking.sessionID])
-        XCTAssertEqual(Set(rows(in: snapshot, group: .idle).map(\.sessionID)), [staleWaiting.id, staleRunning.id, failed.id, staleConflicted.id])
-        XCTAssertEqual(rows(in: snapshot, group: .idle).first { $0.sessionID == staleConflicted.id }?.mergeAttention?.status, .conflicted)
-        XCTAssertTrue(rows(in: snapshot, group: .blocked).isEmpty)
-        XCTAssertEqual(rows(in: snapshot, group: .done).map(\.sessionID), [completed.id])
+        XCTAssertEqual(snapshot.counts.blocked, 1)
+        XCTAssertEqual(snapshot.counts.review, 1)
+        XCTAssertEqual(snapshot.counts.done, 1)
+        XCTAssertEqual(snapshot.counts.stalePersistedOnly, 1)
+        XCTAssertEqual(rows(in: snapshot, group: .needsYou).map(\.sessionID), [needs.sessionID])
+        XCTAssertEqual(rows(in: snapshot, group: .working).map(\.sessionID), [working.sessionID])
+        XCTAssertEqual(rows(in: snapshot, group: .blocked).map(\.sessionID), [blocked.sessionID])
+        XCTAssertEqual(rows(in: snapshot, group: .review).map(\.sessionID), [review.sessionID])
+        XCTAssertEqual(rows(in: snapshot, group: .done).map(\.sessionID), [done.id])
     }
 
     func testConflictedWorktreeMergeForcesBlockedAndProjectsMergeAttention() {
-        let sessionID = uuid(1)
+        let coordinatorID = uuid(1)
+        let sessionID = uuid(2)
         let merge = mergeSummary(id: "merge-conflict", status: .conflicted, conflicts: 2, updatedAt: date(90))
         let conflicted = live(
             id: sessionID,
-            tab: uuid(101),
+            tab: uuid(102),
             title: "Merge conflict",
             updatedAt: date(10),
             state: .idle,
+            parent: coordinatorID,
             merges: [merge]
         )
 
-        let snapshot = projector.project(input(live: [conflicted]))
+        let snapshot = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle),
+                conflicted
+            ],
+            demoCoordinatorIDs: [coordinatorID]
+        ))
         let row = rows(in: snapshot, group: .blocked).first
 
         XCTAssertEqual(snapshot.counts.blocked, 1)
@@ -209,7 +212,7 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(row?.mergeAttention?.conflictFileCount, 2)
     }
 
-    func testCoordinatorDetectionUsesOffWindowPersistedMetadataWithoutRenderingChildren() {
+    func testCoordinatorDetectionMetadataAloneDoesNotRenderBoard() {
         let coordinatorID = uuid(1)
         let offWindowChildID = uuid(2)
         let coordinator = live(
@@ -229,42 +232,52 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             ]
         ))
 
-        XCTAssertEqual(snapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
-        XCTAssertEqual(snapshot.coordinatorRail.selectionSource, .orchestrateWorkflow)
-        XCTAssertEqual(allRows(in: snapshot).map(\.sessionID), [coordinatorID])
-        XCTAssertEqual(allRows(in: snapshot).first?.childSessionIDs, [])
+        XCTAssertEqual(snapshot.coordinatorRail.state, .chooseCoordinator)
+        XCTAssertTrue(allRows(in: snapshot).isEmpty)
     }
 
     func testSortingReordersOnlyWithinStatusGroups() {
-        let lowPriorityRecent = live(id: uuid(1), tab: uuid(101), title: "Beta", updatedAt: date(30), state: .running, priority: 1)
-        let highPriorityOld = live(id: uuid(2), tab: uuid(102), title: "Alpha", updatedAt: date(10), state: .running, priority: 10)
-        let needsYou = live(id: uuid(3), tab: uuid(103), title: "Needs", updatedAt: date(20), state: .waitingForUser, priority: 100)
+        let coordinatorID = uuid(10)
+        let lowPriorityRecent = live(id: uuid(1), tab: uuid(101), title: "Beta", updatedAt: date(30), state: .running, parent: coordinatorID, priority: 1)
+        let highPriorityOld = live(id: uuid(2), tab: uuid(102), title: "Alpha", updatedAt: date(10), state: .running, parent: coordinatorID, priority: 10)
+        let needsYou = live(id: uuid(3), tab: uuid(103), title: "Needs", updatedAt: date(20), state: .waitingForUser, parent: coordinatorID, priority: 100)
 
         let prioritySorted = projector.project(input(
-            live: [lowPriorityRecent, highPriorityOld, needsYou],
-            sort: .priority
+            live: [live(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(40), state: .idle), lowPriorityRecent, highPriorityOld, needsYou],
+            sort: .priority,
+            demoCoordinatorIDs: [coordinatorID]
         ))
         XCTAssertEqual(rows(in: prioritySorted, group: .working).map(\.sessionID), [highPriorityOld.sessionID, lowPriorityRecent.sessionID])
         XCTAssertEqual(rows(in: prioritySorted, group: .needsYou).map(\.sessionID), [needsYou.sessionID])
 
         let nameSorted = projector.project(input(
-            live: [lowPriorityRecent, highPriorityOld, needsYou],
-            sort: .name
+            live: [live(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(40), state: .idle), lowPriorityRecent, highPriorityOld, needsYou],
+            sort: .name,
+            demoCoordinatorIDs: [coordinatorID]
         ))
         XCTAssertEqual(rows(in: nameSorted, group: .working).map(\.title), ["Alpha", "Beta"])
         XCTAssertEqual(rows(in: nameSorted, group: .needsYou).map(\.title), ["Needs"])
     }
 
     func testPrioritySortSinksNilPriorityAndBreaksTiesByRecencyThenTitle() {
-        let nilPriorityRecent = live(id: uuid(1), tab: uuid(101), title: "Nil", updatedAt: date(100), state: .running)
-        let priorityRecent = live(id: uuid(2), tab: uuid(102), title: "Zulu", updatedAt: date(30), state: .running, priority: 5)
-        let priorityTitleBeta = live(id: uuid(3), tab: uuid(103), title: "Beta", updatedAt: date(20), state: .running, priority: 5)
-        let priorityTitleAlpha = live(id: uuid(4), tab: uuid(104), title: "Alpha", updatedAt: date(20), state: .running, priority: 5)
-        let lowerPriority = live(id: uuid(5), tab: uuid(105), title: "Lower", updatedAt: date(200), state: .running, priority: 1)
+        let coordinatorID = uuid(10)
+        let nilPriorityRecent = live(id: uuid(1), tab: uuid(101), title: "Nil", updatedAt: date(100), state: .running, parent: coordinatorID)
+        let priorityRecent = live(id: uuid(2), tab: uuid(102), title: "Zulu", updatedAt: date(30), state: .running, parent: coordinatorID, priority: 5)
+        let priorityTitleBeta = live(id: uuid(3), tab: uuid(103), title: "Beta", updatedAt: date(20), state: .running, parent: coordinatorID, priority: 5)
+        let priorityTitleAlpha = live(id: uuid(4), tab: uuid(104), title: "Alpha", updatedAt: date(20), state: .running, parent: coordinatorID, priority: 5)
+        let lowerPriority = live(id: uuid(5), tab: uuid(105), title: "Lower", updatedAt: date(200), state: .running, parent: coordinatorID, priority: 1)
 
         let snapshot = projector.project(input(
-            live: [nilPriorityRecent, priorityTitleBeta, lowerPriority, priorityRecent, priorityTitleAlpha],
-            sort: .priority
+            live: [
+                live(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(300), state: .idle),
+                nilPriorityRecent,
+                priorityTitleBeta,
+                lowerPriority,
+                priorityRecent,
+                priorityTitleAlpha
+            ],
+            sort: .priority,
+            demoCoordinatorIDs: [coordinatorID]
         ))
 
         XCTAssertEqual(rows(in: snapshot, group: .working).map(\.sessionID), [
@@ -277,18 +290,21 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
     }
 
     func testWorkstreamLabelFallbackOrder() {
+        let coordinatorID = uuid(10)
         let rows = allRows(in: projector.project(input(live: [
-            live(id: uuid(1), tab: uuid(101), title: "Visual", updatedAt: date(50), state: .idle, bindings: [binding(visualLabel: "Visual", worktreeName: "Worktree", logicalRootName: "Root", branch: "branch", repoKey: "repo")]),
-            live(id: uuid(2), tab: uuid(102), title: "Worktree", updatedAt: date(40), state: .idle, bindings: [binding(visualLabel: nil, worktreeName: "Worktree", logicalRootName: "Root", branch: "branch", repoKey: "repo")]),
-            live(id: uuid(3), tab: uuid(103), title: "Root", updatedAt: date(30), state: .idle, bindings: [binding(visualLabel: nil, worktreeName: nil, logicalRootName: "Root", branch: "branch", repoKey: "repo")]),
-            live(id: uuid(4), tab: uuid(104), title: "Branch", updatedAt: date(20), state: .idle, bindings: [binding(visualLabel: nil, worktreeName: nil, logicalRootName: nil, branch: "branch", repoKey: "repo")]),
-            live(id: uuid(5), tab: uuid(105), title: "Repo", updatedAt: date(10), state: .idle, bindings: [binding(visualLabel: nil, worktreeName: nil, logicalRootName: nil, branch: nil, repoKey: "repo")])
-        ])))
+            live(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(60), state: .idle),
+            live(id: uuid(1), tab: uuid(101), title: "Visual", updatedAt: date(50), state: .idle, parent: coordinatorID, bindings: [binding(visualLabel: "Visual", worktreeName: "Worktree", logicalRootName: "Root", branch: "branch", repoKey: "repo")]),
+            live(id: uuid(2), tab: uuid(102), title: "Worktree", updatedAt: date(40), state: .idle, parent: coordinatorID, bindings: [binding(visualLabel: nil, worktreeName: "Worktree", logicalRootName: "Root", branch: "branch", repoKey: "repo")]),
+            live(id: uuid(3), tab: uuid(103), title: "Root", updatedAt: date(30), state: .idle, parent: coordinatorID, bindings: [binding(visualLabel: nil, worktreeName: nil, logicalRootName: "Root", branch: "branch", repoKey: "repo")]),
+            live(id: uuid(4), tab: uuid(104), title: "Branch", updatedAt: date(20), state: .idle, parent: coordinatorID, bindings: [binding(visualLabel: nil, worktreeName: nil, logicalRootName: nil, branch: "branch", repoKey: "repo")]),
+            live(id: uuid(5), tab: uuid(105), title: "Repo", updatedAt: date(10), state: .idle, parent: coordinatorID, bindings: [binding(visualLabel: nil, worktreeName: nil, logicalRootName: nil, branch: nil, repoKey: "repo")])
+        ], demoCoordinatorIDs: [coordinatorID])))
 
         XCTAssertEqual(rows.map { $0.workstream?.label }, ["Visual", "Worktree", "Root", "branch", "repo"])
     }
 
     func testPendingInteractionProjectsStructuredMCPDataAndNullableRouteOnly() {
+        let coordinatorID = uuid(10)
         let sessionID = uuid(1)
         let tabID = uuid(101)
         let interaction = AgentRunMCPSnapshot.Interaction(
@@ -304,9 +320,13 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             details: [AgentRunMCPSnapshot.Interaction.Detail(label: "File", value: "Sources/App.swift", isCode: true)]
         )
         let snapshot = projector.project(input(
-            live: [live(id: sessionID, tab: tabID, title: "Needs", updatedAt: date(10), state: .waitingForApproval)],
+            live: [
+                live(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle),
+                live(id: sessionID, tab: tabID, title: "Needs", updatedAt: date(10), state: .waitingForApproval, parent: coordinatorID)
+            ],
             mcpSnapshots: [sessionID: mcpSnapshot(sessionID: sessionID, tabID: tabID, interaction: interaction)],
-            resolvableTabs: [tabID]
+            resolvableTabs: [uuid(110), tabID],
+            demoCoordinatorIDs: [coordinatorID]
         ))
 
         let summary = snapshot.pendingInteractions.first
@@ -318,14 +338,19 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertNotNil(summary?.openAgentChatRoute)
 
         let missingRouteSnapshot = projector.project(input(
-            live: [live(id: sessionID, tab: tabID, title: "Needs", updatedAt: date(10), state: .waitingForApproval)],
+            live: [
+                live(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle),
+                live(id: sessionID, tab: tabID, title: "Needs", updatedAt: date(10), state: .waitingForApproval, parent: coordinatorID)
+            ],
             mcpSnapshots: [sessionID: mcpSnapshot(sessionID: sessionID, tabID: tabID, interaction: interaction)],
-            resolvableTabs: []
+            resolvableTabs: [],
+            demoCoordinatorIDs: [coordinatorID]
         ))
         XCTAssertNil(missingRouteSnapshot.pendingInteractions.first?.openAgentChatRoute)
     }
 
     func testPersistedOnlyRowDoesNotProjectPendingInteraction() {
+        let coordinatorID = uuid(10)
         let sessionID = uuid(1)
         let tabID = uuid(101)
         let interaction = AgentRunMCPSnapshot.Interaction(
@@ -341,28 +366,36 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             details: []
         )
         let snapshot = projector.project(input(
-            persisted: [persisted(id: sessionID, tab: tabID, title: "Stale", updatedAt: date(10), state: .waitingForQuestion)],
+            persisted: [
+                persisted(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(20)),
+                persisted(id: sessionID, tab: tabID, title: "Stale", updatedAt: date(10), state: .waitingForQuestion, parent: coordinatorID)
+            ],
             mcpSnapshots: [sessionID: mcpSnapshot(sessionID: sessionID, tabID: tabID, interaction: interaction)],
-            resolvableTabs: [tabID]
+            resolvableTabs: [uuid(110), tabID],
+            demoCoordinatorIDs: [coordinatorID]
         ))
         let row = allRows(in: snapshot).first
 
         XCTAssertTrue(snapshot.pendingInteractions.isEmpty)
         XCTAssertNil(row?.pendingInteraction)
-        XCTAssertEqual(row?.statusGroup, .idle)
+        XCTAssertEqual(row?.statusGroup, .done)
     }
 
     func testAssistantProseAndStreamingTextDoNotCreatePendingOrChangeFingerprint() {
+        let coordinatorID = uuid(10)
         let sessionID = uuid(1)
         let tabID = uuid(101)
-        let liveSession = live(id: sessionID, tab: tabID, title: "Mentions decision", updatedAt: date(10), state: .running)
+        let coordinator = live(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle)
+        let liveSession = live(id: sessionID, tab: tabID, title: "Mentions decision", updatedAt: date(10), state: .running, parent: coordinatorID)
         let first = projector.project(input(
-            live: [liveSession],
-            mcpSnapshots: [sessionID: mcpSnapshot(sessionID: sessionID, tabID: tabID, assistantPreview: "Please decide yes or no", interaction: nil)]
+            live: [coordinator, liveSession],
+            mcpSnapshots: [sessionID: mcpSnapshot(sessionID: sessionID, tabID: tabID, assistantPreview: "Please decide yes or no", interaction: nil)],
+            demoCoordinatorIDs: [coordinatorID]
         ))
         let second = projector.project(input(
-            live: [liveSession],
-            mcpSnapshots: [sessionID: mcpSnapshot(sessionID: sessionID, tabID: tabID, assistantPreview: "Please decide yes or no. More streamed text.", interaction: nil)]
+            live: [coordinator, liveSession],
+            mcpSnapshots: [sessionID: mcpSnapshot(sessionID: sessionID, tabID: tabID, assistantPreview: "Please decide yes or no. More streamed text.", interaction: nil)],
+            demoCoordinatorIDs: [coordinatorID]
         ))
 
         XCTAssertTrue(first.pendingInteractions.isEmpty)
@@ -370,18 +403,23 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
     }
 
     func testPersistedOnlyRowsWithoutResolvableTabsDoNotCreateRoutes() {
+        let coordinatorID = uuid(10)
         let sessionID = uuid(1)
         let tabID = uuid(101)
         let snapshot = projector.project(input(
-            persisted: [persisted(id: sessionID, tab: tabID, title: "Archived", updatedAt: date(10), state: .running)],
-            resolvableTabs: []
+            persisted: [
+                persisted(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(20)),
+                persisted(id: sessionID, tab: tabID, title: "Archived", updatedAt: date(10), state: .running, parent: coordinatorID)
+            ],
+            resolvableTabs: [],
+            demoCoordinatorIDs: [coordinatorID]
         ))
 
         let row = allRows(in: snapshot).first
         XCTAssertEqual(row?.sessionID, sessionID)
         XCTAssertEqual(row?.isPersistedOnly, true)
         XCTAssertNil(row?.openAgentChatRoute)
-        XCTAssertEqual(row?.statusGroup, .idle)
+        XCTAssertEqual(row?.statusGroup, .done)
     }
 
     func testMCPCompactProjectionCoversOffEmptyIdleAndActiveStates() {
@@ -430,7 +468,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         detection: [CoordinatorModeSnapshotProjector.CoordinatorDetectionSession] = [],
         selectedCoordinatorID: UUID? = nil,
         sort: CoordinatorModeSortMode = .lastUpdated,
-        resolvableTabs: Set<UUID>? = nil
+        resolvableTabs: Set<UUID>? = nil,
+        demoCoordinatorIDs: Set<UUID> = []
     ) -> CoordinatorModeSnapshotProjector.Input {
         let tabs = resolvableTabs ?? Set(persisted.map(\.tabID) + live.map(\.tabID))
         return CoordinatorModeSnapshotProjector.Input(
@@ -443,7 +482,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             coordinatorDetectionSessions: detection,
             selectedCoordinatorID: selectedCoordinatorID,
             sortMode: sort,
-            resolvableTabIDs: tabs
+            resolvableTabIDs: tabs,
+            demoCoordinatorSessionIDs: demoCoordinatorIDs
         )
     }
 
