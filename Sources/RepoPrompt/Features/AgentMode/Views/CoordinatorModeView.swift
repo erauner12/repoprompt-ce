@@ -43,7 +43,7 @@ struct CoordinatorModeView: View {
     @State private var filterText = ""
     @State private var isRailCollapsed = false
     @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
-    @State private var preferredSplitColumn: NavigationSplitViewColumn = .detail
+    @State private var preferredSplitColumn: NavigationSplitViewColumn = .content
     @ObservedObject private var fontScale = FontScaleManager.shared
 
     private var visualMetrics: CoordinatorVisualMetrics {
@@ -60,7 +60,6 @@ struct CoordinatorModeView: View {
             let forceList = useList && presentationMode == .board
             let railIsAvailable = proxy.size.width >= 900
             let showRailReveal = railIsAvailable && isRailCollapsed
-            let showInspector = proxy.size.width >= 1120 && selectedRow != nil
 
             if railIsAvailable {
                 NavigationSplitView(
@@ -73,28 +72,27 @@ struct CoordinatorModeView: View {
                             ideal: metrics.railWidth,
                             max: metrics.railWidth
                         )
-                } detail: {
-                    coordinatorDetail(
+                } content: {
+                    coordinatorContent(
                         snapshot: snapshot,
                         sections: sections,
-                        selectedRow: selectedRow,
                         useList: useList,
                         forceList: forceList,
                         showRailReveal: showRailReveal,
-                        showInspector: showInspector,
                         metrics: metrics
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } detail: {
+                    coordinatorInspectorColumn(selectedRow: selectedRow, metrics: metrics)
                 }
                 .navigationSplitViewStyle(.balanced)
             } else {
-                coordinatorDetail(
+                coordinatorContent(
                     snapshot: snapshot,
                     sections: sections,
-                    selectedRow: selectedRow,
                     useList: useList,
                     forceList: forceList,
                     showRailReveal: false,
-                    showInspector: false,
                     metrics: metrics
                 )
             }
@@ -115,8 +113,9 @@ struct CoordinatorModeView: View {
         Binding(
             get: { splitColumnVisibility },
             set: { newValue in
-                splitColumnVisibility = newValue
-                isRailCollapsed = newValue == .detailOnly
+                let resolvedVisibility = newValue == .detailOnly ? NavigationSplitViewVisibility.doubleColumn : newValue
+                splitColumnVisibility = resolvedVisibility
+                isRailCollapsed = resolvedVisibility == .doubleColumn
             }
         )
     }
@@ -129,35 +128,25 @@ struct CoordinatorModeView: View {
 
     private func collapseCoordinatorRail() {
         isRailCollapsed = true
-        splitColumnVisibility = .detailOnly
-        preferredSplitColumn = .detail
+        splitColumnVisibility = .doubleColumn
+        preferredSplitColumn = .content
     }
 
-    private func coordinatorDetail(
-        snapshot: CoordinatorModeSnapshot,
-        sections: [CoordinatorModeStatusSection],
+    @ViewBuilder
+    private func coordinatorInspectorColumn(
         selectedRow: CoordinatorModeRow?,
-        useList: Bool,
-        forceList: Bool,
-        showRailReveal: Bool,
-        showInspector: Bool,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        HStack(spacing: 0) {
-            coordinatorContent(
-                snapshot: snapshot,
-                sections: sections,
-                useList: useList,
-                forceList: forceList,
-                showRailReveal: showRailReveal,
-                metrics: metrics
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if showInspector, let selectedRow {
-                inspector(row: selectedRow, metrics: metrics)
-                    .frame(width: metrics.inspectorWidth)
-            }
+        if let selectedRow {
+            inspector(row: selectedRow, metrics: metrics)
+                .navigationSplitViewColumnWidth(
+                    min: metrics.inspectorWidth,
+                    ideal: metrics.inspectorWidth,
+                    max: metrics.inspectorWidth
+                )
+        } else {
+            Color.clear
+                .navigationSplitViewColumnWidth(min: 0, ideal: 0, max: 0)
         }
     }
 
