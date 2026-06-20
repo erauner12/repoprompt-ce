@@ -70,6 +70,30 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertNil(plainSnapshot.coordinatorRail.coordinatorSessionID)
     }
 
+    func testManualSelectionCanPromotePlainLiveSessionAsCoordinator() {
+        let sessionID = uuid(1)
+        let tabID = uuid(101)
+
+        let unselected = projector.project(input(live: [
+            live(id: sessionID, tab: tabID, title: "Plain Live Session", updatedAt: date(10), state: .idle)
+        ]))
+
+        XCTAssertEqual(unselected.coordinatorRail.state, .chooseCoordinator)
+        XCTAssertFalse(unselected.coordinatorRail.isComposerEnabled)
+
+        let selected = projector.project(input(
+            live: [live(id: sessionID, tab: tabID, title: "Plain Live Session", updatedAt: date(10), state: .idle)],
+            selectedCoordinatorID: sessionID
+        ))
+
+        XCTAssertEqual(selected.coordinatorRail.state, .selected)
+        XCTAssertEqual(selected.coordinatorRail.coordinatorSessionID, sessionID)
+        XCTAssertEqual(selected.coordinatorRail.selectionSource, .userSelected)
+        XCTAssertTrue(selected.coordinatorRail.isLiveInCurrentWindow)
+        XCTAssertTrue(selected.coordinatorRail.isComposerEnabled)
+        XCTAssertTrue(selected.coordinatorRail.isComposerSendEnabled)
+    }
+
     func testComposerAvailabilityRequiresLiveCurrentWindowCoordinator() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)

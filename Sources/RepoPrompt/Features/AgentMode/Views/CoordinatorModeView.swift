@@ -289,6 +289,11 @@ struct CoordinatorModeView: View {
                             metrics: metrics
                         )
                         openAgentChatButton(route: rail.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
+                        Button("Clear Coordinator") {
+                            viewModel.selectCoordinator(sessionID: nil)
+                        }
+                        .buttonStyle(.link)
+                        .font(metrics.bodyMedium)
                     }
                 case .chooseCoordinator:
                     VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
@@ -457,7 +462,10 @@ struct CoordinatorModeView: View {
                 statusChip("Persisted only", color: .secondary, metrics: metrics)
             }
 
-            openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
+            HStack(spacing: metrics.controlSpacing) {
+                openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
+                coordinatorSelectionButton(row, metrics: metrics)
+            }
         }
         .padding(metrics.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -520,6 +528,7 @@ struct CoordinatorModeView: View {
             }
             Spacer()
             openAgentChatButton(route: row.openAgentChatRoute, title: "Open", metrics: metrics)
+            coordinatorSelectionButton(row, metrics: metrics)
         }
         .padding(.vertical, metrics.listRowVerticalPadding)
         .padding(.horizontal, metrics.listRowHorizontalPadding)
@@ -537,6 +546,20 @@ struct CoordinatorModeView: View {
         }
         .onHover { hovering in
             hoveredRowID = hovering ? row.id : (hoveredRowID == row.id ? nil : hoveredRowID)
+        }
+    }
+
+    @ViewBuilder
+    private func coordinatorSelectionButton(_ row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
+        if !row.isPersistedOnly, !row.isCoordinator {
+            Button("Use as Coordinator") {
+                viewModel.selectCoordinator(sessionID: row.sessionID)
+                selectedRowID = row.id
+                isCoordinatorRailVisible = true
+            }
+            .buttonStyle(.link)
+            .font(metrics.bodyMedium)
+            .accessibilityLabel("Use \(row.title) as Coordinator")
         }
     }
 
