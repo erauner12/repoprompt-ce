@@ -59,8 +59,6 @@ struct CoordinatorModeView: View {
             let useList = presentationMode == .list || proxy.size.width < 760
             let forceList = useList && presentationMode == .board
             let railIsAvailable = proxy.size.width >= 900
-            let showRailReveal = railIsAvailable && isRailCollapsed
-
             if railIsAvailable {
                 NavigationSplitView(
                     columnVisibility: coordinatorSplitVisibility,
@@ -78,7 +76,6 @@ struct CoordinatorModeView: View {
                         sections: sections,
                         useList: useList,
                         forceList: forceList,
-                        showRailReveal: showRailReveal,
                         metrics: metrics
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -92,7 +89,6 @@ struct CoordinatorModeView: View {
                     sections: sections,
                     useList: useList,
                     forceList: forceList,
-                    showRailReveal: false,
                     metrics: metrics
                 )
             }
@@ -120,18 +116,6 @@ struct CoordinatorModeView: View {
         )
     }
 
-    private func revealCoordinatorRail() {
-        isRailCollapsed = false
-        splitColumnVisibility = .all
-        preferredSplitColumn = .sidebar
-    }
-
-    private func collapseCoordinatorRail() {
-        isRailCollapsed = true
-        splitColumnVisibility = .doubleColumn
-        preferredSplitColumn = .content
-    }
-
     @ViewBuilder
     private func coordinatorInspectorColumn(
         selectedRow: CoordinatorModeRow?,
@@ -155,11 +139,10 @@ struct CoordinatorModeView: View {
         sections: [CoordinatorModeStatusSection],
         useList: Bool,
         forceList: Bool,
-        showRailReveal: Bool,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(spacing: 0) {
-            boardControls(forceList: forceList, showRailReveal: showRailReveal, metrics: metrics)
+            boardControls(forceList: forceList, metrics: metrics)
                 .padding(.horizontal, metrics.outerPadding)
                 .padding(.vertical, metrics.headerPadding)
                 .background(.regularMaterial)
@@ -180,20 +163,8 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func boardControls(forceList: Bool, showRailReveal: Bool, metrics: CoordinatorVisualMetrics) -> some View {
+    private func boardControls(forceList: Bool, metrics: CoordinatorVisualMetrics) -> some View {
         HStack(spacing: metrics.controlSpacing) {
-            if showRailReveal {
-                Button {
-                    revealCoordinatorRail()
-                } label: {
-                    Label("Show Coordinator Rail", systemImage: "sidebar.left")
-                }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-                .hoverTooltip("Show Coordinator Rail")
-                .accessibilityLabel("Show Coordinator Rail")
-            }
-
             presentationPicker(metrics: metrics)
             sortPicker(metrics: metrics)
             filterSearchBox(metrics: metrics)
@@ -280,20 +251,6 @@ struct CoordinatorModeView: View {
         let rail = snapshot.coordinatorRail
 
         return VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
-            HStack {
-                Spacer(minLength: 0)
-                Button {
-                    collapseCoordinatorRail()
-                } label: {
-                    Label("Hide Coordinator Rail", systemImage: "sidebar.left")
-                }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-                .hoverTooltip("Hide Coordinator Rail")
-                .accessibilityLabel("Hide Coordinator Rail")
-            }
-            .frame(height: metrics.railTitlebarLaneHeight, alignment: .topTrailing)
-
             Group {
                 switch rail.state {
                 case .selected:
