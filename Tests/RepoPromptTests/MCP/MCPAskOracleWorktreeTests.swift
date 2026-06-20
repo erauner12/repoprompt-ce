@@ -949,10 +949,26 @@ import XCTest
             )
         }
 
+        func testAgentRunCanonicalSourceDelegatesArtifactToFreshAppManagedWorktreeChild() async throws {
+            try await assertOracleReviewTransportUsesPublishedPatch(
+                repositoryKind: .canonical,
+                delegateToChildRun: true,
+                childCreateWorktree: true
+            )
+        }
+
         func testAgentRunLinkedWorktreeFreshAndContinuingOracleInheritsLaunchArtifact() async throws {
             try await assertOracleReviewTransportUsesPublishedPatch(
                 repositoryKind: .linkedWorktree,
                 delegateToChildRun: true
+            )
+        }
+
+        func testAgentRunLinkedWorktreeSourceDelegatesArtifactToExplicitlyUnboundChild() async throws {
+            try await assertOracleReviewTransportUsesPublishedPatch(
+                repositoryKind: .linkedWorktree,
+                delegateToChildRun: true,
+                childInheritWorktreeBindings: false
             )
         }
 
@@ -1257,7 +1273,9 @@ import XCTest
 
         private func assertOracleReviewTransportUsesPublishedPatch(
             repositoryKind: ProductionOracleRepositoryKind,
-            delegateToChildRun: Bool = false
+            delegateToChildRun: Bool = false,
+            childInheritWorktreeBindings: Bool = true,
+            childCreateWorktree: Bool = false
         ) async throws {
             try await MCPSharedServerTestLease.shared.withLease { lease in
                 let fixture = try await PersistentMCPTestFixture.make(lease: lease)
@@ -1622,6 +1640,8 @@ import XCTest
                             "message": .string("Start delegated Oracle review child."),
                             "model_id": .string("claudeCode:sonnet"),
                             "session_name": .string("Delegated Oracle child"),
+                            "inherit_worktree": .bool(childInheritWorktreeBindings),
+                            "worktree_create": .bool(childCreateWorktree),
                             "detach": .bool(true),
                             "timeout": .int(0)
                         ])
@@ -1643,12 +1663,19 @@ import XCTest
                             )
                         )
                         expectedDelegationID = delegated.source.delegationID
+                        let actualTargetBindings = agentModeViewModel.session(for: targetTabID).worktreeBindings
+                        let expectedTargetBindings = childCreateWorktree
+                            ? actualTargetBindings
+                            : (childInheritWorktreeBindings ? bindings : [])
+                        if childCreateWorktree {
+                            XCTAssertEqual(actualTargetBindings.count, 1)
+                        }
+                        XCTAssertEqual(delegated.targetWorktreeBindings, expectedTargetBindings)
                         if bindings.isEmpty {
                             XCTAssertNil(startSession["parent_session_id"])
                             XCTAssertNil(delegated.source.sourceAgentSessionID)
                         } else {
                             XCTAssertNotNil(startSession["parent_session_id"]?.stringValue)
-                            XCTAssertEqual(delegated.targetWorktreeBindings, bindings)
                         }
                         XCTAssertEqual(delegated.source.sourceTabID, fixture.contextA.tabID)
                         XCTAssertEqual(delegated.source.workspaceID, fixture.contextA.workspaceID)
@@ -1678,7 +1705,7 @@ import XCTest
                             tabName: "Delegated Oracle child",
                             runID: resolvedTargetRunID,
                             activeAgentSessionID: targetSessionID,
-                            worktreeBindingState: .hydrated(bindings),
+                            worktreeBindingState: .hydrated(expectedTargetBindings),
                             explicitlyBound: false
                         )
                         if let sourceRunIDToCleanup {

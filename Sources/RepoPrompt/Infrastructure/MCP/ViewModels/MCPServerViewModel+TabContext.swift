@@ -220,6 +220,8 @@ extension MCPServerViewModel {
 
         /// Frozen lookup context inherited by nested run-scoped tools.
         var frozenLookupContext: WorkspaceLookupContext?
+        /// Ephemeral Context Builder review repository authority for one exact nested run.
+        var contextBuilderReviewTargetResolution: ContextBuilderReviewTargetResolution?
         /// True if this snapshot was created via explicit `bind_context` / `_tabID` binding.
         /// Explicit bindings should persist even when the bound tab is not the active tab.
         let explicitlyBound: Bool
@@ -243,6 +245,7 @@ extension MCPServerViewModel {
             worktreeBindings: [AgentSessionWorktreeBinding] = [],
             worktreeBindingState: AgentSessionWorktreeBindingState? = nil,
             frozenLookupContext: WorkspaceLookupContext? = nil,
+            contextBuilderReviewTargetResolution: ContextBuilderReviewTargetResolution? = nil,
             explicitlyBound: Bool,
             readFileAutoSelectionGeneration: UInt64 = 0
         ) {
@@ -261,6 +264,7 @@ extension MCPServerViewModel {
             self.worktreeBindingState = worktreeBindingState
                 ?? (activeAgentSessionID == nil ? .notApplicable : .hydrated(worktreeBindings))
             self.frozenLookupContext = frozenLookupContext
+            self.contextBuilderReviewTargetResolution = contextBuilderReviewTargetResolution
             self.explicitlyBound = explicitlyBound
             self.readFileAutoSelectionGeneration = readFileAutoSelectionGeneration
         }
@@ -1625,6 +1629,7 @@ extension MCPServerViewModel {
         merged.activeAgentSessionID = context.activeAgentSessionID
         merged.worktreeBindingState = context.worktreeBindingState
         merged.frozenLookupContext = context.frozenLookupContext
+        merged.contextBuilderReviewTargetResolution = context.contextBuilderReviewTargetResolution
         merged.readFileAutoSelectionGeneration = context.readFileAutoSelectionGeneration
         return merged
     }
@@ -2492,6 +2497,63 @@ extension MCPServerViewModel {
             )
         }
         return scopedPurposes.first ?? .unknown
+    }
+
+    @MainActor
+    func resolveImplicitContextBuilderGitTarget(
+        metadata: RequestMetadata
+    ) async throws -> ContextBuilderReviewTargetResolution? {
+        let purpose = try await reconciledAgentRunLaunchPurpose(metadata: metadata)
+        guard purpose == .discoverRun else { return nil }
+        let resolved = try resolveTabContextSnapshot(
+            from: metadata,
+            toolName: "context_builder nested git target",
+            policy: .requireExplicitOrRunScoped
+        )
+        guard Self.isExactRunScopedTabContext(resolved),
+              resolved.snapshot.activeAgentSessionID != nil
+        else { return nil }
+        guard resolved.snapshot.runID != nil else {
+            return .unavailable(.missingFrozenTarget)
+        }
+        return resolved.snapshot.contextBuilderReviewTargetResolution
+            ?? .unavailable(.missingFrozenTarget)
+    }
+
+    @MainActor
+    func validateContextBuilderGitArtifactSelection(
+        metadata: RequestMetadata,
+        target: ContextBuilderReviewTarget
+    ) async throws {
+        let resolved = try resolveTabContextSnapshot(
+            from: metadata,
+            toolName: "context_builder nested git publication",
+            policy: .requireExplicitOrRunScoped
+        )
+        guard Self.isExactRunScopedTabContext(resolved),
+              resolved.snapshot.workspaceID == target.workspaceID,
+              resolved.snapshot.tabID == target.tabID,
+              resolved.snapshot.contextBuilderReviewTargetResolution == .available(target),
+              let lookupContext = resolved.snapshot.frozenLookupContext
+        else {
+            throw ContextBuilderReviewTargetUnavailableReason.workspaceOrTabMismatch
+        }
+        let reviewContext = FrozenPromptGitReviewContext(
+            artifactCapability: target.artifactCapability,
+            compareIntent: .uncommittedHEAD,
+            displayContext: target.displayContext
+        )
+        if let reason = await ContextBuilderReviewTargetResolver().validateSelection(
+            resolved.snapshot.selection,
+            workspaceID: target.workspaceID,
+            tabID: target.tabID,
+            frozenTarget: target,
+            lookupContext: lookupContext,
+            reviewGitContext: reviewContext,
+            store: promptVM.workspaceFileContextStore
+        ) {
+            throw reason
+        }
     }
 
     /// Resolves and freezes the exact compose tab whose immutable review package will be

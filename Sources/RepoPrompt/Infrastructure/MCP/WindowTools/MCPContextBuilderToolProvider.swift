@@ -218,6 +218,9 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
         guard let initialResultTab = targetWindow.workspaceManager.composeTab(for: resolvedIdentity) else {
             throw MCPError.internalError("Resolved Context Builder tab is unavailable in its workspace")
         }
+        try await workspaceContext?.validateReviewTargetAvailability(
+            store: dependencies.promptVM.workspaceFileContextStore
+        )
 
         if tabResolution.bindCaller, let connectionID {
             let clientName = await ServerNetworkManager.shared.clientIdentifier(forConnection: connectionID)
@@ -444,6 +447,38 @@ final class MCPContextBuilderToolProvider: MCPWindowToolProviding {
                     throw MCPError.internalError(message)
                 case let .generate(mode):
                     try Task.checkCancellation()
+                    if mode == .review, let workspaceContext {
+                        guard case .completed = snapshot.terminalDisposition,
+                              let committedTab = snapshot.committedTab
+                        else {
+                            throw MCPError.internalError(
+                                "Context Builder review requires an exact completed selection snapshot"
+                            )
+                        }
+                        try await workspaceContext.validateFinalReviewSelection(
+                            sel,
+                            workspaceID: committedTab.identity.workspaceID,
+                            tabID: committedTab.identity.tabID,
+                            store: dependencies.promptVM.workspaceFileContextStore
+                        )
+                        let finalCanonical = await MainActor.run { () -> (ComposeTabState?, UInt64) in
+                            let manager = targetWindow.workspaceManager
+                            return (
+                                manager.composeTab(for: committedTab.identity),
+                                manager.selectionRevisionForMCP(
+                                    workspaceID: committedTab.identity.workspaceID,
+                                    tabID: committedTab.identity.tabID
+                                )
+                            )
+                        }
+                        guard finalCanonical.1 == committedTab.selectionRevision,
+                              finalCanonical.0?.selection == sel
+                        else {
+                            throw MCPError.invalidParams(
+                                "Context Builder review selection changed after the frozen repository target was validated."
+                            )
+                        }
+                    }
 
                     let modeLabel = responseType?.generationLabel ?? "question"
                     await dependencies.sendStageProgress(

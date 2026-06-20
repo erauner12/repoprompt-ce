@@ -488,11 +488,11 @@ final class SelectedGitDiffArtifactAuthorizationServiceTests: XCTestCase {
         )
     }
 
-    func testDelegatedLinkedWorktreeRejectsTargetBindingMismatch() async throws {
+    func testDelegatedLinkedWorktreeAllowsDifferentTargetBindingAndRejectsConsumerDrift() async throws {
         let fixture = try await makeBoundFixture()
         let consumer = makeDelegationConsumer(
             workspaceID: fixture.capability.workspaceID,
-            boundCheckouts: fixture.capability.boundCheckouts
+            boundCheckouts: []
         )
         let delegated = makeDelegatedCapability(
             fixture,
@@ -509,6 +509,14 @@ final class SelectedGitDiffArtifactAuthorizationServiceTests: XCTestCase {
             authorized.dispositions,
             [.authorized(path: fixture.allPatchURL.path, kind: .patch, readability: .readable)]
         )
+        XCTAssertFalse(fixture.capability.boundCheckouts.isEmpty)
+        XCTAssertTrue(consumer.boundCheckouts.isEmpty)
+        let provenance = try XCTUnwrap(
+            authorized.checkoutProvenanceByAbsolutePath[fixture.allPatchURL.path]
+        )
+        XCTAssertEqual(provenance.repositoryID, fixture.capability.boundCheckouts[0].repositoryID)
+        XCTAssertEqual(provenance.worktreeID, fixture.capability.boundCheckouts[0].worktreeID)
+        XCTAssertEqual(provenance.kind, .linkedWorktree)
 
         let siblingBinding = FrozenBoundCheckoutIdentity(
             logicalRootPath: fixture.capability.boundCheckouts[0].logicalRootPath,

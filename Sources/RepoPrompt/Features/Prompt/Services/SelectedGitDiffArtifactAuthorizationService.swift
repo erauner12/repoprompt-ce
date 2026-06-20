@@ -38,22 +38,33 @@ struct ExactSelectedGitArtifactAuthorizationRequest {
     }
 }
 
+struct SelectedGitArtifactCheckoutProvenance: Equatable {
+    let checkoutRootPath: String
+    let repoKey: String
+    let repositoryID: String
+    let worktreeID: String
+    let kind: FrozenVisibleGitCheckoutKind
+}
+
 struct SelectedGitArtifactAuthorizationResult {
     let entries: [ResolvedPromptFileEntry]
     let consumedSelectionPaths: Set<String>
     let dispositions: [SelectedGitArtifactDisposition]
     let displayAliasesByAbsolutePath: [String: String]
+    let checkoutProvenanceByAbsolutePath: [String: SelectedGitArtifactCheckoutProvenance]
 
     init(
         entries: [ResolvedPromptFileEntry],
         consumedSelectionPaths: Set<String>,
         dispositions: [SelectedGitArtifactDisposition],
-        displayAliasesByAbsolutePath: [String: String] = [:]
+        displayAliasesByAbsolutePath: [String: String] = [:],
+        checkoutProvenanceByAbsolutePath: [String: SelectedGitArtifactCheckoutProvenance] = [:]
     ) {
         self.entries = entries
         self.consumedSelectionPaths = consumedSelectionPaths
         self.dispositions = dispositions
         self.displayAliasesByAbsolutePath = displayAliasesByAbsolutePath
+        self.checkoutProvenanceByAbsolutePath = checkoutProvenanceByAbsolutePath
     }
 
     var rejectedDisplayDiagnostics: [String] {
@@ -173,6 +184,11 @@ struct SelectedGitDiffArtifactAuthorizationService {
         case unbound
     }
 
+    private struct AuthorizedCheckout: Equatable {
+        let authority: CheckoutAuthorization
+        let provenance: SelectedGitArtifactCheckoutProvenance
+    }
+
     private let vcsService: VCSService
     private let snapshotStore = GitDiffSnapshotStore()
 
@@ -187,6 +203,7 @@ struct SelectedGitDiffArtifactAuthorizationService {
         var consumedPaths = Set<String>()
         var dispositions: [SelectedGitArtifactDisposition] = []
         var displayAliasesByAbsolutePath: [String: String] = [:]
+        var checkoutProvenanceByAbsolutePath: [String: SelectedGitArtifactCheckoutProvenance] = [:]
         var seenPaths = Set<String>()
 
         let capability = request.capability
@@ -303,7 +320,7 @@ struct SelectedGitDiffArtifactAuthorizationService {
                         dispositions.append(.rejected(path: path, reason: .tabMismatch))
                         continue
                     }
-                } else if checkoutAuthorization == .bound || checkoutAuthorization == .visibleLinked {
+                } else if checkoutAuthorization.authority == .bound || checkoutAuthorization.authority == .visibleLinked {
                     dispositions.append(.rejected(path: path, reason: .legacyTabNotAllowed))
                     continue
                 }
@@ -349,13 +366,15 @@ struct SelectedGitDiffArtifactAuthorizationService {
             dispositions.append(
                 .authorized(path: path, kind: candidate.kind, readability: readability)
             )
+            checkoutProvenanceByAbsolutePath[path] = checkoutAuthorization.provenance
         }
 
         return SelectedGitArtifactAuthorizationResult(
             entries: entries,
             consumedSelectionPaths: consumedPaths,
             dispositions: dispositions,
-            displayAliasesByAbsolutePath: displayAliasesByAbsolutePath
+            displayAliasesByAbsolutePath: displayAliasesByAbsolutePath,
+            checkoutProvenanceByAbsolutePath: checkoutProvenanceByAbsolutePath
         )
     }
 
@@ -398,10 +417,11 @@ struct SelectedGitDiffArtifactAuthorizationService {
               consumer.agentRunID == delegation.targetAgentRunID
         else { return .delegationConsumerMismatch }
 
-        let sourceBindings = Set(capability.boundCheckouts)
-        guard sourceBindings == Set(delegation.targetBoundCheckouts),
-              sourceBindings == Set(consumer.boundCheckouts)
-        else { return .delegationBindingMismatch }
+        // The source capability owns manifest checkout authority. Target bindings are only the
+        // exact child-consumer lifetime snapshot and may intentionally differ from the source.
+        guard Set(delegation.targetBoundCheckouts) == Set(consumer.boundCheckouts) else {
+            return .delegationBindingMismatch
+        }
 
         return nil
     }
@@ -484,7 +504,7 @@ struct SelectedGitDiffArtifactAuthorizationService {
         manifest: GitDiffSnapshotManifest,
         capability: SelectedGitArtifactCapability,
         store: WorkspaceFileContextStore
-    ) async -> CheckoutAuthorization? {
+    ) async -> AuthorizedCheckout? {
         guard let manifestRepoRoot = normalizedRootPath(manifest.repoRoot) else { return nil }
         let boundCheckout = capability.boundCheckouts.first {
             GitRepoRootAuthorization.canonicalPath($0.physicalWorktreeRootPath) == manifestRepoRoot
@@ -541,6 +561,13 @@ struct SelectedGitDiffArtifactAuthorizationService {
                 path: layout.workTreeRoot
             )
 
+            let provenance = SelectedGitArtifactCheckoutProvenance(
+                checkoutRootPath: manifestWorktreeRoot,
+                repoKey: GitRepoDescriptor(rootURL: layout.workTreeRoot).repoKey,
+                repositoryID: repositoryIdentity.repositoryID,
+                worktreeID: worktreeID,
+                kind: .linkedWorktree
+            )
             if let boundCheckout,
                manifestWorktreeRoot == GitRepoRootAuthorization.canonicalPath(
                    boundCheckout.physicalWorktreeRootPath
@@ -548,7 +575,7 @@ struct SelectedGitDiffArtifactAuthorizationService {
                repositoryIdentity.repositoryID == boundCheckout.repositoryID,
                worktreeID == boundCheckout.worktreeID
             {
-                return .bound
+                return AuthorizedCheckout(authority: .bound, provenance: provenance)
             }
 
             guard let visibleCheckout,
@@ -562,7 +589,7 @@ struct SelectedGitDiffArtifactAuthorizationService {
                   visibleCheckout.worktreeID == worktreeID,
                   await visibleCheckoutIsCurrent(visibleCheckout, store: store)
             else { return nil }
-            return .visibleLinked
+            return AuthorizedCheckout(authority: .visibleLinked, provenance: provenance)
         }
 
         guard GitRepoRootAuthorization.isPathWithinAuthorizedRoots(
@@ -580,8 +607,27 @@ struct SelectedGitDiffArtifactAuthorizationService {
         {
             return nil
         }
+        let repositoryIdentity = GitWorktreeIdentity.repositoryIdentity(
+            commonGitDir: layout.commonDir,
+            mainWorktreeRoot: layout.knownMainWorktreeRoot
+        )
+        let worktreeID = GitWorktreeIdentity.worktreeID(
+            repositoryID: repositoryIdentity.repositoryID,
+            gitDir: layout.gitDir,
+            isMain: true,
+            path: layout.workTreeRoot
+        )
         _ = resolved
-        return .unbound
+        return AuthorizedCheckout(
+            authority: .unbound,
+            provenance: SelectedGitArtifactCheckoutProvenance(
+                checkoutRootPath: manifestRepoRoot,
+                repoKey: GitRepoDescriptor(rootURL: layout.workTreeRoot).repoKey,
+                repositoryID: repositoryIdentity.repositoryID,
+                worktreeID: worktreeID,
+                kind: .canonical
+            )
+        )
     }
 
     func visibleRootCheckoutsAreCurrent(

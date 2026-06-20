@@ -1167,6 +1167,18 @@ final class MCPServerViewModel: ObservableObject {
             guard let self else { return MCPServerViewModel.RequestMetadata(connectionID: nil, clientName: nil, windowID: nil) }
             return await captureRequestMetadata()
         },
+        resolveImplicitContextBuilderGitTarget: { [weak self] metadata in
+            guard let self else {
+                throw MCPError.internalError("Window deallocated while resolving the Context Builder Git target")
+            }
+            return try await resolveImplicitContextBuilderGitTarget(metadata: metadata)
+        },
+        validateContextBuilderGitArtifactSelection: { [weak self] metadata, target in
+            guard let self else {
+                throw MCPError.internalError("Window deallocated while validating Context Builder Git publication")
+            }
+            try await validateContextBuilderGitArtifactSelection(metadata: metadata, target: target)
+        },
         resolveTabContextSnapshot: { [weak self] metadata, toolName, policy in
             guard let self else { throw MCPError.internalError("Window deallocated while resolving tab context") }
             return try resolveTabContextSnapshot(

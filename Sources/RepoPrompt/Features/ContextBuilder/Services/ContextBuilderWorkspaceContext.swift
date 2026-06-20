@@ -7,6 +7,7 @@ struct ContextBuilderWorkspaceContext {
     let lookupContext: WorkspaceLookupContext
     let providerWorkspacePath: String
     let reviewGitContext: FrozenPromptGitReviewContext
+    let reviewTargetResolution: ContextBuilderReviewTargetResolution
 
     var tabID: UUID {
         frozenTabContext.tabID
@@ -24,13 +25,9 @@ struct ContextBuilderWorkspaceContext {
         guard snapshot.runID != nil else {
             throw ContextBuilderWorkspaceContextError.missingParentAgentRun
         }
-        guard snapshot.workspaceID != nil else {
+        guard let workspaceID = snapshot.workspaceID else {
             throw ContextBuilderWorkspaceContextError.missingWorkspace
         }
-        guard let fallbackWorkspacePath = workspaceRepoPaths.first else {
-            throw ContextBuilderWorkspaceContextError.missingWorkspaceRoot
-        }
-
         guard case let .hydrated(bindings) = snapshot.worktreeBindingState else {
             throw ContextBuilderWorkspaceContextError.unavailableWorktreeBindingState
         }
@@ -68,15 +65,8 @@ struct ContextBuilderWorkspaceContext {
             }
         }
 
-        guard let providerWorkspacePath = try AgentWorktreeRuntimeWorkspaceResolver.effectiveWorkspacePath(
-            bindings: bindings,
-            fallbackWorkspacePath: fallbackWorkspacePath
-        ) else {
-            throw ContextBuilderWorkspaceContextError.missingWorkspaceRoot
-        }
-
-        let reviewGitContext = try await FrozenPromptGitReviewContext.make(
-            workspaceID: requireWorkspaceID(snapshot.workspaceID),
+        let reviewGitContext = await FrozenPromptGitReviewContext.make(
+            workspaceID: workspaceID,
             workspaceDirectoryPath: workspaceDirectoryPath,
             workspaceRootPaths: workspaceRepoPaths,
             tabID: snapshot.tabID,
@@ -85,22 +75,44 @@ struct ContextBuilderWorkspaceContext {
             base: "HEAD",
             store: store
         )
+        let reviewTargetResolution = await ContextBuilderReviewTargetResolver().resolve(
+            snapshot: snapshot,
+            lookupContext: lookupContext,
+            reviewGitContext: reviewGitContext,
+            store: store
+        )
+
+        let providerWorkspacePath: String
+        if let target = reviewTargetResolution.availableTarget {
+            providerWorkspacePath = target.primaryCheckout.checkoutRootPath
+        } else if !bindings.isEmpty {
+            let fallback = workspaceRepoPaths.first ?? workspaceDirectoryPath
+            guard let projected = try AgentWorktreeRuntimeWorkspaceResolver.effectiveWorkspacePath(
+                bindings: bindings,
+                fallbackWorkspacePath: fallback
+            ) else {
+                throw ContextBuilderWorkspaceContextError.missingWorkspaceRoot
+            }
+            providerWorkspacePath = projected
+        } else if workspaceRepoPaths.count == 1, let onlyRoot = workspaceRepoPaths.first {
+            providerWorkspacePath = onlyRoot
+        } else {
+            // A neutral CWD is not Git authority. Nested Agent Context Builder Git calls use the
+            // frozen selected-repository target carried in the run-scoped tab snapshot.
+            providerWorkspacePath = workspaceDirectoryPath
+        }
 
         let context = ContextBuilderWorkspaceContext(
             parentAgentSessionID: parentAgentSessionID,
             frozenTabContext: snapshot,
             worktreeBindings: bindings,
             lookupContext: lookupContext,
-            providerWorkspacePath: providerWorkspacePath,
-            reviewGitContext: reviewGitContext
+            providerWorkspacePath: StandardizedPath.absolute(providerWorkspacePath),
+            reviewGitContext: reviewGitContext,
+            reviewTargetResolution: reviewTargetResolution
         )
         try context.validateAvailability()
         return context
-    }
-
-    private static func requireWorkspaceID(_ workspaceID: UUID?) throws -> UUID {
-        guard let workspaceID else { throw ContextBuilderWorkspaceContextError.missingWorkspace }
-        return workspaceID
     }
 
     func validateAvailability() throws {
@@ -117,6 +129,36 @@ struct ContextBuilderWorkspaceContext {
         }
     }
 
+    func validateReviewTargetAvailability(store: WorkspaceFileContextStore) async throws {
+        guard case let .available(target) = reviewTargetResolution else { return }
+        if let reason = await ContextBuilderReviewTargetResolver().revalidate(target, store: store) {
+            throw reason
+        }
+    }
+
+    func validateFinalReviewSelection(
+        _ selection: StoredSelection,
+        workspaceID: UUID,
+        tabID: UUID,
+        store: WorkspaceFileContextStore
+    ) async throws {
+        guard case let .available(target) = reviewTargetResolution else {
+            if case let .unavailable(reason) = reviewTargetResolution { throw reason }
+            throw ContextBuilderReviewTargetUnavailableReason.missingFrozenTarget
+        }
+        if let reason = await ContextBuilderReviewTargetResolver().validateSelection(
+            selection,
+            workspaceID: workspaceID,
+            tabID: tabID,
+            frozenTarget: target,
+            lookupContext: lookupContext,
+            reviewGitContext: reviewGitContext,
+            store: store
+        ) {
+            throw reason
+        }
+    }
+
     func nestedDiscoveryTabContext(runID: UUID) -> MCPServerViewModel.TabContextSnapshot {
         let source = frozenTabContext
         return MCPServerViewModel.TabContextSnapshot(
@@ -124,7 +166,9 @@ struct ContextBuilderWorkspaceContext {
             windowID: source.windowID,
             workspaceID: source.workspaceID,
             promptText: source.promptText,
+            usedAgentOutputAsPrompt: source.usedAgentOutputAsPrompt,
             selection: source.selection,
+            selectionRevision: source.selectionRevision,
             selectedMetaPromptIDs: source.selectedMetaPromptIDs,
             selectedContextBuilderPromptIDs: source.selectedContextBuilderPromptIDs,
             tabName: source.tabName,
@@ -132,6 +176,7 @@ struct ContextBuilderWorkspaceContext {
             activeAgentSessionID: parentAgentSessionID,
             worktreeBindingState: .hydrated(worktreeBindings),
             frozenLookupContext: lookupContext,
+            contextBuilderReviewTargetResolution: reviewTargetResolution,
             explicitlyBound: source.explicitlyBound,
             readFileAutoSelectionGeneration: source.readFileAutoSelectionGeneration
         )

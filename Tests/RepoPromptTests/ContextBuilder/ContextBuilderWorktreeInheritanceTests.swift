@@ -548,6 +548,180 @@ import XCTest
             }
         }
 
+        func testAgentModeTwoRootContextBuilderImplicitGitPublishesSelectedRepository() async throws {
+            try await MCPSharedServerTestLease.shared.withLease { lease in
+                let state = ContextBuilderWorktreeProbeState()
+                let factory = ContextBuilderWorktreeProbeFactory(state: state)
+                let fixture = try await PersistentMCPTestFixture.make(
+                    lease: lease,
+                    contextBuilderProviderFactory: factory.makeProvider
+                )
+                let gitFixture = try ReviewGitRepositoryFixture(name: "ContextBuilderTwoRootNestedGit")
+                do {
+                    try await activateWorkspace(fixture.contextA)
+                    // Keep the workspace's original/first root as the unrelated Classic checkout.
+                    // The selected CE checkout is attached second so an ambient-first implementation
+                    // would reproduce the wrong-root publication this regression protects against.
+                    let classicRoot = fixture.contextA.rootURL
+                    let classicFile = fixture.contextA.fileURL
+                    _ = try gitFixture.runGit(["init"], at: classicRoot)
+                    _ = try gitFixture.runGit(["config", "user.name", "RepoPrompt Test"], at: classicRoot)
+                    _ = try gitFixture.runGit(["config", "user.email", "repoprompt@example.test"], at: classicRoot)
+                    _ = try gitFixture.runGit(["config", "commit.gpgSign", "false"], at: classicRoot)
+                    _ = try gitFixture.runGit(["add", "."], at: classicRoot)
+                    _ = try gitFixture.runGit(["commit", "-m", "Initial Classic commit"], at: classicRoot)
+                    let ceRoot = try gitFixture.makeRepository(
+                        named: "selected-ce",
+                        files: ["Sources/Selected.swift": "let ce = 1\n"]
+                    )
+                    let ceFile = ceRoot.appendingPathComponent("Sources/Selected.swift")
+                    try await fixture.contextA.window.workspaceManager.addFolder(
+                        ceRoot,
+                        to: XCTUnwrap(fixture.contextA.window.workspaceManager.activeWorkspace)
+                    )
+                    let orderedRepoPaths = try XCTUnwrap(
+                        fixture.contextA.window.workspaceManager.activeWorkspace
+                    ).repoPaths.map { ($0 as NSString).standardizingPath }
+                    XCTAssertEqual(orderedRepoPaths.first, classicRoot.standardizedFileURL.path)
+                    XCTAssertEqual(orderedRepoPaths.last, ceRoot.standardizedFileURL.path)
+                    let ceMarker = "CE_CONTEXT_BUILDER_TARGET_MARKER"
+                    let classicMarker = "CLASSIC_CONTEXT_BUILDER_LEAK_MARKER"
+                    try write("let marker = \"\(ceMarker)\"\n", to: ceFile)
+                    try write("let marker = \"\(classicMarker)\"\n", to: classicFile)
+
+                    let identity = WorkspaceSelectionIdentity(
+                        workspaceID: fixture.contextA.workspaceID,
+                        tabID: fixture.contextA.tabID
+                    )
+                    let sourceSelection = StoredSelection(
+                        selectedPaths: [ceFile.path],
+                        codemapAutoEnabled: false
+                    )
+                    _ = await fixture.contextA.window.selectionCoordinator.persistSelection(
+                        sourceSelection,
+                        for: identity,
+                        source: .mcpTabContext,
+                        mirrorToUIIfActive: true
+                    )
+                    let revision = fixture.contextA.window.workspaceManager.selectionRevisionForMCP(
+                        workspaceID: identity.workspaceID,
+                        tabID: identity.tabID
+                    )
+                    var tab = try XCTUnwrap(
+                        fixture.contextA.window.workspaceManager.composeTab(for: identity)
+                    )
+                    tab.promptText = "Review only the selected CE checkout"
+                    fixture.contextA.window.workspaceManager.updateComposeTab(tab, markDirty: false)
+                    let sessionID = UUID()
+                    let parentRunID = UUID()
+                    let frozenContext = MCPServerViewModel.TabContextSnapshot(
+                        tabID: tab.id,
+                        windowID: fixture.contextA.window.windowID,
+                        workspaceID: identity.workspaceID,
+                        promptText: "Review only the selected CE checkout",
+                        selection: sourceSelection,
+                        selectionRevision: revision,
+                        selectedMetaPromptIDs: tab.selectedMetaPromptIDs,
+                        selectedContextBuilderPromptIDs: tab.contextBuilder.selectedContextBuilderPromptIDs,
+                        tabName: tab.name,
+                        runID: parentRunID,
+                        activeAgentSessionID: sessionID,
+                        worktreeBindings: [],
+                        explicitlyBound: false
+                    )
+                    let endpoint = try fixture.endpointA()
+                    try await configureAgentModeEndpoint(
+                        endpoint,
+                        context: frozenContext,
+                        fixture: fixture
+                    )
+                    factory.configure(
+                        networkManager: fixture.networkManager,
+                        logicalFilePath: ceFile.path,
+                        searchPattern: ceMarker,
+                        publishImplicitGitArtifacts: true
+                    )
+                    fixture.contextA.window.promptManager
+                        .setAutomaticReviewGitDiffProviderOverrideForTesting { _ in
+                            AutomaticReviewGitDiffResult(
+                                text: "AUTOMATIC_FALLBACK_INVOKED",
+                                completeness: .complete,
+                                outcomes: [],
+                                pathIssues: []
+                            )
+                        }
+                    fixture.contextA.window.mcpServer.setContextBuilderFollowUpOverrideForTesting {
+                        _, tabID, routedSessionID, routedRunID, mode, prompt, selection, lookupContext, reviewGitContext, _, _ in
+                        XCTAssertEqual(routedSessionID, sessionID)
+                        XCTAssertEqual(routedRunID, parentRunID)
+                        let message = await fixture.contextA.window.promptManager.buildHeadlessAIMessage(
+                            from: HeadlessContextSnapshot(
+                                tabID: tabID,
+                                promptText: prompt,
+                                selection: selection,
+                                lookupContext: lookupContext,
+                                reviewGitContext: reviewGitContext
+                            ),
+                            model: fixture.contextA.window.promptManager.preferredAIModel,
+                            mode: mode
+                        )
+                        state.recordFollowUp(
+                            mode: mode,
+                            fileTree: message.fileTree,
+                            fileBlocks: message.fileBlocks,
+                            gitDiff: message.gitDiff,
+                            selection: selection,
+                            lookupContext: lookupContext
+                        )
+                        return ChatSendReply(
+                            chatId: UUID(),
+                            shortId: "two-root-review",
+                            mode: mode.mcpModeName,
+                            response: "generated review",
+                            errors: nil
+                        )
+                    }
+
+                    let response = try await endpoint.callTool(
+                        name: MCPWindowToolName.contextBuilder,
+                        arguments: [
+                            "instructions": "Inspect the selected checkout.",
+                            "response_type": "review"
+                        ],
+                        timeoutSeconds: 60
+                    )
+                    let responseText = try toolResultText(response)
+                    XCTAssertTrue(responseText.contains("generated review"), responseText)
+                    let run = try XCTUnwrap(state.runs.first)
+                    let gitOutput = try XCTUnwrap(run.git)
+                    XCTAssertTrue(gitOutput.contains(ceRoot.lastPathComponent), gitOutput)
+                    XCTAssertFalse(gitOutput.contains(classicRoot.path), gitOutput)
+                    let followUp = try XCTUnwrap(state.followUps.first)
+                    let gitDiff = try XCTUnwrap(followUp.gitDiff)
+                    XCTAssertTrue(gitDiff.contains(ceMarker), gitDiff)
+                    XCTAssertFalse(gitDiff.contains(classicMarker), gitDiff)
+                    XCTAssertNotEqual(gitDiff, "AUTOMATIC_FALLBACK_INVOKED")
+                    let artifactPaths = followUp.selection.selectedPaths.filter {
+                        $0.contains("/_git_data/")
+                    }
+                    XCTAssertEqual(artifactPaths.count, 2)
+
+                    fixture.contextA.window.promptManager
+                        .setAutomaticReviewGitDiffProviderOverrideForTesting(nil)
+                    fixture.contextA.window.mcpServer.setContextBuilderFollowUpOverrideForTesting(nil)
+                    gitFixture.cleanup()
+                    await fixture.cleanup()
+                } catch {
+                    fixture.contextA.window.promptManager
+                        .setAutomaticReviewGitDiffProviderOverrideForTesting(nil)
+                    fixture.contextA.window.mcpServer.setContextBuilderFollowUpOverrideForTesting(nil)
+                    gitFixture.cleanup()
+                    await fixture.cleanup()
+                    throw error
+                }
+            }
+        }
+
         func testNonAgentContextBuilderKeepsCanonicalWorkspaceBehavior() async throws {
             try await MCPSharedServerTestLease.shared.withLease { lease in
                 let state = ContextBuilderWorktreeProbeState()
@@ -873,6 +1047,7 @@ import XCTest
             let networkManager: ServerNetworkManager
             let logicalFilePath: String
             let searchPattern: String
+            let publishImplicitGitArtifacts: Bool
         }
 
         private let state: ContextBuilderWorktreeProbeState
@@ -885,12 +1060,14 @@ import XCTest
         func configure(
             networkManager: ServerNetworkManager,
             logicalFilePath: String,
-            searchPattern: String
+            searchPattern: String,
+            publishImplicitGitArtifacts: Bool = false
         ) {
             configuration = Configuration(
                 networkManager: networkManager,
                 logicalFilePath: logicalFilePath,
-                searchPattern: searchPattern
+                searchPattern: searchPattern,
+                publishImplicitGitArtifacts: publishImplicitGitArtifacts
             )
         }
 
@@ -912,6 +1089,7 @@ import XCTest
                 networkManager: configuration.networkManager,
                 logicalFilePath: configuration.logicalFilePath,
                 searchPattern: configuration.searchPattern,
+                publishImplicitGitArtifacts: configuration.publishImplicitGitArtifacts,
                 clientName: clientName,
                 workspacePath: workspacePath
             )
@@ -923,6 +1101,7 @@ import XCTest
         private let networkManager: ServerNetworkManager
         private let logicalFilePath: String
         private let searchPattern: String
+        private let publishImplicitGitArtifacts: Bool
         private let clientName: String
         private let workspacePath: String?
         private var endpoint: PersistentMCPTestEndpoint?
@@ -933,6 +1112,7 @@ import XCTest
             networkManager: ServerNetworkManager,
             logicalFilePath: String,
             searchPattern: String,
+            publishImplicitGitArtifacts: Bool,
             clientName: String,
             workspacePath: String?
         ) {
@@ -940,6 +1120,7 @@ import XCTest
             self.networkManager = networkManager
             self.logicalFilePath = logicalFilePath
             self.searchPattern = searchPattern
+            self.publishImplicitGitArtifacts = publishImplicitGitArtifacts
             self.clientName = clientName
             self.workspacePath = workspacePath
         }
@@ -965,7 +1146,8 @@ import XCTest
                     MCPWindowToolName.search,
                     MCPWindowToolName.getCodeStructure,
                     MCPWindowToolName.manageSelection,
-                    MCPWindowToolName.workspaceContext
+                    MCPWindowToolName.workspaceContext,
+                    MCPWindowToolName.git
                 ]
             )
             self.endpoint = endpoint
@@ -1025,6 +1207,21 @@ import XCTest
                 ],
                 timeoutSeconds: 20
             ))
+            let git: String? = if publishImplicitGitArtifacts {
+                try await toolResultText(endpoint.callTool(
+                    name: MCPWindowToolName.git,
+                    arguments: [
+                        "op": "diff",
+                        "scope": "selected",
+                        "detail": "patches",
+                        "artifacts": true,
+                        "mode": "deep"
+                    ],
+                    timeoutSeconds: 30
+                ))
+            } else {
+                nil
+            }
             let workspaceContext = try await toolResultText(endpoint.callTool(
                 name: MCPWindowToolName.workspaceContext,
                 arguments: [
@@ -1042,6 +1239,7 @@ import XCTest
                 search: search,
                 codeStructure: codeStructure,
                 selection: selection,
+                git: git,
                 workspaceContext: workspaceContext
             ))
 
@@ -1136,6 +1334,7 @@ import XCTest
             let search: String
             let codeStructure: String
             let selection: String
+            let git: String?
             let workspaceContext: String
         }
 

@@ -113,6 +113,7 @@ struct SelectedGitArtifactDelegation: Equatable {
     let targetAgentSessionID: UUID
     let targetAgentRunID: UUID
     let exactSelectedArtifactPaths: Set<String>
+    /// Immutable child-consumer lifetime snapshot; source manifest authority remains on the capability.
     let targetBoundCheckouts: [FrozenBoundCheckoutIdentity]
 
     init(

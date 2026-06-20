@@ -112,12 +112,6 @@ struct AutomaticReviewGitDiffCoordinator {
         }
     }
 
-    private struct CheckoutGroup {
-        let rootPath: String
-        let baseDisplayLabel: String
-        var selectedPaths: [String]
-    }
-
     private enum FrozenCheckoutPlan {
         case ready(checkout: ReviewGitCheckout, compare: GitDiffCompareSpec)
         case baseFailure(checkout: ReviewGitCheckout, summary: String)
@@ -159,60 +153,20 @@ struct AutomaticReviewGitDiffCoordinator {
     ) async throws -> AutomaticReviewGitDiffResult {
         try Task.checkCancellation()
 
-        var pathIssues = request.pathResolution.unresolvedCandidates.enumerated().map { index, path in
-            ReviewGitPathIssue.unresolvedSelection(
-                displayPath: request.displayContext.displayPath(for: path, fallbackIndex: index + 1)
+        let ownership = try await ReviewGitSelectedPathOwnershipResolver(
+            dependencies: .init(
+                resolveRepo: dependencies.resolveRepo,
+                resolveLayout: dependencies.resolveLayout
+            )
+        ).resolve(request.pathResolution, displayContext: request.displayContext)
+        let pathIssues = ownership.pathIssues
+        let checkouts = ownership.checkouts.map {
+            ReviewGitCheckout(
+                checkoutRootPath: $0.checkoutRootPath,
+                displayLabel: $0.displayLabel,
+                selectedPaths: $0.selectedPaths
             )
         }
-        var groupedPaths: [String: CheckoutGroup] = [:]
-        var seenPaths = Set<String>()
-
-        for (index, rawPath) in request.pathResolution.paths.enumerated() {
-            try Task.checkCancellation()
-            let physicalPath = StandardizedPath.absolute((rawPath as NSString).expandingTildeInPath)
-            guard seenPaths.insert(physicalPath).inserted else { continue }
-
-            let displayPath = request.displayContext.displayPath(for: physicalPath, fallbackIndex: index + 1)
-            let pathURL = URL(fileURLWithPath: physicalPath)
-            let resolvedOwner = await dependencies.resolveRepo(pathURL)
-            try Task.checkCancellation()
-            guard let resolved = resolvedOwner else {
-                pathIssues.append(.noRepository(displayPath: displayPath))
-                continue
-            }
-            guard resolved.backendKind == .git else {
-                pathIssues.append(.unsupportedBackend(displayPath: displayPath, backendKind: resolved.backendKind))
-                continue
-            }
-
-            let resolvedRoot = resolved.rootURL.standardizedFileURL
-            guard let layout = dependencies.resolveLayout(resolvedRoot) else {
-                pathIssues.append(.invalidGitLayout(displayPath: displayPath))
-                continue
-            }
-
-            let checkoutRoot = layout.workTreeRoot.standardizedFileURL.path
-            guard resolvedRoot.path == checkoutRoot,
-                  StandardizedPath.isDescendant(physicalPath, of: checkoutRoot),
-                  physicalPath != checkoutRoot
-            else {
-                pathIssues.append(.invalidGitLayout(displayPath: displayPath))
-                continue
-            }
-
-            if var group = groupedPaths[checkoutRoot] {
-                group.selectedPaths.append(physicalPath)
-                groupedPaths[checkoutRoot] = group
-            } else {
-                groupedPaths[checkoutRoot] = CheckoutGroup(
-                    rootPath: checkoutRoot,
-                    baseDisplayLabel: request.displayContext.checkoutLabel(for: checkoutRoot),
-                    selectedPaths: [physicalPath]
-                )
-            }
-        }
-
-        let checkouts = makeDeterministicCheckouts(from: Array(groupedPaths.values))
         var frozenPlans: [FrozenCheckoutPlan] = []
         frozenPlans.reserveCapacity(checkouts.count)
 
@@ -295,35 +249,6 @@ struct AutomaticReviewGitDiffCoordinator {
         )
     }
 
-    private func makeDeterministicCheckouts(from groups: [CheckoutGroup]) -> [ReviewGitCheckout] {
-        let sortedGroups = groups.sorted { lhs, rhs in
-            if lhs.baseDisplayLabel != rhs.baseDisplayLabel {
-                return lhs.baseDisplayLabel < rhs.baseDisplayLabel
-            }
-            return lhs.rootPath < rhs.rootPath
-        }
-        let labelCounts = Dictionary(grouping: sortedGroups, by: \.baseDisplayLabel).mapValues(\.count)
-        var labelOrdinals: [String: Int] = [:]
-
-        return sortedGroups.map { group in
-            let ordinal = labelOrdinals[group.baseDisplayLabel, default: 0] + 1
-            labelOrdinals[group.baseDisplayLabel] = ordinal
-            let displayLabel: String = if labelCounts[group.baseDisplayLabel, default: 0] > 1 {
-                "\(group.baseDisplayLabel) [\(ordinal)]"
-            } else {
-                group.baseDisplayLabel
-            }
-            let paths = Array(Set(group.selectedPaths)).sorted {
-                relativePath($0, under: group.rootPath) < relativePath($1, under: group.rootPath)
-            }
-            return ReviewGitCheckout(
-                checkoutRootPath: group.rootPath,
-                displayLabel: displayLabel,
-                selectedPaths: paths
-            )
-        }
-    }
-
     private func renderText(
         outcomes: [ReviewGitCheckoutOutcome],
         pathIssues: [ReviewGitPathIssue],
@@ -390,14 +315,9 @@ struct AutomaticReviewGitDiffCoordinator {
         lines.append("===== END REPOPROMPT REVIEW DIFF INCOMPLETE =====")
         return lines.joined(separator: "\n")
     }
-
-    private func relativePath(_ path: String, under rootPath: String) -> String {
-        guard path != rootPath, path.hasPrefix(rootPath + "/") else { return path }
-        return String(path.dropFirst(rootPath.count + 1))
-    }
 }
 
-private extension ReviewGitDisplayContext {
+extension ReviewGitDisplayContext {
     func checkoutLabel(for checkoutRootPath: String) -> String {
         guard let root = longestMatchingRoot(for: checkoutRootPath) else {
             return "Checkout"

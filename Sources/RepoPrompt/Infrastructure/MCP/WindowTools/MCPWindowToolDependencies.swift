@@ -94,6 +94,13 @@ struct MCPWindowToolDependencies {
         _ activityReporter: ContextBuilderMCPActivityReporter?
     ) async throws -> ChatSendReply
     typealias CaptureRequestMetadata = @MainActor @Sendable () async -> MCPServerViewModel.RequestMetadata
+    typealias ResolveImplicitContextBuilderGitTarget = @MainActor @Sendable (
+        _ metadata: MCPServerViewModel.RequestMetadata
+    ) async throws -> ContextBuilderReviewTargetResolution?
+    typealias ValidateContextBuilderGitArtifactSelection = @MainActor @Sendable (
+        _ metadata: MCPServerViewModel.RequestMetadata,
+        _ target: ContextBuilderReviewTarget
+    ) async throws -> Void
     typealias ResolveTabContextSnapshot = @MainActor @Sendable (
         _ metadata: MCPServerViewModel.RequestMetadata,
         _ toolName: String,
@@ -298,6 +305,8 @@ struct MCPWindowToolDependencies {
     let selectionCoordinator: WorkspaceSelectionCoordinator?
     let applyEditsApprovalStore: ApplyEditsApprovalStore
     let captureRequestMetadata: CaptureRequestMetadata
+    let resolveImplicitContextBuilderGitTarget: ResolveImplicitContextBuilderGitTarget
+    let validateContextBuilderGitArtifactSelection: ValidateContextBuilderGitArtifactSelection
     let resolveTabContextSnapshot: ResolveTabContextSnapshot
     let updateCurrentTabContext: UpdateCurrentTabContext
     let selectedRecordsForCurrentTabContext: SelectedRecordsForCurrentTabContext

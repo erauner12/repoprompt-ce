@@ -6079,13 +6079,6 @@ final class AgentModeViewModel: ObservableObject {
             .targetWorkspaceMismatch
         } else if session.parentSessionID != expectedParentSessionID {
             .parentSessionMismatch
-        } else if case let .captured(captured) = source,
-                  !Self.agentRunOracleReviewBindingsMatch(
-                      source: captured.sourceWorktreeBindings,
-                      target: session.worktreeBindings
-                  )
-        {
-            .targetBindingMismatch
         } else {
             nil
         }

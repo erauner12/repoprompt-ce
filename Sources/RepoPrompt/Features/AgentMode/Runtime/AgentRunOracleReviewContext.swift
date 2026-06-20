@@ -159,7 +159,8 @@ enum AgentRunOracleReviewSource: Equatable {
 }
 
 /// A captured source staged for one exact child control activation. It has no run identity and
-/// therefore cannot yet be consumed by Oracle.
+/// therefore cannot yet be consumed by Oracle. Source packaging and target conversation bindings
+/// are independent checkout domains; only the frozen target snapshot must match the later consumer.
 struct PendingAgentRunOracleReviewContext: Equatable {
     let source: AgentRunOracleReviewSource
     let targetTabID: UUID

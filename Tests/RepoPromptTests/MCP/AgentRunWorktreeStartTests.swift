@@ -516,8 +516,9 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
         XCTAssertEqual(object["worktree_bindings"]?.arrayValue?.count, 1)
     }
 
-    func testCanonicalAgentRunReviewSourceStagesBindsToExactRunAndCleansUp() async throws {
+    func testCanonicalAgentRunReviewSourceStagesBindsToFreshWorktreeChildAndCleansUp() async throws {
         let root = try makeTemporaryDirectory(named: "canonical-review-root")
+        let worktree = try makeTemporaryDirectory(named: "canonical-review-child-worktree")
         let window = try await makeWindow(root: root)
         let viewModel = window.agentModeViewModel
         let sourceTabID = try XCTUnwrap(window.workspaceManager.activeWorkspace?.activeComposeTabID)
@@ -537,6 +538,8 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
             originatingConnectionID: nil,
             startPending: true
         )
+        let targetBinding = makeBinding(logicalRoot: root.path, worktreeRoot: worktree.path)
+        viewModel.session(for: target.tabID).worktreeBindings = [targetBinding]
 
         let selectedPath = root.appendingPathComponent("Tracked.txt").path
         let source = AgentRunOracleReviewSource.captured(.init(
@@ -563,6 +566,8 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
             viewModel.mcpBindPendingAgentRunOracleReviewContext(tabID: target.tabID, runID: runID)
         )
         XCTAssertEqual(delegated.targetRunID, runID)
+        XCTAssertEqual(delegated.targetWorktreeBindings, [targetBinding])
+        XCTAssertEqual(delegated.capturedSource?.sourceWorktreeBindings, [])
         XCTAssertEqual(delegated.capturedSource?.promptText, "frozen canonical prompt")
         XCTAssertEqual(delegated.capturedSource?.exactSelectedIdentities, [selectedPath])
         XCTAssertEqual(
@@ -713,7 +718,7 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
         )
     }
 
-    func testLinkedWorktreeAgentRunReviewSourceRequiresExactInheritedBinding() async throws {
+    func testLinkedWorktreeAgentRunReviewSourceAllowsDifferentFrozenTargetAndRejectsDrift() async throws {
         let root = try makeTemporaryDirectory(named: "linked-review-root")
         let worktree = try makeTemporaryDirectory(named: "linked-review-worktree")
         let window = try await makeWindow(root: root)
@@ -810,10 +815,20 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
             expectedParentSessionID: parentSessionID
         )
         let mismatchedRunID = UUID()
-        _ = viewModel.mcpBindPendingAgentRunOracleReviewContext(
+        let unboundDelegated = try XCTUnwrap(viewModel.mcpBindPendingAgentRunOracleReviewContext(
             tabID: mismatchedTarget.tabID,
             runID: mismatchedRunID
-        )
+        ))
+        XCTAssertEqual(unboundDelegated.capturedSource?.sourceWorktreeBindings, [binding])
+        XCTAssertEqual(unboundDelegated.targetWorktreeBindings, [])
+        XCTAssertNotNil(try viewModel.mcpDelegatedAgentRunOracleReviewContext(
+            tabID: mismatchedTarget.tabID,
+            workspaceID: workspaceID,
+            sessionID: mismatchedSessionID,
+            runID: mismatchedRunID
+        ))
+
+        viewModel.session(for: mismatchedTarget.tabID).worktreeBindings = [binding]
         XCTAssertThrowsError(try viewModel.mcpDelegatedAgentRunOracleReviewContext(
             tabID: mismatchedTarget.tabID,
             workspaceID: workspaceID,
