@@ -289,8 +289,8 @@ struct CoordinatorModeView: View {
                             metrics: metrics
                         )
                         openAgentChatButton(route: rail.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
-                        Button("Clear Coordinator") {
-                            viewModel.clearCoordinator()
+                        Button("New Coordinator Run") {
+                            viewModel.startNewCoordinatorRun()
                         }
                         .buttonStyle(.link)
                         .font(metrics.bodyMedium)
@@ -299,10 +299,15 @@ struct CoordinatorModeView: View {
                     VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
                         Text("No Coordinator selected")
                             .font(metrics.cardTitle)
-                        Text("The board still shows workspace sessions. Coordinator identity can be selected or auto-detected by structured lineage in later layers.")
+                        Text(viewModel.isFreshCoordinatorRunPending ? "Next directive will start a new Codex Coordinator runtime." : "The board still shows workspace sessions. Coordinator identity can be selected or auto-detected by structured lineage in later layers.")
                             .font(metrics.body)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(viewModel.isFreshCoordinatorRunPending ? .primary : .secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                        Button("New Coordinator Run") {
+                            viewModel.startNewCoordinatorRun()
+                        }
+                        .buttonStyle(.link)
+                        .font(metrics.bodyMedium)
                     }
                 }
             }

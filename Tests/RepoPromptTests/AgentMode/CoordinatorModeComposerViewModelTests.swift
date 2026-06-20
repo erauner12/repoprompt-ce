@@ -16,7 +16,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(20), state: .idle, isMCP: true)
             ]
         )
-        var submissions: [(text: String, sessionID: UUID?)] = []
+        var submissions: [(text: String, sessionID: UUID?, forceNewRuntime: Bool)] = []
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in
                 var next = input
@@ -25,8 +25,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 return next
             },
             dashboardVisibilityHandler: { _ in },
-            directiveSubmitter: { text, sessionID in
-                submissions.append((text, sessionID))
+            directiveSubmitter: { text, sessionID, forceNewRuntime in
+                submissions.append((text, sessionID, forceNewRuntime))
                 return .accepted
             }
         )
@@ -39,6 +39,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(submissions.count, 1)
         XCTAssertEqual(submissions.first?.text, "Coordinate the child session")
         XCTAssertEqual(submissions.first?.sessionID, coordinatorID)
+        XCTAssertEqual(submissions.first?.forceNewRuntime, false)
         XCTAssertEqual(viewModel.railTranscriptEntries.map(\.text), ["Coordinate the child session"])
         XCTAssertEqual(viewModel.snapshot.groups, rowsBeforeSubmit)
 
@@ -67,7 +68,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 return next
             },
             dashboardVisibilityHandler: { _ in },
-            directiveSubmitter: { _, _ in
+            directiveSubmitter: { _, _, _ in
                 submitterCalled = true
                 return .accepted
             }
@@ -81,6 +82,29 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(result, .rejected(message: "Coordinator is mid-run. Send directives when it reaches an ordinary turn boundary."))
         XCTAssertFalse(submitterCalled)
         XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
+    }
+
+    func testForceNewCoordinatorRuntimeCreatesDifferentRuntimeEvenWhenOldRuntimeIsMarked() async throws {
+        let oldTabID = uuid(301)
+        let oldSessionID = uuid(302)
+        var oldTab = ComposeTabState(id: oldTabID, name: "Coordinator Runtime Demo", activeAgentSessionID: oldSessionID)
+        oldTab.lastModified = date(20)
+        let fixture = makeAgentModeFixture(tabs: [oldTab], activeTabID: oldTabID)
+        let viewModel = fixture.viewModel
+        let oldSession = await viewModel.ensureSessionReady(tabID: oldTabID)
+        _ = viewModel.test_installPersistentSessionBinding(sessionID: oldSessionID, on: oldSession)
+        oldSession.isCoordinatorRuntimeDemo = true
+
+        let next = try await viewModel.test_resolveOrCreateCoordinatorRuntimeDemoTarget(
+            preferredSessionID: oldSessionID,
+            forceNewRuntime: true
+        )
+
+        XCTAssertNotEqual(next.tabID, oldTabID)
+        XCTAssertNotEqual(next.sessionID, oldSessionID)
+        XCTAssertFalse(oldSession.isCoordinatorRuntimeDemo)
+        XCTAssertNotEqual(fixture.manager.composeTabName(with: oldTabID), "Coordinator Runtime Demo")
+        XCTAssertTrue(viewModel.sessions[next.tabID]?.isCoordinatorRuntimeDemo == true)
     }
 
     func testClearCoordinatorRuntimeDemoTargetForcesResolverToCreateDifferentRuntime() async throws {
@@ -121,7 +145,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         let coordinatorTab = uuid(101)
         var demoCoordinatorIDs: Set<UUID> = [coordinatorID]
         var resetCoordinatorID: UUID?
-        var submissions: [(text: String, sessionID: UUID?)] = []
+        var submissions: [(text: String, sessionID: UUID?, forceNewRuntime: Bool)] = []
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in
                 self.input(
@@ -134,8 +158,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 )
             },
             dashboardVisibilityHandler: { _ in },
-            directiveSubmitter: { text, sessionID in
-                submissions.append((text, sessionID))
+            directiveSubmitter: { text, sessionID, forceNewRuntime in
+                submissions.append((text, sessionID, forceNewRuntime))
                 return .accepted
             },
             coordinatorResetHandler: { sessionID in
@@ -149,17 +173,20 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.selectionSource, .demoRuntime)
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
 
-        viewModel.clearCoordinator()
-
+        viewModel.startNewCoordinatorRun()
         XCTAssertEqual(resetCoordinatorID, coordinatorID)
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.state, .chooseCoordinator)
         XCTAssertNil(viewModel.snapshot.coordinatorRail.coordinatorSessionID)
+        XCTAssertTrue(viewModel.isFreshCoordinatorRunPending)
+        XCTAssertEqual(viewModel.composerNotice, "Next directive will start a new Codex Coordinator runtime.")
 
         let result = await viewModel.submitCoordinatorDirective("start fresh")
 
         XCTAssertEqual(result, .accepted)
         XCTAssertEqual(submissions.first?.text, "start fresh")
         XCTAssertNil(submissions.first?.sessionID)
+        XCTAssertEqual(submissions.first?.forceNewRuntime, true)
+        XCTAssertFalse(viewModel.isFreshCoordinatorRunPending)
     }
 
     func testUnreachableCoordinatorRejectsDirectiveWithoutCallingSubmitter() async {
@@ -178,7 +205,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 return next
             },
             dashboardVisibilityHandler: { _ in },
-            directiveSubmitter: { _, _ in
+            directiveSubmitter: { _, _, _ in
                 submitterCalled = true
                 return .accepted
             }
@@ -286,6 +313,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             activeComposeTabID: activeTabID
         )
         manager.workspaces = [workspace]
+        manager.activeWorkspace = workspace
         prompt.loadComposeTabsFromWorkspace(workspace)
         let viewModel = AgentModeViewModel(
             codexControllerFactory: { _, _, _, _, _, _ in CoordinatorResetFakeCodexController() }
