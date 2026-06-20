@@ -179,6 +179,28 @@ struct CoordinatorModeRailTranscriptEntry: Identifiable, Equatable {
     let role: Role
     let text: String
     let createdAt: Date
+    let action: CoordinatorModeCoordinatorAction?
+}
+
+struct CoordinatorModeCoordinatorAction: Equatable {
+    enum Verb: String, Equatable {
+        case delegate
+        case collect
+        case cancel
+    }
+
+    enum Phase: String, Equatable {
+        case pending
+        case resolved
+        case failed
+    }
+
+    let ownerCoordinatorSessionID: UUID
+    let ownerTitle: String
+    let targetSessionID: UUID?
+    let targetTitle: String
+    let verb: Verb
+    let phase: Phase
 }
 
 struct CoordinatorModePendingInteractionSummary: Identifiable, Equatable {

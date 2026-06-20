@@ -37,6 +37,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private var lastPublishedFingerprint: CoordinatorModeSnapshotFingerprint?
     private var displayedTranscriptCoordinatorSessionID: UUID?
     private var lastDurableRailStatusEntryKey: String?
+    private var displayedDelegateActionTargetIDs: Set<UUID> = []
     private(set) var isVisible = false
 
     init(
@@ -94,6 +95,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         coordinatorResetHandler(coordinatorSessionID)
         displayedTranscriptCoordinatorSessionID = nil
         lastDurableRailStatusEntryKey = nil
+        displayedDelegateActionTargetIDs.removeAll()
         railTranscriptEntries.removeAll()
         currentRailActivityText = nil
         composerNotice = "Next directive will start a new Codex Coordinator runtime."
@@ -108,6 +110,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     func clearCoordinatorRailTranscript() {
         railTranscriptEntries.removeAll()
         lastDurableRailStatusEntryKey = nil
+        displayedDelegateActionTargetIDs.removeAll()
         currentRailActivityText = nil
         composerNotice = nil
     }
@@ -144,7 +147,8 @@ final class CoordinatorModeViewModel: ObservableObject {
                 id: UUID(),
                 role: .user,
                 text: trimmed,
-                createdAt: Date()
+                createdAt: Date(),
+                action: nil
             ))
         case let .rejected(message):
             composerNotice = message.isEmpty ? nil : message
@@ -186,12 +190,66 @@ final class CoordinatorModeViewModel: ObservableObject {
             displayedTranscriptCoordinatorSessionID = nextCoordinatorSessionID
             currentRailActivityText = nil
             lastDurableRailStatusEntryKey = nil
+            displayedDelegateActionTargetIDs = delegatedActionTargetIDs(in: nextSnapshot)
         }
         updateRailStatusPresentation(from: nextSnapshot.coordinatorRail)
+        updateRailActionPresentation(from: nextSnapshot)
         let nextFingerprint = nextSnapshot.fingerprint
         guard lastPublishedFingerprint != nextFingerprint else { return }
         lastPublishedFingerprint = nextFingerprint
         snapshot = nextSnapshot
+    }
+
+    private func updateRailActionPresentation(from snapshot: CoordinatorModeSnapshot) {
+        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID else {
+            displayedDelegateActionTargetIDs.removeAll()
+            return
+        }
+
+        let rows = directDelegatedRows(in: snapshot, coordinatorSessionID: coordinatorSessionID)
+            .filter { !displayedDelegateActionTargetIDs.contains($0.sessionID) }
+            .sorted { lhs, rhs in
+                if lhs.updatedAt == rhs.updatedAt {
+                    return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+                }
+                return lhs.updatedAt < rhs.updatedAt
+            }
+
+        for row in rows {
+            displayedDelegateActionTargetIDs.insert(row.sessionID)
+            railTranscriptEntries.append(CoordinatorModeRailTranscriptEntry(
+                id: row.sessionID,
+                role: .event,
+                text: "Delegated to \(row.title)",
+                createdAt: row.updatedAt,
+                action: CoordinatorModeCoordinatorAction(
+                    ownerCoordinatorSessionID: coordinatorSessionID,
+                    ownerTitle: snapshot.coordinatorRail.title ?? "Coordinator",
+                    targetSessionID: row.sessionID,
+                    targetTitle: row.title,
+                    verb: .delegate,
+                    phase: .resolved
+                )
+            ))
+        }
+    }
+
+    private func delegatedActionTargetIDs(in snapshot: CoordinatorModeSnapshot) -> Set<UUID> {
+        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID else {
+            return []
+        }
+        return Set(directDelegatedRows(in: snapshot, coordinatorSessionID: coordinatorSessionID).map(\.sessionID))
+    }
+
+    private func directDelegatedRows(
+        in snapshot: CoordinatorModeSnapshot,
+        coordinatorSessionID: UUID
+    ) -> [CoordinatorModeRow] {
+        snapshot.groups
+            .flatMap(\.rows)
+            .filter { row in
+                row.parentSessionID == coordinatorSessionID && !row.isCoordinator
+            }
     }
 
     private func updateRailStatusPresentation(from rail: CoordinatorModeCoordinatorRail) {
@@ -224,7 +282,8 @@ final class CoordinatorModeViewModel: ObservableObject {
             id: UUID(),
             role: report.status.isTerminal ? .coordinator : .event,
             text: text,
-            createdAt: Date()
+            createdAt: Date(),
+            action: nil
         ))
     }
 

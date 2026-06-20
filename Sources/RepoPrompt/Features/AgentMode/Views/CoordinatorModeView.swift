@@ -952,47 +952,123 @@ struct CoordinatorModeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    @ViewBuilder
     private func coordinatorConversationEntry(
         _ entry: CoordinatorModeRailTranscriptEntry,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        let isUser = entry.role == .user
-        let isEvent = entry.role == .event
-        return HStack(alignment: .top) {
-            if isUser {
-                Spacer(minLength: metrics.controlSpacing)
+        if let action = entry.action {
+            coordinatorActionConversationEntry(action, metrics: metrics)
+        } else {
+            let isUser = entry.role == .user
+            HStack(alignment: .top) {
+                if isUser {
+                    Spacer(minLength: metrics.controlSpacing)
+                }
+
+                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                    HStack(spacing: metrics.smallSpacing) {
+                        if !isUser {
+                            Image(systemName: entry.role.systemImage)
+                                .font(.system(size: metrics.microIconSize, weight: .medium))
+                        }
+                        Text(entry.role.displayName)
+                            .font(metrics.microMedium)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(entry.role.labelColor)
+
+                    coordinatorConversationBody(entry, metrics: metrics)
+                }
+                .padding(metrics.pendingPadding)
+                .frame(maxWidth: isUser ? metrics.userBubbleMaxWidth : .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                        .fill(entry.role.bubbleFill)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                        .stroke(entry.role.bubbleStroke, lineWidth: 0.5)
+                )
+
+                if !isUser {
+                    Spacer(minLength: metrics.controlSpacing)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+        }
+    }
+
+    private func coordinatorActionConversationEntry(
+        _ action: CoordinatorModeCoordinatorAction,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let targetRow = action.targetSessionID.flatMap { coordinatorRow(for: $0) }
+        let statusColor = targetRow?.statusGroup.accentColor ?? action.phase.tint
+        let statusText = targetRow?.statusGroup.displayName ?? action.phase.displayName
+
+        return HStack(alignment: .top, spacing: metrics.smallSpacing) {
+            Image(systemName: action.verb.systemImage)
+                .font(.system(size: metrics.microIconSize, weight: .semibold))
+                .foregroundStyle(action.verb.tint)
+                .frame(width: metrics.titlebarIconSize, height: metrics.titlebarIconSize)
 
             VStack(alignment: .leading, spacing: metrics.tightSpacing) {
                 HStack(spacing: metrics.smallSpacing) {
-                    if !isUser {
-                        Image(systemName: entry.role.systemImage)
-                            .font(.system(size: metrics.microIconSize, weight: .medium))
-                    }
-                    Text(entry.role.displayName)
+                    Text(action.verb.displayName)
                         .font(metrics.microMedium)
-                    Spacer(minLength: 0)
+                        .foregroundStyle(action.verb.tint)
+                    Text(action.ownerTitle)
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.secondary.opacity(0.85))
+                        .lineLimit(1)
                 }
-                .foregroundStyle(entry.role.labelColor)
 
-                coordinatorConversationBody(entry, metrics: metrics)
+                Text(action.targetTitle)
+                    .font(metrics.bodySemibold)
+                    .foregroundStyle(.primary.opacity(0.9))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(metrics.pendingPadding)
-            .frame(maxWidth: isUser ? metrics.userBubbleMaxWidth : .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                    .fill(entry.role.bubbleFill)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                    .stroke(entry.role.bubbleStroke, lineWidth: 0.5)
-            )
 
-            if !isUser {
-                Spacer(minLength: metrics.controlSpacing)
+            Spacer(minLength: metrics.smallSpacing)
+
+            HStack(spacing: metrics.miniPillIconSpacing) {
+                Circle()
+                    .fill(statusColor.opacity(0.9))
+                    .frame(width: metrics.composerStatusDotSize, height: metrics.composerStatusDotSize)
+                Text(statusText)
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, metrics.miniPillHorizontalPadding)
+            .padding(.vertical, metrics.miniPillVerticalPadding)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.28))
+            )
+        }
+        .padding(.horizontal, metrics.pendingPadding)
+        .padding(.vertical, metrics.pendingPadding * 0.82)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.30))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(action.verb.tint.opacity(0.16), lineWidth: 0.8)
+        )
+    }
+
+    private func coordinatorRow(for sessionID: UUID) -> CoordinatorModeRow? {
+        for section in viewModel.snapshot.groups {
+            if let row = section.rows.first(where: { $0.sessionID == sessionID }) {
+                return row
             }
         }
-        .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+        return nil
     }
 
     @ViewBuilder
@@ -2130,6 +2206,50 @@ private extension CoordinatorModeRailTranscriptEntry.Role {
             Color.secondary.opacity(0.10)
         case .event:
             Color.secondary.opacity(0.08)
+        }
+    }
+}
+
+private extension CoordinatorModeCoordinatorAction.Verb {
+    var displayName: String {
+        switch self {
+        case .delegate: "Delegated"
+        case .collect: "Collected"
+        case .cancel: "Cancelled"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .delegate: "arrow.up.forward.circle.fill"
+        case .collect: "tray.and.arrow.down.fill"
+        case .cancel: "xmark.circle.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .delegate: .blue
+        case .collect: .teal
+        case .cancel: .red
+        }
+    }
+}
+
+private extension CoordinatorModeCoordinatorAction.Phase {
+    var displayName: String {
+        switch self {
+        case .pending: "Pending"
+        case .resolved: "Started"
+        case .failed: "Failed"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .pending: .orange
+        case .resolved: .blue
+        case .failed: .red
         }
     }
 }

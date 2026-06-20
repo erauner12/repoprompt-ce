@@ -251,6 +251,71 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(row?.statusReport?.assistantPreview, "COORDINATOR_LOOPBACK_WORKING")
     }
 
+    func testNewDirectDelegateAddsSingleCoordinatorActionEntry() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let coordinatorTab = uuid(101)
+        let childTab = uuid(102)
+        var liveSessions = [
+            live(
+                id: coordinatorID,
+                tab: coordinatorTab,
+                title: "Coordinator Runtime Demo",
+                updatedAt: date(20),
+                state: .idle,
+                isMCP: true
+            )
+        ]
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: liveSessions,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+
+        viewModel.refresh()
+        XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
+
+        liveSessions.append(live(
+            id: childID,
+            tab: childTab,
+            title: "README probe",
+            updatedAt: date(30),
+            state: .running,
+            parent: coordinatorID,
+            isMCP: true
+        ))
+        viewModel.refresh()
+
+        let actionEntries = viewModel.railTranscriptEntries.compactMap(\.action)
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.event])
+        XCTAssertEqual(actionEntries.count, 1)
+        XCTAssertEqual(actionEntries.first?.ownerCoordinatorSessionID, coordinatorID)
+        XCTAssertEqual(actionEntries.first?.ownerTitle, "Coordinator Runtime Demo")
+        XCTAssertEqual(actionEntries.first?.targetSessionID, childID)
+        XCTAssertEqual(actionEntries.first?.targetTitle, "README probe")
+        XCTAssertEqual(actionEntries.first?.verb, .delegate)
+        XCTAssertEqual(actionEntries.first?.phase, .resolved)
+
+        liveSessions[1] = live(
+            id: childID,
+            tab: childTab,
+            title: "README probe",
+            updatedAt: date(40),
+            state: .idle,
+            parent: coordinatorID,
+            isMCP: true
+        )
+        viewModel.refresh()
+
+        XCTAssertEqual(viewModel.railTranscriptEntries.compactMap(\.action).count, 1)
+    }
+
     func testMidRunCoordinatorRejectsDirectiveWithoutCallingSubmitter() async {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
