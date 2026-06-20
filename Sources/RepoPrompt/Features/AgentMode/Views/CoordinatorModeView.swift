@@ -495,8 +495,6 @@ struct CoordinatorModeView: View {
     private func inspector(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(spacing: 0) {
             HStack {
-                Spacer(minLength: 0)
-
                 Button {
                     selectedRowID = nil
                 } label: {
@@ -506,6 +504,8 @@ struct CoordinatorModeView: View {
                 .foregroundStyle(.secondary)
                 .hoverTooltip("Hide Inspector")
                 .accessibilityLabel("Hide Inspector")
+
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, metrics.outerPadding)
             .frame(height: metrics.railTitlebarLaneHeight)
