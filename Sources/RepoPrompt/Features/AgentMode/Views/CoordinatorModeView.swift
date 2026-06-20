@@ -45,6 +45,7 @@ struct CoordinatorModeView: View {
     @State private var isSubmittingCoordinatorDirective = false
     @State private var isCoordinatorRailVisible = true
     @State private var isInspectorVisible = true
+    @State private var isSortMenuOpen = false
     @FocusState private var isCoordinatorComposerFocused: Bool
     @ObservedObject private var fontScale = FontScaleManager.shared
 
@@ -201,23 +202,93 @@ struct CoordinatorModeView: View {
     }
 
     private func presentationPicker(metrics: CoordinatorVisualMetrics) -> some View {
-        Picker("View", selection: $presentationMode) {
+        HStack(spacing: metrics.headerSegmentSpacing) {
             ForEach(PresentationMode.allCases) { mode in
-                Text(mode.displayName).tag(mode)
+                Button {
+                    presentationMode = mode
+                } label: {
+                    Text(mode.displayName)
+                        .font(metrics.bodySemibold)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: metrics.headerSegmentHeight)
+                        .padding(.horizontal, metrics.headerSegmentHorizontalPadding)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(presentationMode == mode ? Color.accentColor : Color.secondary)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(presentationMode == mode ? Color.accentColor.opacity(0.16) : Color.clear)
+                )
+                .accessibilityLabel(mode.displayName)
             }
         }
-        .pickerStyle(.segmented)
-        .frame(width: metrics.controlWidth)
+        .padding(metrics.headerControlInset)
+        .frame(width: metrics.controlWidth, height: metrics.headerControlHeight)
+        .coordinatorHeaderControlBackground()
         .accessibilityLabel("Presentation")
     }
 
     private func sortPicker(metrics: CoordinatorVisualMetrics) -> some View {
-        Picker("Sort", selection: $viewModel.sortMode) {
+        Button {
+            isSortMenuOpen.toggle()
+        } label: {
+            HStack(spacing: metrics.smallSpacing) {
+                Text("Sort")
+                    .font(metrics.bodyMedium)
+                    .foregroundStyle(.secondary)
+
+                Text(viewModel.sortMode.displayName)
+                    .font(metrics.bodySemibold)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: metrics.microIconSize, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, metrics.headerControlHorizontalPadding)
+            .frame(width: metrics.sortControlWidth, height: metrics.headerControlHeight)
+            .coordinatorHeaderControlBackground()
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Sort")
+        .popover(isPresented: $isSortMenuOpen, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+            sortMenuContent(metrics: metrics)
+        }
+    }
+
+    private func sortMenuContent(metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
             ForEach(CoordinatorModeSortMode.allCases, id: \.self) { mode in
-                Text(mode.displayName).tag(mode)
+                Button {
+                    viewModel.sortMode = mode
+                    isSortMenuOpen = false
+                } label: {
+                    HStack(spacing: metrics.smallSpacing) {
+                        Text(mode.displayName)
+                            .font(metrics.bodyMedium)
+                            .foregroundStyle(.primary)
+                        Spacer(minLength: metrics.controlSpacing)
+                        if viewModel.sortMode == mode {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: metrics.microIconSize, weight: .semibold))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    .padding(.horizontal, metrics.headerControlHorizontalPadding)
+                    .frame(width: metrics.sortControlWidth, height: metrics.headerControlHeight)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(viewModel.sortMode == mode ? Color.accentColor.opacity(0.12) : Color.clear)
+                    )
+                }
+                .buttonStyle(.plain)
             }
         }
-        .frame(width: metrics.controlWidth)
+        .padding(metrics.headerControlInset)
     }
 
     private func forceListLabel(metrics: CoordinatorVisualMetrics) -> some View {
@@ -259,11 +330,7 @@ struct CoordinatorModeView: View {
         .padding(.horizontal, metrics.searchHorizontalPadding)
         .padding(.vertical, metrics.searchVerticalPadding)
         .frame(minHeight: metrics.searchControlHeight)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: metrics.searchCornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: metrics.searchCornerRadius, style: .continuous)
-                .stroke(CoordinatorStyle.hairline, lineWidth: 0.5)
-        )
+        .coordinatorHeaderControlBackground()
     }
 
     private func coordinatorRail(
@@ -1301,8 +1368,36 @@ private struct CoordinatorVisualMetrics {
         fontPreset.scaledClamped(160, min: 160, max: 190)
     }
 
+    var sortControlWidth: CGFloat {
+        fontPreset.scaledClamped(190, min: 190, max: 230)
+    }
+
+    var headerControlHeight: CGFloat {
+        fontPreset.scaledClamped(34, min: 34, max: 42)
+    }
+
+    var headerControlInset: CGFloat {
+        fontPreset.scaledClamped(4, max: 5)
+    }
+
+    var headerSegmentHeight: CGFloat {
+        max(headerControlHeight - (headerControlInset * 2), 26)
+    }
+
+    var headerSegmentSpacing: CGFloat {
+        fontPreset.scaledClamped(4, max: 6)
+    }
+
+    var headerSegmentHorizontalPadding: CGFloat {
+        fontPreset.scaledClamped(10, max: 14)
+    }
+
+    var headerControlHorizontalPadding: CGFloat {
+        fontPreset.scaledClamped(12, max: 16)
+    }
+
     var searchWidth: CGFloat {
-        fontPreset.scaledClamped(220, min: 220, max: 280)
+        fontPreset.scaledClamped(240, min: 240, max: 300)
     }
 
     var outerPadding: CGFloat {
@@ -1571,6 +1666,18 @@ private extension View {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(CoordinatorStyle.hairline, lineWidth: 0.5)
             )
+    }
+
+    func coordinatorHeaderControlBackground() -> some View {
+        background(
+            Capsule(style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.22))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.secondary.opacity(0.20), lineWidth: 0.75)
+        )
+        .clipShape(Capsule(style: .continuous))
     }
 
     func coordinatorCardBackground(
