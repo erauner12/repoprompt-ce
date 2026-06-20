@@ -4,7 +4,7 @@ RepoPrompt CE now has a Coordinator mode surface that can supervise active-works
 
 The real Coordinator role is a different architectural object. It should be a layer-above meta-agent that supervises workspace sessions without being projected as one of them. pvncher's notes frame this as a new `coordinator` role with broader/top-level session visibility than `pair`, `engineer`, `explore`, or `design`. He also called out the core tool-design fork: the Coordinator could focus tabs and inherit scoped file/search tools, or it could avoid tab focus and talk to agents that already own their scopes. This design chooses the delegate-only direction for the first implementation.
 
-The key product boundary is: agent/model text is output; Agent task/session state is the RepoPrompt control plane. Coordinator and external callers should not infer completion, blockers, or deliverables from assistant prose. They should query deterministic RepoPrompt task/session state and artifact references.
+The key product boundary is: agent/model text is output; Agent run/session state is the RepoPrompt control plane. Coordinator and external callers should not infer completion, blockers, or deliverables from assistant prose when RepoPrompt can expose deterministic lifecycle state.
 
 Important existing anchors:
 
@@ -22,7 +22,7 @@ Important existing anchors:
 - **Coordinator mode/view**: the human-facing control-plane surface from `add-coordinator-mode`.
 - **Demo Coordinator session**: an ordinary selected or auto-detected Agent Mode session used by the current scoped composer.
 - **Coordinator role/runtime**: the new layer-above meta-agent identity defined by this change.
-- **Agent task/session lifecycle contract**: the native RepoPrompt control-plane contract for starting, observing, steering, responding to, cancelling, and exporting task/session state.
+- **Agent run/session lifecycle contract**: the native RepoPrompt control-plane contract for starting, observing, steering, responding to, cancelling, and exporting run/session state.
 - **MCP adapter**: the external `agent_run` / `agent_manage` tool schema that exposes parts of the native lifecycle contract to MCP callers.
 
 ## Goals / Non-Goals
@@ -30,12 +30,12 @@ Important existing anchors:
 **Goals:**
 
 - Define the first real Coordinator role as a layer-above meta-agent, not a workspace session/card.
-- Define a native RepoPrompt Agent task/session lifecycle contract underneath MCP tool schemas.
+- Define a native RepoPrompt Agent run/session lifecycle contract underneath MCP tool schemas.
 - Treat MCP `agent_run` and `agent_manage` as adapters/consumers of the native lifecycle contract, not as the only durable boundary.
 - Give the first Coordinator role a delegate-only tool boundary: observe/list sessions, spawn agents, poll/wait deterministic state, steer/message agents, and summarize/export through artifact references.
 - Give the Coordinator top-level active-workspace session visibility, or a stricter explicitly recorded scope, without applying ordinary child-only agent scoping.
 - Keep Coordinator runtime state out of `CoordinatorModeSnapshot` workspace row groups by construction.
-- Define auditable directive records before adding autonomy or broad mutation powers.
+- Define auditable Coordinator action records for v1 instructions before adding higher-level directive/autonomy behavior.
 - Preserve the existing manual selected-session composer as a demo shim until the real role replaces or supersedes it.
 
 **Non-Goals:**
@@ -46,7 +46,7 @@ Important existing anchors:
 - Making the Coordinator board/list a full transcript, log, file, or diff viewer.
 - Treating MCP tool argument/result JSON as the durable source-of-truth contract instead of an adapter over native lifecycle state.
 - Hiding a normal workspace session row after using it as Coordinator. The real role should not be projected into the workspace fleet in the first place.
-- Defining broad autonomous behavior without explicit directive classes, authorization rules, and failure semantics.
+- Defining broad autonomous directive behavior without explicit directive classes, authorization rules, and failure semantics.
 
 ## Decisions
 
@@ -62,19 +62,19 @@ Alternatives considered:
 - **Filter the Coordinator card out of the board:** rejected because it treats a modeling error as a UI problem.
 - **Plain task-label-only Coordinator:** rejected because it risks creating the wrong layer: a normal tab-scoped agent with a new label.
 
-### 2. Native Agent task/session lifecycle is the durable control-plane contract
+### 2. Native Agent run/session lifecycle is the durable control-plane contract
 
-RepoPrompt should define the underlying Agent task/session lifecycle as a native contract. MCP `agent_run` and `agent_manage` expose that contract externally, but the MCP schema should not be the only durable boundary.
+RepoPrompt should define the underlying Agent run/session lifecycle as a native contract. MCP `agent_run` and `agent_manage` expose that contract externally, but the MCP schema should not be the only durable boundary.
 
 The lifecycle contract should include:
 
-- stable task/session handles;
+- stable run/session handles;
 - deterministic lifecycle status sufficient for Coordinator decisions;
 - active/actionable/terminal status classification;
 - pending interaction shape;
 - respond-by-interaction-id semantics;
 - cancel semantics;
-- durable artifact references for summaries, logs, handoff/export artifacts, worktree metadata, and related structured outputs;
+- durable artifact references for summaries, logs, exported context, worktree metadata, and related structured outputs;
 - public contract tests for caller-visible start, poll/status, wait, steer with `wait: true`, respond, cancel, and artifact/export shapes.
 
 Coordinator needs functional state categories more than a final universal enum:
@@ -90,7 +90,7 @@ Existing RepoPrompt vocabulary to preserve or map from:
 
 Coordinator should preserve these semantic categories rather than introduce unrelated new state names. The internal waiting states may collapse to a Coordinator-facing `waiting_for_input` / actionable category when the specific pending interaction shape carries the detail. Additional outcomes should be added only when the runtime has concrete semantics for them.
 
-Coordinator directives and external integrations should derive state from this contract instead of parsing assistant prose.
+Coordinator actions, future directives, and external integrations should derive state from this contract instead of parsing assistant prose.
 
 Alternatives considered:
 
@@ -105,11 +105,11 @@ Rationale: delegate-only matches pvncher's “maybe coordinator doesnt focus tab
 
 Coordinator v1 allowed verbs should map to the native lifecycle contract as:
 
-- `list` / `observe`: enumerate visible sessions, models, compact status, and artifact refs.
-- `start` / `spawn`: create a delegated Agent task/session.
+- `list` / `observe`: enumerate visible sessions, models, compact status, and artifact references.
+- `start` / `spawn`: create a delegated Agent run/session.
 - `poll` / `status` / `wait`: observe deterministic lifecycle categories and terminal/actionable transitions.
 - `steer` / `message`: send follow-up work to an existing delegated session.
-- `summarize` / `export`: request compact summaries or durable artifact refs without loading full transcripts into the supervision loop.
+- `summarize` / `export`: request compact summaries or durable artifact references without loading full transcripts into the supervision loop.
 
 The underlying lifecycle contract may define `respond` and `cancel`, but Coordinator v1 should expose only the safe delegate subset until each higher-risk action has accepted authorization and failure semantics. Coordinator access to `respond`, `cancel`, approve/decline, worktree mutation, tab focus, full log read, and direct file/search capabilities remains deferred or gated.
 
@@ -128,7 +128,7 @@ The current external lifecycle is useful and should be preserved as an adapter s
 - `agent_run.steer` for follow-up messages.
 - `agent_run.respond` for pending interactions as a lifecycle capability; Coordinator use remains gated until accepted.
 - `agent_run.cancel` for cancellation as a lifecycle capability; Coordinator use remains gated until accepted.
-- `agent_manage.get_log` / `agent_manage.handoff` or export-like surfaces for artifact refs, compact summaries, and handoff/export artifacts.
+- `agent_manage.get_log` or export-like surfaces for artifact references, compact summaries, and exported context.
 
 However, today's agent-control MCP tools are not automatically the Coordinator scope. Existing tools are tied to window/workspace/tab context and ordinary agents may be scoped to their own sub-agents. The Coordinator needs one layer up: at minimum active-workspace top-level session listing without the ordinary child-only filter, and possibly an explicit global or attached-session scope later.
 
@@ -157,7 +157,7 @@ The enforcement seam is the MCP/Agent Mode tool policy and advertisement layer, 
 | `agent_run.steer` | Allowed to message/redirect delegated agents. | Allowed within the agent's own session scope. |
 | `agent_run.respond` | Lifecycle-supported but Coordinator access gated until authorization/audit semantics are accepted. | Target agent or user-facing Agent Mode UI handles pending interactions today. |
 | `agent_run.cancel`, `agent_manage.stop_session`, `cleanup_sessions` | Deferred/gated for Coordinator v1. | Existing UI/MCP paths keep their current semantics. |
-| `agent_manage.get_log` / `handoff` / export | Limited to compact summaries or durable artifact refs by default. | Delegated agents may inspect deeper context when scoped to their task. |
+| `agent_manage.get_log` / export-like surfaces | Limited to compact summaries or durable artifact references by default. | Delegated agents may inspect deeper context when scoped to their task. |
 | `bind_context`, tab focus, workspace/tab switching | Not allowed for Coordinator v1. | Delegated agents operate within their own bound tab/session scope. |
 | `read_file`, `file_search`, `workspace_context`, `manage_selection` | Not allowed for Coordinator v1. | Delegated agents perform project reading/search/selection in their scoped context. |
 | `apply_edits`, `file_actions` | Not allowed for Coordinator v1. | Delegated implementation agents make file changes when assigned that work. |
@@ -167,20 +167,19 @@ When the user's intent requires direct codebase investigation or mutation, the C
 
 ### 6. Coordinator history is control-plane state, not workspace fleet state
 
-The Coordinator's own conversation/history/directive log must live outside workspace row projection. It may be app-level Coordinator state, MCP client/runtime state, or a new persisted control-plane store, but it must not be represented as a normal supervised `AgentSession` row in Coordinator mode.
+The Coordinator's own conversation/history/action log must live outside workspace row projection. It may be app-level Coordinator state, MCP client/runtime state, or a new persisted control-plane store, but it must not be represented as a normal supervised `AgentSession` row in Coordinator mode.
 
 The final storage decision depends on the lifecycle/runtime implementation, but the invisibility requirement does not. Restoring Coordinator state must not create, restore, or promote a workspace Agent Mode session into the supervised fleet.
 
-### 7. Directives are structured and auditable before autonomy
+### 7. Instructions and actions are auditable; higher-level directives are deferred
 
-The first directive model should include a small set of explicit verbs: list, start/spawn, poll/wait, steer/message, and summarize/export. Each directive records source, target, action type, lifecycle handle, status, and failure information. Higher-risk Coordinator operations such as respond, cancel/stop, approvals, worktree mutation, and tab focus remain deferred until their authorization and audit semantics are designed.
+The first Coordinator model should treat user input as instructions/messages and resulting control-plane work as structured action records. The initial action verbs are list, start/spawn, poll/wait, steer/message, and summarize/export. Each action record stores source, target, action type, lifecycle handle, status, and failure information. Higher-risk Coordinator operations such as respond, cancel/stop, approvals, worktree mutation, and tab focus remain deferred until their authorization and audit semantics are designed.
 
-Coordinator v1 should feel like a human-directed command rail: the user gives a directive, the Coordinator decomposes or delegates within the accepted tool boundary, and the user can observe deterministic state as delegated sessions progress. Autonomy, including follow-up directives triggered by observed session lifecycle changes, is deferred to a later spec.
+Coordinator v1 should feel like a human-directed command rail: the user gives an instruction, the Coordinator decomposes or delegates within the accepted tool boundary, and the user can observe deterministic state as delegated sessions progress. Goal-like directives that span multiple sessions or trigger follow-up work from observed session lifecycle changes are deferred to a later spec.
 
+#### Deferred directive/autonomy examples
 
-#### Deferred autonomy examples
-
-These examples document the boundary only. Coordinator v1 does not perform these follow-up directives autonomously.
+These examples document the boundary only. Coordinator v1 does not perform these follow-up actions autonomously.
 
 | Observed condition | Coordinator v1 behavior | Later autonomy spec could allow |
 | --- | --- | --- |
@@ -188,9 +187,9 @@ These examples document the boundary only. Coordinator v1 does not perform these
 | Delegated agent is blocked or waiting | Surface actionable state to the user. | Ask the user a targeted question or route a response if authorized. |
 | Delegated agent reports failure | Record failed outcome and summarize artifacts. | Spawn a fix or investigation agent. |
 | Delegated agent appears stale or long-running | Surface stale/long-running state. | Request confirmation to cancel, restart, or reassign. |
-| Work appears ready to integrate | Report completion and artifact refs. | Start a review, merge, or check workflow under explicit policy. |
+| Work appears ready to integrate | Report completion and artifact references. | Start a review, merge, or check workflow under explicit policy. |
 
-Directive status should derive from native lifecycle state, pending-interaction records, and durable artifact refs. It should not rely on assistant prose or absence of an error message.
+Coordinator action status should derive from native lifecycle state, pending-interaction records, and durable artifact references. It should not rely on assistant prose or absence of an error message.
 
 This keeps the Coordinator role from becoming an ad hoc command box and aligns with the later Layer 2/3 direction already described by `add-coordinator-mode/end-state.md`.
 
@@ -217,15 +216,15 @@ The first implementation should record its stance before enabling spawn/steer/re
 - **Existing MCP scope mismatch** → Current `agent_run` / `agent_manage` behavior may be window/workspace/tab scoped and child-filtered; implement an explicit Coordinator binding or adapter scope rather than assuming global visibility exists.
 - **Over-broad Coordinator power** → Start delegate-only and require a later spec before exposing tab focus, file access, worktree mutation, approval/respond/cancel actions, or app-global visibility to the Coordinator.
 - **Coordinator appears on its own board** → Keep Coordinator runtime state outside workspace row projection by requirement, not by filtering after projection.
-- **Duplicate directive paths** → Treat the current composer as Layer 1/demo and make structured directives part of the role spec, not an ad hoc extension of ordinary user messages.
+- **Instruction vs directive ambiguity** → Treat the current composer as Layer 1/demo instructions/messages. Reserve goal-like directives for a later spec with explicit autonomy, authorization, and audit semantics.
 
 ## Migration Plan
 
 1. Create and validate this OpenSpec change.
-2. Record the accepted direction: Coordinator is a first-class role backed by a native Agent task/session lifecycle contract, with MCP as adapter and delegate-only v1 scope.
+2. Record the accepted direction: Coordinator is a first-class role backed by a native Agent run/session lifecycle contract, with MCP as adapter and delegate-only v1 scope.
 3. Review the narrowed design with wren using delegate-vs-focus, lifecycle-contract-vs-MCP-schema, and active-workspace-top-level-vs-global scope as the discussion spine.
 4. Implement the lifecycle contract and Coordinator role behind a feature boundary while preserving existing Coordinator mode behavior.
-5. Integrate the real role with Coordinator view/composer only after role identity, scope, history, projection exclusion, and directive records are stable.
+5. Integrate the real role with Coordinator view/composer only after role identity, scope, history, projection exclusion, and action records are stable.
 6. Retire, hide, or keep the manual selected-session composer as an explicit demo/manual override based on the accepted migration decision.
 
 Rollback for the first implementation should leave the existing Coordinator view and manual selected-session composer intact. The real role should be additive until it is proven stable.
@@ -233,7 +232,7 @@ Rollback for the first implementation should leave the existing Coordinator view
 ## Open Questions
 
 - Should the first Coordinator listing scope be active-workspace top-level or explicitly attached sessions? App-global remains deferred unless cross-window ownership is accepted.
-- Where should Coordinator history/directive logs live if the Coordinator is not a workspace session?
-- Should `respond` be in the first directive set once pending-interaction shape is defined, or should it remain deferred with cancel/approval actions?
+- Where should Coordinator history/action logs live if the Coordinator is not a workspace session?
+- Should `respond` be in the first action set once pending-interaction shape is defined, or should it remain deferred with cancel/approval actions?
 - Which MCP adapter changes are required so `agent_run` / `agent_manage` expose the native lifecycle contract without ordinary child-only scoping?
 - What evidence would justify adding direct tab focus later?
