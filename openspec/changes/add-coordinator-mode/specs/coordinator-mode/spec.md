@@ -30,6 +30,25 @@ The system SHALL provide a non-default Coordinator mode peer surface inside the 
 - **WHEN** UI tests or launch configuration force `.main`
 - **THEN** the system SHALL land on Agent Mode unless a Coordinator-view-specific forced-surface option is explicitly added.
 
+### Requirement: Coordinator/control-plane separation
+The system SHALL keep the Coordinator supervisor/control-plane surface distinct from the supervised Agent Mode rows it observes.
+
+#### Scenario: Control plane is not a supervised row list
+- **WHEN** Coordinator mode renders supervised Agent Mode rows in board, list, sidebar, rail, or session-list-like surfaces
+- **THEN** those rows SHALL represent supervised Agent Mode sessions rather than the Coordinator/control-plane surface itself
+- **AND** the read-only shell SHALL NOT imply that a future real Coordinator runtime must appear as one of those supervised rows.
+
+#### Scenario: V1 boundaries are provisional
+- **WHEN** v1/demo behavior relies on current-window scope, tab-backed reachability, or rail/composer placement
+- **THEN** those behaviors SHALL be treated as provisional shell boundaries
+- **AND** they SHALL NOT be interpreted as permanent constraints on future Coordinator runtime shape or control-plane UX.
+
+#### Scenario: Future Coordinator runtime shape is undecided
+- **WHEN** planning the real Coordinator role beyond the read-only/demo shell
+- **THEN** the product SHALL force an explicit decision between a tab-backed Agent Mode runtime and a provider+transcript+loopback MCP runtime outside `TabSession` / workspace-session enrollment
+- **AND** provider/runtime machinery reuse SHALL be considered desirable without overclaiming that either option is already implemented or feasible
+- **AND** the read-only shell specs SHALL NOT require the future Coordinator runtime to appear in board, sidebar, or session lists.
+
 ### Requirement: Coordinator view snapshot projection
 The system SHALL render Coordinator mode from a single Coordinator-view-facing `CoordinatorModeSnapshot` projection.
 

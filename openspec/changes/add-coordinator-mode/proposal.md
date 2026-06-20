@@ -12,6 +12,8 @@ Users can already run multiple isolated Agent Mode sessions, often across worktr
 - Include one scoped v1 write path: a Coordinator composer that is enabled only for a current-window live Coordinator and sends ordinary user messages to that Coordinator session. Board/list cards, pending prompts, and inspector content remain read-only/deep-link-first.
 - Surface structured waiting/user-attention states read-only, enrich live MCP-controlled sessions with normalized interaction details when available, and deep-link users to Agent Mode for response.
 - Avoid heuristic labels and runtime rewrites: workflow is optional, objective is deferred, and workstream chips render only from structured data such as worktree binding metadata.
+- Preserve the durable separation between the Coordinator/control-plane surface and supervised Agent Mode rows while treating v1/demo boundaries as provisional.
+- Record the future runtime-shape decision instead of assuming a real Coordinator must be a tab-backed `AgentSession`: provider/runtime reuse is desirable, but a provider+transcript+loopback MCP runtime outside `TabSession` / workspace-session enrollment remains an explicit option to decide before role implementation.
 
 ## Capabilities
 

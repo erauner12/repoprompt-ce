@@ -12,6 +12,14 @@ Naming convention for this change: **Coordinator mode** is the peer `.main` surf
 
 The Coordinator view should therefore be a sourced projection over existing state plus one deliberately scoped v1 write path: sending an ordinary user message to a current-window live Coordinator session. It is not a new runtime, protocol, or Agent UI replacement.
 
+### Durable invariants vs v1/demo boundaries
+
+The durable invariant is separation of roles: the supervisor/control-plane surface must not be confused with the supervised Agent Mode rows it observes. V1/demo boundaries are provisional and may move later; current-window scoping, tab-backed reachability, and rail/composer placement describe this shell slice rather than permanent product constraints.
+
+### Runtime-shape decision to force later
+
+Reusing provider/runtime machinery for a future real Coordinator remains desirable, but this OpenSpec does not assume the real Coordinator must be a tab-backed `AgentSession` enrolled in `TabSession` or workspace-session lists. Before implementing the real Coordinator role, force an explicit runtime decision between a tab/session-backed Agent Mode runtime and an alternative provider+transcript+loopback MCP runtime outside workspace tab/session enrollment. The read-only shell must therefore avoid implying that the future Coordinator runtime has to appear in board, sidebar, or session-list surfaces as a supervised row.
+
 ## Goals / Non-Goals
 
 **Goals:**

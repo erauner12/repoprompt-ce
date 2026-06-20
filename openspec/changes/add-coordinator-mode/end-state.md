@@ -21,7 +21,7 @@ The Coordinator view should let a user:
 - converse with an addressable Coordinator agent that can spawn or steer child agents;
 - jump into Agent Mode whenever detailed transcript, files, diffs, or provider-specific controls are needed.
 
-This is a control plane over Agent Mode, not a replacement for Agent Mode.
+This is a control plane over Agent Mode, not a replacement for Agent Mode. The durable invariant is that the supervisor/control-plane surface remains distinct from the supervised Agent Mode rows it observes. V1/demo cuts such as current-window scope, tab-backed reachability, and rail/composer placement are provisional boundaries that can move once the runtime and write-path decisions are made.
 
 ## Four Capability Layers
 
@@ -189,6 +189,25 @@ Required decisions:
 - Whether action targets are represented by session ID + interaction ID, or by an owning-window/session handle.
 - How action failure is surfaced when the target session changes before the response lands.
 
+### `decide-coordinator-runtime-shape`
+
+Scope:
+
+- Decide whether the real Coordinator role is a tab-backed Agent Mode session enrolled in `TabSession` / workspace-session lists, or a provider+transcript+loopback MCP runtime outside workspace tab/session enrollment.
+- Preserve provider/runtime machinery reuse where practical without overclaiming that either runtime shape is already proven feasible.
+- Define how a non-enrolled Coordinator would expose transcript, liveness, routing, permissions, and MCP loopback control without appearing as one of the supervised board/sidebar/session-list rows.
+
+Unlocks:
+
+- Real Coordinator role implementation without baking demo-shell assumptions into identity, routing, or session-list UX.
+- Clear separation between the control-plane actor and the Agent Mode sessions it supervises.
+
+Required decisions:
+
+- Must the Coordinator be visible as an ordinary Agent Mode row, or should it be addressable only through Coordinator/control-plane surfaces?
+- If outside workspace tab/session enrollment, what owns its transcript, provider lifecycle, and loopback MCP authorization?
+- Which existing provider/runtime components can be reused without requiring `TabSession` enrollment?
+
 ### `extend-coordinator-directives`
 
 Scope:
@@ -207,7 +226,7 @@ Unlocks:
 
 Required decisions:
 
-- Is the Coordinator an ordinary Agent Mode session with additional metadata, or a distinct orchestration runtime role?
+- Decide the Coordinator runtime shape first: an ordinary tab-backed Agent Mode session with metadata, or a provider+transcript+loopback MCP runtime outside `TabSession` / workspace-session enrollment.
 - Which directive types remain plain user messages, and which require structured commands or a new control-plane envelope?
 - Does Coordinator mode act only on current-window Coordinator sessions, or can it route directives cross-window?
 - What happens when the Coordinator is mid-run: queue, reject, interrupt, or steer?
@@ -460,7 +479,7 @@ The same audit confirmed the largest deferred source:
 
 - For Layer 2, is current-window-only action good enough, or must actions route to owning windows?
 - What is the minimal activity/event stream that unlocks useful chips without becoming a logging platform?
-- Should the Coordinator be modeled as an ordinary Agent Mode session with metadata, or as a distinct runtime role?
+- Should the Coordinator be modeled as an ordinary tab-backed Agent Mode session with metadata, or as a provider+transcript+loopback MCP runtime outside `TabSession` / workspace-session enrollment?
 - Which Coordinator directives can remain ordinary user messages, and which require structured commands or a new control-plane envelope?
 - What retention policy applies to activity/provenance records?
 - Which activity/event fields must be persisted versus rebuilt from existing session/transcript state?
