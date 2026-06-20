@@ -533,12 +533,12 @@ struct CoordinatorModeView: View {
     }
 
     private func sessionCard(_ row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
-        VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+        VStack(alignment: .leading, spacing: metrics.sessionCardInnerSpacing) {
             HStack(alignment: .top) {
                 Text(row.title)
                     .font(metrics.cardTitle)
                     .foregroundStyle(.primary)
-                    .lineLimit(2)
+                    .lineLimit(1)
                     .truncationMode(.tail)
                     .layoutPriority(1)
                 Spacer(minLength: metrics.controlSpacing)
@@ -546,17 +546,9 @@ struct CoordinatorModeView: View {
 
             rowMetadata(row, metrics: metrics)
 
-            if let pending = row.pendingInteraction {
-                pendingSummary(pending, metrics: metrics)
-            } else if let report = row.statusReport {
-                statusReportSummary(report, metrics: metrics)
-            }
-
             if row.isPersistedOnly {
                 statusChip("Persisted only", color: .secondary, metrics: metrics)
             }
-
-            openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
         }
         .padding(metrics.sessionCardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1130,82 +1122,28 @@ struct CoordinatorModeView: View {
     private func rowMetadata(_ row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
         HStack(spacing: metrics.smallSpacing) {
             statusChip(row.runState.displayName, color: row.statusGroup.accentColor, metrics: metrics)
-            if let providerName = row.providerName {
-                Text(providerName)
-                    .font(metrics.body)
-                    .foregroundStyle(.secondary)
-            }
-            if let workstream = row.workstream {
-                Text(workstream.label)
+            if let identity = cardIdentityText(for: row) {
+                Text(identity)
                     .font(metrics.body)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
         }
     }
 
-    @ViewBuilder
-    private func statusReportSummary(_ report: CoordinatorModeSessionStatusReport, metrics: CoordinatorVisualMetrics) -> some View {
-        if report.hasDisplayableContent {
-            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                if let statusText = report.statusText {
-                    Text(statusText)
-                        .font(metrics.bodySemibold)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-                if let assistantPreview = report.assistantPreview {
-                    Text(assistantPreview)
-                        .font(metrics.body)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                }
-                if let failureReason = report.failureReason {
-                    Text("Failure: \(failureReason.displayLabel)")
-                        .font(metrics.bodySemibold)
-                        .foregroundStyle(.red.opacity(0.85))
-                        .lineLimit(2)
-                }
-                if let terminalOutput = report.terminalOutput {
-                    Text(terminalOutput)
-                        .font(metrics.body)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                }
-            }
-            .padding(metrics.pendingPadding)
-            .background(
-                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                    .fill(Color(nsColor: .windowBackgroundColor).opacity(0.45))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                    .stroke(Color.secondary.opacity(0.10), lineWidth: 1)
-            )
+    private func cardIdentityText(for row: CoordinatorModeRow) -> String? {
+        var parts: [String] = []
+        if let providerName = row.providerName {
+            parts.append(providerName)
         }
-    }
-
-    private func pendingSummary(_ pending: CoordinatorModePendingInteractionSummary, metrics: CoordinatorVisualMetrics) -> some View {
-        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-            Label(pending.title ?? pending.kind.displayLabel, systemImage: "exclamationmark.bubble")
-                .font(metrics.bodySemibold)
-                .foregroundStyle(.orange.opacity(0.85))
-            if let prompt = pending.prompt {
-                Text(prompt)
-                    .font(metrics.body)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-            }
+        if let modelName = row.modelName, modelName != row.providerName {
+            parts.append(modelName)
         }
-        .padding(metrics.pendingPadding)
-        .background(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .fill(Color.orange.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .stroke(Color.orange.opacity(0.12), lineWidth: 1)
-        )
+        if let workstream = row.workstream {
+            parts.append(workstream.label)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private func openAgentChatButton(route: AgentSessionDeepLinkRoute?, title: String, metrics: CoordinatorVisualMetrics) -> some View {
@@ -1486,6 +1424,10 @@ private struct CoordinatorVisualMetrics {
 
     var cardInnerSpacing: CGFloat {
         fontPreset.scaledClamped(8, max: 11)
+    }
+
+    var sessionCardInnerSpacing: CGFloat {
+        fontPreset.scaledClamped(6, max: 8)
     }
 
     var cardPadding: CGFloat {
