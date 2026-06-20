@@ -610,16 +610,30 @@ actor WorkspaceFileContextStore {
             let lastRootCount: Int
         }
 
+        enum RootCatalogShardFallbackReason: String, CaseIterable, Hashable {
+            case missingReusableShard
+            case generationGap
+            case fullResync
+            case unsafeOrAmbiguousBatch
+            case retentionBoundary
+            case patchThresholdExceeded
+            case patchApplicationBackstop
+            case shadowValidationMismatch
+        }
+
         struct RootCatalogShardGenerationDebugSnapshot: Equatable {
             let rootID: UUID
+            let lifetimeID: UUID?
             let publishedTopologyGeneration: UInt64?
             let liveTopologyGenerations: [UInt64]
             let retainedTopologyGenerations: [UInt64]
             let buildCount: Int
             let pathIndexBuildCount: Int
+            let overlayPathIndexBuildCount: Int
             let patchCount: Int
             let authoritativeRebuildCount: Int
-            let fallbackReasonCounts: [String: Int]
+            let fallbackCount: Int
+            let fallbackReasonCounts: [RootCatalogShardFallbackReason: Int]
             let lastAppliedIndexGeneration: UInt64?
             let deltaStateDirty: Bool
             let backstopCount: Int
@@ -629,6 +643,7 @@ actor WorkspaceFileContextStore {
         struct RootCatalogShardDebugSnapshot: Equatable {
             let liveGenerationCapPerRoot: Int
             let maxPatchLogicalMutationCount: Int
+            let maxPathIndexOverlayChangedFileCount: Int
             let publishedShardCount: Int
             let totalBuildCount: Int
             let totalBackstopCount: Int
@@ -737,9 +752,13 @@ actor WorkspaceFileContextStore {
         private var catalogRebuildLastFileCount = 0
         private var catalogRebuildLastRootCount = 0
         private var rootCatalogShardBuildCountsByRootID: [UUID: Int] = [:]
+        private var rootCatalogShardFullPathIndexBuildCountsByRootID: [UUID: Int] = [:]
+        private var rootCatalogShardOverlayPathIndexBuildCountsByRootID: [UUID: Int] = [:]
         private var rootCatalogShardPatchCountsByRootID: [UUID: Int] = [:]
         private var rootCatalogShardAuthoritativeRebuildCountsByRootID: [UUID: Int] = [:]
-        private var rootCatalogShardFallbackReasonCountsByRootID: [UUID: [String: Int]] = [:]
+        private var rootCatalogShardFallbackCountsByRootID: [UUID: Int] = [:]
+        private var rootCatalogShardFallbackReasonCountsByRootID: [UUID: [RootCatalogShardFallbackReason: Int]] = [:]
+        private var rootCatalogShardFallbackLifetimeIDsByRootID: [UUID: UUID] = [:]
         private var rootCatalogShardBackstopCountsByRootID: [UUID: Int] = [:]
         private var rootCatalogShardMaxLiveGenerationCountsByRootID: [UUID: Int] = [:]
         private var rootCatalogShardSingleShardCompositionReuseCount = 0
@@ -955,9 +974,13 @@ actor WorkspaceFileContextStore {
             let staleDiagnosticRootIDs = Set(rootCatalogShardBuildCountsByRootID.keys).subtracting(trackedRootIDs)
             for rootID in staleDiagnosticRootIDs {
                 rootCatalogShardBuildCountsByRootID.removeValue(forKey: rootID)
+                rootCatalogShardFullPathIndexBuildCountsByRootID.removeValue(forKey: rootID)
+                rootCatalogShardOverlayPathIndexBuildCountsByRootID.removeValue(forKey: rootID)
                 rootCatalogShardPatchCountsByRootID.removeValue(forKey: rootID)
                 rootCatalogShardAuthoritativeRebuildCountsByRootID.removeValue(forKey: rootID)
+                rootCatalogShardFallbackCountsByRootID.removeValue(forKey: rootID)
                 rootCatalogShardFallbackReasonCountsByRootID.removeValue(forKey: rootID)
+                rootCatalogShardFallbackLifetimeIDsByRootID.removeValue(forKey: rootID)
                 rootCatalogShardBackstopCountsByRootID.removeValue(forKey: rootID)
                 rootCatalogShardMaxLiveGenerationCountsByRootID.removeValue(forKey: rootID)
             }
@@ -975,15 +998,29 @@ actor WorkspaceFileContextStore {
                     liveShards.count
                 )
                 rootCatalogShardMaxLiveGenerationCountsByRootID[rootID] = maxLiveCount
+                let lifetimeID = publishedShard?.key.lifetimeID
+                    ?? rootCatalogShardDeltaStatesByRootID[rootID]?.lifetimeID
+                    ?? rootStatesByID[rootID]?.lifetimeID
+                    ?? rootCatalogShardFallbackLifetimeIDsByRootID[rootID]
+                    ?? liveShards.first?.key.lifetimeID
+                if let lifetimeID {
+                    resetRootCatalogShardFallbackDiagnosticsIfLifetimeChanged(
+                        rootID: rootID,
+                        lifetimeID: lifetimeID
+                    )
+                }
                 return RootCatalogShardGenerationDebugSnapshot(
                     rootID: rootID,
+                    lifetimeID: lifetimeID,
                     publishedTopologyGeneration: publishedShard?.key.topologyGeneration,
                     liveTopologyGenerations: liveGenerations,
                     retainedTopologyGenerations: retainedGenerations,
                     buildCount: rootCatalogShardBuildCountsByRootID[rootID] ?? 0,
-                    pathIndexBuildCount: rootCatalogShardBuildCountsByRootID[rootID] ?? 0,
+                    pathIndexBuildCount: rootCatalogShardFullPathIndexBuildCountsByRootID[rootID] ?? 0,
+                    overlayPathIndexBuildCount: rootCatalogShardOverlayPathIndexBuildCountsByRootID[rootID] ?? 0,
                     patchCount: rootCatalogShardPatchCountsByRootID[rootID] ?? 0,
                     authoritativeRebuildCount: rootCatalogShardAuthoritativeRebuildCountsByRootID[rootID] ?? 0,
+                    fallbackCount: rootCatalogShardFallbackCountsByRootID[rootID] ?? 0,
                     fallbackReasonCounts: rootCatalogShardFallbackReasonCountsByRootID[rootID] ?? [:],
                     lastAppliedIndexGeneration: rootCatalogShardDeltaStatesByRootID[rootID]?.lastAppliedIndexGeneration,
                     deltaStateDirty: rootCatalogShardDeltaStatesByRootID[rootID]?.isDirty ?? false,
@@ -994,6 +1031,7 @@ actor WorkspaceFileContextStore {
             return RootCatalogShardDebugSnapshot(
                 liveGenerationCapPerRoot: Self.maxLiveRootCatalogShardGenerationsPerRoot,
                 maxPatchLogicalMutationCount: Self.maxRootCatalogShardPatchLogicalMutationCount,
+                maxPathIndexOverlayChangedFileCount: WorkspaceSearchRootPathIndex.maxOverlayChangedFileCount,
                 publishedShardCount: publishedRootCatalogShardsByRootID.count,
                 totalBuildCount: rootCatalogShardBuildCountsByRootID.values.reduce(0, +),
                 totalBackstopCount: rootCatalogShardBackstopCountsByRootID.values.reduce(0, +),
@@ -1268,6 +1306,7 @@ actor WorkspaceFileContextStore {
             files: [WorkspaceFileRecord],
             folders: [WorkspaceFolderRecord],
             entries: [WorkspaceSearchCatalogEntry],
+            pathSearchIndex preparedPathSearchIndex: WorkspaceSearchRootPathIndex? = nil,
             appliedIndexGeneration: UInt64
         ) {
             self.key = key
@@ -1275,7 +1314,7 @@ actor WorkspaceFileContextStore {
             self.files = files
             self.folders = folders
             self.entries = entries
-            pathSearchIndex = WorkspaceSearchRootPathIndex(
+            pathSearchIndex = preparedPathSearchIndex ?? WorkspaceSearchRootPathIndex(
                 identity: WorkspaceSearchRootPathIndexIdentity(
                     rootID: key.rootID,
                     lifetimeID: key.lifetimeID,
@@ -1313,18 +1352,6 @@ actor WorkspaceFileContextStore {
         var isDirty: Bool
     }
 
-    private enum RootCatalogShardFallbackReason: String {
-        case missingShard = "missing_shard"
-        case generationGap = "generation_gap"
-        case generationOverflow = "generation_overflow"
-        case fullResync = "full_resync"
-        case dirtyRecovery = "dirty_recovery"
-        case thresholdExceeded = "threshold_exceeded"
-        case unsafeAmbiguity = "unsafe_ambiguity"
-        case unload
-        case retentionBackstop = "retention_backstop"
-    }
-
     private enum RootCatalogShardBuildKind {
         case patch
         case authoritative
@@ -1334,6 +1361,7 @@ actor WorkspaceFileContextStore {
         let files: [WorkspaceFileRecord]
         let folders: [WorkspaceFolderRecord]
         let logicalMutationCount: Int
+        let pathIndexChangedFileIDs: Set<UUID>
     }
 
     private struct SearchCatalogRootDependency: Hashable {
@@ -2387,6 +2415,22 @@ actor WorkspaceFileContextStore {
             applyAppliedIndexEventToRootCatalogShard(event)
         }
 
+        func recordRootCatalogShardFallbackForTesting(
+            rootID: UUID,
+            lifetimeID: UUID,
+            reason: RootCatalogShardFallbackReason
+        ) {
+            recordRootCatalogShardFallback(
+                rootID: rootID,
+                lifetimeID: lifetimeID,
+                reason: reason
+            )
+        }
+
+        func advanceRootCatalogTopologyGenerationForTesting(rootID: UUID) {
+            catalogGenerationsByRootID[rootID, default: 0] &+= 1
+        }
+
         func replayPublisherFileSystemPublicationForTesting(
             rootID: UUID,
             expectedLifetimeID: UUID,
@@ -2722,6 +2766,13 @@ actor WorkspaceFileContextStore {
                         byteCount: authoritativeBytes.count
                     )
                     if !shadowMatches {
+                        for shard in shards {
+                            recordRootCatalogShardFallback(
+                                rootID: shard.key.rootID,
+                                lifetimeID: shard.key.lifetimeID,
+                                reason: .shadowValidationMismatch
+                            )
+                        }
                         assertionFailure("Root catalog shard composition diverged from the authoritative full rebuild")
                         composedSnapshot = buildAuthoritativeSearchCatalogSnapshot(
                             rootScope: rootScope,
@@ -2791,11 +2842,17 @@ actor WorkspaceFileContextStore {
                 return nil
             }
             guard canPublishAnotherRootCatalogShard(rootID: candidate.root.id) else {
+                #if DEBUG
+                    recordRootCatalogShardFallback(
+                        rootID: candidate.root.id,
+                        lifetimeID: candidate.key.lifetimeID,
+                        reason: .retentionBoundary
+                    )
+                #endif
                 markRootCatalogShardDirty(
                     rootID: candidate.root.id,
                     lifetimeID: candidate.key.lifetimeID,
-                    lastAppliedIndexGeneration: appliedIndexGenerationsByRootID[candidate.root.id] ?? 0,
-                    reason: .retentionBackstop
+                    lastAppliedIndexGeneration: appliedIndexGenerationsByRootID[candidate.root.id] ?? 0
                 )
                 publishedRootCatalogShardsByRootID.removeValue(forKey: candidate.root.id)
                 return nil
@@ -2884,6 +2941,14 @@ actor WorkspaceFileContextStore {
             case .authoritative:
                 rootCatalogShardAuthoritativeRebuildCountsByRootID[shard.key.rootID, default: 0] += 1
             }
+            switch shard.pathSearchIndex.buildKind {
+            case .full:
+                rootCatalogShardFullPathIndexBuildCountsByRootID[shard.key.rootID, default: 0] += 1
+            case .overlay:
+                rootCatalogShardOverlayPathIndexBuildCountsByRootID[shard.key.rootID, default: 0] += 1
+            case .reused:
+                break
+            }
             let liveCount = liveRootCatalogShards(rootID: shard.key.rootID).count
             rootCatalogShardMaxLiveGenerationCountsByRootID[shard.key.rootID] = max(
                 rootCatalogShardMaxLiveGenerationCountsByRootID[shard.key.rootID] ?? 0,
@@ -2921,7 +2986,6 @@ actor WorkspaceFileContextStore {
         if event.isRootUnload {
             publishedRootCatalogShardsByRootID.removeValue(forKey: event.rootID)
             rootCatalogShardDeltaStatesByRootID.removeValue(forKey: event.rootID)
-            recordRootCatalogShardFallback(rootID: event.rootID, reason: .unload)
             return
         }
 
@@ -2935,19 +2999,25 @@ actor WorkspaceFileContextStore {
         }
 
         guard let previousShard = publishedRootCatalogShardsByRootID[event.rootID] else {
-            let reason: RootCatalogShardFallbackReason = if let deltaState = rootCatalogShardDeltaStatesByRootID[event.rootID],
-                                                            deltaState.lifetimeID == state.lifetimeID,
-                                                            deltaState.isDirty
-            {
-                .dirtyRecovery
-            } else {
-                .missingShard
-            }
+            #if DEBUG
+                let reason: RootCatalogShardFallbackReason = if let deltaState = rootCatalogShardDeltaStatesByRootID[event.rootID],
+                                                                deltaState.lifetimeID == state.lifetimeID,
+                                                                deltaState.isDirty
+                {
+                    .retentionBoundary
+                } else {
+                    .missingReusableShard
+                }
+                recordRootCatalogShardFallback(
+                    rootID: event.rootID,
+                    lifetimeID: state.lifetimeID,
+                    reason: reason
+                )
+            #endif
             rebuildRootCatalogShardAuthoritatively(
                 root: state.root,
                 key: currentKey,
-                appliedIndexGeneration: event.generation,
-                reason: reason
+                appliedIndexGeneration: event.generation
             )
             return
         }
@@ -2961,47 +3031,77 @@ actor WorkspaceFileContextStore {
               previousShard.key.rootID == event.rootID,
               previousShard.key.canonicalConfigurationIdentity == currentKey.canonicalConfigurationIdentity
         else {
+            #if DEBUG
+                recordRootCatalogShardFallback(
+                    rootID: event.rootID,
+                    lifetimeID: state.lifetimeID,
+                    reason: .unsafeOrAmbiguousBatch
+                )
+            #endif
             rebuildRootCatalogShardAuthoritatively(
                 root: state.root,
                 key: currentKey,
-                appliedIndexGeneration: event.generation,
-                reason: .unsafeAmbiguity
+                appliedIndexGeneration: event.generation
             )
             return
         }
         if deltaState.isDirty {
+            #if DEBUG
+                recordRootCatalogShardFallback(
+                    rootID: event.rootID,
+                    lifetimeID: state.lifetimeID,
+                    reason: .retentionBoundary
+                )
+            #endif
             rebuildRootCatalogShardAuthoritatively(
                 root: state.root,
                 key: currentKey,
-                appliedIndexGeneration: event.generation,
-                reason: .dirtyRecovery
+                appliedIndexGeneration: event.generation
             )
             return
         }
         if event.requiresFullResync {
+            #if DEBUG
+                recordRootCatalogShardFallback(
+                    rootID: event.rootID,
+                    lifetimeID: state.lifetimeID,
+                    reason: .fullResync
+                )
+            #endif
             rebuildRootCatalogShardAuthoritatively(
                 root: state.root,
                 key: currentKey,
-                appliedIndexGeneration: event.generation,
-                reason: .fullResync
+                appliedIndexGeneration: event.generation
             )
             return
         }
         if deltaState.lastAppliedIndexGeneration == UInt64.max || event.generation == 0 {
+            #if DEBUG
+                recordRootCatalogShardFallback(
+                    rootID: event.rootID,
+                    lifetimeID: state.lifetimeID,
+                    reason: .generationGap
+                )
+            #endif
             rebuildRootCatalogShardAuthoritatively(
                 root: state.root,
                 key: currentKey,
-                appliedIndexGeneration: event.generation,
-                reason: .generationOverflow
+                appliedIndexGeneration: event.generation
             )
             return
         }
         guard event.generation == deltaState.lastAppliedIndexGeneration + 1 else {
+            #if DEBUG
+                recordRootCatalogShardFallback(
+                    rootID: event.rootID,
+                    lifetimeID: state.lifetimeID,
+                    reason: .generationGap
+                )
+            #endif
             rebuildRootCatalogShardAuthoritatively(
                 root: state.root,
                 key: currentKey,
-                appliedIndexGeneration: event.generation,
-                reason: .generationGap
+                appliedIndexGeneration: event.generation
             )
             return
         }
@@ -3015,11 +3115,17 @@ actor WorkspaceFileContextStore {
         let expectedTopologyGeneration: UInt64
         if hasTopologyMutation {
             guard previousShard.key.topologyGeneration != UInt64.max else {
+                #if DEBUG
+                    recordRootCatalogShardFallback(
+                        rootID: event.rootID,
+                        lifetimeID: state.lifetimeID,
+                        reason: .generationGap
+                    )
+                #endif
                 rebuildRootCatalogShardAuthoritatively(
                     root: state.root,
                     key: currentKey,
-                    appliedIndexGeneration: event.generation,
-                    reason: .generationOverflow
+                    appliedIndexGeneration: event.generation
                 )
                 return
             }
@@ -3027,43 +3133,85 @@ actor WorkspaceFileContextStore {
         } else {
             expectedTopologyGeneration = previousShard.key.topologyGeneration
         }
-        guard currentKey.topologyGeneration == expectedTopologyGeneration,
-              let builderOutput = buildRootCatalogShardPatch(event: event, previousShard: previousShard)
-        else {
+        guard currentKey.topologyGeneration == expectedTopologyGeneration else {
+            #if DEBUG
+                recordRootCatalogShardFallback(
+                    rootID: event.rootID,
+                    lifetimeID: state.lifetimeID,
+                    reason: .unsafeOrAmbiguousBatch
+                )
+            #endif
             rebuildRootCatalogShardAuthoritatively(
                 root: state.root,
                 key: currentKey,
-                appliedIndexGeneration: event.generation,
-                reason: .unsafeAmbiguity
+                appliedIndexGeneration: event.generation
+            )
+            return
+        }
+        guard let builderOutput = buildRootCatalogShardPatch(event: event, previousShard: previousShard) else {
+            #if DEBUG
+                recordRootCatalogShardFallback(
+                    rootID: event.rootID,
+                    lifetimeID: state.lifetimeID,
+                    reason: .patchApplicationBackstop
+                )
+            #endif
+            rebuildRootCatalogShardAuthoritatively(
+                root: state.root,
+                key: currentKey,
+                appliedIndexGeneration: event.generation
             )
             return
         }
         guard builderOutput.logicalMutationCount <= Self.maxRootCatalogShardPatchLogicalMutationCount else {
+            #if DEBUG
+                recordRootCatalogShardFallback(
+                    rootID: event.rootID,
+                    lifetimeID: state.lifetimeID,
+                    reason: .patchThresholdExceeded
+                )
+            #endif
             rebuildRootCatalogShardAuthoritatively(
                 root: state.root,
                 key: currentKey,
-                appliedIndexGeneration: event.generation,
-                reason: .thresholdExceeded
+                appliedIndexGeneration: event.generation
             )
             return
         }
         guard canPublishAnotherRootCatalogShard(rootID: event.rootID) else {
+            #if DEBUG
+                recordRootCatalogShardFallback(
+                    rootID: event.rootID,
+                    lifetimeID: state.lifetimeID,
+                    reason: .retentionBoundary
+                )
+            #endif
             markRootCatalogShardDirty(
                 rootID: event.rootID,
                 lifetimeID: state.lifetimeID,
-                lastAppliedIndexGeneration: event.generation,
-                reason: .retentionBackstop
+                lastAppliedIndexGeneration: event.generation
             )
             publishedRootCatalogShardsByRootID.removeValue(forKey: event.rootID)
             return
         }
 
+        let patchedEntries = builderOutput.files.map { WorkspaceSearchCatalogEntry(file: $0, root: state.root) }
+        let patchedPathSearchIndex = previousShard.pathSearchIndex.applyingPatch(
+            identity: WorkspaceSearchRootPathIndexIdentity(
+                rootID: currentKey.rootID,
+                lifetimeID: currentKey.lifetimeID,
+                topologyGeneration: currentKey.topologyGeneration
+            ),
+            entries: patchedEntries,
+            changedFileIDs: builderOutput.pathIndexChangedFileIDs
+        )
         let patchedShard = RootCatalogShard(
             key: currentKey,
             root: state.root,
             files: builderOutput.files,
             folders: builderOutput.folders,
-            entries: builderOutput.files.map { WorkspaceSearchCatalogEntry(file: $0, root: state.root) },
+            entries: patchedEntries,
+            pathSearchIndex: patchedPathSearchIndex,
             appliedIndexGeneration: event.generation
         )
         var publication = publishedRootCatalogShardsByRootID
@@ -3080,16 +3228,20 @@ actor WorkspaceFileContextStore {
     private func rebuildRootCatalogShardAuthoritatively(
         root: WorkspaceRootRecord,
         key: RootCatalogShardKey,
-        appliedIndexGeneration: UInt64,
-        reason: RootCatalogShardFallbackReason
+        appliedIndexGeneration: UInt64
     ) {
-        recordRootCatalogShardFallback(rootID: root.id, reason: reason)
         guard canPublishAnotherRootCatalogShard(rootID: root.id) else {
+            #if DEBUG
+                recordRootCatalogShardFallback(
+                    rootID: root.id,
+                    lifetimeID: key.lifetimeID,
+                    reason: .retentionBoundary
+                )
+            #endif
             markRootCatalogShardDirty(
                 rootID: root.id,
                 lifetimeID: key.lifetimeID,
-                lastAppliedIndexGeneration: appliedIndexGeneration,
-                reason: .retentionBackstop
+                lastAppliedIndexGeneration: appliedIndexGeneration
             )
             publishedRootCatalogShardsByRootID.removeValue(forKey: root.id)
             return
@@ -3113,25 +3265,43 @@ actor WorkspaceFileContextStore {
     private func markRootCatalogShardDirty(
         rootID: UUID,
         lifetimeID: UUID,
-        lastAppliedIndexGeneration: UInt64,
-        reason: RootCatalogShardFallbackReason
+        lastAppliedIndexGeneration: UInt64
     ) {
         rootCatalogShardDeltaStatesByRootID[rootID] = RootCatalogShardDeltaState(
             lifetimeID: lifetimeID,
             lastAppliedIndexGeneration: lastAppliedIndexGeneration,
             isDirty: true
         )
-        recordRootCatalogShardFallback(rootID: rootID, reason: reason)
     }
 
-    private func recordRootCatalogShardFallback(
-        rootID: UUID,
-        reason: RootCatalogShardFallbackReason
-    ) {
-        #if DEBUG
-            rootCatalogShardFallbackReasonCountsByRootID[rootID, default: [:]][reason.rawValue, default: 0] += 1
-        #endif
-    }
+    #if DEBUG
+        private func resetRootCatalogShardFallbackDiagnosticsIfLifetimeChanged(
+            rootID: UUID,
+            lifetimeID: UUID
+        ) {
+            guard rootCatalogShardFallbackLifetimeIDsByRootID[rootID] != lifetimeID else { return }
+            rootCatalogShardFallbackLifetimeIDsByRootID[rootID] = lifetimeID
+            rootCatalogShardFallbackCountsByRootID.removeValue(forKey: rootID)
+            rootCatalogShardFallbackReasonCountsByRootID.removeValue(forKey: rootID)
+        }
+
+        private func recordRootCatalogShardFallback(
+            rootID: UUID,
+            lifetimeID: UUID,
+            reason: RootCatalogShardFallbackReason
+        ) {
+            resetRootCatalogShardFallbackDiagnosticsIfLifetimeChanged(
+                rootID: rootID,
+                lifetimeID: lifetimeID
+            )
+            rootCatalogShardFallbackCountsByRootID[rootID, default: 0] += 1
+            rootCatalogShardFallbackReasonCountsByRootID[rootID, default: [:]][reason, default: 0] += 1
+            assert(
+                rootCatalogShardFallbackCountsByRootID[rootID]
+                    == rootCatalogShardFallbackReasonCountsByRootID[rootID]?.values.reduce(0, +)
+            )
+        }
+    #endif
 
     private func buildRootCatalogShardPatch(
         event: WorkspaceAppliedIndexBatchEvent,
@@ -3209,6 +3379,12 @@ actor WorkspaceFileContextStore {
 
         let upsertedFilePaths = Set(upsertedFilesByID.values.map(\.standardizedRelativePath))
         let upsertedFolderPaths = Set(upsertedFoldersByID.values.map(\.standardizedRelativePath))
+        var pathIndexChangedFileIDs = touchedFileIDs
+        for path in removedFilePaths.union(upsertedFilePaths) {
+            if let oldFileID = oldFileIDsByPath[path] {
+                pathIndexChangedFileIDs.insert(oldFileID)
+            }
+        }
         guard removedFileIDs.isDisjoint(with: upsertedFilesByID.keys),
               removedFolderIDs.isDisjoint(with: upsertedFoldersByID.keys),
               removedFilePaths.isDisjoint(with: upsertedFilePaths),
@@ -3222,7 +3398,8 @@ actor WorkspaceFileContextStore {
             return RootCatalogShardBuilderOutput(
                 files: previousShard.files,
                 folders: previousShard.folders,
-                logicalMutationCount: logicalMutationCount
+                logicalMutationCount: logicalMutationCount,
+                pathIndexChangedFileIDs: []
             )
         }
 
@@ -3285,7 +3462,8 @@ actor WorkspaceFileContextStore {
         return RootCatalogShardBuilderOutput(
             files: files,
             folders: folders,
-            logicalMutationCount: logicalMutationCount
+            logicalMutationCount: logicalMutationCount,
+            pathIndexChangedFileIDs: pathIndexChangedFileIDs
         )
     }
 

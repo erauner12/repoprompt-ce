@@ -200,6 +200,12 @@ import XCTest
             let root = try await loadStoppedRoot(in: store, path: rootURL.path)
             let initialSnapshot = await store.searchCatalogSnapshot(rootScope: .visibleWorkspace)
             let initialFolderCount = initialSnapshot.diagnostics.folderCount
+            let initialDiagnostics = await store.storeWorkDiagnosticsSnapshot().rootCatalogShards
+            let initialRootDiagnostics = try diagnosticsForRoot(rootID: root.id, in: initialDiagnostics)
+            let lifetimeID = try await store.rootLifetimeIDForTesting(rootID: root.id)
+            XCTAssertEqual(initialRootDiagnostics.lifetimeID, lifetimeID)
+            XCTAssertEqual(initialRootDiagnostics.authoritativeRebuildCount, 1)
+            assertFallbackInvariant(initialRootDiagnostics, expected: [:])
 
             let addedURL = rootURL.appendingPathComponent("Added.swift")
             try write("added", to: addedURL)
@@ -233,9 +239,12 @@ import XCTest
             XCTAssertEqual(rootDiagnostics.patchCount, 6)
             XCTAssertEqual(rootDiagnostics.authoritativeRebuildCount, 1)
             XCTAssertEqual(rootDiagnostics.buildCount, 7)
+            XCTAssertEqual(rootDiagnostics.pathIndexBuildCount, 1)
+            XCTAssertEqual(rootDiagnostics.overlayPathIndexBuildCount, 3)
             XCTAssertEqual(rootDiagnostics.lastAppliedIndexGeneration, 6)
             XCTAssertFalse(rootDiagnostics.deltaStateDirty)
-            XCTAssertTrue(rootDiagnostics.fallbackReasonCounts.isEmpty)
+            assertFallbackInvariant(rootDiagnostics, expected: [:])
+            XCTAssertNil(rootDiagnostics.fallbackReasonCounts[.shadowValidationMismatch])
             XCTAssertEqual(diagnostics.shadowMismatchCount, 0)
         }
 
@@ -275,16 +284,26 @@ import XCTest
                 generation: 1,
                 modifiedFileIDs: [UUID()]
             ))
+            await store.advanceRootCatalogTopologyGenerationForTesting(rootID: root.id)
+            await store.applyAppliedIndexEventToRootCatalogShardForTesting(WorkspaceAppliedIndexBatchEvent(
+                rootID: root.id,
+                rootPath: root.standardizedFullPath,
+                generation: 2
+            ))
 
             let diagnostics = await store.storeWorkDiagnosticsSnapshot().rootCatalogShards
             let rootDiagnostics = try diagnosticsForRoot(rootID: root.id, in: diagnostics)
             XCTAssertEqual(rootDiagnostics.patchCount, 0)
-            XCTAssertEqual(rootDiagnostics.authoritativeRebuildCount, 6)
-            XCTAssertEqual(rootDiagnostics.fallbackReasonCounts["full_resync"], 1)
-            XCTAssertEqual(rootDiagnostics.fallbackReasonCounts["generation_gap"], 2)
-            XCTAssertEqual(rootDiagnostics.fallbackReasonCounts["generation_overflow"], 1)
-            XCTAssertEqual(rootDiagnostics.fallbackReasonCounts["unsafe_ambiguity"], 1)
-            XCTAssertEqual(rootDiagnostics.lastAppliedIndexGeneration, 1)
+            XCTAssertEqual(rootDiagnostics.authoritativeRebuildCount, 7)
+            XCTAssertEqual(rootDiagnostics.pathIndexBuildCount, 7)
+            XCTAssertEqual(rootDiagnostics.overlayPathIndexBuildCount, 0)
+            assertFallbackInvariant(rootDiagnostics, expected: [
+                .generationGap: 3,
+                .fullResync: 1,
+                .unsafeOrAmbiguousBatch: 1,
+                .patchApplicationBackstop: 1
+            ])
+            XCTAssertEqual(rootDiagnostics.lastAppliedIndexGeneration, 2)
             XCTAssertFalse(rootDiagnostics.deltaStateDirty)
         }
 
@@ -314,10 +333,13 @@ import XCTest
             let rootBDiagnostics = try diagnosticsForRoot(rootID: rootB.id, in: diagnostics)
             XCTAssertEqual(rootADiagnostics.patchCount, 0)
             XCTAssertEqual(rootADiagnostics.authoritativeRebuildCount, 2)
-            XCTAssertEqual(rootADiagnostics.fallbackReasonCounts["threshold_exceeded"], 1)
+            XCTAssertEqual(rootADiagnostics.pathIndexBuildCount, 2)
+            XCTAssertEqual(rootADiagnostics.overlayPathIndexBuildCount, 0)
+            assertFallbackInvariant(rootADiagnostics, expected: [.patchThresholdExceeded: 1])
             XCTAssertEqual(rootBDiagnostics.buildCount, 1)
             XCTAssertEqual(rootBDiagnostics.authoritativeRebuildCount, 1)
             XCTAssertEqual(rootBDiagnostics.patchCount, 0)
+            assertFallbackInvariant(rootBDiagnostics, expected: [:])
             XCTAssertEqual(diagnostics.shadowMismatchCount, 0)
         }
 
@@ -343,7 +365,7 @@ import XCTest
             var rootDiagnostics = try diagnosticsForRoot(rootID: root.id, in: diagnostics)
             XCTAssertNil(rootDiagnostics.publishedTopologyGeneration)
             XCTAssertTrue(rootDiagnostics.deltaStateDirty)
-            XCTAssertEqual(rootDiagnostics.fallbackReasonCounts["retention_backstop"], 1)
+            assertFallbackInvariant(rootDiagnostics, expected: [.retentionBoundary: 1])
             XCTAssertEqual(rootDiagnostics.backstopCount, 1)
 
             retainedSnapshots.removeAll(keepingCapacity: false)
@@ -356,7 +378,7 @@ import XCTest
             diagnostics = await store.storeWorkDiagnosticsSnapshot().rootCatalogShards
             rootDiagnostics = try diagnosticsForRoot(rootID: root.id, in: diagnostics)
             XCTAssertFalse(rootDiagnostics.deltaStateDirty)
-            XCTAssertEqual(rootDiagnostics.fallbackReasonCounts["dirty_recovery"], 1)
+            assertFallbackInvariant(rootDiagnostics, expected: [.retentionBoundary: 2])
             XCTAssertEqual(rootDiagnostics.authoritativeRebuildCount, 2)
             XCTAssertEqual(rootDiagnostics.patchCount, cap - 1)
             XCTAssertEqual(rootDiagnostics.backstopCount, 1)
@@ -372,11 +394,41 @@ import XCTest
             let retainedOriginalSnapshot = await store.searchCatalogSnapshot(rootScope: .visibleWorkspace)
             let originalLifetimeID = try await store.rootLifetimeIDForTesting(rootID: originalRoot.id)
 
-            await store.unloadRoot(id: originalRoot.id)
+            await store.recordRootCatalogShardFallbackForTesting(
+                rootID: originalRoot.id,
+                lifetimeID: originalLifetimeID,
+                reason: .fullResync
+            )
             var diagnostics = await store.storeWorkDiagnosticsSnapshot().rootCatalogShards
+            let originalDiagnostics = try diagnosticsForRoot(rootID: originalRoot.id, in: diagnostics)
+            assertFallbackInvariant(originalDiagnostics, expected: [.fullResync: 1])
+
+            await store.unloadRoot(id: originalRoot.id)
+            diagnostics = await store.storeWorkDiagnosticsSnapshot().rootCatalogShards
             let unloadedDiagnostics = try diagnosticsForRoot(rootID: originalRoot.id, in: diagnostics)
+            XCTAssertEqual(unloadedDiagnostics.lifetimeID, originalLifetimeID)
             XCTAssertNil(unloadedDiagnostics.publishedTopologyGeneration)
-            XCTAssertEqual(unloadedDiagnostics.fallbackReasonCounts["unload"], 1)
+            assertFallbackInvariant(unloadedDiagnostics, expected: [.fullResync: 1])
+
+            let reusedLifetimeID = UUID()
+            await store.recordRootCatalogShardFallbackForTesting(
+                rootID: originalRoot.id,
+                lifetimeID: reusedLifetimeID,
+                reason: .generationGap
+            )
+            await store.recordRootCatalogShardFallbackForTesting(
+                rootID: originalRoot.id,
+                lifetimeID: reusedLifetimeID,
+                reason: .patchApplicationBackstop
+            )
+            diagnostics = await store.storeWorkDiagnosticsSnapshot().rootCatalogShards
+            let reusedLifetimeDiagnostics = try diagnosticsForRoot(rootID: originalRoot.id, in: diagnostics)
+            XCTAssertEqual(reusedLifetimeDiagnostics.lifetimeID, reusedLifetimeID)
+            assertFallbackInvariant(reusedLifetimeDiagnostics, expected: [
+                .generationGap: 1,
+                .patchApplicationBackstop: 1
+            ])
+            XCTAssertNil(reusedLifetimeDiagnostics.fallbackReasonCounts[.fullResync])
 
             let replacementRoot = try await loadStoppedRoot(in: store, path: rootURL.path)
             let replacementLifetimeID = try await store.rootLifetimeIDForTesting(rootID: replacementRoot.id)
@@ -433,6 +485,21 @@ import XCTest
             in diagnostics: WorkspaceFileContextStore.RootCatalogShardDebugSnapshot
         ) -> Int {
             diagnostics.roots.first { $0.rootID == rootID }?.buildCount ?? 0
+        }
+
+        private func assertFallbackInvariant(
+            _ diagnostics: WorkspaceFileContextStore.RootCatalogShardGenerationDebugSnapshot,
+            expected: [WorkspaceFileContextStore.RootCatalogShardFallbackReason: Int],
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) {
+            XCTAssertEqual(diagnostics.fallbackReasonCounts, expected, file: file, line: line)
+            XCTAssertEqual(
+                diagnostics.fallbackCount,
+                diagnostics.fallbackReasonCounts.values.reduce(0, +),
+                file: file,
+                line: line
+            )
         }
 
         private func makeTemporaryRoot(name: String) throws -> URL {

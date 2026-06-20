@@ -119,7 +119,9 @@ import XCTest
             XCTAssertTrue(firstBIndex === secondBIndex)
 
             var diagnostics = await store.storeWorkDiagnosticsSnapshot().rootCatalogShards
-            XCTAssertEqual(try shardDiagnostics(rootID: rootA.id, diagnostics: diagnostics).pathIndexBuildCount, 2)
+            let rootADiagnostics = try shardDiagnostics(rootID: rootA.id, diagnostics: diagnostics)
+            XCTAssertEqual(rootADiagnostics.pathIndexBuildCount, 1)
+            XCTAssertEqual(rootADiagnostics.overlayPathIndexBuildCount, 1)
             XCTAssertEqual(try shardDiagnostics(rootID: rootB.id, diagnostics: diagnostics).pathIndexBuildCount, 1)
 
             await store.unloadRoot(id: rootA.id)
@@ -139,6 +141,97 @@ import XCTest
             diagnostics = await store.storeWorkDiagnosticsSnapshot().rootCatalogShards
             XCTAssertEqual(try shardDiagnostics(rootID: replacementA.id, diagnostics: diagnostics).pathIndexBuildCount, 1)
             XCTAssertEqual(try shardDiagnostics(rootID: rootB.id, diagnostics: diagnostics).pathIndexBuildCount, 1)
+        }
+
+        func testOverlayTransitionsPreserveSearchAndPerRootMergeParity() async throws {
+            let rootAURL = try makeTemporaryRoot(name: "OverlayParityA")
+            let rootBURL = try makeTemporaryRoot(name: "OverlayParityB")
+            try write("a", to: rootAURL.appendingPathComponent("AAATarget.swift"))
+            try write("b", to: rootAURL.appendingPathComponent("BBTarget.swift"))
+            try write("space", to: rootAURL.appendingPathComponent("Sources/Space Target.swift"))
+            try write("unicode", to: rootAURL.appendingPathComponent("Sources/ÅngströmTarget.swift"))
+            try write("unicode", to: rootAURL.appendingPathComponent("Sources/文件Target.swift"))
+            try write("other", to: rootBURL.appendingPathComponent("A0OtherTarget.swift"))
+
+            let store = makeStore()
+            let rootA = try await loadStoppedRoot(in: store, path: rootAURL.path)
+            _ = try await loadStoppedRoot(in: store, path: rootBURL.path)
+            let service = WorkspaceSearchService()
+            let queries = ["", "Target", "Space Target", "*.swift", "Ångström", "文件"]
+
+            try FileManager.default.removeItem(at: rootAURL.appendingPathComponent("AAATarget.swift"))
+            await store.replayObservedFileSystemDeltas(rootID: rootA.id, deltas: [.fileRemoved("AAATarget.swift")])
+            try await assertSearchParity(store: store, service: service, queries: queries)
+
+            try write("added", to: rootAURL.appendingPathComponent("A0AddedTarget.swift"))
+            await store.replayObservedFileSystemDeltas(rootID: rootA.id, deltas: [.fileAdded("A0AddedTarget.swift")])
+            try await assertSearchParity(store: store, service: service, queries: queries)
+
+            try FileManager.default.removeItem(at: rootAURL.appendingPathComponent("BBTarget.swift"))
+            await store.replayObservedFileSystemDeltas(rootID: rootA.id, deltas: [.fileRemoved("BBTarget.swift")])
+            try write("renamed", to: rootAURL.appendingPathComponent("RenamedTarget.swift"))
+            await store.replayObservedFileSystemDeltas(rootID: rootA.id, deltas: [.fileAdded("RenamedTarget.swift")])
+            try await assertSearchParity(store: store, service: service, queries: queries)
+
+            let beforeFolderPatch = try await shardDiagnostics(
+                rootID: rootA.id,
+                diagnostics: store.storeWorkDiagnosticsSnapshot().rootCatalogShards
+            )
+            let folderURL = rootAURL.appendingPathComponent("FolderOnly", isDirectory: true)
+            try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+            await store.replayObservedFileSystemDeltas(rootID: rootA.id, deltas: [.folderAdded("FolderOnly")])
+            try await assertSearchParity(store: store, service: service, queries: queries)
+            let afterFolderPatch = try await shardDiagnostics(
+                rootID: rootA.id,
+                diagnostics: store.storeWorkDiagnosticsSnapshot().rootCatalogShards
+            )
+            XCTAssertEqual(afterFolderPatch.pathIndexBuildCount, beforeFolderPatch.pathIndexBuildCount)
+            XCTAssertEqual(
+                afterFolderPatch.overlayPathIndexBuildCount,
+                beforeFolderPatch.overlayPathIndexBuildCount
+            )
+        }
+
+        func testOverlayCompactsAtBoundWhileRetainedReadersStayImmutable() async throws {
+            let rootURL = try makeTemporaryRoot(name: "OverlayCompaction")
+            try write("seed", to: rootURL.appendingPathComponent("Seed.swift"))
+
+            let store = makeStore()
+            let root = try await loadStoppedRoot(in: store, path: rootURL.path)
+            let oldSnapshot = await store.searchCatalogSnapshot(rootScope: .visibleWorkspace)
+            let oldIndex = try rootPathIndex(rootID: root.id, snapshot: oldSnapshot)
+            let overlayBound = await store.storeWorkDiagnosticsSnapshot()
+                .rootCatalogShards.maxPathIndexOverlayChangedFileCount
+            XCTAssertEqual(overlayBound, 32)
+
+            var lastOverlaySnapshot: WorkspaceSearchCatalogSnapshot?
+            for index in 0 ..< overlayBound {
+                let relativePath = String(format: "Added-%02d-Target.swift", index)
+                try write("added", to: rootURL.appendingPathComponent(relativePath))
+                await store.replayObservedFileSystemDeltas(rootID: root.id, deltas: [.fileAdded(relativePath)])
+                if index == overlayBound - 2 {
+                    lastOverlaySnapshot = await store.searchCatalogSnapshot(rootScope: .visibleWorkspace)
+                }
+            }
+
+            let compactedSnapshot = await store.searchCatalogSnapshot(rootScope: .visibleWorkspace)
+            let compactedIndex = try rootPathIndex(rootID: root.id, snapshot: compactedSnapshot)
+            let overlayIndex = try rootPathIndex(
+                rootID: root.id,
+                snapshot: XCTUnwrap(lastOverlaySnapshot)
+            )
+            XCTAssertTrue(oldIndex.search("Added", limit: 100).isEmpty)
+            XCTAssertEqual(overlayIndex.search("Added", limit: 100).count, overlayBound - 1)
+            XCTAssertEqual(compactedIndex.search("Added", limit: 100).count, overlayBound)
+
+            let diagnostics = try await shardDiagnostics(
+                rootID: root.id,
+                diagnostics: store.storeWorkDiagnosticsSnapshot().rootCatalogShards
+            )
+            XCTAssertEqual(diagnostics.pathIndexBuildCount, 2)
+            XCTAssertEqual(diagnostics.overlayPathIndexBuildCount, overlayBound - 1)
+            XCTAssertEqual(diagnostics.patchCount, overlayBound)
+            XCTAssertEqual(diagnostics.authoritativeRebuildCount, 1)
         }
 
         func testRootUnloadDropsOnlyItsReadyIndexWhileReplacementGenerationIsPending() async throws {
@@ -202,6 +295,13 @@ import XCTest
             let newResult = await service.search("OldTarget", limit: 10)
             XCTAssertEqual(newResult.indexedGeneration, newSnapshot.generation)
             XCTAssertTrue(newResult.results.isEmpty)
+
+            let diagnostics = try await shardDiagnostics(
+                rootID: root.id,
+                diagnostics: store.storeWorkDiagnosticsSnapshot().rootCatalogShards
+            )
+            XCTAssertEqual(diagnostics.pathIndexBuildCount, 1)
+            XCTAssertEqual(diagnostics.overlayPathIndexBuildCount, 1)
         }
 
         private func makeStore() -> WorkspaceFileContextStore {
@@ -218,6 +318,28 @@ import XCTest
             let root = try await store.loadRoot(path: path, kind: kind)
             await store.stopWatchingRoot(id: root.id)
             return root
+        }
+
+        private func assertSearchParity(
+            store: WorkspaceFileContextStore,
+            service: WorkspaceSearchService,
+            queries: [String],
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) async throws {
+            let snapshot = await store.searchCatalogSnapshot(rootScope: .visibleWorkspace)
+            await service.prepareIndex(from: snapshot)
+            for query in queries {
+                for limit in [1, 3, 20] {
+                    let expected = WorkspaceSearchService.authoritativeGlobalResultsForTesting(
+                        from: snapshot,
+                        query: query,
+                        limit: limit
+                    )
+                    let actual = await service.search(query, limit: limit)
+                    XCTAssertEqual(actual.results, expected, "query=\(query) limit=\(limit)", file: file, line: line)
+                }
+            }
         }
 
         private func rootPathIndex(
