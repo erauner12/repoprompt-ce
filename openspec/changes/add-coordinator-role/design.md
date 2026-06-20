@@ -18,7 +18,7 @@ Important existing anchors:
 - `Sources/RepoPrompt/Features/AgentMode/ViewModels/CoordinatorModeViewModel.swift`: current selected-session demo composer.
 - `Sources/RepoPrompt/Features/AgentMode/Services/CoordinatorModeSnapshotProjector.swift`: current workspace session projection and demo Coordinator detection.
 - `Sources/RepoPrompt/Features/AgentMode/ViewModels/AgentModeSidebarSessionBuilder.swift`: Agent Mode sidebar/session-list projection fed by `sessionIndex`.
-- `docs/investigations/coordinator-runtime-separability.md`: separability spike explaining why Coordinator v1 uses a marked `TabSession` instead of a non-enrolled provider runtime.
+- `openspec/changes/add-coordinator-role/reference/coordinator-runtime-separability.md`: separability spike explaining why Coordinator v1 uses a marked `TabSession` instead of a non-enrolled provider runtime.
 
 ## Glossary
 
@@ -62,7 +62,7 @@ Durable invariants: the Coordinator must not be part of the supervised fleet it 
 
 The Coordinator role is a runtime identity above the workspace fleet. The Coordinator view remains the human-facing observation/control plane over workspace Agent Mode sessions. The role may consume and produce Coordinator-view state later, but its own runtime identity is separate from board/list row projection.
 
-Decision 1 now rests on the separability spike in `docs/investigations/coordinator-runtime-separability.md`. The cleaner alternative was a Coordinator-owned provider runtime outside the tab/session model, which would avoid projection exclusion entirely. That alternative is rejected for v1 because provider start, transcript persistence, file/worktree context assembly, terminal-commit publication, and loopback `agent_run` routing all key off the compose-tab-to-Agent-session binding. A non-enrolled runtime cannot drive a Coordinator-representative turn through the existing run path without a larger runtime registry/context-provider extraction.
+Decision 1 now rests on the separability spike in `openspec/changes/add-coordinator-role/reference/coordinator-runtime-separability.md`. The cleaner alternative was a Coordinator-owned provider runtime outside the tab/session model, which would avoid projection exclusion entirely. That alternative is rejected for v1 because provider start, transcript persistence, file/worktree context assembly, terminal-commit publication, and loopback `agent_run` routing all key off the compose-tab-to-Agent-session binding. A non-enrolled runtime cannot drive a Coordinator-representative turn through the existing run path without a larger runtime registry/context-provider extraction.
 
 Coordinator v1 therefore reuses the existing run path through a marked/background Agent `TabSession`. `AgentModeRunService.startRun` remains a possible future extraction seam, but pulling on that seam is explicitly out of v1 scope; if implementation starts requiring `startRun`-level runtime extraction, the work should stop and be re-scoped instead of becoming a creeping refactor.
 

@@ -3,7 +3,7 @@
 - [ ] 1.1 Record the accepted direction that Coordinator is a constrained top-level orchestrator runtime using existing `agent_run` / `agent_manage` lifecycle/control surfaces with delegate-only v1 scope.
 - [ ] 1.2 Decide whether to accept the leading ownership recommendation: per-window Coordinator runtime, lazy creation on first real Coordinator instruction, persisted/restored with the Coordinator marker.
 - [ ] 1.3 Confirm that the Coordinator still resolves to a concrete provider/model selection while its Coordinator identity marker remains separate from ordinary task-label role selection.
-- [ ] 1.4 Record the separability verdict and marked-`TabSession` rationale in Decision 1, citing `docs/investigations/coordinator-runtime-separability.md`.
+- [ ] 1.4 Record the separability verdict and marked-`TabSession` rationale in Decision 1, citing `openspec/changes/add-coordinator-role/reference/coordinator-runtime-separability.md`.
 - [ ] 1.5 Review the narrowed design with wren, using delegate-vs-focus, runtime ownership, list-session scope, execution policy, op/arg guard, and projection marker seams as the explicit discussion forks.
 - [ ] 1.6 Update the spec/design with any accepted review changes before implementation begins.
 
