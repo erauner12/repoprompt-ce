@@ -45,6 +45,7 @@ struct CoordinatorModeView: View {
     @State private var isSubmittingCoordinatorDirective = false
     @State private var isCoordinatorRailVisible = true
     @State private var isInspectorVisible = true
+    @FocusState private var isCoordinatorComposerFocused: Bool
     @ObservedObject private var fontScale = FontScaleManager.shared
 
     private var visualMetrics: CoordinatorVisualMetrics {
@@ -829,67 +830,113 @@ struct CoordinatorModeView: View {
 
     private func coordinatorComposer(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-            if let activityText = viewModel.currentRailActivityText {
-                coordinatorActivityIndicator(activityText, metrics: metrics)
-            }
-
             if rail.state == .selected, !rail.isComposerSendEnabled, viewModel.currentRailActivityText == nil {
                 coordinatorComposerNotice("Coordinator is working. You can send the next message when it reaches a turn boundary.", metrics: metrics)
             } else if let notice = viewModel.composerNotice, !notice.isEmpty {
                 coordinatorComposerNotice(notice, metrics: metrics)
             }
 
-            HStack(alignment: .bottom, spacing: metrics.smallSpacing) {
+            VStack(alignment: .leading, spacing: 0) {
                 TextField("Message Coordinator...", text: $coordinatorDirectiveDraft, axis: .vertical)
                     .lineLimit(2 ... 5)
                     .textFieldStyle(.plain)
                     .font(metrics.body)
-                    .disabled(isSubmittingCoordinatorDirective || (!rail.isComposerSendEnabled && rail.state != .chooseCoordinator))
+                    .disabled(!canEditCoordinatorDirective(rail))
+                    .focused($isCoordinatorComposerFocused)
                     .onSubmit {
                         submitCoordinatorDirective()
                     }
+                    .frame(minHeight: metrics.composerTextMinHeight, alignment: .topLeading)
+                    .padding(.horizontal, metrics.composerHorizontalPadding)
+                    .padding(.vertical, metrics.composerVerticalPadding)
 
-                Button {
-                    submitCoordinatorDirective()
-                } label: {
-                    Image(systemName: isSubmittingCoordinatorDirective ? "hourglass" : "paperplane.fill")
-                        .font(.system(size: metrics.smallIconSize, weight: .semibold))
-                        .frame(width: metrics.sendButtonSize, height: metrics.sendButtonSize)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(canSubmitCoordinatorDirective ? Color.accentColor : Color.secondary.opacity(0.55))
-                .disabled(!canSubmitCoordinatorDirective)
-                .hoverTooltip(isSubmittingCoordinatorDirective ? "Sending" : "Send")
+                Divider()
+                    .opacity(0.42)
+
+                coordinatorComposerControlStrip(rail, metrics: metrics)
             }
-            .padding(.horizontal, metrics.pendingPadding)
-            .padding(.vertical, metrics.pendingPadding)
             .background(
                 RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
-                    .fill(Color(nsColor: .windowBackgroundColor).opacity(0.68))
+                    .fill(Color(nsColor: .windowBackgroundColor).opacity(0.72))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
-                    .stroke(canSubmitCoordinatorDirective ? Color.accentColor.opacity(0.45) : CoordinatorStyle.hairline, lineWidth: 1)
+                    .stroke(canSubmitCoordinatorDirective ? Color.accentColor.opacity(0.48) : CoordinatorStyle.hairline.opacity(1.2), lineWidth: 1)
             )
         }
     }
 
-    private func coordinatorActivityIndicator(_ text: String, metrics: CoordinatorVisualMetrics) -> some View {
+    private func coordinatorComposerControlStrip(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
         HStack(spacing: metrics.smallSpacing) {
-            ProgressView()
-                .controlSize(.mini)
-                .scaleEffect(0.62)
-            Text(text)
-                .font(metrics.microMedium)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            HStack(spacing: metrics.miniPillIconSpacing) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: metrics.microIconSize, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                Text("Coordinator")
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.primary.opacity(0.82))
+            }
+            .padding(.horizontal, metrics.miniPillHorizontalPadding)
+            .padding(.vertical, metrics.miniPillVerticalPadding)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.32))
+            )
+
+            HStack(spacing: metrics.miniPillIconSpacing) {
+                if isSubmittingCoordinatorDirective || viewModel.currentRailActivityText != nil {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .scaleEffect(0.58)
+                } else {
+                    Circle()
+                        .fill(rail.isLiveInCurrentWindow ? Color.green.opacity(0.82) : Color.secondary.opacity(0.55))
+                        .frame(width: metrics.composerStatusDotSize, height: metrics.composerStatusDotSize)
+                }
+                Text(coordinatorComposerStatusText(rail))
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, metrics.miniPillHorizontalPadding)
+            .padding(.vertical, metrics.miniPillVerticalPadding)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.22))
+            )
+
+            Spacer(minLength: metrics.smallSpacing)
+
+            Button {
+                submitCoordinatorDirective()
+            } label: {
+                Image(systemName: isSubmittingCoordinatorDirective ? "hourglass" : "paperplane.fill")
+                    .font(.system(size: metrics.composerSendIconSize, weight: .semibold))
+                    .frame(width: metrics.sendButtonSize, height: metrics.sendButtonSize)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(canSubmitCoordinatorDirective ? Color.accentColor : Color.secondary.opacity(0.55))
+            .disabled(!canSubmitCoordinatorDirective)
+            .hoverTooltip(isSubmittingCoordinatorDirective ? "Sending" : "Send")
         }
-        .padding(.horizontal, metrics.pendingPadding)
-        .padding(.vertical, metrics.miniPillVerticalPadding)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.22))
-        )
+        .frame(height: metrics.composerControlStripHeight)
+        .padding(.horizontal, metrics.composerControlHorizontalPadding)
+    }
+
+    private func coordinatorComposerStatusText(_ rail: CoordinatorModeCoordinatorRail) -> String {
+        if isSubmittingCoordinatorDirective {
+            return "Sending"
+        }
+        if let activityText = viewModel.currentRailActivityText, !activityText.isEmpty {
+            return activityText
+        }
+        if rail.state == .chooseCoordinator {
+            return "New run"
+        }
+        if rail.isComposerSendEnabled {
+            return rail.isLiveInCurrentWindow ? "Live" : "Ready"
+        }
+        return "Working"
     }
 
     private func coordinatorComposerNotice(_ text: String, metrics: CoordinatorVisualMetrics) -> some View {
@@ -908,18 +955,26 @@ struct CoordinatorModeView: View {
             && !coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private func canEditCoordinatorDirective(_ rail: CoordinatorModeCoordinatorRail) -> Bool {
+        rail.state == .chooseCoordinator || rail.isComposerEnabled
+    }
+
     private func submitCoordinatorDirective() {
         let draft = coordinatorDirectiveDraft
-        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !isSubmittingCoordinatorDirective
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              canSubmitCoordinatorDirective
         else { return }
+        coordinatorDirectiveDraft = ""
         isSubmittingCoordinatorDirective = true
+        isCoordinatorComposerFocused = true
         Task { @MainActor in
             let result = await viewModel.submitCoordinatorDirective(draft)
-            if result == .accepted {
-                coordinatorDirectiveDraft = ""
+            if result != .accepted, coordinatorDirectiveDraft.isEmpty {
+                coordinatorDirectiveDraft = draft
             }
             isSubmittingCoordinatorDirective = false
+            isCoordinatorComposerFocused = true
         }
     }
 
@@ -1396,6 +1451,38 @@ private struct CoordinatorVisualMetrics {
 
     var sendButtonSize: CGFloat {
         fontPreset.scaledClamped(28, min: 28, max: 34)
+    }
+
+    var composerSendIconSize: CGFloat {
+        fontPreset.scaledClamped(14, max: 18)
+    }
+
+    var composerTextMinHeight: CGFloat {
+        fontPreset.scaledClamped(54, min: 54, max: 72)
+    }
+
+    var composerControlStripHeight: CGFloat {
+        fontPreset.scaledClamped(40, min: 40, max: 48)
+    }
+
+    var composerHorizontalPadding: CGFloat {
+        fontPreset.scaledClamped(12, max: 16)
+    }
+
+    var composerVerticalPadding: CGFloat {
+        fontPreset.scaledClamped(10, max: 14)
+    }
+
+    var composerControlHorizontalPadding: CGFloat {
+        fontPreset.scaledClamped(8, max: 12)
+    }
+
+    var composerStatusDotSize: CGFloat {
+        fontPreset.scaledClamped(6, max: 8)
+    }
+
+    var miniPillIconSpacing: CGFloat {
+        fontPreset.scaledClamped(4, max: 6)
     }
 
     var conversationMinHeight: CGFloat {

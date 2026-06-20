@@ -92,6 +92,8 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.8 Bind the PR3 Coordinator shell to Agent Mode font-scale, search-field, chip, card, and subtle selection/hover chrome without changing snapshot or write-control behavior.
 - [x] 10.9 Keep the production-demo rail visually framed as an agentic Coordinator conversation rather than an ordinary Agent Mode session proxy.
 - [x] 10.10 Widen the production-demo Coordinator rail and render Coordinator/event messages through the shared Agent Mode Markdown renderer.
+- [x] 10.11 Restyle the Coordinator composer as a compact Agent Mode-like command surface without adding ordinary Agent Mode controls.
+- [x] 10.12 Keep the Coordinator composer text area editable and focused while send is gated by an active Coordinator run.
 
 ## 11. Validation
 

@@ -353,6 +353,16 @@ The system SHALL keep the Coordinator view calm by default and expose detail onl
 - **THEN** the Coordinator rail SHALL render those rows through the shared Agent Mode Markdown rendering substrate where practical
 - **AND** the rail SHALL provide enough width for command-log responses to remain readable without excessive wrapping.
 
+#### Scenario: Coordinator composer matches Agent Mode visual language
+- **WHEN** the Coordinator rail renders its scoped composer
+- **THEN** it SHALL use a composer surface consistent with Agent Mode's message bar, including a clear text area, compact status/identity strip, and send affordance
+- **AND** it SHALL NOT expose Agent Mode model, workflow, tool, permission, attachment, or context controls unless those controls map to real Coordinator-view behavior.
+
+#### Scenario: Coordinator composer remains draftable while busy
+- **WHEN** the Coordinator runtime is connecting, submitting, or rendering a response
+- **THEN** the Coordinator composer SHALL keep the text area editable for drafting the next directive when the Coordinator is live in the current window
+- **AND** it SHALL gate only the send action until the Coordinator reaches a supported turn boundary.
+
 #### Scenario: Coordinator view first renders
 - **WHEN** the Coordinator view first renders
 - **THEN** it SHALL show summarized counts, status board columns/cards, Coordinator context when available, and compact MCP awareness
