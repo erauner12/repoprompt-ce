@@ -115,7 +115,8 @@ struct CoordinatorModeView: View {
                 sections: sections,
                 useList: useList,
                 forceList: forceList,
-                metrics: metrics
+                metrics: metrics,
+                showRailToggle: coordinatorSplitVisibility == .detailOnly
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -137,10 +138,11 @@ struct CoordinatorModeView: View {
         sections: [CoordinatorModeStatusSection],
         useList: Bool,
         forceList: Bool,
-        metrics: CoordinatorVisualMetrics
+        metrics: CoordinatorVisualMetrics,
+        showRailToggle: Bool = false
     ) -> some View {
         VStack(spacing: 0) {
-            boardControls(forceList: forceList, metrics: metrics)
+            boardControls(forceList: forceList, metrics: metrics, showRailToggle: showRailToggle)
                 .padding(.horizontal, metrics.outerPadding)
                 .padding(.vertical, metrics.headerPadding)
                 .background(.regularMaterial)
@@ -161,8 +163,18 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func boardControls(forceList: Bool, metrics: CoordinatorVisualMetrics) -> some View {
+    private func boardControls(
+        forceList: Bool,
+        metrics: CoordinatorVisualMetrics,
+        showRailToggle: Bool
+    ) -> some View {
         HStack(spacing: metrics.controlSpacing) {
+            if showRailToggle {
+                CoordinatorRailToggleButton(isRailVisible: false, metrics: metrics) {
+                    toggleCoordinatorRail()
+                }
+            }
+
             presentationPicker(metrics: metrics)
             sortPicker(metrics: metrics)
             filterSearchBox(metrics: metrics)
@@ -249,6 +261,8 @@ struct CoordinatorModeView: View {
         let rail = snapshot.coordinatorRail
 
         return VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
+            coordinatorRailTitlebarLane(metrics: metrics)
+
             Group {
                 switch rail.state {
                 case .selected:
@@ -307,6 +321,29 @@ struct CoordinatorModeView: View {
         }
         .padding(metrics.outerPadding)
         .coordinatorSidebarPanel(edge: .trailing)
+    }
+
+    private func coordinatorRailTitlebarLane(metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.smallSpacing) {
+            CoordinatorRailToggleButton(isRailVisible: true, metrics: metrics) {
+                toggleCoordinatorRail()
+            }
+
+            Label("Coordinator", systemImage: "rectangle.3.group.bubble")
+                .font(metrics.bodyMedium)
+                .foregroundStyle(.secondary)
+                .labelStyle(.titleAndIcon)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .frame(height: metrics.railTitlebarLaneHeight)
+    }
+
+    private func toggleCoordinatorRail() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            coordinatorSplitVisibility = coordinatorSplitVisibility == .detailOnly ? .all : .detailOnly
+        }
     }
 
     private func boardView(sections: [CoordinatorModeStatusSection], metrics: CoordinatorVisualMetrics) -> some View {
@@ -736,6 +773,44 @@ struct CoordinatorModeView: View {
     }
 }
 
+private struct CoordinatorRailToggleButton: View {
+    let isRailVisible: Bool
+    let metrics: CoordinatorVisualMetrics
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: metrics.titlebarIconSize, weight: .medium))
+                .foregroundStyle(.primary.opacity(isHovering ? 0.95 : 0.68))
+                .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.titlebarButtonCornerRadius, style: .continuous)
+                .fill(titlebarButtonFill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.titlebarButtonCornerRadius, style: .continuous)
+                .stroke(CoordinatorStyle.hairline.opacity(isHovering ? 1 : 0), lineWidth: 0.5)
+        )
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                isHovering = hovering
+            }
+        }
+        .hoverTooltip(isRailVisible ? "Hide Coordinator Rail" : "Show Coordinator Rail")
+        .accessibilityLabel(isRailVisible ? "Hide Coordinator Rail" : "Show Coordinator Rail")
+    }
+
+    private var titlebarButtonFill: Color {
+        isHovering ? Color.primary.opacity(0.08) : Color.clear
+    }
+}
+
 private struct CoordinatorVisualMetrics {
     let fontPreset: FontScalePreset
 
@@ -813,6 +888,18 @@ private struct CoordinatorVisualMetrics {
 
     var railTitlebarLaneHeight: CGFloat {
         fontPreset.scaledClamped(34, min: 34, max: 42)
+    }
+
+    var titlebarButtonSize: CGFloat {
+        fontPreset.scaledClamped(28, min: 28, max: 34)
+    }
+
+    var titlebarButtonCornerRadius: CGFloat {
+        fontPreset.scaledClamped(6, max: 8)
+    }
+
+    var titlebarIconSize: CGFloat {
+        fontPreset.scaledClamped(15, max: 18)
     }
 
     var sectionSpacing: CGFloat {
