@@ -468,6 +468,8 @@ struct CoordinatorModeView: View {
 
             if let pending = row.pendingInteraction {
                 pendingSummary(pending, metrics: metrics)
+            } else if let report = row.statusReport {
+                statusReportSummary(report, metrics: metrics)
             }
 
             if row.isPersistedOnly {
@@ -605,6 +607,16 @@ struct CoordinatorModeView: View {
                         keyValue("Source", row.isPersistedOnly ? "Persisted metadata" : "Current window live state", metrics: metrics)
                     }
 
+                    if let assistantPreview = row.statusReport?.assistantPreview {
+                        inspectorGroup("Recent assistant output", metrics: metrics) {
+                            Text(assistantPreview)
+                                .font(metrics.body)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
                     if let terminalOutput = row.statusReport?.terminalOutput {
                         inspectorGroup("Terminal output", metrics: metrics) {
                             Text(terminalOutput)
@@ -680,6 +692,14 @@ struct CoordinatorModeView: View {
                         .foregroundStyle(.red.opacity(0.85))
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if let assistantPreview = report.assistantPreview {
+                    Text(assistantPreview)
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(5)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let terminalOutput = report.terminalOutput {
                     Text(terminalOutput)
                         .font(metrics.micro)
@@ -741,7 +761,7 @@ struct CoordinatorModeView: View {
                 .frame(maxHeight: 160)
             }
 
-            if !rail.isComposerSendEnabled {
+            if rail.state == .selected, !rail.isComposerSendEnabled {
                 Text("Coordinator is mid-run. Send directives when it reaches an ordinary turn boundary.")
                     .font(metrics.micro)
                     .foregroundStyle(.secondary)
@@ -877,6 +897,47 @@ struct CoordinatorModeView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func statusReportSummary(_ report: CoordinatorModeSessionStatusReport, metrics: CoordinatorVisualMetrics) -> some View {
+        if report.hasDisplayableContent {
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                if let statusText = report.statusText {
+                    Text(statusText)
+                        .font(metrics.bodySemibold)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                if let assistantPreview = report.assistantPreview {
+                    Text(assistantPreview)
+                        .font(metrics.body)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+                if let failureReason = report.failureReason {
+                    Text("Failure: \(failureReason.displayLabel)")
+                        .font(metrics.bodySemibold)
+                        .foregroundStyle(.red.opacity(0.85))
+                        .lineLimit(2)
+                }
+                if let terminalOutput = report.terminalOutput {
+                    Text(terminalOutput)
+                        .font(metrics.body)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+            }
+            .padding(metrics.pendingPadding)
+            .background(
+                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                    .fill(Color(nsColor: .windowBackgroundColor).opacity(0.45))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.10), lineWidth: 1)
+            )
         }
     }
 
@@ -1529,6 +1590,7 @@ private extension AgentSessionRunState {
                     statusReport: CoordinatorModeSessionStatusReport(
                         status: .running,
                         statusText: "Dispatching delegated work…",
+                        assistantPreview: "Starting delegated fleet…",
                         terminalOutput: nil,
                         failureReason: nil
                     ),

@@ -120,11 +120,13 @@ struct CoordinatorModeRow: Identifiable, Equatable {
 struct CoordinatorModeSessionStatusReport: Equatable {
     let status: AgentRunMCPSnapshot.Status
     let statusText: String?
+    let assistantPreview: String?
     let terminalOutput: String?
     let failureReason: AgentRunMCPSnapshot.FailureReason?
 
     var hasDisplayableContent: Bool {
         statusText?.isEmpty == false
+            || assistantPreview?.isEmpty == false
             || terminalOutput?.isEmpty == false
             || failureReason != nil
     }

@@ -120,13 +120,13 @@ final class CoordinatorModeViewModel: ObservableObject {
         case .accepted:
             isFreshCoordinatorRunPending = false
             composerNotice = nil
+            refresh()
             railTranscriptEntries.append(CoordinatorModeRailTranscriptEntry(
                 id: UUID(),
                 role: .user,
                 text: trimmed,
                 createdAt: Date()
             ))
-            refresh()
         case let .rejected(message):
             composerNotice = message.isEmpty ? nil : message
         }
@@ -373,13 +373,13 @@ extension AgentModeViewModel {
                 activeWorktreeMergeSummaries: session.worktreeMergeOperations.activeWorktreeMergeSummaries
             )
         }
-        let liveSessionIDs = Set(liveSessions.map(\.sessionID))
-        let mcpSnapshotsBySessionID = Dictionary(
-            uniqueKeysWithValues: liveSessionIDs.compactMap { sessionID -> (UUID, AgentRunMCPSnapshot)? in
-                guard let snapshot = mcpSnapshot(sessionID: sessionID) else { return nil }
-                return (sessionID, snapshot)
-            }
-        )
+        var mcpSnapshotsBySessionID: [UUID: AgentRunMCPSnapshot] = [:]
+        for tabID in mcpControlledTabIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard let session = sessions[tabID],
+                  let snapshot = mcpSnapshot(for: session)
+            else { continue }
+            mcpSnapshotsBySessionID[snapshot.sessionID] = snapshot
+        }
 
         return CoordinatorModeSnapshotProjector.Input(
             workspaceID: workspaceID,

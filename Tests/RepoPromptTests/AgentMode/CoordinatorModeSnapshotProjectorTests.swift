@@ -37,6 +37,47 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(allRows(in: snapshot).first { $0.sessionID == directChildID }?.childSessionIDs, [nestedChildID])
     }
 
+    func testBoardIncludesRunningDelegatedSnapshotBeforePersistence() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let coordinatorTab = uuid(101)
+        let childTab = uuid(102)
+
+        let snapshot = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator Runtime Demo", updatedAt: date(10), state: .idle)
+            ],
+            mcpSnapshots: [
+                childID: mcpSnapshot(
+                    sessionID: childID,
+                    tabID: childTab,
+                    sessionName: "Live delegate",
+                    status: .running,
+                    statusText: "Running focused validation",
+                    assistantPreview: "make dev-test FILTER=CoordinatorModeSnapshotProjectorTests",
+                    interaction: nil,
+                    parent: coordinatorID
+                )
+            ],
+            resolvableTabs: [coordinatorTab, childTab],
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        let row = rows(in: snapshot, group: .working).first
+        XCTAssertEqual(snapshot.counts.totalRows, 1)
+        XCTAssertEqual(snapshot.counts.liveRows, 1)
+        XCTAssertEqual(row?.sessionID, childID)
+        XCTAssertEqual(row?.title, "Live delegate")
+        XCTAssertEqual(row?.runState, .running)
+        XCTAssertEqual(row?.parentSessionID, coordinatorID)
+        XCTAssertFalse(row?.isPersistedOnly ?? true)
+        XCTAssertEqual(row?.statusReport?.status, .running)
+        XCTAssertEqual(row?.statusReport?.statusText, "Running focused validation")
+        XCTAssertEqual(row?.statusReport?.assistantPreview, "make dev-test FILTER=CoordinatorModeSnapshotProjectorTests")
+        XCTAssertNil(row?.statusReport?.terminalOutput)
+        XCTAssertNotNil(row?.openAgentChatRoute)
+    }
+
     func testManualSelectionCannotPromotePlainSessionAsCoordinator() {
         let plainID = uuid(1)
         let demoID = uuid(2)
@@ -338,12 +379,14 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
 
         XCTAssertEqual(snapshot.coordinatorRail.statusReport?.status, .running)
         XCTAssertEqual(snapshot.coordinatorRail.statusReport?.statusText, "Dispatching delegated work…")
+        XCTAssertEqual(snapshot.coordinatorRail.statusReport?.assistantPreview, "Do not use active streaming as terminal output")
         XCTAssertNil(snapshot.coordinatorRail.statusReport?.terminalOutput)
         XCTAssertNil(snapshot.coordinatorRail.statusReport?.failureReason)
 
         let childReport = allRows(in: snapshot).first { $0.sessionID == childID }?.statusReport
         XCTAssertEqual(childReport?.status, .failed)
         XCTAssertEqual(childReport?.statusText, "Timed out waiting for tests")
+        XCTAssertNil(childReport?.assistantPreview)
         XCTAssertEqual(childReport?.terminalOutput, "Last delegate output")
         XCTAssertEqual(childReport?.failureReason, .timeout)
     }
@@ -394,28 +437,15 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertNil(missingRouteSnapshot.pendingInteractions.first?.openAgentChatRoute)
     }
 
-    func testPersistedOnlyRowDoesNotProjectPendingInteraction() {
+    func testPersistedOnlyRowWithoutLiveSnapshotDoesNotProjectPendingInteraction() {
         let coordinatorID = uuid(10)
         let sessionID = uuid(1)
         let tabID = uuid(101)
-        let interaction = AgentRunMCPSnapshot.Interaction(
-            id: uuid(200),
-            kind: .question,
-            responseType: .text,
-            title: "Need answer",
-            prompt: "Continue?",
-            context: nil,
-            allowsMultiple: nil,
-            options: [],
-            fields: [],
-            details: []
-        )
         let snapshot = projector.project(input(
             persisted: [
                 persisted(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(20)),
                 persisted(id: sessionID, tab: tabID, title: "Stale", updatedAt: date(10), state: .waitingForQuestion, parent: coordinatorID)
             ],
-            mcpSnapshots: [sessionID: mcpSnapshot(sessionID: sessionID, tabID: tabID, interaction: interaction)],
             resolvableTabs: [uuid(110), tabID],
             demoCoordinatorIDs: [coordinatorID]
         ))
@@ -426,7 +456,7 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(row?.statusGroup, .done)
     }
 
-    func testAssistantProseAndStreamingTextDoNotCreatePendingOrChangeFingerprint() {
+    func testAssistantProseAndStreamingTextDoesNotCreatePendingButRefreshesProgressFingerprint() {
         let coordinatorID = uuid(10)
         let sessionID = uuid(1)
         let tabID = uuid(101)
@@ -444,7 +474,10 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         ))
 
         XCTAssertTrue(first.pendingInteractions.isEmpty)
-        XCTAssertEqual(first.fingerprint, second.fingerprint)
+        XCTAssertTrue(second.pendingInteractions.isEmpty)
+        XCTAssertEqual(allRows(in: first).first?.statusReport?.assistantPreview, "Please decide yes or no")
+        XCTAssertEqual(allRows(in: second).first?.statusReport?.assistantPreview, "Please decide yes or no. More streamed text.")
+        XCTAssertNotEqual(first.fingerprint, second.fingerprint)
     }
 
     func testPersistedOnlyRowsWithoutResolvableTabsDoNotCreateRoutes() {
@@ -656,16 +689,18 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
     private func mcpSnapshot(
         sessionID: UUID,
         tabID: UUID,
+        sessionName: String = "Session",
         status: AgentRunMCPSnapshot.Status = .running,
         statusText: String? = nil,
         assistantPreview: String? = nil,
         interaction: AgentRunMCPSnapshot.Interaction?,
-        failureReason: AgentRunMCPSnapshot.FailureReason? = nil
+        failureReason: AgentRunMCPSnapshot.FailureReason? = nil,
+        parent: UUID? = nil
     ) -> AgentRunMCPSnapshot {
         AgentRunMCPSnapshot(
             sessionID: sessionID,
             tabID: tabID,
-            sessionName: "Session",
+            sessionName: sessionName,
             agentRaw: nil,
             agentDisplayName: nil,
             modelRaw: nil,
@@ -676,7 +711,7 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             interaction: interaction,
             transcriptItemCount: 10,
             updatedAt: date(20),
-            parentSessionID: nil,
+            parentSessionID: parent,
             failureReason: failureReason,
             worktreeBindings: [],
             activeWorktreeMerges: []

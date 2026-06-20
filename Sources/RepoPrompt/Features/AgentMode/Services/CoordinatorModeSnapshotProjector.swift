@@ -304,6 +304,30 @@ struct CoordinatorModeSnapshotProjector {
             )
         }
 
+        for snapshot in input.mcpSnapshotsBySessionID.values {
+            let previous = seedsByID[snapshot.sessionID]
+            seedsByID[snapshot.sessionID] = RowSeed(
+                id: snapshot.sessionID,
+                tabID: snapshot.tabID ?? previous?.tabID,
+                title: normalizedTitle(snapshot.sessionName ?? previous?.title ?? "Agent Session"),
+                updatedAt: max(snapshot.updatedAt, previous?.updatedAt ?? snapshot.updatedAt),
+                runState: runState(from: snapshot),
+                agentKind: snapshot.agentRaw ?? previous?.agentKind,
+                agentModel: snapshot.modelRaw ?? previous?.agentModel,
+                parentSessionID: snapshot.parentSessionID ?? previous?.parentSessionID,
+                isMCPOriginated: true,
+                worktreeBindingSummaries: snapshot.worktreeBindings.isEmpty
+                    ? previous?.worktreeBindingSummaries ?? []
+                    : snapshot.worktreeBindings.map(worktreeBindingSummary),
+                activeWorktreeMergeSummaries: snapshot.activeWorktreeMerges.isEmpty
+                    ? previous?.activeWorktreeMergeSummaries ?? []
+                    : snapshot.activeWorktreeMerges,
+                workflowKind: previous?.workflowKind,
+                priority: previous?.priority,
+                isPersistedOnly: false
+            )
+        }
+
         return seedsByID.values.sorted { lhs, rhs in
             if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
             if lhs.title.localizedCaseInsensitiveCompare(rhs.title) != .orderedSame {
@@ -347,6 +371,45 @@ struct CoordinatorModeSnapshotProjector {
             pendingInteraction: pendingInteraction,
             openAgentChatRoute: route,
             statusReport: sessionStatusReport(snapshot: mcpSnapshot)
+        )
+    }
+
+    private func runState(from snapshot: AgentRunMCPSnapshot) -> AgentSessionRunState {
+        switch snapshot.status {
+        case .running:
+            .running
+        case .waitingForInput:
+            switch snapshot.interaction?.kind {
+            case .some(.approval):
+                .waitingForApproval
+            case .some(.question), .some(.mcpElicitation):
+                .waitingForQuestion
+            case .some(.instruction), .some(.userInput), nil:
+                .waitingForUser
+            }
+        case .completed:
+            .completed
+        case .cancelled:
+            .cancelled
+        case .failed, .expired:
+            .failed
+        }
+    }
+
+    private func worktreeBindingSummary(_ binding: AgentRunMCPSnapshot.WorktreeBinding) -> AgentSessionWorktreeBindingSummary {
+        AgentSessionWorktreeBindingSummary(
+            id: binding.id,
+            repositoryID: binding.repositoryID,
+            repoKey: binding.repoKey,
+            logicalRootPath: binding.logicalRootPath,
+            logicalRootName: binding.logicalRootName,
+            worktreeID: binding.worktreeID,
+            worktreeRootPath: binding.worktreeRootPath,
+            worktreeName: binding.worktreeName,
+            branch: binding.branch,
+            visualLabel: binding.visualLabel,
+            visualColorHex: binding.visualColorHex,
+            boundAt: binding.boundAt
         )
     }
 
@@ -487,9 +550,13 @@ struct CoordinatorModeSnapshotProjector {
         from detectionSeeds: [CoordinatorDetectionSeed],
         input: Input
     ) -> CoordinatorSelection? {
-        if let demoRuntime = mostRecentCandidate(
-            from: detectionSeeds.filter { input.demoCoordinatorSessionIDs.contains($0.id) }
-        ) {
+        let demoCandidates = detectionSeeds.filter { input.demoCoordinatorSessionIDs.contains($0.id) }
+        if let selectedCoordinatorID = input.selectedCoordinatorID,
+           demoCandidates.contains(where: { $0.id == selectedCoordinatorID })
+        {
+            return CoordinatorSelection(sessionID: selectedCoordinatorID, source: .demoRuntime)
+        }
+        if let demoRuntime = mostRecentCandidate(from: demoCandidates) {
             return CoordinatorSelection(sessionID: demoRuntime.id, source: .demoRuntime)
         }
 
@@ -546,12 +613,16 @@ struct CoordinatorModeSnapshotProjector {
     private func sessionStatusReport(snapshot: AgentRunMCPSnapshot?) -> CoordinatorModeSessionStatusReport? {
         guard let snapshot else { return nil }
         let statusText = normalizedOptionalText(snapshot.statusText)
+        let assistantPreview = snapshot.status.isTerminal
+            ? nil
+            : normalizedOptionalText(snapshot.latestAssistantPreview)
         let terminalOutput = snapshot.status.isTerminal
             ? normalizedOptionalText(snapshot.latestAssistantPreview)
             : nil
         let report = CoordinatorModeSessionStatusReport(
             status: snapshot.status,
             statusText: statusText,
+            assistantPreview: assistantPreview,
             terminalOutput: terminalOutput,
             failureReason: snapshot.failureReason
         )
