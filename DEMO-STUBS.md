@@ -15,5 +15,5 @@ Deliberate shortcuts / non-goals for the demo spine:
 - The Coordinator runtime prompt includes a hardcoded loopback proof step before fan-out: start one explore child and require a returned `session_id` before continuing.
 - Fan-out behavior is prompt-guided only in this item; center-board fleet projection and right-inspector UX are left to Item 2 and Item 3.
 - Board eligibility is narrowed to descendants of the current in-memory demo Coordinator runtime marker. Until a durable fleet handle model exists, previous demo runtime tabs are excluded by the demo runtime title used by `New Coordinator Run` reset.
-- The loopback proof child is excluded from the board by the exact demo proof title `Coordinator loopback proof`; real delegated work should use distinct session names until a structured proof/delegate marker exists.
+- The loopback proof child is intentionally visible on the board. It is the demo's first real delegated session and proves the live `agent_run.start` path before broader fan-out.
 - The left Coordinator rail remains the composer surface; the right inspector is not used as a composer.

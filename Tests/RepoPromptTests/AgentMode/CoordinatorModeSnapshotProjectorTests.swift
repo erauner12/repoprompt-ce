@@ -28,12 +28,12 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
 
         XCTAssertEqual(snapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
         XCTAssertEqual(snapshot.coordinatorRail.selectionSource, .demoRuntime)
-        XCTAssertEqual(Set(allRows(in: snapshot).map(\.sessionID)), [directChildID, nestedChildID])
+        XCTAssertEqual(Set(allRows(in: snapshot).map(\.sessionID)), [directChildID, nestedChildID, proofID])
         XCTAssertFalse(allRows(in: snapshot).contains { $0.sessionID == coordinatorID })
-        XCTAssertFalse(allRows(in: snapshot).contains { $0.sessionID == proofID })
         XCTAssertFalse(allRows(in: snapshot).contains { $0.sessionID == unrelatedID })
         XCTAssertEqual(rows(in: snapshot, group: .needsYou).map(\.sessionID), [directChildID])
         XCTAssertEqual(rows(in: snapshot, group: .working).map(\.sessionID), [nestedChildID])
+        XCTAssertEqual(rows(in: snapshot, group: .done).map(\.sessionID), [proofID])
         XCTAssertEqual(allRows(in: snapshot).first { $0.sessionID == directChildID }?.childSessionIDs, [nestedChildID])
     }
 

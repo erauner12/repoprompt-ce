@@ -479,16 +479,11 @@ struct CoordinatorModeSnapshotProjector {
             descendantIDs.contains(seed.id)
                 && !demoCoordinatorSessionIDs.contains(seed.id)
                 && !isDemoCoordinatorRuntimeTitle(seed.title)
-                && !isDemoLoopbackProof(seed)
         }
     }
 
     private func isDemoCoordinatorRuntimeTitle(_ title: String) -> Bool {
         title == "Coordinator Runtime Demo" || title == "Coordinator Runtime Demo (cleared)"
-    }
-
-    private func isDemoLoopbackProof(_ seed: RowSeed) -> Bool {
-        seed.title == "Coordinator loopback proof"
     }
 
     private func childrenByParent(from seeds: [RowSeed]) -> [UUID: Set<UUID>] {
