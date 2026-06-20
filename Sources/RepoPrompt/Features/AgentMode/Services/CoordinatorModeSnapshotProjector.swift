@@ -167,14 +167,30 @@ struct CoordinatorModeSnapshotProjector {
         let rowSeeds = mergedRowSeeds(from: input)
         let renderedChildrenByParent = childrenByParent(from: rowSeeds)
         let detectionSeeds = coordinatorDetectionSeeds(from: input, rowSeeds: rowSeeds)
-        let detectionChildrenByParent = childrenByParent(from: detectionSeeds)
-        let coordinator = selectedCoordinator(from: rowSeeds, detectionSeeds: detectionSeeds, childrenByParent: detectionChildrenByParent, input: input)
+        let coordinator = selectedCoordinator(from: detectionSeeds, input: input)
         let routeBuilder = RouteBuilder(
             workspaceID: input.workspaceID,
             windowID: input.windowID,
             resolvableTabIDs: input.resolvableTabIDs
         )
 
+        let boardSeeds = delegatedFleetSeeds(
+            from: rowSeeds,
+            coordinatorID: coordinator?.sessionID,
+            childrenByParent: renderedChildrenByParent,
+            demoCoordinatorSessionIDs: input.demoCoordinatorSessionIDs
+        )
+        let boardSeedIDs = Set(boardSeeds.map(\.id))
+        let boardChildrenByParent = eligibleChildrenByParent(from: boardSeeds, visibleIDs: boardSeedIDs)
+        let boardRows = sortedRows(boardSeeds.map { seed in
+            row(
+                from: seed,
+                childSessionIDs: Array(boardChildrenByParent[seed.id, default: []]).sorted { $0.uuidString < $1.uuidString },
+                isCoordinator: false,
+                input: input,
+                routeBuilder: routeBuilder
+            )
+        }, mode: input.sortMode)
         let allRows = sortedRows(rowSeeds.map { seed in
             row(
                 from: seed,
@@ -184,7 +200,6 @@ struct CoordinatorModeSnapshotProjector {
                 routeBuilder: routeBuilder
             )
         }, mode: input.sortMode)
-        let boardRows = allRows.filter { !input.demoCoordinatorSessionIDs.contains($0.sessionID) }
 
         let groups = CoordinatorModeStatusGroup.allCases.map { group in
             CoordinatorModeStatusSection(group: group, rows: boardRows.filter { $0.statusGroup == group })
@@ -342,13 +357,15 @@ struct CoordinatorModeSnapshotProjector {
         {
             return .blocked
         }
-        if !seed.isPersistedOnly, seed.runState == .running {
+        if !seed.isPersistedOnly,
+           seed.runState == .running || hasApplyingMerge(seed.activeWorktreeMergeSummaries)
+        {
             return .working
         }
-        if seed.runState == .completed || seed.runState == .cancelled {
-            return .done
+        if seed.runState == .completed || seed.runState == .cancelled, hasPendingReviewMerge(seed.activeWorktreeMergeSummaries) {
+            return .review
         }
-        return .idle
+        return .done
     }
 
     private func isNeedsYou(_ state: AgentSessionRunState) -> Bool {
@@ -364,21 +381,56 @@ struct CoordinatorModeSnapshotProjector {
         }
     }
 
-    private func childrenByParent(from seeds: [RowSeed]) -> [UUID: Set<UUID>] {
-        let visibleIDs = Set(seeds.map(\.id))
-        var children: [UUID: Set<UUID>] = [:]
-        for seed in seeds {
-            guard let parentSessionID = seed.parentSessionID,
-                  parentSessionID != seed.id,
-                  visibleIDs.contains(parentSessionID)
-            else { continue }
-            children[parentSessionID, default: []].insert(seed.id)
-        }
-        return children
+    private func hasApplyingMerge(_ summaries: [AgentSessionWorktreeMergeSummary]) -> Bool {
+        summaries.contains { $0.status == .applying }
     }
 
-    private func childrenByParent(from seeds: [CoordinatorDetectionSeed]) -> [UUID: Set<UUID>] {
-        let visibleIDs = Set(seeds.map(\.id))
+    private func hasPendingReviewMerge(_ summaries: [AgentSessionWorktreeMergeSummary]) -> Bool {
+        summaries.contains { summary in
+            switch summary.status {
+            case .previewed, .awaitingApproval, .awaitingCommit:
+                true
+            case .applying, .conflicted, .stale, .completed, .failed, .cancelled, .aborted:
+                false
+            }
+        }
+    }
+
+    private func delegatedFleetSeeds(
+        from seeds: [RowSeed],
+        coordinatorID: UUID?,
+        childrenByParent: [UUID: Set<UUID>],
+        demoCoordinatorSessionIDs: Set<UUID>
+    ) -> [RowSeed] {
+        guard let coordinatorID else { return [] }
+        var descendantIDs: Set<UUID> = []
+        var stack = Array(childrenByParent[coordinatorID, default: []])
+        while let sessionID = stack.popLast() {
+            guard !descendantIDs.contains(sessionID), sessionID != coordinatorID else { continue }
+            descendantIDs.insert(sessionID)
+            stack.append(contentsOf: childrenByParent[sessionID, default: []])
+        }
+        return seeds.filter { seed in
+            descendantIDs.contains(seed.id)
+                && !demoCoordinatorSessionIDs.contains(seed.id)
+                && !isDemoCoordinatorRuntimeTitle(seed.title)
+                && !isDemoLoopbackProof(seed)
+        }
+    }
+
+    private func isDemoCoordinatorRuntimeTitle(_ title: String) -> Bool {
+        title == "Coordinator Runtime Demo" || title == "Coordinator Runtime Demo (cleared)"
+    }
+
+    private func isDemoLoopbackProof(_ seed: RowSeed) -> Bool {
+        seed.title == "Coordinator loopback proof"
+    }
+
+    private func childrenByParent(from seeds: [RowSeed]) -> [UUID: Set<UUID>] {
+        eligibleChildrenByParent(from: seeds, visibleIDs: Set(seeds.map(\.id)))
+    }
+
+    private func eligibleChildrenByParent(from seeds: [RowSeed], visibleIDs: Set<UUID>) -> [UUID: Set<UUID>] {
         var children: [UUID: Set<UUID>] = [:]
         for seed in seeds {
             guard let parentSessionID = seed.parentSessionID,
@@ -430,35 +482,13 @@ struct CoordinatorModeSnapshotProjector {
     }
 
     private func selectedCoordinator(
-        from rowSeeds: [RowSeed],
-        detectionSeeds: [CoordinatorDetectionSeed],
-        childrenByParent: [UUID: Set<UUID>],
+        from detectionSeeds: [CoordinatorDetectionSeed],
         input: Input
     ) -> CoordinatorSelection? {
-        let rowsByID = Dictionary(uniqueKeysWithValues: rowSeeds.map { ($0.id, $0) })
-        if let selectedCoordinatorID = input.selectedCoordinatorID,
-           rowsByID[selectedCoordinatorID] != nil
-        {
-            return CoordinatorSelection(sessionID: selectedCoordinatorID, source: .userSelected)
-        }
-
         if let demoRuntime = mostRecentCandidate(
             from: detectionSeeds.filter { input.demoCoordinatorSessionIDs.contains($0.id) }
         ) {
             return CoordinatorSelection(sessionID: demoRuntime.id, source: .demoRuntime)
-        }
-
-        let renderedDetectionSeeds = detectionSeeds.filter { rowsByID[$0.id] != nil }
-        if let orchestrate = mostRecentCandidate(
-            from: renderedDetectionSeeds.filter { $0.workflowKind == .orchestrate && childrenByParent[$0.id]?.isEmpty == false }
-        ) {
-            return CoordinatorSelection(sessionID: orchestrate.id, source: .orchestrateWorkflow)
-        }
-
-        if let mcpLineage = mostRecentCandidate(
-            from: renderedDetectionSeeds.filter { $0.parentSessionID == nil && $0.isMCPOriginated && childrenByParent[$0.id]?.isEmpty == false }
-        ) {
-            return CoordinatorSelection(sessionID: mcpLineage.id, source: .mcpLineageRoot)
         }
 
         return nil
@@ -571,8 +601,8 @@ struct CoordinatorModeSnapshotProjector {
             needsYou: rows.count(where: { $0.statusGroup == .needsYou }),
             blocked: rows.count(where: { $0.statusGroup == .blocked }),
             working: rows.count(where: { $0.statusGroup == .working }),
+            review: rows.count(where: { $0.statusGroup == .review }),
             done: rows.count(where: { $0.statusGroup == .done }),
-            idle: rows.count(where: { $0.statusGroup == .idle }),
             stalePersistedOnly: rows.filter(\.isPersistedOnly).count,
             liveRows: rows.count(where: { !$0.isPersistedOnly })
         )

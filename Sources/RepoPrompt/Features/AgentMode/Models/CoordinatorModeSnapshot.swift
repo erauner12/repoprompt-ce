@@ -42,8 +42,8 @@ struct CoordinatorModeCounts: Equatable {
         needsYou: 0,
         blocked: 0,
         working: 0,
+        review: 0,
         done: 0,
-        idle: 0,
         stalePersistedOnly: 0,
         liveRows: 0
     )
@@ -52,26 +52,26 @@ struct CoordinatorModeCounts: Equatable {
     let needsYou: Int
     let blocked: Int
     let working: Int
+    let review: Int
     let done: Int
-    let idle: Int
     let stalePersistedOnly: Int
     let liveRows: Int
 }
 
 enum CoordinatorModeStatusGroup: String, CaseIterable, Equatable {
     case needsYou
-    case blocked
     case working
+    case blocked
+    case review
     case done
-    case idle
 
     var displayName: String {
         switch self {
         case .needsYou: "Needs you"
-        case .blocked: "Blocked"
         case .working: "Working"
+        case .blocked: "Blocked"
+        case .review: "Review"
         case .done: "Done"
-        case .idle: "Idle"
         }
     }
 }
