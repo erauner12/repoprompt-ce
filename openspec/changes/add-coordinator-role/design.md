@@ -111,6 +111,8 @@ Coordinator v1 allowed verbs should map to the native lifecycle contract as:
 - `steer` / `message`: send follow-up work to an existing delegated session.
 - `summarize` / `export`: request compact summaries or durable artifact references without loading full transcripts into the supervision loop.
 
+A single user instruction may produce one delegated run, sequential delegated runs, or multiple concurrent delegated runs when the work naturally splits into independent workstreams. The Coordinator must track each delegated run handle and action status separately, then summarize combined outcomes from lifecycle state, action records, and artifact references.
+
 The underlying lifecycle contract may define `respond` and `cancel`, but Coordinator v1 should expose only the safe delegate subset until each higher-risk action has accepted authorization and failure semantics. Coordinator access to `respond`, `cancel`, approve/decline, worktree mutation, tab focus, full log read, and direct file/search capabilities remains deferred or gated.
 
 Alternatives considered:

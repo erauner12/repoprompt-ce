@@ -47,8 +47,9 @@
 - [ ] 6.1 Define the structured Coordinator action record with source, target, action type, lifecycle handle, status, and failure fields.
 - [ ] 6.2 Implement the initial action verbs: list, start/spawn, poll/wait, message/steer, and summarize/export.
 - [ ] 6.3 Surface action delivery/completion/failure states from native lifecycle state, pending interactions, and artifact references without parsing assistant prose.
-- [ ] 6.4 Ensure Coordinator v1 remains human-directed: observed session lifecycle changes may update sourced status/summaries, but must not trigger new higher-level directives without a later accepted autonomy spec.
-- [ ] 6.5 Add tests for successful actions, failed delivery, terminal/actionable transitions, no-autonomous-dispatch from background session changes, and unsupported higher-risk actions.
+- [ ] 6.4 Support instructions that create one delegated run, sequential delegated runs, or multiple concurrent delegated runs by tracking each delegated run handle and action status separately.
+- [ ] 6.5 Ensure Coordinator v1 remains human-directed: observed session lifecycle changes may update sourced status/summaries, but must not trigger new higher-level directives without a later accepted autonomy spec.
+- [ ] 6.6 Add tests for successful actions, failed delivery, terminal/actionable transitions, sequential and concurrent delegated-run tracking, no-autonomous-dispatch from background session changes, and unsupported higher-risk actions.
 
 ## 7. Coordinator view integration
 

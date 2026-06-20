@@ -99,6 +99,13 @@ The first Coordinator role implementation SHALL use a delegate-only tool contrac
 - **THEN** it SHALL start, message, steer, poll, wait for, or request summaries from Agent runs/sessions through explicit lifecycle/control APIs
 - **AND** it SHALL leave tab focus, file reads/searches, file selection, and worktree context to the target agent session.
 
+#### Scenario: User instruction creates multiple delegated runs
+- **WHEN** a user instruction requires multiple independent delegated workstreams
+- **THEN** the Coordinator MAY start multiple delegated Agent runs through the accepted lifecycle/control APIs
+- **AND** it SHALL record each delegated run handle and action status separately
+- **AND** it SHALL observe each delegated run through deterministic lifecycle state rather than assistant prose
+- **AND** it SHALL summarize combined outcomes from lifecycle state, action records, and artifact references.
+
 #### Scenario: Respond capability is considered
 - **WHEN** the Coordinator needs to answer a pending interaction
 - **THEN** Coordinator access to `respond` SHALL remain unavailable until the accepted lifecycle contract defines stable pending interaction identifiers, response shape, authorization, and failure semantics
