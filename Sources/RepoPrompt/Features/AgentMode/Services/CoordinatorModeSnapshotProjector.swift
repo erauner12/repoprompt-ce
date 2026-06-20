@@ -12,6 +12,7 @@ struct CoordinatorModeSnapshotProjector {
         var selectedCoordinatorID: UUID?
         var sortMode: CoordinatorModeSortMode
         var resolvableTabIDs: Set<UUID>
+        var demoCoordinatorSessionIDs: Set<UUID>
 
         init(
             workspaceID: UUID?,
@@ -23,7 +24,8 @@ struct CoordinatorModeSnapshotProjector {
             coordinatorDetectionSessions: [CoordinatorDetectionSession] = [],
             selectedCoordinatorID: UUID? = nil,
             sortMode: CoordinatorModeSortMode = .lastUpdated,
-            resolvableTabIDs: Set<UUID> = []
+            resolvableTabIDs: Set<UUID> = [],
+            demoCoordinatorSessionIDs: Set<UUID> = []
         ) {
             self.workspaceID = workspaceID
             self.windowID = windowID
@@ -35,6 +37,7 @@ struct CoordinatorModeSnapshotProjector {
             self.selectedCoordinatorID = selectedCoordinatorID
             self.sortMode = sortMode
             self.resolvableTabIDs = resolvableTabIDs
+            self.demoCoordinatorSessionIDs = demoCoordinatorSessionIDs
         }
     }
 
@@ -172,7 +175,7 @@ struct CoordinatorModeSnapshotProjector {
             resolvableTabIDs: input.resolvableTabIDs
         )
 
-        var rows = rowSeeds.map { seed in
+        let allRows = sortedRows(rowSeeds.map { seed in
             row(
                 from: seed,
                 childSessionIDs: Array(renderedChildrenByParent[seed.id, default: []]).sorted { $0.uuidString < $1.uuidString },
@@ -180,25 +183,25 @@ struct CoordinatorModeSnapshotProjector {
                 input: input,
                 routeBuilder: routeBuilder
             )
-        }
-        rows = sortedRows(rows, mode: input.sortMode)
+        }, mode: input.sortMode)
+        let boardRows = allRows.filter { !input.demoCoordinatorSessionIDs.contains($0.sessionID) }
 
         let groups = CoordinatorModeStatusGroup.allCases.map { group in
-            CoordinatorModeStatusSection(group: group, rows: rows.filter { $0.statusGroup == group })
+            CoordinatorModeStatusSection(group: group, rows: boardRows.filter { $0.statusGroup == group })
         }
 
-        let coordinatorRail = coordinatorRail(from: coordinator, rowsByID: Dictionary(uniqueKeysWithValues: rows.map { ($0.sessionID, $0) }))
-        let pendingInteractions = rows.compactMap(\.pendingInteraction)
+        let coordinatorRail = coordinatorRail(from: coordinator, rowsByID: Dictionary(uniqueKeysWithValues: allRows.map { ($0.sessionID, $0) }))
+        let pendingInteractions = boardRows.compactMap(\.pendingInteraction)
 
         return CoordinatorModeSnapshot(
             workspaceID: input.workspaceID,
             sortMode: input.sortMode,
-            counts: counts(for: rows),
+            counts: counts(for: boardRows),
             groups: groups,
             coordinatorRail: coordinatorRail,
             pendingInteractions: pendingInteractions,
             mcpAwareness: mcpAwareness(from: input.dashboard),
-            isEmpty: rows.isEmpty
+            isEmpty: boardRows.isEmpty
         )
     }
 
@@ -437,6 +440,12 @@ struct CoordinatorModeSnapshotProjector {
            rowsByID[selectedCoordinatorID] != nil
         {
             return CoordinatorSelection(sessionID: selectedCoordinatorID, source: .userSelected)
+        }
+
+        if let demoRuntime = mostRecentCandidate(
+            from: detectionSeeds.filter { input.demoCoordinatorSessionIDs.contains($0.id) }
+        ) {
+            return CoordinatorSelection(sessionID: demoRuntime.id, source: .demoRuntime)
         }
 
         let renderedDetectionSeeds = detectionSeeds.filter { rowsByID[$0.id] != nil }

@@ -315,7 +315,7 @@ struct CoordinatorModeView: View {
             )
 
             Group {
-                if rail.isComposerEnabled {
+                if rail.isComposerEnabled || rail.state == .chooseCoordinator {
                     coordinatorComposer(rail, metrics: metrics)
                 } else {
                     coordinatorComposerFallback(rail, metrics: metrics)
@@ -709,7 +709,7 @@ struct CoordinatorModeView: View {
                 .lineLimit(2 ... 5)
                 .textFieldStyle(.roundedBorder)
                 .font(metrics.body)
-                .disabled(isSubmittingCoordinatorDirective || !rail.isComposerSendEnabled)
+                .disabled(isSubmittingCoordinatorDirective || (!rail.isComposerSendEnabled && rail.state != .chooseCoordinator))
                 .onSubmit {
                     submitCoordinatorDirective()
                 }
@@ -747,7 +747,10 @@ struct CoordinatorModeView: View {
     }
 
     private var canSubmitCoordinatorDirective: Bool {
-        viewModel.snapshot.coordinatorRail.isComposerSendEnabled
+        (
+            viewModel.snapshot.coordinatorRail.isComposerSendEnabled
+                || viewModel.snapshot.coordinatorRail.state == .chooseCoordinator
+        )
             && !isSubmittingCoordinatorDirective
             && !coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -1312,6 +1315,7 @@ private extension CoordinatorModeCoordinatorRail.SelectionSource {
         case .userSelected: "User selected"
         case .orchestrateWorkflow: "Orchestrate workflow"
         case .mcpLineageRoot: "MCP lineage root"
+        case .demoRuntime: "Demo runtime"
         }
     }
 }

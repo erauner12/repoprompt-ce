@@ -145,6 +145,9 @@ extension AgentModeViewModel {
         }
 
         var isMCPInstructionDispatchInProgress: Bool = false
+        /// Demo-only marker for the Coordinator runtime spine. This is intentionally
+        /// in-memory/addressability-only until the full containment/restore design lands.
+        var isCoordinatorRuntimeDemo: Bool = false
         /// Whether this session was originally created by an MCP client.
         var isMCPOriginated: Bool = false
         /// Persisted logical-root to worktree bindings for this Agent session.

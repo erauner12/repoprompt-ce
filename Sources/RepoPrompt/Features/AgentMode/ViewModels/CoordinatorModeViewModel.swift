@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import MCP
 
 @MainActor
 final class CoordinatorModeViewModel: ObservableObject {
@@ -10,7 +11,7 @@ final class CoordinatorModeViewModel: ObservableObject {
 
     typealias InputProvider = @MainActor (_ sortMode: CoordinatorModeSortMode, _ selectedCoordinatorID: UUID?) -> CoordinatorModeSnapshotProjector.Input
     typealias DashboardVisibilityHandler = @MainActor (_ visible: Bool) -> Void
-    typealias DirectiveSubmitter = @MainActor (_ text: String, _ coordinatorSessionID: UUID) async -> DirectiveSubmissionResult
+    typealias DirectiveSubmitter = @MainActor (_ text: String, _ coordinatorSessionID: UUID?) async -> DirectiveSubmissionResult
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
     @Published private(set) var railTranscriptEntries: [CoordinatorModeRailTranscriptEntry] = []
@@ -79,18 +80,18 @@ final class CoordinatorModeViewModel: ObservableObject {
             composerNotice = nil
             return .rejected(message: "")
         }
-        guard snapshot.coordinatorRail.state == .selected,
-              snapshot.coordinatorRail.isComposerEnabled,
-              let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID
-        else {
-            let message = "Open agent chat to message this Coordinator."
-            composerNotice = message
-            return .rejected(message: message)
-        }
-        guard snapshot.coordinatorRail.isComposerSendEnabled else {
-            let message = "Coordinator is mid-run. Send directives when it reaches an ordinary turn boundary."
-            composerNotice = message
-            return .rejected(message: message)
+        let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID
+        if snapshot.coordinatorRail.state == .selected {
+            guard snapshot.coordinatorRail.isComposerEnabled else {
+                let message = "Open agent chat to message this Coordinator."
+                composerNotice = message
+                return .rejected(message: message)
+            }
+            guard snapshot.coordinatorRail.isComposerSendEnabled else {
+                let message = "Coordinator is mid-run. Send directives when it reaches an ordinary turn boundary."
+                composerNotice = message
+                return .rejected(message: message)
+            }
         }
 
         let result = await directiveSubmitter(trimmed, coordinatorSessionID)
@@ -164,25 +165,88 @@ extension AgentModeViewModel {
     @MainActor
     func submitCoordinatorDirectiveToAgentMode(
         _ text: String,
-        coordinatorSessionID: UUID
+        coordinatorSessionID: UUID?
     ) async -> UserTurnSubmissionResult {
-        guard let match = sessions.first(where: { $0.value.activeAgentSessionID == coordinatorSessionID }) else {
-            return .blocked(message: "Open agent chat to message this Coordinator.")
+        let runtime: (tabID: UUID, sessionID: UUID)
+        do {
+            runtime = try await resolveOrCreateCoordinatorRuntimeDemoTarget(preferredSessionID: coordinatorSessionID)
+        } catch {
+            return .blocked(message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
-        let tabID = match.key
-        let session = match.value
+        guard let session = sessions[runtime.tabID] else {
+            return .blocked(message: "Coordinator composer is unavailable for this session state.")
+        }
         guard !session.runState.isActive else {
             return .blocked(message: "Coordinator is mid-run. Send directives when it reaches an ordinary turn boundary.")
         }
-        guard let target = makeComposerSubmitTarget(tabID: tabID, session: session),
+        guard let target = makeComposerSubmitTarget(tabID: runtime.tabID, session: session),
               target.route == .existingAgentSession,
-              target.expectedSourceAgentSessionID == coordinatorSessionID
+              target.expectedSourceAgentSessionID == runtime.sessionID
         else {
             return .blocked(message: "Coordinator composer is unavailable for this session state.")
         }
         return await submitUserTurnCreatingSessionIfNeeded(text: text, target: target) {
             nil
         }
+    }
+
+    @MainActor
+    private func resolveOrCreateCoordinatorRuntimeDemoTarget(
+        preferredSessionID: UUID?
+    ) async throws -> (tabID: UUID, sessionID: UUID) {
+        if let preferredSessionID,
+           let match = sessions.first(where: { $0.value.activeAgentSessionID == preferredSessionID })
+        {
+            let session = match.value
+            session.isCoordinatorRuntimeDemo = true
+            try await ensureCoordinatorRuntimeDemoControl(tabID: match.key, sessionID: preferredSessionID)
+            return (match.key, preferredSessionID)
+        }
+
+        if let match = sessions.first(where: { $0.value.isCoordinatorRuntimeDemo }),
+           let sessionID = match.value.activeAgentSessionID
+        {
+            try await ensureCoordinatorRuntimeDemoControl(tabID: match.key, sessionID: sessionID)
+            return (match.key, sessionID)
+        }
+
+        if let match = sessions.first(where: { coordinatorModeTabName(for: $0.key) == Self.coordinatorRuntimeDemoSessionName }),
+           let sessionID = match.value.activeAgentSessionID
+        {
+            match.value.isCoordinatorRuntimeDemo = true
+            try await ensureCoordinatorRuntimeDemoControl(tabID: match.key, sessionID: sessionID)
+            return (match.key, sessionID)
+        }
+
+        let tabID = try await mcpCreateBackgroundSessionTab(name: Self.coordinatorRuntimeDemoSessionName)
+        let session = await ensureSessionReady(tabID: tabID)
+        guard let sessionID = ensureSessionBoundToTab(session) else {
+            throw MCPError.invalidParams("The Coordinator runtime tab could not be bound to an agent session.")
+        }
+        session.isCoordinatorRuntimeDemo = true
+        try await ensureCoordinatorRuntimeDemoControl(tabID: tabID, sessionID: sessionID)
+        return (tabID, sessionID)
+    }
+
+    @MainActor
+    private func ensureCoordinatorRuntimeDemoControl(tabID: UUID, sessionID: UUID) async throws {
+        let session = await ensureSessionReady(tabID: tabID)
+        session.isCoordinatorRuntimeDemo = true
+        if session.mcpControlContext?.sessionID != sessionID {
+            try await mcpActivateControlContext(
+                forTabID: tabID,
+                sessionID: sessionID,
+                originatingConnectionID: nil,
+                taskLabelKind: nil,
+                startPending: false
+            )
+        }
+        try await mcpConfigureSession(
+            tabID: tabID,
+            agentRaw: AgentProviderKind.codexExec.rawValue,
+            modelRaw: AgentModel.gpt55CodexHigh.rawValue,
+            reasoningEffortRaw: nil
+        )
     }
 
     @MainActor
@@ -237,9 +301,14 @@ extension AgentModeViewModel {
             coordinatorDetectionSessions: persistedSessions.map(CoordinatorModeSnapshotProjector.CoordinatorDetectionSession.init),
             selectedCoordinatorID: selectedCoordinatorID,
             sortMode: sortMode,
-            resolvableTabIDs: resolvableTabIDs
+            resolvableTabIDs: resolvableTabIDs,
+            demoCoordinatorSessionIDs: Set(sessions.values.compactMap { session in
+                session.isCoordinatorRuntimeDemo ? session.activeAgentSessionID : nil
+            })
         )
     }
+
+    private static let coordinatorRuntimeDemoSessionName = "Coordinator Runtime Demo"
 
     @MainActor
     private func coordinatorModeResolvableTabIDs() -> Set<UUID> {

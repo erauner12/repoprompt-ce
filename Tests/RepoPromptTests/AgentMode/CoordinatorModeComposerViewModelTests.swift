@@ -16,7 +16,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(20), state: .idle, isMCP: true)
             ]
         )
-        var submissions: [(text: String, sessionID: UUID)] = []
+        var submissions: [(text: String, sessionID: UUID?)] = []
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in
                 var next = input

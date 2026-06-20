@@ -3328,7 +3328,7 @@ final class AgentModeViewModel: ObservableObject {
 
     /// Single creation point for attaching an Agent session identity to a compose tab.
     @discardableResult
-    private func ensureSessionBoundToTab(_ session: TabSession) -> UUID? {
+    func ensureSessionBoundToTab(_ session: TabSession) -> UUID? {
         if let existing = session.activeAgentSessionID {
             return existing
         }
@@ -5869,7 +5869,7 @@ final class AgentModeViewModel: ObservableObject {
         return .init(tabID: hydrated.tabID, sessionID: resolvedSessionID, origin: .existingSession)
     }
 
-    private func mcpCreateBackgroundSessionTab(name: String?) async throws -> UUID {
+    func mcpCreateBackgroundSessionTab(name: String?) async throws -> UUID {
         guard let promptManager else {
             throw MCPError.internalError("Prompt manager unavailable.")
         }
@@ -13142,7 +13142,8 @@ final class AgentModeViewModel: ObservableObject {
         let systemPrompt = SystemPromptService.agentModePrompt(
             agentKind: session.selectedAgent,
             taskLabelKind: session.mcpControlContext?.taskLabelKind,
-            codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled()
+            codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled(),
+            coordinatorRuntimeDemo: session.isCoordinatorRuntimeDemo
         )
         return AgentMessage(systemPrompt: systemPrompt, userMessage: fullMessage, resumeSessionID: resumeSessionID)
     }

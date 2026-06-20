@@ -3885,7 +3885,8 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
         let basePrompt = SystemPromptService.agentModePrompt(
             agentKind: .codexExec,
             taskLabelKind: session.mcpControlContext?.taskLabelKind,
-            codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled()
+            codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled(),
+            coordinatorRuntimeDemo: session.isCoordinatorRuntimeDemo
         )
         let resumeCandidate: CodexNativeSessionController.SessionRef? = {
             guard session.codexNeedsReconnect else { return nil }

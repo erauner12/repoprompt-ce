@@ -680,7 +680,8 @@ class SystemPromptService {
     static func agentModePrompt(
         agentKind: AgentProviderKind? = nil,
         taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
-        codeMapsDisabled: Bool = false
+        codeMapsDisabled: Bool = false,
+        coordinatorRuntimeDemo: Bool = false
     ) -> String {
         // Role-specific prompts: dedicated lean prompts instead of conditional blocks
         switch taskLabelKind {
@@ -851,6 +852,11 @@ class SystemPromptService {
             """
         }
 
+        let coordinatorRuntimeDemoGuidance = coordinatorRuntimeDemo ? """
+
+        \(AgentModePrompts.Fragments.coordinatorRuntimeDemoGuidance.trimmingCharacters(in: .whitespacesAndNewlines))
+        """ : ""
+
         let prompt = """
         **Conversation Style**
         - Conversational and concise; expand when asked
@@ -879,6 +885,7 @@ class SystemPromptService {
         - `oracle_chat_log` - Read recent Oracle conversation messages to recover context after compaction
 
         \(agentDelegationSection)
+        \(coordinatorRuntimeDemoGuidance)
 
         *User Interaction:*
         - `ask_user` - Ask the user a question when you need clarification\(setStatusInList)\(codexToolPriorityGuidance)\(progressUpdatesGuidance)

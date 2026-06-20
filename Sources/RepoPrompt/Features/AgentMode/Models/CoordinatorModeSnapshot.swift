@@ -137,6 +137,7 @@ struct CoordinatorModeCoordinatorRail: Equatable {
         case userSelected
         case orchestrateWorkflow
         case mcpLineageRoot
+        case demoRuntime
     }
 
     let state: State
