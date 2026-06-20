@@ -348,6 +348,11 @@ The system SHALL keep the Coordinator view calm by default and expose detail onl
 - **THEN** it SHALL present the conversation as the place where the user talks to the Coordinator
 - **AND** it SHALL avoid chrome that frames the Coordinator as an ordinary supervised Agent Mode session, including Coordinator-self `Open in Agent Mode` affordances in the production-demo path.
 
+#### Scenario: Coordinator window title is surface-scoped
+- **WHEN** Coordinator mode is the active main surface
+- **THEN** the top-level window title SHALL identify the Coordinator surface and workspace rather than the active Agent session tab
+- **AND** parent/delegate session titles SHALL remain scoped to board/list rows, inspector detail, or explicit Agent Mode deep links.
+
 #### Scenario: Coordinator messages contain Markdown
 - **WHEN** Coordinator or event conversation rows contain Markdown structures such as lists, links, inline code, or code fences
 - **THEN** the Coordinator rail SHALL render those rows through the shared Agent Mode Markdown rendering substrate where practical

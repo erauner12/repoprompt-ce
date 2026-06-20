@@ -49,6 +49,7 @@ struct ContentView: View {
 
             // Evaluate initial route (workspace entry vs main) and auto-onboarding
             viewModel.evaluateInitialRouteIfNeeded()
+            syncMainSurfaceSelectionToWindowTitle()
 
             // Initialize recommendation wizard view model
             if recommendationWizardViewModel == nil {
@@ -80,6 +81,10 @@ struct ContentView: View {
             if !canSelect {
                 mainSurfaceRawValue = MainSurface.defaultSurface.rawValue
             }
+            syncMainSurfaceSelectionToWindowTitle()
+        }
+        .onChange(of: mainSurfaceRawValue) { _, _ in
+            syncMainSurfaceSelectionToWindowTitle()
         }
         .workspaceSwitchConfirmation(manager: viewModel.workspaceManager)
         .modifier(ContentViewSheetPresenter(
@@ -134,6 +139,10 @@ struct ContentView: View {
             }
             mainSurfaceRawValue = newValue.rawValue
         }
+    }
+
+    private func syncMainSurfaceSelectionToWindowTitle() {
+        viewModel.state.setMainSurfaceForWindowTitle(mainSurfaceSelection.wrappedValue)
     }
 
     private func closeAllSheets() {

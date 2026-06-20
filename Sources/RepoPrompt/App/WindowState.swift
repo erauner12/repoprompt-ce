@@ -218,7 +218,7 @@ class WindowState: ObservableObject {
         let workspaceTitle = resolvedWorkspaceWindowTitle(for: ws)
         let resolvedTitle = WindowTitleFormatter.compose(
             workspaceTitle: workspaceTitle,
-            agentSessionTitle: resolvedAgentSessionTitleForWindowTitle(activeWorkspace: ws),
+            agentSessionTitle: resolvedMainSurfaceTitleForWindowTitle(activeWorkspace: ws),
             duplicateWorkspaceTitle: ws.isSystemWorkspace ? WindowTitleFormatter.defaultTitle : ws.name
         )
         lastKnownResolvedTitle = resolvedTitle
@@ -237,15 +237,29 @@ class WindowState: ObservableObject {
         return base
     }
 
-    private func resolvedAgentSessionTitleForWindowTitle(activeWorkspace: WorkspaceModel) -> String? {
-        guard !activeWorkspace.isSystemWorkspace,
-              promptManager.activeComposeTabID != nil
-        else {
+    private func resolvedMainSurfaceTitleForWindowTitle(activeWorkspace: WorkspaceModel) -> String? {
+        guard !activeWorkspace.isSystemWorkspace else {
             return nil
         }
 
-        let rawTitle = promptManager.activeComposeTabID.flatMap { workspaceManager.composeTabName(with: $0) }
-        return AgentSessionRestoreSupport.normalizedSessionTitle(rawTitle)
+        switch mainSurfaceForWindowTitle {
+        case .agentMode:
+            guard promptManager.activeComposeTabID != nil else {
+                return nil
+            }
+            let rawTitle = promptManager.activeComposeTabID.flatMap { workspaceManager.composeTabName(with: $0) }
+            return AgentSessionRestoreSupport.normalizedSessionTitle(rawTitle)
+        case .coordinatorMode:
+            return "Coordinator"
+        }
+    }
+
+    private var mainSurfaceForWindowTitle: MainSurface = .defaultSurface
+
+    func setMainSurfaceForWindowTitle(_ surface: MainSurface) {
+        guard mainSurfaceForWindowTitle != surface else { return }
+        mainSurfaceForWindowTitle = surface
+        requestWindowTitleUpdate(reason: .mainSurfaceChanged)
     }
 
     enum WindowTitleUpdateReason {
@@ -253,6 +267,7 @@ class WindowState: ObservableObject {
         case workspaceChanged
         case focusChanged
         case appBecameActive
+        case mainSurfaceChanged
         case activeComposeTabChanged
         case agentSessionNameChanged
         case explicit
