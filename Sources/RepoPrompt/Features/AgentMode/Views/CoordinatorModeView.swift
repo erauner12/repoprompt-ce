@@ -329,21 +329,45 @@ struct CoordinatorModeView: View {
         .coordinatorSidebarPanel(edge: .trailing)
     }
 
-    private func coordinatorRailTitlebarLane(metrics: CoordinatorVisualMetrics) -> some View {
+    private enum SidebarTitlebarControlPlacement {
+        case leading
+        case trailing
+    }
+
+    private func coordinatorSidebarTitlebarLane(
+        metrics: CoordinatorVisualMetrics,
+        controlPlacement: SidebarTitlebarControlPlacement,
+        @ViewBuilder title: () -> some View,
+        @ViewBuilder control: () -> some View
+    ) -> some View {
         HStack(spacing: metrics.smallSpacing) {
+            if controlPlacement == .leading {
+                control()
+            }
+
+            title()
+
+            Spacer(minLength: 0)
+
+            if controlPlacement == .trailing {
+                control()
+            }
+        }
+        .frame(height: metrics.railTitlebarLaneHeight)
+    }
+
+    private func coordinatorRailTitlebarLane(metrics: CoordinatorVisualMetrics) -> some View {
+        coordinatorSidebarTitlebarLane(metrics: metrics, controlPlacement: .trailing) {
             Label("Coordinator", systemImage: "rectangle.3.group.bubble")
                 .font(metrics.bodyMedium)
                 .foregroundStyle(.secondary)
                 .labelStyle(.titleAndIcon)
                 .lineLimit(1)
-
-            Spacer(minLength: 0)
-
+        } control: {
             CoordinatorRailToggleButton(isRailVisible: true, metrics: metrics) {
                 toggleCoordinatorRail()
             }
         }
-        .frame(height: metrics.railTitlebarLaneHeight)
     }
 
     private func toggleCoordinatorRail() {
@@ -517,7 +541,9 @@ struct CoordinatorModeView: View {
 
     private func inspector(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(spacing: 0) {
-            HStack {
+            coordinatorSidebarTitlebarLane(metrics: metrics, controlPlacement: .leading) {
+                EmptyView()
+            } control: {
                 Button {
                     isInspectorVisible = false
                 } label: {
@@ -527,11 +553,8 @@ struct CoordinatorModeView: View {
                 .foregroundStyle(.secondary)
                 .hoverTooltip("Hide Inspector")
                 .accessibilityLabel("Hide Inspector")
-
-                Spacer(minLength: 0)
             }
             .padding(.horizontal, metrics.outerPadding)
-            .frame(height: metrics.railTitlebarLaneHeight)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
