@@ -24,46 +24,54 @@
 - [ ] 3.5 Guard against the role-label trap: adding `coordinator` as a label must not by itself create an ordinary tab-backed session that is treated as the real Coordinator runtime.
 - [ ] 3.6 Ensure Coordinator runtime identity is distinguishable from workspace Agent Mode sessions in state, logs, tool policy, and UI-facing metadata.
 
-## 4. Coordinator scope and permissions
+## 4. Coordinator role behavior and prompt contract
 
-- [ ] 4.1 Implement the accepted first listing/control scope from section 1, with active-workspace top-level as the leading default unless review chooses a stricter or broader scope.
-- [ ] 4.2 Restrict the first Coordinator role toolset to lifecycle/control-plane capabilities: session/model listing, start/spawn, poll/status/wait, message/steer, and summarize/export through artifact references.
-- [ ] 4.3 Keep Coordinator access to `respond` unavailable until pending-interaction shape, authorization, and failure semantics are accepted; if accepted, audit it as a structured action record.
-- [ ] 4.4 Block direct tab focus, tab-scoped file read/search, file-selection mutation, worktree mutation, approval/decline, cancel, stop, and full-log read unless a later spec grants Coordinator access.
-- [ ] 4.5 Enforce the boundary through MCP/Agent Mode tool policy and advertisement, not just prompts or model instructions.
-- [ ] 4.6 Define and test the Coordinator v1 allow/deny matrix for CLI-adjacent tools: allow lifecycle listing/start/poll/wait/steer/summarize, gate respond/cancel, and block tab focus, file/search/edit, selection, and worktree mutation.
-- [ ] 4.7 Ensure requests requiring direct workspace investigation or mutation are routed to delegated Agent Mode sessions rather than handled by Coordinator tools directly.
-- [ ] 4.8 Record the cross-window stance for Coordinator actions: current-window-only, route to owning windows, or shared session-control service.
-- [ ] 4.9 Add focused permission tests for allowed lifecycle tools and blocked tab/workspace mutation tools.
+- [ ] 4.1 Define the Coordinator-specific runtime prompt/instructions so the role classifies user input as conversational/status/advisory, coordination instruction, or workspace/code work request before acting.
+- [ ] 4.2 Ensure conversational/status/advisory input can be answered directly from Coordinator-visible lifecycle state, action records, summaries, artifact references, and conversation history without spawning or steering another agent.
+- [ ] 4.3 Ensure coordination instructions use lifecycle/control APIs and structured action records.
+- [ ] 4.4 Ensure workspace/code work requests are delegated to appropriately scoped Agent Mode sessions rather than handled through Coordinator tools directly.
+- [ ] 4.5 Add prompt/behavior tests or fixtures covering direct answer, coordination action, and workspace delegation classification.
 
-## 5. Coordinator context and history
+## 5. Coordinator scope and permissions
 
-- [ ] 5.1 Implement the accepted Coordinator history/action-log storage location outside workspace row projection.
-- [ ] 5.2 Restore Coordinator context without creating, restoring, or promoting a supervised workspace session.
-- [ ] 5.3 Add tests for history persistence/restoration and board/list invisibility.
+- [ ] 5.1 Implement the accepted first listing/control scope from section 1, with active-workspace top-level as the leading default unless review chooses a stricter or broader scope.
+- [ ] 5.2 Restrict the first Coordinator role toolset to lifecycle/control-plane capabilities: session/model listing, start/spawn, poll/status/wait, message/steer, and summarize/export through artifact references.
+- [ ] 5.3 Keep Coordinator access to `respond` unavailable until pending-interaction shape, authorization, and failure semantics are accepted; if accepted, audit it as a structured action record.
+- [ ] 5.4 Block direct tab focus, tab-scoped file read/search, file-selection mutation, worktree mutation, approval/decline, cancel, stop, and full-log read unless a later spec grants Coordinator access.
+- [ ] 5.5 Enforce the boundary through MCP/Agent Mode tool policy and advertisement, not just prompts or model instructions.
+- [ ] 5.6 Define and test the Coordinator v1 allow/deny matrix for CLI-adjacent tools: allow lifecycle listing/start/poll/wait/steer/summarize, gate respond/cancel, and block tab focus, file/search/edit, selection, and worktree mutation.
+- [ ] 5.7 Ensure requests requiring direct workspace investigation or mutation are routed to delegated Agent Mode sessions rather than handled by Coordinator tools directly.
+- [ ] 5.8 Record the cross-window stance for Coordinator actions: current-window-only, route to owning windows, or shared session-control service.
+- [ ] 5.9 Add focused permission tests for allowed lifecycle tools and blocked tab/workspace mutation tools.
 
-## 6. Instruction/action audit contract
+## 6. Coordinator context and history
 
-- [ ] 6.1 Define the structured Coordinator action record with source, target, action type, lifecycle handle, status, and failure fields.
-- [ ] 6.2 Implement the initial action verbs: list, start/spawn, poll/wait, message/steer, and summarize/export.
-- [ ] 6.3 Surface action delivery/completion/failure states from native lifecycle state, pending interactions, and artifact references without parsing assistant prose.
-- [ ] 6.4 Support instructions that create one delegated run, sequential delegated runs, or multiple concurrent delegated runs by tracking each delegated run handle and action status separately.
-- [ ] 6.5 Ensure Coordinator v1 remains human-directed: observed session lifecycle changes may update sourced status/summaries, but must not trigger new higher-level directives without a later accepted autonomy spec.
-- [ ] 6.6 Add tests for successful actions, failed delivery, terminal/actionable transitions, sequential and concurrent delegated-run tracking, no-autonomous-dispatch from background session changes, and unsupported higher-risk actions.
+- [ ] 6.1 Implement the accepted Coordinator history/action-log storage location outside workspace row projection.
+- [ ] 6.2 Restore Coordinator context without creating, restoring, or promoting a supervised workspace session.
+- [ ] 6.3 Add tests for history persistence/restoration and board/list invisibility.
 
-## 7. Coordinator view integration
+## 7. Instruction/action audit contract
 
-- [ ] 7.1 Reconcile the real Coordinator runtime with existing `CoordinatorModeSnapshotProjector` demo Coordinator detection.
-- [ ] 7.2 Define the identity/exclusion predicate that keeps the real Coordinator runtime out of `CoordinatorModeSnapshot.groups`.
-- [ ] 7.3 Wire Coordinator mode to show or address the real Coordinator runtime when available while preserving the existing manual selected-session composer as a demo/manual fallback until migration is decided.
-- [ ] 7.4 Decide whether to retire, hide, or keep the manual selected-session composer after the real role is stable.
-- [ ] 7.5 Add UI/snapshot coverage for no Coordinator runtime, real Coordinator runtime available, manual fallback states, and board/list invisibility.
+- [ ] 7.1 Define the structured Coordinator action record with source, target, action type, lifecycle handle, status, and failure fields.
+- [ ] 7.2 Implement the initial action verbs: list, start/spawn, poll/wait, message/steer, and summarize/export.
+- [ ] 7.3 Surface action delivery/completion/failure states from native lifecycle state, pending interactions, and artifact references without parsing assistant prose.
+- [ ] 7.4 Support instructions that create one delegated run, sequential delegated runs, or multiple concurrent delegated runs by tracking each delegated run handle and action status separately.
+- [ ] 7.5 Ensure Coordinator v1 remains human-directed: observed session lifecycle changes may update sourced status/summaries, but must not trigger new higher-level directives without a later accepted autonomy spec.
+- [ ] 7.6 Add tests for successful actions, failed delivery, terminal/actionable transitions, sequential and concurrent delegated-run tracking, no-autonomous-dispatch from background session changes, and unsupported higher-risk actions.
 
-## 8. Feature boundary and validation
+## 8. Coordinator view integration
 
-- [ ] 8.1 Implement the lifecycle contract and Coordinator role behind a feature boundary or guarded availability path so rollback leaves existing Coordinator mode behavior intact.
-- [ ] 8.2 Run `openspec validate add-coordinator-role` after each spec/design change.
-- [ ] 8.3 Run focused role/scope/action/lifecycle tests added by this implementation.
-- [ ] 8.4 Run the smallest relevant coordinated Swift build/test lanes for touched app/MCP files.
-- [ ] 8.5 Follow `docs/testing.md` contract-ledger and authoritative XCTest-list workflow when adding, renaming, consolidating, or removing tests.
-- [ ] 8.6 Run contribution preflight before commit and push.
+- [ ] 8.1 Reconcile the real Coordinator runtime with existing `CoordinatorModeSnapshotProjector` demo Coordinator detection.
+- [ ] 8.2 Define the identity/exclusion predicate that keeps the real Coordinator runtime out of `CoordinatorModeSnapshot.groups`.
+- [ ] 8.3 Wire Coordinator mode to show or address the real Coordinator runtime when available while preserving the existing manual selected-session composer as a demo/manual fallback until migration is decided.
+- [ ] 8.4 Decide whether to retire, hide, or keep the manual selected-session composer after the real role is stable.
+- [ ] 8.5 Add UI/snapshot coverage for no Coordinator runtime, real Coordinator runtime available, manual fallback states, and board/list invisibility.
+
+## 9. Feature boundary and validation
+
+- [ ] 9.1 Implement the lifecycle contract and Coordinator role behind a feature boundary or guarded availability path so rollback leaves existing Coordinator mode behavior intact.
+- [ ] 9.2 Run `openspec validate add-coordinator-role` after each spec/design change.
+- [ ] 9.3 Run focused role/scope/action/lifecycle tests added by this implementation.
+- [ ] 9.4 Run the smallest relevant coordinated Swift build/test lanes for touched app/MCP files.
+- [ ] 9.5 Follow `docs/testing.md` contract-ledger and authoritative XCTest-list workflow when adding, renaming, consolidating, or removing tests.
+- [ ] 9.6 Run contribution preflight before commit and push.

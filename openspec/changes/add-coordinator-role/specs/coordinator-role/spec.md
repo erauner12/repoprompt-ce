@@ -86,6 +86,34 @@ The Coordinator role SHALL use an explicit layer-above listing and control scope
 - **THEN** the design SHALL record whether the implementation is current-window-only, routes to owning windows, or uses a shared session-control service
 - **AND** it SHALL not silently create app-global cross-window control.
 
+### Requirement: Coordinator role behavior contract
+The system SHALL define a Coordinator-specific role behavior contract for the runtime prompt/instructions before exposing the Coordinator role.
+
+#### Scenario: User input is classified
+- **WHEN** the Coordinator receives user input
+- **THEN** its role behavior SHALL distinguish conversational or advisory input, coordination instructions, and workspace/code work requests
+- **AND** it SHALL NOT treat every user message as requiring a delegated Agent run.
+
+#### Scenario: Direct answer is sufficient
+- **WHEN** user input is conversational, advisory, or answerable from Coordinator-visible lifecycle state, action records, summaries, or artifact references
+- **THEN** the Coordinator MAY answer directly without starting or steering another Agent run
+- **AND** it SHALL avoid inventing unavailable workspace details.
+
+#### Scenario: Coordination action is needed
+- **WHEN** user input requires supervising or redirecting Agent work
+- **THEN** the Coordinator SHALL use the accepted lifecycle/control APIs and structured action records
+- **AND** it SHALL track delegated run handles and statuses rather than relying on assistant prose.
+
+#### Scenario: Workspace work is needed
+- **WHEN** user input requires codebase investigation, file reads/searches, edits, test runs, worktree operations, or tab-scoped context
+- **THEN** the Coordinator SHALL delegate that work to an appropriately scoped Agent Mode session
+- **AND** it SHALL NOT attempt to perform the workspace work directly through Coordinator tools.
+
+#### Scenario: Role behavior is installed
+- **WHEN** the Coordinator role is launched or resumed
+- **THEN** the runtime SHALL receive Coordinator-specific instructions matching this behavior contract
+- **AND** ordinary `pair`, `engineer`, `explore`, and `design` prompts SHALL NOT be reused without Coordinator-specific behavior and tool-boundary instructions.
+
 ### Requirement: Delegate-only first tool contract
 The first Coordinator role implementation SHALL use a delegate-only tool contract.
 
