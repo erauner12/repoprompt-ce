@@ -532,7 +532,7 @@ struct CoordinatorModeView: View {
             VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
                 HStack(spacing: metrics.controlSpacing) {
                     Label("Inspector", systemImage: "sidebar.right")
-                        .font(metrics.sectionTitle)
+                        .font(metrics.bodyMedium)
                     Spacer()
                     Button {
                         selectedRowID = nil
@@ -546,9 +546,17 @@ struct CoordinatorModeView: View {
                 }
                 .coordinatorSidebarHeaderPill(cornerRadius: metrics.headerPillCornerRadius)
 
-                Text(row.title)
-                    .font(metrics.inspectorTitle)
-                    .lineLimit(3)
+                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                    Text(row.title)
+                        .font(metrics.inspectorTitle)
+                        .lineLimit(3)
+
+                    Text(inspectorObjectSubtitle(for: row))
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                .padding(.bottom, metrics.tightSpacing)
 
                 inspectorGroup("Status", metrics: metrics) {
                     keyValue("Group", row.statusGroup.displayName, metrics: metrics)
@@ -601,6 +609,15 @@ struct CoordinatorModeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .coordinatorSidebarPanel(edge: .leading)
+    }
+
+    private func inspectorObjectSubtitle(for row: CoordinatorModeRow) -> String {
+        var parts = [row.runState.displayName]
+        if let providerName = row.providerName {
+            parts.append(providerName)
+        }
+        parts.append(row.isMCPOriginated ? "MCP originated" : "App originated")
+        return parts.joined(separator: " · ")
     }
 
     private func mcpFooter(_ awareness: CoordinatorModeMCPAwareness, metrics: CoordinatorVisualMetrics) -> some View {
