@@ -1007,12 +1007,16 @@ private enum CoordinatorSidebarPanelEdge {
 
 private extension View {
     func coordinatorSidebarPanel(edge: CoordinatorSidebarPanelEdge) -> some View {
-        background(CoordinatorSidebarMaterialView())
-            .overlay(alignment: edge.alignment) {
-                Rectangle()
-                    .fill(CoordinatorStyle.panelSeam)
-                    .frame(width: 0.5)
-            }
+        background(
+            CoordinatorSidebarMaterialView()
+                .ignoresSafeArea(.container, edges: .top)
+        )
+        .overlay(alignment: edge.alignment) {
+            Rectangle()
+                .fill(CoordinatorStyle.panelSeam)
+                .frame(width: 0.5)
+                .ignoresSafeArea(.container, edges: .top)
+        }
     }
 
     func coordinatorSidebarHeaderPill(cornerRadius: CGFloat) -> some View {
