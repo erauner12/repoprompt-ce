@@ -29,7 +29,7 @@
 - [ ] 3.3 Confirm whether the Coordinator launch path can reuse the existing MCP background compose-tab / `.mcpBackgroundAgent` creation seam with the Coordinator marker attached.
 - [ ] 3.4 Implement or specify a dedicated Coordinator launch path or additional runtime marker; do not rely solely on adding `coordinator` to `AgentModelCatalog.TaskLabelKind`, task labels, or candidate chains.
 - [ ] 3.5 Ensure Coordinator runtime identity is distinguishable from workspace Agent Mode sessions in state, logs, tool policy, restore metadata, and UI-facing metadata.
-- [ ] 3.6 Define whether the Coordinator marker exempts the runtime from background-Agent capacity eviction, idle cleanup, and MCP-originated destructive cleanup/stop targeting, or whether re-creation on next instruction is explicitly accepted.
+- [ ] 3.6 Define whether the Coordinator marker exempts the runtime from background-Agent capacity eviction, idle cleanup, and MCP-originated incidental cleanup/stop targeting, or whether re-creation on next instruction is explicitly accepted with persisted Coordinator history/action restoration.
 - [ ] 3.7 Ensure the identity marker is threaded through run lease / connection policy / tool policy seams before Coordinator scope or permissions are granted.
 
 ## 4. Coordinator role behavior and prompt contract
@@ -43,18 +43,18 @@
 
 ## 5. Coordinator scope and permissions
 
-- [ ] 5.1 Implement current-window active-workspace fleet visibility for the Coordinator runtime, including delegated child sessions that are part of the supervised fleet.
-- [ ] 5.2 Bypass ordinary child-only `agent_manage.list_sessions` scoping for Coordinator connections so the model-visible fleet has membership parity with the Coordinator view's active-workspace projection, excluding ordering, pagination, transient liveness differences, and the Coordinator runtime itself.
+- [ ] 5.1 Track the Coordinator's launched delegated fleet through stable session handles returned by `agent_run.start`.
+- [ ] 5.2 Use returned handles with `agent_run.poll`, `wait`, `steer`, and status/failure reporting so broad active-workspace `list_sessions` visibility is not required for the first role implementation.
 - [ ] 5.3 Restrict the first Coordinator role toolset to lifecycle/control-plane capabilities: session/model listing, start/spawn, poll/status/wait, message/steer, and status/failure reporting from existing snapshot fields.
 - [ ] 5.4 Keep Coordinator access to `respond` unavailable until authorization and stale-interaction failure semantics are accepted; if accepted, audit it as a structured action record.
 - [ ] 5.5 Block direct tab focus, tab-scoped file read/search, file-selection mutation, worktree mutation, approval/decline, cancel, stop, and unbounded full-log/full-transcript read unless a later spec grants Coordinator access.
 - [ ] 5.6 Hide blocked whole tools from Coordinator tool-list advertisement.
 - [ ] 5.7 Enforce blocked whole tools at execution time for Coordinator connections, because hidden tools remain callable by name.
 - [ ] 5.8 Enforce op/arg-level boundaries inside `agent_run` / `agent_manage` dispatch for Coordinator connections, including `respond`, `cancel`, `stop_session`, `cleanup_sessions`, and worktree creation/binding args on `agent_run.start`.
-- [ ] 5.9 Exclude Coordinator-marked runtimes from being targeted by other callers' cleanup/stop/destructive session-management flows unless explicit authorization semantics are accepted.
+- [ ] 5.9 Exclude Coordinator-marked runtimes from being targeted by other callers' incidental cleanup/stop/destructive session-management flows unless explicit authorization semantics are accepted, while preserving at least one intentional user reset/teardown/recreate path.
 - [ ] 5.10 Ensure requests requiring direct workspace investigation or mutation are routed to delegated Agent Mode sessions rather than handled by Coordinator tools directly.
-- [ ] 5.11 Add focused permission tests for allowed lifecycle tools, Coordinator-specific list scope, rejected op/arg-level actions, execution-blocked whole tools, blocked tab/workspace mutation tools, and cleanup/stop target exclusion.
-- [ ] 5.12 Add membership-parity fixture coverage proving Coordinator list scope and Coordinator view projection include the same active-workspace sessions, including supervised child sessions and excluding ordering, pagination, transient liveness differences, and the Coordinator runtime itself.
+- [ ] 5.11 Add focused permission tests for allowed lifecycle tools, delegated-run handle tracking, rejected op/arg-level actions, execution-blocked whole tools, blocked tab/workspace mutation tools, and cleanup/stop target exclusion.
+- [ ] 5.12 Defer broad active-workspace `list_sessions` visibility and Coordinator-view membership parity fixtures to a separate visibility-boundary OpenSpec change.
 
 ## 6. Coordinator context, history, and enumeration invisibility
 

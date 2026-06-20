@@ -30,13 +30,17 @@ Important existing anchors:
 
 ## Goals / Non-Goals
 
+### Durable invariants vs v1 lines
+
+Durable invariants: the Coordinator must not be part of the supervised fleet it controls, and Coordinator-visible state must come from structured lifecycle/action records rather than assistant prose. The delegate-only toolset, per-window/lazy ownership recommendation, snapshot-field reporting surface, and deferred `respond`/cancel/autonomy capabilities are v1 scope lines that may be relaxed by later accepted specs without weakening those invariants.
+
 **Goals:**
 
 - Define the first real Coordinator role as a layer-above meta-agent, not a workspace session/card.
 - Reuse existing `agent_run` / `agent_manage` lifecycle/control behavior for Coordinator v1 delegation.
 - Identify any later native lifecycle facade extraction as cleanup, not as a first Coordinator role prerequisite.
 - Give the first Coordinator role a delegate-only tool boundary: observe/list sessions, spawn agents, poll/wait deterministic state, steer/message agents, and report status/failure from existing snapshot fields.
-- Give the Coordinator current-window active-workspace fleet visibility, or a stricter explicitly recorded scope, without applying ordinary child-only agent scoping.
+- Let Coordinator v1 supervise its own launched delegated fleet through lifecycle handles returned by `agent_run.start`, without requiring broadened active-workspace `list_sessions` visibility.
 - Keep Coordinator runtime state out of all session-enumerating supervised-session surfaces, including Coordinator mode groups, Agent Mode sidebar/session lists, and MCP session lists.
 - Define auditable Coordinator action records for v1 instructions before adding higher-level directive/autonomy behavior.
 - Preserve the existing manual selected-session composer as a demo shim until the real role replaces or supersedes it.
@@ -128,11 +132,11 @@ Alternatives considered:
 - **Focus-tabs first:** deferred because it forces the Coordinator into the most coupled part of the app before the role identity and permission model are stable.
 - **Full app-user capability:** rejected for v1 because it is too broad to audit or validate.
 
-### 4. Coordinator scope must bypass child-only list scoping
+### 4. Coordinator v1 can supervise its own launched fleet without broadened listing
 
-The existing external lifecycle is close to the desired Coordinator runtime: a parent-less MCP-controlled top-level Agent Mode session can already use `agent_run.start`, `poll`, `wait`, `steer`, and `agent_manage` through loopback MCP, and child sessions do not recursively receive external-control tools. Multi-run delegation can reuse `start(detach: true)`, `wait`/`poll` with multiple session IDs, and the wait-winner-then-wait-remaining pattern already documented for orchestration.
+The existing external lifecycle is close to the desired Coordinator runtime: a parent-less MCP-controlled top-level Agent Mode session can already use `agent_run.start`, `poll`, `wait`, `steer`, and `agent_manage` through loopback MCP, and child sessions do not recursively receive external-control tools. Multi-run delegation can reuse `start(detach: true)`, returned session handles, `wait`/`poll` with multiple session IDs, and the wait-winner-then-wait-remaining pattern already documented for orchestration.
 
-The concrete scope blocker is `agent_manage.list_sessions`: in-app agent callers are normally scoped through the spawn-parent resolution path, so a Coordinator calling the current `list_sessions` from an in-app session would see only its own children. Coordinator scope needs a bypass for Coordinator connections so `list_sessions` enumerates the current-window active-workspace top-level fleet instead. The model-visible fleet from `list_sessions` should have membership parity with the human Coordinator view's active-workspace top-level projection, excluding ordering, pagination, transient liveness differences, and the Coordinator runtime itself.
+Coordinator v1 does not need broadened active-workspace `list_sessions` visibility to perform its core delegation loop. It can supervise the delegated fleet it launched because each `agent_run.start` response returns a stable `session_id`, and subsequent `poll`, `wait`, and `steer` calls can operate on those handles. Visibility into sessions the Coordinator did not spawn is useful, but it is a separate visibility-boundary capability and should be specified in a focused follow-up change rather than treated as a role prerequisite.
 
 Cross-window control remains deferred. In this architecture, active-workspace scope is effectively current-window active-workspace scope; app-global behavior should not appear unless a later spec grants owning-window routing or a shared session-control service.
 
@@ -171,7 +175,7 @@ Before threading the Coordinator privilege marker, the run-lease / connection-po
 | Capability | Coordinator v1 | Delegated Agent Mode session |
 | --- | --- | --- |
 | `agent_manage.list_agents` / `list_workflows` | Allowed for role/workflow discovery. | May also use when needed within its own scope. |
-| `agent_manage.list_sessions` | Allowed with explicit Coordinator current-window active-workspace fleet scope. | Ordinary agents remain scoped to their spawned children where applicable. |
+| `agent_manage.list_sessions` | Allowed only within the accepted v1 scope; broad active-workspace visibility into sessions the Coordinator did not spawn is deferred to a separate change. | Ordinary agents remain scoped to their spawned children where applicable. |
 | `agent_run.start` | Allowed to spawn delegated agents. | Not recursive for sub-agents unless a later role explicitly allows it. |
 | `agent_run.poll` / `wait` | Allowed to observe deterministic lifecycle state. | Allowed for sessions it owns or is scoped to. |
 | `agent_run.steer` | Allowed to message/redirect delegated agents. | Allowed within the agent's own session scope. |
@@ -191,7 +195,7 @@ The Coordinator's own conversation/history/action log must be invisible to super
 
 The hard requirement is enumeration invisibility and lifecycle protection: restoring Coordinator state must retain the marker and must not create, restore, or promote the Coordinator as a supervised Agent Mode row in any workspace-session enumeration surface. Because the Coordinator is a marked `TabSession`, every current or future surface that walks `sessionIndex` or equivalent workspace-session state must exclude the Coordinator marker at the enumeration boundary. Coordinator mode, the Agent Mode sidebar/session list, and MCP `list_sessions` are examples, not an exhaustive list.
 
-If Coordinator creation reuses background MCP Agent machinery, the marker must also prevent inappropriate background-agent lifecycle treatment. The Coordinator should not be silently reclaimed as a disposable background worker, nor targeted by cleanup/stop sweeps that act on MCP-originated sessions, unless a later accepted spec defines explicit user authorization and recovery semantics.
+If Coordinator creation reuses background MCP Agent machinery, the marker must also prevent inappropriate background-agent lifecycle treatment. The Coordinator should not be silently reclaimed as a disposable background worker, nor targeted by incidental cleanup/stop sweeps that act on MCP-originated sessions, unless a later accepted spec defines explicit user authorization and recovery semantics. Re-creation on next instruction is acceptable only if it restores persisted Coordinator history/action state; otherwise it is silent context loss.
 
 ### 10. Instructions and actions are auditable; higher-level directives are deferred
 
@@ -223,7 +227,7 @@ The manual “Use as Coordinator” affordance and selected-session composer rem
 
 ### 12. Cross-window control is deferred unless explicitly chosen
 
-Coordinator role implementation must not accidentally create an app-global cross-window control plane. The leading first scope is current-window active-workspace fleet visibility. Cross-window action routing remains tied to the Option A/B/C fork in `add-coordinator-mode/end-state.md`:
+Coordinator role implementation must not accidentally create an app-global cross-window control plane. The leading first scope is the Coordinator's own launched delegated fleet, tracked by lifecycle handles. Broader active-workspace visibility and cross-window action routing remain tied to later scope decisions, including the Option A/B/C fork in `add-coordinator-mode/end-state.md`:
 
 - current-window control plane;
 - route actions to owning windows;
@@ -236,17 +240,17 @@ The first implementation should record its stance before enabling spawn/steer/re
 - **Native lifecycle scope creep** → Reuse existing lifecycle/control surfaces for v1; defer typed facade extraction unless implementation proves it is needed.
 - **Role-label trap** → Do not equate a `coordinator` task label with the real Coordinator runtime unless launch path, identity marker, scope, policy, and projection semantics are also correct.
 - **Privilege marker miswiring** → Refactor the run-lease / connection-policy installer to use a named context struct before threading Coordinator privilege state through it.
-- **Existing MCP scope mismatch** → `agent_manage.list_sessions` child-scopes in-app agent callers; implement a Coordinator-specific bypass to active-workspace fleet membership rather than assuming global visibility exists.
+- **Existing MCP scope mismatch** → `agent_manage.list_sessions` child-scopes in-app agent callers. Coordinator v1 can still supervise its own launched fleet via returned lifecycle handles; broadened visibility into sessions it did not spawn should be handled by a separate visibility-boundary change.
 - **Over-broad Coordinator power** → Start delegate-only and require a later spec before exposing tab focus, file access, worktree mutation, approval/respond/cancel actions, or app-global visibility to the Coordinator.
 - **Hidden tool execution hole** → Do not rely on advertisement alone; enforce Coordinator's blocked whole tools at execution time.
 - **Coordinator appears as a supervised session** → Use a first-class Coordinator identity marker and exclude it at the shared workspace-session enumeration boundary, with tests proving it never appears in generic `sessionIndex`-derived supervised enumerations rather than only in a few named leaf surfaces.
-- **Coordinator inherits disposable background-agent lifecycle** → If creation reuses MCP background-agent capacity/persistence paths, ensure the Coordinator marker exempts it from inappropriate idle eviction, cleanup, and stop targeting unless explicitly authorized.
+- **Coordinator inherits disposable background-agent lifecycle** → If creation reuses MCP background-agent capacity/persistence paths, ensure the Coordinator marker exempts it from inappropriate idle eviction, incidental cleanup, and incidental stop targeting unless explicitly authorized. Re-creation is acceptable only with persisted Coordinator history/action restoration.
 - **Instruction vs directive ambiguity** → Treat the current composer as Layer 1/demo instructions/messages. Reserve goal-like directives for a later spec with explicit autonomy, authorization, and audit semantics.
 
 ## Migration Plan
 
 1. Create and validate this OpenSpec change.
-2. Record the accepted direction: Coordinator is a constrained top-level orchestrator runtime that reuses existing `agent_run` / `agent_manage` lifecycle/control surfaces with delegate-only v1 scope.
+2. Record the accepted direction: Coordinator is a constrained top-level orchestrator runtime that reuses existing `agent_run` / `agent_manage` lifecycle/control surfaces with delegate-only v1 scope over its launched delegated fleet.
 3. Review the narrowed design with wren using delegate-vs-focus, runtime ownership, list-session scope, execution policy, op/arg guard, and projection marker seams as the discussion spine.
 4. Refactor the run-lease / connection-policy installer to use a named policy context before adding Coordinator privilege fields.
 5. Implement the Coordinator role behind a feature boundary while preserving existing Coordinator mode behavior.
@@ -259,7 +263,7 @@ Rollback for the first implementation should leave the existing Coordinator view
 
 - Is the Coordinator runtime owned per window with lazy first-instruction creation as recommended here, or is there a concrete reason to choose another ownership/creation policy?
 - What is the exact human-to-Coordinator instruction delivery path once the real runtime exists, and how does it take precedence over the manual selected-session fallback?
-- If Coordinator creation reuses the MCP background compose-tab path, does the Coordinator marker exempt it from background-agent eviction/capacity cleanup, `cleanup_sessions`, and `stop_session` targeting, or is re-creation on next instruction an accepted behavior?
+- If Coordinator creation reuses the MCP background compose-tab path, does the Coordinator marker exempt it from background-agent eviction/capacity cleanup, `cleanup_sessions`, and `stop_session` targeting, or is re-creation on next instruction accepted with persisted history/action restoration?
 - Should `respond` be in the first action set once authorization and stale-interaction failure semantics are defined, or should it remain deferred with cancel/approval actions?
 - Which dispatch-level guards are required in `agent_run` / `agent_manage` for Coordinator connections?
 - What evidence would justify adding direct tab focus later?

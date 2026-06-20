@@ -91,9 +91,20 @@ The system SHALL define how the real Coordinator runtime is created, owned, pers
 - **AND** it SHALL define whether the Coordinator inherits or overrides background-Agent capacity, eviction, and cleanup behavior.
 
 #### Scenario: Coordinator runtime is protected from disposable-worker lifecycle
-- **WHEN** background-Agent lifecycle management would evict, reclaim, clean up, or stop MCP-originated background sessions
+- **WHEN** background-Agent lifecycle management would evict, reclaim, or clean up MCP-originated background sessions automatically or incidentally
 - **THEN** the Coordinator marker SHALL prevent the Coordinator runtime from being treated as a disposable worker unless explicit Coordinator lifecycle semantics allow it
-- **AND** silent loss of the Coordinator runtime SHALL NOT be the default behavior.
+- **AND** re-creation on next instruction SHALL be acceptable only when persisted Coordinator history and action state are restored
+- **AND** silent loss of Coordinator context SHALL NOT be the default behavior.
+
+#### Scenario: Coordinator runtime is targeted by destructive session management
+- **WHEN** any caller invokes session cleanup, stop, or other destructive session-management behavior against MCP-originated or background Agent sessions
+- **THEN** Coordinator-marked runtimes SHALL be excluded from incidental destructive targeting unless a later accepted spec defines explicit authorization and recovery semantics
+- **AND** the Coordinator runtime SHALL NOT be removed merely because it was created through an MCP-originated background path.
+
+#### Scenario: User intentionally resets the Coordinator
+- **WHEN** the Coordinator runtime is wedged or the user intentionally wants to tear it down
+- **THEN** the implementation SHALL provide or specify at least one intentional reset, teardown, or recreate path
+- **AND** that path SHALL define whether Coordinator history is restored or intentionally discarded.
 
 #### Scenario: Runtime is restored
 - **WHEN** the app or runtime restarts
@@ -101,17 +112,17 @@ The system SHALL define how the real Coordinator runtime is created, owned, pers
 - **AND** restore behavior SHALL NOT promote the Coordinator into the supervised workspace fleet.
 
 ### Requirement: Coordinator runtime scope
-The Coordinator role SHALL use an explicit layer-above listing and control scope rather than ordinary child-only Agent Mode scoping.
+The first Coordinator role SHALL supervise its own launched delegated fleet through lifecycle handles returned by existing `agent_run` / `agent_manage` control surfaces.
 
-#### Scenario: Active-workspace fleet scope is used
-- **WHEN** the Coordinator runtime lists sessions in v1
-- **THEN** it SHALL see visible Agent run/session state for the current window's active workspace, including delegated child sessions where they are part of the supervised fleet
-- **AND** ordinary child-only scoping for agent sub-agents SHALL NOT hide sibling sessions or sessions the Coordinator did not spawn.
+#### Scenario: Delegated fleet is tracked by handles
+- **WHEN** the Coordinator starts delegated Agent runs in v1
+- **THEN** it SHALL retain the returned stable session handles for each delegated run
+- **AND** it SHALL use those handles with `poll`, `wait`, `steer`, and status reporting to supervise its launched fleet.
 
-#### Scenario: Existing MCP child scope is insufficient
-- **WHEN** `agent_manage list_sessions` would normally scope an in-app agent caller to sessions whose parent is the caller
-- **THEN** the Coordinator connection SHALL bypass that child-only listing scope and enumerate the current-window active-workspace fleet instead
-- **AND** the Coordinator runtime's model-visible session list SHALL have membership parity with the Coordinator view's active-workspace fleet projection, excluding ordering, pagination, transient liveness differences, and the Coordinator runtime itself.
+#### Scenario: Broad workspace visibility is deferred
+- **WHEN** the Coordinator needs visibility into sessions it did not spawn, sibling sessions, or the full active-workspace supervised-session set
+- **THEN** that broader `list_sessions` visibility SHALL be treated as a separate visibility-boundary capability
+- **AND** it SHALL NOT be required for the first Coordinator role's core delegation loop.
 
 #### Scenario: Cross-window control is requested
 - **WHEN** a Coordinator behavior would observe or act beyond the current window's active workspace
@@ -200,11 +211,6 @@ The first Coordinator role implementation SHALL use a delegate-only tool contrac
 - **AND** execution policy SHALL reject Coordinator attempts to invoke blocked whole tools even if those tools are called by name
 - **AND** op-level or argument-level guards SHALL reject disallowed operations on otherwise-allowed tools, including Coordinator use of `agent_run.respond`, `agent_run.cancel`, `agent_manage.stop_session`, `agent_manage.cleanup_sessions`, and worktree creation/binding arguments on `agent_run.start` unless a later accepted spec grants access.
 
-#### Scenario: Coordinator runtime is targeted by cleanup or stop
-- **WHEN** any caller invokes session cleanup, stop, or other destructive session-management behavior against MCP-originated or background Agent sessions
-- **THEN** Coordinator-marked runtimes SHALL be excluded from destructive targeting unless a later accepted spec defines explicit authorization and recovery semantics
-- **AND** the Coordinator runtime SHALL NOT be removed merely because it was created through an MCP-originated background path.
-
 #### Scenario: Workspace investigation or mutation is requested
 - **WHEN** user intent requires direct codebase investigation, file reads/searches, file edits, selection changes, tab focus, or worktree mutation
 - **THEN** the first Coordinator role SHALL spawn or steer an appropriately scoped Agent Mode session to perform that work
@@ -255,7 +261,7 @@ The system SHALL reconcile the real Coordinator runtime with existing Coordinato
 
 #### Scenario: Real Coordinator runtime is integrated with session enumeration
 - **WHEN** the real Coordinator runtime becomes available
-- **THEN** the system SHALL mark that runtime with a first-class Coordinator identity marker and exclude it at the shared workspace-session enumeration boundary where feasible
+- **THEN** the system SHALL mark that runtime with a first-class Coordinator identity marker and exclude it from every workspace-session enumeration surface, preferably through a single shared enumeration-boundary predicate
 - **AND** the runtime SHALL NOT appear in any `sessionIndex`-derived UI, service, or MCP session enumeration as a supervised row, including `CoordinatorModeSnapshot.groups`, Agent Mode sidebar/session lists, and MCP `list_sessions`.
 
 #### Scenario: New session enumeration surface is added
