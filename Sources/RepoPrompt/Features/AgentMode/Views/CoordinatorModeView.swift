@@ -42,6 +42,8 @@ struct CoordinatorModeView: View {
     @State private var hoveredRowID: UUID?
     @State private var filterText = ""
     @State private var isRailCollapsed = false
+    @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
+    @State private var preferredSplitColumn: NavigationSplitViewColumn = .detail
     @ObservedObject private var fontScale = FontScaleManager.shared
 
     private var visualMetrics: CoordinatorVisualMetrics {
@@ -57,30 +59,44 @@ struct CoordinatorModeView: View {
             let useList = presentationMode == .list || proxy.size.width < 760
             let forceList = useList && presentationMode == .board
             let railIsAvailable = proxy.size.width >= 900
-            let showRail = railIsAvailable && !isRailCollapsed
             let showRailReveal = railIsAvailable && isRailCollapsed
             let showInspector = proxy.size.width >= 1120 && selectedRow != nil
 
-            HStack(spacing: 0) {
-                if showRail {
+            if railIsAvailable {
+                NavigationSplitView(
+                    columnVisibility: coordinatorSplitVisibility,
+                    preferredCompactColumn: $preferredSplitColumn
+                ) {
                     coordinatorRail(snapshot: snapshot, metrics: metrics)
-                        .frame(width: metrics.railWidth)
+                        .navigationSplitViewColumnWidth(
+                            min: metrics.railWidth,
+                            ideal: metrics.railWidth,
+                            max: metrics.railWidth
+                        )
+                } detail: {
+                    coordinatorDetail(
+                        snapshot: snapshot,
+                        sections: sections,
+                        selectedRow: selectedRow,
+                        useList: useList,
+                        forceList: forceList,
+                        showRailReveal: showRailReveal,
+                        showInspector: showInspector,
+                        metrics: metrics
+                    )
                 }
-
-                coordinatorContent(
+                .navigationSplitViewStyle(.balanced)
+            } else {
+                coordinatorDetail(
                     snapshot: snapshot,
                     sections: sections,
+                    selectedRow: selectedRow,
                     useList: useList,
                     forceList: forceList,
-                    showRailReveal: showRailReveal,
+                    showRailReveal: false,
+                    showInspector: false,
                     metrics: metrics
                 )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if showInspector, let selectedRow {
-                    inspector(row: selectedRow, metrics: metrics)
-                        .frame(width: metrics.inspectorWidth)
-                }
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
@@ -92,6 +108,56 @@ struct CoordinatorModeView: View {
         }
         .onChange(of: viewModel.snapshot) { _, _ in
             reconcileSelection()
+        }
+    }
+
+    private var coordinatorSplitVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { splitColumnVisibility },
+            set: { newValue in
+                splitColumnVisibility = newValue
+                isRailCollapsed = newValue == .detailOnly
+            }
+        )
+    }
+
+    private func revealCoordinatorRail() {
+        isRailCollapsed = false
+        splitColumnVisibility = .all
+        preferredSplitColumn = .sidebar
+    }
+
+    private func collapseCoordinatorRail() {
+        isRailCollapsed = true
+        splitColumnVisibility = .detailOnly
+        preferredSplitColumn = .detail
+    }
+
+    private func coordinatorDetail(
+        snapshot: CoordinatorModeSnapshot,
+        sections: [CoordinatorModeStatusSection],
+        selectedRow: CoordinatorModeRow?,
+        useList: Bool,
+        forceList: Bool,
+        showRailReveal: Bool,
+        showInspector: Bool,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(spacing: 0) {
+            coordinatorContent(
+                snapshot: snapshot,
+                sections: sections,
+                useList: useList,
+                forceList: forceList,
+                showRailReveal: showRailReveal,
+                metrics: metrics
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if showInspector, let selectedRow {
+                inspector(row: selectedRow, metrics: metrics)
+                    .frame(width: metrics.inspectorWidth)
+            }
         }
     }
 
@@ -129,7 +195,7 @@ struct CoordinatorModeView: View {
         HStack(spacing: metrics.controlSpacing) {
             if showRailReveal {
                 Button {
-                    isRailCollapsed = false
+                    revealCoordinatorRail()
                 } label: {
                     Label("Show Coordinator Rail", systemImage: "sidebar.left")
                 }
@@ -236,7 +302,7 @@ struct CoordinatorModeView: View {
                 }
                 Spacer(minLength: metrics.controlSpacing)
                 Button {
-                    isRailCollapsed = true
+                    collapseCoordinatorRail()
                 } label: {
                     Label("Hide Coordinator Rail", systemImage: "sidebar.left")
                 }
