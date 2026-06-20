@@ -31,6 +31,11 @@ The system SHALL define a Coordinator role as a layer-above meta-agent identity 
 ### Requirement: Existing Agent run/session lifecycle surfaces
 The first Coordinator role SHALL use the existing `agent_run` and `agent_manage` lifecycle/control surfaces for v1 delegation rather than requiring a new native lifecycle subsystem.
 
+#### Scenario: Privilege context is prepared
+- **WHEN** Coordinator privilege state is threaded through the run-lease and connection-policy path
+- **THEN** the implementation SHALL use a named policy context or equivalent typed structure rather than adding another ambiguous positional privilege argument
+- **AND** ordinary agents SHALL NOT receive Coordinator scope or tools because of positional argument miswiring.
+
 #### Scenario: Lifecycle state is queried
 - **WHEN** a Coordinator runtime observes an Agent run/session
 - **THEN** it SHALL use stable run/session handles, deterministic status, and active/actionable/terminal classification exposed by existing lifecycle snapshots
@@ -62,6 +67,7 @@ The system SHALL define how the real Coordinator runtime is created, owned, pers
 #### Scenario: Runtime ownership is selected
 - **WHEN** the Coordinator runtime is first made available
 - **THEN** the implementation SHALL define whether there is one Coordinator per window, per workspace, or another explicit ownership unit
+- **AND** the leading first implementation SHOULD use per-window ownership with lazy creation on first real Coordinator instruction unless a concrete reason for another policy is accepted
 - **AND** that ownership unit SHALL determine restore, history, and active-workspace visibility semantics.
 
 #### Scenario: Runtime is created
@@ -77,15 +83,15 @@ The system SHALL define how the real Coordinator runtime is created, owned, pers
 ### Requirement: Coordinator runtime scope
 The Coordinator role SHALL use an explicit layer-above listing and control scope rather than ordinary child-only Agent Mode scoping.
 
-#### Scenario: Active-workspace top-level scope is used
+#### Scenario: Active-workspace fleet scope is used
 - **WHEN** the Coordinator runtime lists sessions in v1
-- **THEN** it SHALL see top-level visible Agent run/session state for the current window's active workspace
-- **AND** ordinary child-only scoping for agent sub-agents SHALL NOT hide sibling or top-level sessions from the Coordinator.
+- **THEN** it SHALL see visible Agent run/session state for the current window's active workspace, including delegated child sessions where they are part of the supervised fleet
+- **AND** ordinary child-only scoping for agent sub-agents SHALL NOT hide sibling sessions or sessions the Coordinator did not spawn.
 
 #### Scenario: Existing MCP child scope is insufficient
 - **WHEN** `agent_manage list_sessions` would normally scope an in-app agent caller to sessions whose parent is the caller
-- **THEN** the Coordinator connection SHALL bypass that child-only listing scope and enumerate the active-workspace top-level fleet instead
-- **AND** the Coordinator runtime's model-visible session list SHALL have membership parity with the Coordinator view's active-workspace top-level fleet projection, excluding ordering, pagination, transient liveness differences, and the Coordinator runtime itself.
+- **THEN** the Coordinator connection SHALL bypass that child-only listing scope and enumerate the current-window active-workspace fleet instead
+- **AND** the Coordinator runtime's model-visible session list SHALL have membership parity with the Coordinator view's active-workspace fleet projection, excluding ordering, pagination, transient liveness differences, and the Coordinator runtime itself.
 
 #### Scenario: Cross-window control is requested
 - **WHEN** a Coordinator behavior would observe or act beyond the current window's active workspace
@@ -170,7 +176,8 @@ The first Coordinator role implementation SHALL use a delegate-only tool contrac
 
 #### Scenario: Tools and operations are restricted for Coordinator
 - **WHEN** tools are advertised or installed for the Coordinator runtime
-- **THEN** the system SHALL advertise only the accepted lifecycle/control-plane toolset and hide ordinary tab-scoped file, selection, worktree, and focus tools
+- **THEN** the system SHALL advertise only the accepted lifecycle/control-plane toolset and hide ordinary tab-scoped file, selection, worktree, and focus tools from tool-list output
+- **AND** execution policy SHALL reject Coordinator attempts to invoke blocked whole tools even if those tools are called by name
 - **AND** op-level or argument-level guards SHALL reject disallowed operations on otherwise-allowed tools, including Coordinator use of `agent_run.respond`, `agent_run.cancel`, `agent_manage.stop_session`, `agent_manage.cleanup_sessions`, and worktree creation/binding arguments on `agent_run.start` unless a later accepted spec grants access.
 
 #### Scenario: Workspace investigation or mutation is requested
@@ -179,17 +186,17 @@ The first Coordinator role implementation SHALL use a delegate-only tool contrac
 - **AND** the Coordinator SHALL observe the delegated session through lifecycle state, structured action status, terminal output, status text, and compact failure diagnostics instead of using those workspace tools directly.
 
 ### Requirement: Coordinator context and history ownership
-The system SHALL keep Coordinator context, conversation history, and action/instruction logs invisible to the supervised workspace row projection.
+The system SHALL keep Coordinator context, conversation history, and action/instruction logs invisible to supervised-session enumeration surfaces.
 
 #### Scenario: Coordinator stores history
 - **WHEN** the Coordinator records conversation, instruction, or action history
 - **THEN** the system MAY reuse existing Agent session persistence or another control-plane store
-- **AND** storage choice SHALL NOT cause the Coordinator runtime to appear as a supervised workspace row.
+- **AND** storage choice SHALL NOT cause the Coordinator runtime to appear as a supervised workspace row in Coordinator mode, Agent Mode sidebar/session lists, or MCP session lists.
 
 #### Scenario: Coordinator state is restored
 - **WHEN** Coordinator state is restored after app or runtime restart
 - **THEN** restored Coordinator state SHALL retain its Coordinator identity marker
-- **AND** restoring it SHALL NOT create, restore, or promote a workspace Agent Mode session into the supervised fleet.
+- **AND** restoring it SHALL NOT create, restore, or promote a workspace Agent Mode session into any supervised-session enumeration.
 
 ### Requirement: Structured Coordinator action records
 The system SHALL represent first-version Coordinator role actions as structured, auditable action records before adding autonomous directive behavior.
@@ -221,10 +228,10 @@ The system SHALL represent first-version Coordinator role actions as structured,
 ### Requirement: Coordinator projection reconciliation
 The system SHALL reconcile the real Coordinator runtime with existing Coordinator mode demo selection and projection behavior.
 
-#### Scenario: Real Coordinator runtime is integrated with Coordinator mode
-- **WHEN** the real Coordinator runtime becomes available to the Coordinator view
-- **THEN** the system SHALL mark that runtime with a first-class Coordinator identity marker and exclude it at the Coordinator mode projection-input boundary
-- **AND** the runtime SHALL NOT appear in `CoordinatorModeSnapshot.groups` as a supervised row.
+#### Scenario: Real Coordinator runtime is integrated with session enumeration
+- **WHEN** the real Coordinator runtime becomes available
+- **THEN** the system SHALL mark that runtime with a first-class Coordinator identity marker and exclude it at shared supervised-session enumeration inputs
+- **AND** the runtime SHALL NOT appear in `CoordinatorModeSnapshot.groups`, Agent Mode sidebar/session lists, or MCP `list_sessions` as a supervised row.
 
 #### Scenario: Demo Coordinator detection remains available
 - **WHEN** the manual selected-session composer or auto-detected demo Coordinator session remains available during migration

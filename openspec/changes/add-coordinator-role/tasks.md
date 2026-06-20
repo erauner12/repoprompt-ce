@@ -1,9 +1,16 @@
 ## 1. Design confirmation
 
 - [ ] 1.1 Record the accepted direction that Coordinator is a constrained top-level orchestrator runtime using existing `agent_run` / `agent_manage` lifecycle/control surfaces with delegate-only v1 scope.
-- [ ] 1.2 Decide runtime ownership and creation policy: per-window vs per-workspace, lazy vs eager creation, and restore semantics.
-- [ ] 1.3 Review the narrowed design with wren, using delegate-vs-focus, runtime ownership, list-session scope, op/arg guard, and projection marker seams as the explicit discussion forks.
-- [ ] 1.4 Update the spec/design with any accepted review changes before implementation begins.
+- [ ] 1.2 Decide whether to accept the leading ownership recommendation: per-window Coordinator runtime, lazy creation on first real Coordinator instruction, persisted/restored with the Coordinator marker.
+- [ ] 1.3 Confirm that the Coordinator still resolves to a concrete provider/model selection while its Coordinator identity marker remains separate from ordinary task-label role selection.
+- [ ] 1.4 Review the narrowed design with wren, using delegate-vs-focus, runtime ownership, list-session scope, execution policy, op/arg guard, and projection marker seams as the explicit discussion forks.
+- [ ] 1.5 Update the spec/design with any accepted review changes before implementation begins.
+
+## 1A. Privilege plumbing prework
+
+- [ ] 1A.1 Refactor the run-lease / connection-policy installer from the current many-positional-argument closure into a named policy context struct or equivalent typed context without behavior changes.
+- [ ] 1A.2 Migrate existing callers to the named policy context before adding Coordinator privilege fields.
+- [ ] 1A.3 Add focused no-behavior-change coverage or review checks proving ordinary Agent Mode runs retain their existing restricted tools, additional tools, task label, external-control, and expected-PID policy behavior.
 
 ## 2. Existing Agent run/session lifecycle surfaces
 
@@ -16,8 +23,8 @@
 
 ## 3. Coordinator runtime identity, ownership, and launch
 
-- [ ] 3.1 Define the runtime ownership unit: per-window, per-workspace, or another explicit owner.
-- [ ] 3.2 Define lazy vs eager runtime creation and restore semantics for the chosen owner.
+- [ ] 3.1 Define the runtime ownership unit, with per-window lazy creation as the preferred first implementation unless a concrete alternative is accepted.
+- [ ] 3.2 Define lazy vs eager runtime creation and restore semantics for the chosen owner, including whether persisted-only Coordinator state is hydrated or leaves the composer disabled until live.
 - [ ] 3.3 Implement or specify a dedicated Coordinator launch path or additional runtime marker; do not rely solely on adding `coordinator` to `AgentModelCatalog.TaskLabelKind`, task labels, or candidate chains.
 - [ ] 3.4 Ensure Coordinator runtime identity is distinguishable from workspace Agent Mode sessions in state, logs, tool policy, restore metadata, and UI-facing metadata.
 - [ ] 3.5 Ensure the identity marker is threaded through run lease / connection policy / tool policy seams before Coordinator scope or permissions are granted.
@@ -33,27 +40,29 @@
 
 ## 5. Coordinator scope and permissions
 
-- [ ] 5.1 Implement current-window active-workspace top-level fleet visibility for the Coordinator runtime.
-- [ ] 5.2 Bypass ordinary child-only `agent_manage.list_sessions` scoping for Coordinator connections so the model-visible fleet has membership parity with the Coordinator view's active-workspace top-level projection, excluding ordering, pagination, transient liveness differences, and the Coordinator runtime itself.
+- [ ] 5.1 Implement current-window active-workspace fleet visibility for the Coordinator runtime, including delegated child sessions that are part of the supervised fleet.
+- [ ] 5.2 Bypass ordinary child-only `agent_manage.list_sessions` scoping for Coordinator connections so the model-visible fleet has membership parity with the Coordinator view's active-workspace projection, excluding ordering, pagination, transient liveness differences, and the Coordinator runtime itself.
 - [ ] 5.3 Restrict the first Coordinator role toolset to lifecycle/control-plane capabilities: session/model listing, start/spawn, poll/status/wait, message/steer, and status/failure reporting from existing snapshot fields.
 - [ ] 5.4 Keep Coordinator access to `respond` unavailable until authorization and stale-interaction failure semantics are accepted; if accepted, audit it as a structured action record.
 - [ ] 5.5 Block direct tab focus, tab-scoped file read/search, file-selection mutation, worktree mutation, approval/decline, cancel, stop, and unbounded full-log/full-transcript read unless a later spec grants Coordinator access.
-- [ ] 5.6 Enforce whole-tool boundaries through MCP/Agent Mode tool policy and advertisement.
-- [ ] 5.7 Enforce op/arg-level boundaries inside `agent_run` / `agent_manage` dispatch for Coordinator connections, including `respond`, `cancel`, `stop_session`, `cleanup_sessions`, and worktree creation/binding args on `agent_run.start`.
-- [ ] 5.8 Ensure requests requiring direct workspace investigation or mutation are routed to delegated Agent Mode sessions rather than handled by Coordinator tools directly.
-- [ ] 5.9 Add focused permission tests for allowed lifecycle tools, Coordinator-specific list scope, rejected op/arg-level actions, and blocked tab/workspace mutation tools.
-- [ ] 5.10 Add membership-parity fixture coverage proving Coordinator list scope and Coordinator view projection include the same active-workspace top-level sessions, excluding ordering, pagination, transient liveness differences, and the Coordinator runtime itself.
+- [ ] 5.6 Hide blocked whole tools from Coordinator tool-list advertisement.
+- [ ] 5.7 Enforce blocked whole tools at execution time for Coordinator connections, because hidden tools remain callable by name.
+- [ ] 5.8 Enforce op/arg-level boundaries inside `agent_run` / `agent_manage` dispatch for Coordinator connections, including `respond`, `cancel`, `stop_session`, `cleanup_sessions`, and worktree creation/binding args on `agent_run.start`.
+- [ ] 5.9 Ensure requests requiring direct workspace investigation or mutation are routed to delegated Agent Mode sessions rather than handled by Coordinator tools directly.
+- [ ] 5.10 Add focused permission tests for allowed lifecycle tools, Coordinator-specific list scope, rejected op/arg-level actions, execution-blocked whole tools, and blocked tab/workspace mutation tools.
+- [ ] 5.11 Add membership-parity fixture coverage proving Coordinator list scope and Coordinator view projection include the same active-workspace sessions, including supervised child sessions and excluding ordering, pagination, transient liveness differences, and the Coordinator runtime itself.
 
-## 6. Coordinator context, history, and projection invisibility
+## 6. Coordinator context, history, and enumeration invisibility
 
-- [ ] 6.1 Decide whether Coordinator conversation/history/action logs reuse Agent session persistence or a separate store; do not make separate storage a prerequisite if projection invisibility is satisfied.
-- [ ] 6.2 Exclude Coordinator-marked runtimes at the Coordinator mode projection-input boundary, not ad hoc in leaf views.
-- [ ] 6.3 Restore Coordinator context with its identity marker intact and without creating, restoring, or promoting a supervised workspace row.
-- [ ] 6.4 Add tests for persistence/restoration behavior and board/list invisibility.
+- [ ] 6.1 Decide whether Coordinator conversation/history/action logs reuse Agent session persistence or a separate store; do not make separate storage a prerequisite if enumeration invisibility is satisfied.
+- [ ] 6.2 Exclude Coordinator-marked runtimes at shared supervised-session enumeration inputs, not ad hoc in leaf views.
+- [ ] 6.3 Ensure the Coordinator runtime is absent from Coordinator mode groups, Agent Mode sidebar/session lists, and MCP `list_sessions` output.
+- [ ] 6.4 Restore Coordinator context with its identity marker intact and without creating, restoring, or promoting a supervised workspace row in any enumeration surface.
+- [ ] 6.5 Add tests for persistence/restoration behavior and Coordinator invisibility across board/list, sidebar/session list, and MCP session list surfaces.
 
 ## 7. Instruction/action audit contract
 
-- [ ] 7.1 Define the structured Coordinator action record with source, target, action type, lifecycle handle, status, and failure fields.
+- [ ] 7.1 Define the structured Coordinator action record with source, target, action type, lifecycle handle, status, and failure fields; start by projecting from existing Coordinator transcript tool-call items if that satisfies v1 audit needs.
 - [ ] 7.2 Implement the initial action verbs: list, start/spawn, poll/wait, message/steer, and report status/failure.
 - [ ] 7.3 Surface action delivery/completion/failure states from structured lifecycle state, pending interactions, terminal output, status text, and compact failure diagnostics without parsing assistant prose.
 - [ ] 7.4 Support instructions that create one delegated run, sequential delegated runs, or multiple concurrent delegated runs by tracking each delegated run handle and action status separately.
@@ -63,12 +72,12 @@
 ## 8. Coordinator view integration and instruction delivery
 
 - [ ] 8.1 Reconcile the real Coordinator runtime with existing `CoordinatorModeSnapshotProjector` demo Coordinator detection.
-- [ ] 8.2 Define the identity/exclusion predicate that keeps the real Coordinator runtime out of `CoordinatorModeSnapshot.groups`.
+- [ ] 8.2 Define the identity/exclusion predicate that keeps the real Coordinator runtime out of all supervised-session enumeration surfaces.
 - [ ] 8.3 Define the human-to-Coordinator instruction delivery path for the real runtime; do not rely on the selected-session demo composer as the final architecture.
 - [ ] 8.4 Define precedence and labeling when both real Coordinator runtime and manual selected-session fallback are available.
 - [ ] 8.5 Wire Coordinator mode to show or address the real Coordinator runtime when available while preserving the existing manual selected-session composer as a demo/manual fallback until migration is decided.
 - [ ] 8.6 Decide whether to retire, hide, or keep the manual selected-session composer after the real role is stable.
-- [ ] 8.7 Add UI/snapshot coverage for no Coordinator runtime, real Coordinator runtime available, manual fallback states, instruction delivery precedence, and board/list invisibility.
+- [ ] 8.7 Add UI/snapshot coverage for no Coordinator runtime, real Coordinator runtime available, manual fallback states, instruction delivery precedence, and supervised-session enumeration invisibility.
 
 ## 9. Feature boundary and validation
 
