@@ -31,8 +31,10 @@
 - [ ] 4.3 Keep Coordinator access to `respond` unavailable until pending-interaction shape, authorization, and failure semantics are accepted; if accepted, audit it as a structured directive.
 - [ ] 4.4 Block direct tab focus, tab-scoped file read/search, file-selection mutation, worktree mutation, approval/decline, cancel, stop, and full-log read unless a later spec grants Coordinator access.
 - [ ] 4.5 Enforce the boundary through MCP/Agent Mode tool policy and advertisement, not just prompts or model instructions.
-- [ ] 4.6 Record the cross-window stance for Coordinator actions: current-window-only, route to owning windows, or shared session-control service.
-- [ ] 4.7 Add focused permission tests for allowed lifecycle tools and blocked tab/workspace mutation tools.
+- [ ] 4.6 Define and test the Coordinator v1 allow/deny matrix for CLI-adjacent tools: allow lifecycle listing/start/poll/wait/steer/summarize, gate respond/cancel, and block tab focus, file/search/edit, selection, and worktree mutation.
+- [ ] 4.7 Ensure requests requiring direct workspace investigation or mutation are routed to delegated Agent Mode sessions rather than handled by Coordinator tools directly.
+- [ ] 4.8 Record the cross-window stance for Coordinator actions: current-window-only, route to owning windows, or shared session-control service.
+- [ ] 4.9 Add focused permission tests for allowed lifecycle tools and blocked tab/workspace mutation tools.
 
 ## 5. Coordinator context and history
 

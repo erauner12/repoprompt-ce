@@ -113,6 +113,11 @@ The first Coordinator role implementation SHALL use a delegate-only tool contrac
 - **THEN** the system SHALL advertise only the accepted lifecycle/control-plane toolset
 - **AND** it SHALL NOT advertise ordinary tab-scoped file, selection, worktree, focus, approval, cancel, or stop tools unless a later accepted spec grants Coordinator access.
 
+#### Scenario: Workspace investigation or mutation is requested
+- **WHEN** user intent requires direct codebase investigation, file reads/searches, file edits, selection changes, tab focus, or worktree mutation
+- **THEN** the first Coordinator role SHALL spawn or steer an appropriately scoped Agent Mode session to perform that work
+- **AND** the Coordinator SHALL observe the delegated session through lifecycle state, structured directive status, and artifact references instead of using those workspace tools directly.
+
 ### Requirement: Coordinator context and history ownership
 The system SHALL keep Coordinator context, conversation history, and directive logs outside the supervised workspace row projection.
 

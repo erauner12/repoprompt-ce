@@ -146,6 +146,25 @@ Delegate-only must be enforced by policy, not just by prompt wording. The Coordi
 
 The enforcement seam is the MCP/Agent Mode tool policy and advertisement layer, including `AgentModeMCPToolPolicy` and related advertisement/install paths. The Coordinator should receive explicit lifecycle/control-plane tools rather than inheriting all ordinary tab-scoped Agent Mode tools.
 
+#### Coordinator v1 tool boundary examples
+
+| Capability | Coordinator v1 | Delegated Agent Mode session |
+| --- | --- | --- |
+| `agent_manage.list_agents` / `list_workflows` | Allowed for role/workflow discovery. | May also use when needed within its own scope. |
+| `agent_manage.list_sessions` | Allowed with explicit Coordinator top-level/active-workspace scope. | Ordinary agents remain scoped to their spawned children where applicable. |
+| `agent_run.start` | Allowed to spawn delegated agents. | Not recursive for sub-agents unless a later role explicitly allows it. |
+| `agent_run.poll` / `wait` | Allowed to observe deterministic lifecycle state. | Allowed for sessions it owns or is scoped to. |
+| `agent_run.steer` | Allowed to message/redirect delegated agents. | Allowed within the agent's own session scope. |
+| `agent_run.respond` | Lifecycle-supported but Coordinator access gated until authorization/audit semantics are accepted. | Target agent or user-facing Agent Mode UI handles pending interactions today. |
+| `agent_run.cancel`, `agent_manage.stop_session`, `cleanup_sessions` | Deferred/gated for Coordinator v1. | Existing UI/MCP paths keep their current semantics. |
+| `agent_manage.get_log` / `handoff` / export | Limited to compact summaries or durable artifact refs by default. | Delegated agents may inspect deeper context when scoped to their task. |
+| `bind_context`, tab focus, workspace/tab switching | Not allowed for Coordinator v1. | Delegated agents operate within their own bound tab/session scope. |
+| `read_file`, `file_search`, `workspace_context`, `manage_selection` | Not allowed for Coordinator v1. | Delegated agents perform project reading/search/selection in their scoped context. |
+| `apply_edits`, `file_actions` | Not allowed for Coordinator v1. | Delegated implementation agents make file changes when assigned that work. |
+| `manage_worktree` mutation or `agent_run.start` worktree creation options | Deferred/gated for Coordinator v1. | Delegated agents may use task-scoped worktree context when permitted by existing policies. |
+
+When the user's intent requires direct codebase investigation or mutation, the Coordinator should spawn or steer an appropriately scoped agent and then observe its lifecycle state and artifacts. It should not focus tabs or acquire file/worktree tools to do the work itself in v1.
+
 ### 6. Coordinator history is control-plane state, not workspace fleet state
 
 The Coordinator's own conversation/history/directive log must live outside workspace row projection. It may be app-level Coordinator state, MCP client/runtime state, or a new persisted control-plane store, but it must not be represented as a normal supervised `AgentSession` row in Coordinator mode.
