@@ -13,8 +13,6 @@ struct AgentModeSessionsSidebarView: View {
     /// changes (model lists, connection state, etc.).
     let apiSettingsVM: APISettingsViewModel
     let currentTabID: UUID?
-    @Binding var mainSurfaceSelection: MainSurface
-    let isMainSurfaceSwitchingAvailable: Bool
     let onManageWorkspaces: () -> Void
 
     @State private var isCollapseAllThreadsButtonHovered = false
@@ -86,19 +84,6 @@ struct AgentModeSessionsSidebarView: View {
             let _ = Self.recordBodyMetric()
         #endif
         VStack(spacing: 0) {
-            HStack(spacing: topBarSpacing) {
-                MainSurfaceSegmentedSwitcher(
-                    selection: $mainSurfaceSelection,
-                    isAvailable: isMainSurfaceSwitchingAvailable
-                )
-                .frame(width: fontPreset.scaledClamped(248, min: 238, max: 270))
-
-                Spacer(minLength: topBarSpacing)
-            }
-            .padding(.horizontal, topBarHorizontalPadding)
-            .padding(.top, topBarVerticalPadding)
-            .padding(.bottom, 2)
-
             // Search box at top
             HStack(spacing: topBarSpacing) {
                 sessionSearchBox
@@ -106,8 +91,7 @@ struct AgentModeSessionsSidebarView: View {
                 collapseAllThreadsButton
             }
             .padding(.horizontal, topBarHorizontalPadding)
-            .padding(.top, 0)
-            .padding(.bottom, topBarVerticalPadding)
+            .padding(.vertical, topBarVerticalPadding)
             .animation(.easeInOut(duration: 0.15), value: agentModeVM.sidebarCollapseAllState(
                 for: promptManager.currentComposeTabs,
                 currentTabID: currentTabID,

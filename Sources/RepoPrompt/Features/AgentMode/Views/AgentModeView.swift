@@ -7,8 +7,6 @@ struct AgentModeView: View {
     @ObservedObject var windowState: WindowState
     let agentModeVM: AgentModeViewModel
     @ObservedObject var promptManager: PromptViewModel
-    @Binding var mainSurfaceSelection: MainSurface
-    let isMainSurfaceSwitchingAvailable: Bool
     @ObservedObject private var workspaceManager: WorkspaceManagerViewModel
 
     @StateObject private var navigationController: AgentModeNavigationController
@@ -26,15 +24,11 @@ struct AgentModeView: View {
     init(
         windowState: WindowState,
         agentModeVM: AgentModeViewModel,
-        promptManager: PromptViewModel,
-        mainSurfaceSelection: Binding<MainSurface>,
-        isMainSurfaceSwitchingAvailable: Bool
+        promptManager: PromptViewModel
     ) {
         self.windowState = windowState
         self.agentModeVM = agentModeVM
         self.promptManager = promptManager
-        _mainSurfaceSelection = mainSurfaceSelection
-        self.isMainSurfaceSwitchingAvailable = isMainSurfaceSwitchingAvailable
         _workspaceManager = ObservedObject(wrappedValue: windowState.workspaceManager)
 
         let isSystem = windowState.workspaceManager.activeWorkspace?.isSystemWorkspace ?? true
@@ -68,8 +62,6 @@ struct AgentModeView: View {
                     promptManager: promptManager,
                     apiSettingsVM: windowState.apiSettingsViewModel,
                     currentTabID: currentTabID,
-                    mainSurfaceSelection: $mainSurfaceSelection,
-                    isMainSurfaceSwitchingAvailable: isMainSurfaceSwitchingAvailable,
                     onManageWorkspaces: {
                         NotificationCenter.default.post(
                             name: .showManageWorkspacesTab,

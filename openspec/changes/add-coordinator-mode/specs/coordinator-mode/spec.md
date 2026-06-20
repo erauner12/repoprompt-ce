@@ -17,8 +17,10 @@ The system SHALL provide a non-default Coordinator mode peer surface inside the 
 - **WHEN** a real workspace is active and the app is in `.main`
 - **THEN** the system SHALL provide a persistent top-level affordance for switching between Agent Mode and the Coordinator mode
 - **AND** the affordance SHALL use a macOS-native peer-surface control, such as a toolbar segmented control or equivalent adaptive surface switcher
+- **AND** the visible affordance SHALL occupy a single window-toolbar location across Agent Mode and Coordinator mode rather than living inside either surface's sidebar or rail
 - **AND** it SHALL NOT use an iOS-style tab bar
-- **AND** the same surface choices SHALL be reachable from the View menu
+- **AND** the same surface choices SHALL be reachable from the View menu with live checked state and keyboard shortcuts
+- **AND** Coordinator SHALL be the left segment and use `Command-1`; Agent Mode SHALL be the right segment and use `Command-2`
 - **AND** the affordance SHALL model those views as peer `.main` surfaces rather than a one-way Coordinator mode button or workspace-entry page.
 
 #### Scenario: Main surface selection is window-sticky
@@ -351,7 +353,7 @@ The system SHALL keep the Coordinator view calm by default and expose detail onl
 #### Scenario: Coordinator window title is workspace-scoped
 - **WHEN** Coordinator mode is the active main surface
 - **THEN** the top-level window title SHALL identify the workspace rather than the active Agent session tab
-- **AND** the peer surface switcher SHALL identify Coordinator mode as the active surface
+- **AND** the toolbar peer surface switcher SHALL identify Coordinator mode as the active surface
 - **AND** parent/delegate session titles SHALL remain scoped to board/list rows, inspector detail, or explicit Agent Mode deep links.
 
 #### Scenario: Coordinator messages contain Markdown

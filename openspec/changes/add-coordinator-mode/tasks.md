@@ -95,6 +95,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.11 Restyle the Coordinator composer as a compact Agent Mode-like command surface without adding ordinary Agent Mode controls.
 - [x] 10.12 Keep the Coordinator composer text area editable and focused while send is gated by an active Coordinator run.
 - [x] 10.13 Keep Coordinator mode window titles workspace-scoped instead of using the active Agent session tab.
+- [x] 10.14 Move the Agent/Coordinator switcher to one window-toolbar location, remove sidebar/rail copies, and back it with live checked View-menu commands.
 
 ## 11. Validation
 

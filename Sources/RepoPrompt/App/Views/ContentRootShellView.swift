@@ -61,8 +61,6 @@ struct ContentRootShellView: View {
         } else if viewModel.canSelectMainSurface, mainSurfaceSelection == .coordinatorMode {
             CoordinatorModeView(
                 viewModel: viewModel.state.agentModeViewModel.coordinatorModeViewModel,
-                mainSurfaceSelection: $mainSurfaceSelection,
-                isMainSurfaceSwitchingAvailable: viewModel.canSelectMainSurface,
                 onOpenAgentChat: { route in
                     mainSurfaceSelection = .agentMode
                     Task { @MainActor in
@@ -74,9 +72,7 @@ struct ContentRootShellView: View {
             AgentModeView(
                 windowState: viewModel.state,
                 agentModeVM: viewModel.state.agentModeViewModel,
-                promptManager: viewModel.promptManager,
-                mainSurfaceSelection: $mainSurfaceSelection,
-                isMainSurfaceSwitchingAvailable: viewModel.canSelectMainSurface
+                promptManager: viewModel.promptManager
             )
         }
     }

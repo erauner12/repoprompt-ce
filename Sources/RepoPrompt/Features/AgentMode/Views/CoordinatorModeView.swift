@@ -35,8 +35,6 @@ struct CoordinatorModeView: View {
     }
 
     @ObservedObject var viewModel: CoordinatorModeViewModel
-    @Binding var mainSurfaceSelection: MainSurface
-    let isMainSurfaceSwitchingAvailable: Bool
     let onOpenAgentChat: (AgentSessionDeepLinkRoute) -> Void
 
     @State private var presentationMode: PresentationMode = .board
@@ -364,11 +362,11 @@ struct CoordinatorModeView: View {
 
     private func coordinatorRailTitlebarLane(metrics: CoordinatorVisualMetrics) -> some View {
         coordinatorSidebarTitlebarLane(metrics: metrics, controlPlacement: .trailing) {
-            MainSurfaceSegmentedSwitcher(
-                selection: $mainSurfaceSelection,
-                isAvailable: isMainSurfaceSwitchingAvailable
-            )
-            .frame(width: metrics.mainSurfaceSwitcherWidth)
+            Label("Coordinator", systemImage: "rectangle.3.group.bubble")
+                .font(metrics.bodyMedium)
+                .foregroundStyle(.secondary)
+                .labelStyle(.titleAndIcon)
+                .lineLimit(1)
         } control: {
             CoordinatorRailToggleButton(isRailVisible: true, metrics: metrics) {
                 toggleCoordinatorRail()
@@ -1307,10 +1305,6 @@ private struct CoordinatorVisualMetrics {
         fontPreset.scaledClamped(220, min: 220, max: 280)
     }
 
-    var mainSurfaceSwitcherWidth: CGFloat {
-        fontPreset.scaledClamped(248, min: 238, max: 270)
-    }
-
     var outerPadding: CGFloat {
         fontPreset.scaledClamped(16, max: 22)
     }
@@ -1738,16 +1732,11 @@ private extension AgentSessionRunState {
         var height: CGFloat = 720
 
         var body: some View {
-            CoordinatorModeView(
-                viewModel: viewModel,
-                mainSurfaceSelection: .constant(.coordinatorMode),
-                isMainSurfaceSwitchingAvailable: true,
-                onOpenAgentChat: { _ in }
-            )
-            .onAppear {
-                viewModel.testPublish(snapshot)
-            }
-            .frame(width: width, height: height)
+            CoordinatorModeView(viewModel: viewModel, onOpenAgentChat: { _ in })
+                .onAppear {
+                    viewModel.testPublish(snapshot)
+                }
+                .frame(width: width, height: height)
         }
     }
 
