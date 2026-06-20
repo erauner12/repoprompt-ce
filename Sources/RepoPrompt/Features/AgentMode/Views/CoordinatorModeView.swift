@@ -1012,10 +1012,13 @@ private extension View {
                 .ignoresSafeArea(.container, edges: .top)
         )
         .overlay(alignment: edge.alignment) {
-            Rectangle()
-                .fill(CoordinatorStyle.panelSeam)
-                .frame(width: 0.5)
-                .ignoresSafeArea(.container, edges: .top)
+            GeometryReader { proxy in
+                Rectangle()
+                    .fill(CoordinatorStyle.panelSeam)
+                    .frame(width: 0.5, height: proxy.size.height + proxy.safeAreaInsets.top)
+                    .offset(y: -proxy.safeAreaInsets.top)
+            }
+            .frame(width: 0.5)
         }
     }
 
