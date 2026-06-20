@@ -292,11 +292,16 @@ struct CoordinatorModeView: View {
                             metrics: metrics
                         )
                         openAgentChatButton(route: rail.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
+                        coordinatorRailStatusReport(rail.statusReport, metrics: metrics)
                         Button("New Coordinator Run") {
                             viewModel.startNewCoordinatorRun()
                         }
                         .buttonStyle(.link)
                         .font(metrics.bodyMedium)
+                        Text("Starts a fresh Coordinator runtime; Clear Chat only removes rail messages.")
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 case .chooseCoordinator:
                     VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
@@ -311,6 +316,10 @@ struct CoordinatorModeView: View {
                         }
                         .buttonStyle(.link)
                         .font(metrics.bodyMedium)
+                        Text("Starts a fresh Coordinator runtime; Clear Chat only removes rail messages.")
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -465,9 +474,7 @@ struct CoordinatorModeView: View {
                 statusChip("Persisted only", color: .secondary, metrics: metrics)
             }
 
-            HStack(spacing: metrics.controlSpacing) {
-                openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
-            }
+            openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
         }
         .padding(metrics.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -485,7 +492,7 @@ struct CoordinatorModeView: View {
             hoveredRowID = hovering ? row.id : (hoveredRowID == row.id ? nil : hoveredRowID)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Coordinator session \(row.title)")
+        .accessibilityLabel("Delegated session \(row.title)")
     }
 
     private func listView(sections: [CoordinatorModeStatusSection], metrics: CoordinatorVisualMetrics) -> some View {
@@ -585,8 +592,27 @@ struct CoordinatorModeView: View {
                     inspectorGroup("Status", metrics: metrics) {
                         keyValue("Group", row.statusGroup.displayName, metrics: metrics)
                         keyValue("Run state", row.runState.displayName, metrics: metrics)
+                        if let report = row.statusReport {
+                            keyValue("Snapshot state", report.status.displayLabel, metrics: metrics)
+                            if let statusText = report.statusText {
+                                keyValue("Status text", statusText, metrics: metrics)
+                            }
+                            if let failureReason = report.failureReason {
+                                keyValue("Failure reason", failureReason.displayLabel, metrics: metrics)
+                            }
+                        }
                         keyValue("Updated", row.updatedAt.formatted(date: .abbreviated, time: .shortened), metrics: metrics)
                         keyValue("Source", row.isPersistedOnly ? "Persisted metadata" : "Current window live state", metrics: metrics)
+                    }
+
+                    if let terminalOutput = row.statusReport?.terminalOutput {
+                        inspectorGroup("Terminal output", metrics: metrics) {
+                            Text(terminalOutput)
+                                .font(metrics.body)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
 
                     inspectorGroup("Session", metrics: metrics) {
@@ -636,6 +662,42 @@ struct CoordinatorModeView: View {
         .coordinatorSidebarPanel(edge: .leading)
     }
 
+    @ViewBuilder
+    private func coordinatorRailStatusReport(_ report: CoordinatorModeSessionStatusReport?, metrics: CoordinatorVisualMetrics) -> some View {
+        if let report, report.hasDisplayableContent {
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                Label("Coordinator status", systemImage: "waveform.path.ecg")
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.secondary)
+                if let statusText = report.statusText {
+                    Text(statusText)
+                        .font(metrics.micro)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let failureReason = report.failureReason {
+                    Text("Failure: \(failureReason.displayLabel)")
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.red.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let terminalOutput = report.terminalOutput {
+                    Text(terminalOutput)
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(5)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(metrics.pendingPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                    .fill(Color(nsColor: .windowBackgroundColor).opacity(0.65))
+            )
+        }
+    }
+
     private func coordinatorComposer(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
             HStack {
@@ -651,7 +713,7 @@ struct CoordinatorModeView: View {
             }
 
             if viewModel.railTranscriptEntries.isEmpty {
-                Text("Accepted directives appear here. Coordinator responses and child-session effects refresh through the board.")
+                Text("Accepted directives appear here. Coordinator status below refreshes from run snapshots; child-session effects refresh through the board.")
                     .font(metrics.micro)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1414,7 +1476,8 @@ private extension AgentSessionRunState {
                     workstream: .init(label: "coordinator/readonly-shell", branch: "coordinator/readonly-shell", colorHex: nil),
                     mergeAttention: nil,
                     pendingInteraction: nil,
-                    openAgentChatRoute: nil
+                    openAgentChatRoute: nil,
+                    statusReport: nil
                 ),
                 CoordinatorModeRow(
                     id: blockedID,
@@ -1435,7 +1498,8 @@ private extension AgentSessionRunState {
                     workstream: nil,
                     mergeAttention: nil,
                     pendingInteraction: nil,
-                    openAgentChatRoute: nil
+                    openAgentChatRoute: nil,
+                    statusReport: nil
                 )
             ]
             let groups = CoordinatorModeStatusGroup.allCases.map { group in
@@ -1462,6 +1526,12 @@ private extension AgentSessionRunState {
                     title: "Coordinate PR stack",
                     isLiveInCurrentWindow: true,
                     openAgentChatRoute: nil,
+                    statusReport: CoordinatorModeSessionStatusReport(
+                        status: .running,
+                        statusText: "Dispatching delegated work…",
+                        terminalOutput: nil,
+                        failureReason: nil
+                    ),
                     isComposerEnabled: true,
                     isComposerSendEnabled: false
                 ),

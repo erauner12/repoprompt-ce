@@ -14,7 +14,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             ],
             live: [
                 live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(20), state: .idle, isMCP: true)
-            ]
+            ],
+            demoCoordinatorIDs: [coordinatorID]
         )
         var submissions: [(text: String, sessionID: UUID?, forceNewRuntime: Bool)] = []
         let viewModel = CoordinatorModeViewModel(
@@ -57,7 +58,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             ],
             live: [
                 live(id: coordinatorID, tab: uuid(101), title: "Coordinator", updatedAt: date(20), state: .running, isMCP: true)
-            ]
+            ],
+            demoCoordinatorIDs: [coordinatorID]
         )
         var submitterCalled = false
         let viewModel = CoordinatorModeViewModel(
@@ -192,10 +194,13 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
     func testUnreachableCoordinatorRejectsDirectiveWithoutCallingSubmitter() async {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
-        let input = input(persisted: [
-            persisted(id: coordinatorID, tab: uuid(101), title: "Coordinator", updatedAt: date(20), isMCP: true),
-            persisted(id: childID, tab: uuid(102), title: "Child", updatedAt: date(10), parent: coordinatorID)
-        ])
+        let input = input(
+            persisted: [
+                persisted(id: coordinatorID, tab: uuid(101), title: "Coordinator", updatedAt: date(20), isMCP: true),
+                persisted(id: childID, tab: uuid(102), title: "Child", updatedAt: date(10), parent: coordinatorID)
+            ],
+            demoCoordinatorIDs: [coordinatorID]
+        )
         var submitterCalled = false
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in

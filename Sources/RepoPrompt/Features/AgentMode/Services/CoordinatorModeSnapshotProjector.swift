@@ -321,8 +321,9 @@ struct CoordinatorModeSnapshotProjector {
         routeBuilder: RouteBuilder
     ) -> CoordinatorModeRow {
         let route = routeBuilder.route(tabID: seed.tabID, sessionID: seed.id)
+        let mcpSnapshot = seed.isPersistedOnly ? nil : input.mcpSnapshotsBySessionID[seed.id]
         let pendingInteraction = pendingInteractionSummary(
-            snapshot: seed.isPersistedOnly ? nil : input.mcpSnapshotsBySessionID[seed.id],
+            snapshot: mcpSnapshot,
             route: route
         )
         return CoordinatorModeRow(
@@ -344,7 +345,8 @@ struct CoordinatorModeSnapshotProjector {
             workstream: workstream(from: seed.worktreeBindingSummaries.first),
             mergeAttention: mergeAttention(from: seed.activeWorktreeMergeSummaries),
             pendingInteraction: pendingInteraction,
-            openAgentChatRoute: route
+            openAgentChatRoute: route,
+            statusReport: sessionStatusReport(snapshot: mcpSnapshot)
         )
     }
 
@@ -519,6 +521,7 @@ struct CoordinatorModeSnapshotProjector {
             title: row.title,
             isLiveInCurrentWindow: isLiveInCurrentWindow,
             openAgentChatRoute: row.openAgentChatRoute,
+            statusReport: row.statusReport,
             isComposerEnabled: isLiveInCurrentWindow,
             isComposerSendEnabled: isLiveInCurrentWindow && !row.runState.isActive
         )
@@ -538,6 +541,26 @@ struct CoordinatorModeSnapshotProjector {
             details: interaction.details,
             openAgentChatRoute: route
         )
+    }
+
+    private func sessionStatusReport(snapshot: AgentRunMCPSnapshot?) -> CoordinatorModeSessionStatusReport? {
+        guard let snapshot else { return nil }
+        let statusText = normalizedOptionalText(snapshot.statusText)
+        let terminalOutput = snapshot.status.isTerminal
+            ? normalizedOptionalText(snapshot.latestAssistantPreview)
+            : nil
+        let report = CoordinatorModeSessionStatusReport(
+            status: snapshot.status,
+            statusText: statusText,
+            terminalOutput: terminalOutput,
+            failureReason: snapshot.failureReason
+        )
+        return report.hasDisplayableContent ? report : nil
+    }
+
+    private func normalizedOptionalText(_ text: String?) -> String? {
+        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func workstream(from binding: AgentSessionWorktreeBindingSummary?) -> CoordinatorModeRow.Workstream? {

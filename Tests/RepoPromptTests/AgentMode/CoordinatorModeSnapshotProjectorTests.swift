@@ -303,6 +303,51 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(rows.map { $0.workstream?.label }, ["Visual", "Worktree", "Root", "branch", "repo"])
     }
 
+    func testCoordinatorRailAndRowsReportOnlySnapshotStatusFields() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let coordinatorTab = uuid(101)
+        let childTab = uuid(102)
+
+        let snapshot = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(20), state: .running),
+                live(id: childID, tab: childTab, title: "Delegate", updatedAt: date(10), state: .failed, parent: coordinatorID)
+            ],
+            mcpSnapshots: [
+                coordinatorID: mcpSnapshot(
+                    sessionID: coordinatorID,
+                    tabID: coordinatorTab,
+                    status: .running,
+                    statusText: "Dispatching delegated work…",
+                    assistantPreview: "Do not use active streaming as terminal output",
+                    interaction: nil
+                ),
+                childID: mcpSnapshot(
+                    sessionID: childID,
+                    tabID: childTab,
+                    status: .failed,
+                    statusText: "Timed out waiting for tests",
+                    assistantPreview: "Last delegate output",
+                    interaction: nil,
+                    failureReason: .timeout
+                )
+            ],
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        XCTAssertEqual(snapshot.coordinatorRail.statusReport?.status, .running)
+        XCTAssertEqual(snapshot.coordinatorRail.statusReport?.statusText, "Dispatching delegated work…")
+        XCTAssertNil(snapshot.coordinatorRail.statusReport?.terminalOutput)
+        XCTAssertNil(snapshot.coordinatorRail.statusReport?.failureReason)
+
+        let childReport = allRows(in: snapshot).first { $0.sessionID == childID }?.statusReport
+        XCTAssertEqual(childReport?.status, .failed)
+        XCTAssertEqual(childReport?.statusText, "Timed out waiting for tests")
+        XCTAssertEqual(childReport?.terminalOutput, "Last delegate output")
+        XCTAssertEqual(childReport?.failureReason, .timeout)
+    }
+
     func testPendingInteractionProjectsStructuredMCPDataAndNullableRouteOnly() {
         let coordinatorID = uuid(10)
         let sessionID = uuid(1)
@@ -611,8 +656,11 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
     private func mcpSnapshot(
         sessionID: UUID,
         tabID: UUID,
+        status: AgentRunMCPSnapshot.Status = .running,
+        statusText: String? = nil,
         assistantPreview: String? = nil,
-        interaction: AgentRunMCPSnapshot.Interaction?
+        interaction: AgentRunMCPSnapshot.Interaction?,
+        failureReason: AgentRunMCPSnapshot.FailureReason? = nil
     ) -> AgentRunMCPSnapshot {
         AgentRunMCPSnapshot(
             sessionID: sessionID,
@@ -622,14 +670,14 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             agentDisplayName: nil,
             modelRaw: nil,
             reasoningEffortRaw: nil,
-            status: .running,
-            statusText: nil,
+            status: status,
+            statusText: statusText,
             latestAssistantPreview: assistantPreview,
             interaction: interaction,
             transcriptItemCount: 10,
             updatedAt: date(20),
             parentSessionID: nil,
-            failureReason: nil,
+            failureReason: failureReason,
             worktreeBindings: [],
             activeWorktreeMerges: []
         )

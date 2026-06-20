@@ -114,6 +114,20 @@ struct CoordinatorModeRow: Identifiable, Equatable {
     let mergeAttention: MergeAttention?
     let pendingInteraction: CoordinatorModePendingInteractionSummary?
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
+    let statusReport: CoordinatorModeSessionStatusReport?
+}
+
+struct CoordinatorModeSessionStatusReport: Equatable {
+    let status: AgentRunMCPSnapshot.Status
+    let statusText: String?
+    let terminalOutput: String?
+    let failureReason: AgentRunMCPSnapshot.FailureReason?
+
+    var hasDisplayableContent: Bool {
+        statusText?.isEmpty == false
+            || terminalOutput?.isEmpty == false
+            || failureReason != nil
+    }
 }
 
 struct CoordinatorModeCoordinatorRail: Equatable {
@@ -124,6 +138,7 @@ struct CoordinatorModeCoordinatorRail: Equatable {
         title: nil,
         isLiveInCurrentWindow: false,
         openAgentChatRoute: nil,
+        statusReport: nil,
         isComposerEnabled: false,
         isComposerSendEnabled: false
     )
@@ -146,6 +161,7 @@ struct CoordinatorModeCoordinatorRail: Equatable {
     let title: String?
     let isLiveInCurrentWindow: Bool
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
+    let statusReport: CoordinatorModeSessionStatusReport?
     let isComposerEnabled: Bool
     let isComposerSendEnabled: Bool
 }
