@@ -18,6 +18,7 @@ Important existing anchors:
 - `Sources/RepoPrompt/Features/AgentMode/ViewModels/CoordinatorModeViewModel.swift`: current selected-session demo composer.
 - `Sources/RepoPrompt/Features/AgentMode/Services/CoordinatorModeSnapshotProjector.swift`: current workspace session projection and demo Coordinator detection.
 - `Sources/RepoPrompt/Features/AgentMode/ViewModels/AgentModeSidebarSessionBuilder.swift`: Agent Mode sidebar/session-list projection fed by `sessionIndex`.
+- `docs/investigations/coordinator-runtime-separability.md`: separability spike explaining why Coordinator v1 uses a marked `TabSession` instead of a non-enrolled provider runtime.
 
 ## Glossary
 
@@ -47,6 +48,7 @@ Important existing anchors:
 - Replacing Agent Mode as the canonical deep-work surface.
 - Making the Coordinator board/list a full transcript, log, file, or diff viewer.
 - Extracting a broad native lifecycle/provenance platform before the first Coordinator role proves it needs one.
+- Building a non-enrolled Coordinator runtime that still uses the existing `agent_run.start` path. The separability spike shows that path either needs a larger runtime registry/context-provider extraction or recreates enough compose-tab/session state to become a marked `TabSession` in practice.
 - Hiding a normal workspace session row after using it as Coordinator. The real role should not be projected into the workspace fleet in the first place.
 - Defining broad autonomous directive behavior without explicit directive classes, authorization rules, and failure semantics.
 
@@ -56,13 +58,18 @@ Important existing anchors:
 
 The Coordinator role is a runtime identity above the workspace fleet. The Coordinator view remains the human-facing observation/control plane over workspace Agent Mode sessions. The role may consume and produce Coordinator-view state later, but its own runtime identity is separate from board/list row projection.
 
-Adding a `coordinator` task label alongside `pair`, `engineer`, `explore`, and `design` is likely the wrong default seam because `AgentMCPSelectionResolver`, `AgentModelCatalog.taskLabels`, and candidate chains currently mean “spawn an ordinary selectable Agent Mode role.” The real Coordinator needs a dedicated launch path or additional runtime marker before it receives Coordinator scope and policy. A plain task-label addition that starts an ordinary tab-backed, window-scoped Agent Mode session must not be treated as the real Coordinator runtime.
+Decision 1 now rests on the separability spike in `docs/investigations/coordinator-runtime-separability.md`. The cleaner alternative was a Coordinator-owned provider runtime outside the tab/session model, which would avoid projection exclusion entirely. That alternative is rejected for v1 because provider start, transcript persistence, file/worktree context assembly, terminal-commit publication, and loopback `agent_run` routing all key off the compose-tab-to-Agent-session binding. A non-enrolled runtime cannot drive a Coordinator-representative turn through the existing run path without a larger runtime registry/context-provider extraction.
+
+Coordinator v1 therefore reuses the existing run path through a marked/background Agent `TabSession`. `AgentModeRunService.startRun` remains a possible future extraction seam, but pulling on that seam is explicitly out of v1 scope; if implementation starts requiring `startRun`-level runtime extraction, the work should stop and be re-scoped instead of becoming a creeping refactor.
+
+Adding a `coordinator` task label alongside `pair`, `engineer`, `explore`, and `design` is still the wrong default seam because `AgentMCPSelectionResolver`, `AgentModelCatalog.taskLabels`, and candidate chains currently mean “spawn an ordinary selectable Agent Mode role.” The real Coordinator needs a dedicated launch path or additional runtime marker before it receives Coordinator scope and policy. A plain task-label addition that starts an ordinary tab-backed, window-scoped Agent Mode session must not be treated as the real Coordinator runtime.
 
 Alternatives considered:
 
 - **Reuse manual selected session as the Coordinator role:** rejected because it makes the supervisor part of the supervised fleet.
 - **Filter the Coordinator card out of the board:** rejected because it treats a modeling error as a UI problem.
 - **Plain task-label-only Coordinator:** rejected because it risks creating the wrong layer: a normal tab-scoped agent with a new label.
+- **Provider runtime outside the tab/session model:** rejected for v1 because the existing provider/run path depends on compose-tab-to-Agent-session binding across provider start, transcript persistence, file/worktree context assembly, terminal commit publication, and loopback `agent_run` routing.
 
 ### 2. Existing Agent run/session lifecycle surfaces are enough for v1
 
@@ -133,7 +140,7 @@ Cross-window control remains deferred. In this architecture, active-workspace sc
 
 The first implementation must choose whether the Coordinator runtime is owned per window, per workspace, or by another explicit unit. That choice controls visibility, restore, history, and how the Coordinator view addresses the runtime. The leading recommendation is per-window ownership with lazy creation on first real Coordinator instruction, because it matches the existing per-window Coordinator view model and avoids cross-window coordination that this spec defers.
 
-The likely implementation should reuse the existing Agent Mode runtime machinery with a Coordinator identity marker rather than inventing a new provider/runtime stack. The Coordinator is still backed by a concrete provider/model selection; the marker is separate from the model-selection task label. Reuse is acceptable as long as the marker, launch path, prompt, scope, and policy distinguish the Coordinator from ordinary supervised Agent Mode sessions. Creation may be lazy on first instruction or eager when the Coordinator surface appears, but the choice must be explicit before UI integration.
+The accepted v1 path should reuse the existing Agent Mode runtime machinery with a Coordinator identity marker rather than inventing a new provider/runtime stack. The Coordinator is still backed by a concrete provider/model selection; the marker is separate from the model-selection task label. Reuse is acceptable as long as the marker, launch path, prompt, scope, and policy distinguish the Coordinator from ordinary supervised Agent Mode sessions. The likely creation seam is the existing MCP background compose-tab path used for non-foreground Agent sessions, with the Coordinator marker attached, but implementation should confirm the exact `.mcpBackgroundAgent` / background-tab behavior before relying on it. Creation may be lazy on first instruction or eager when the Coordinator surface appears, but the choice must be explicit before UI integration. In the lazy case, first-instruction delivery and runtime creation are the same event.
 
 ### 6. Human-to-Coordinator instruction delivery must be explicit
 
@@ -182,7 +189,9 @@ When the user's intent requires direct codebase investigation or mutation, the C
 
 The Coordinator's own conversation/history/action log must be invisible to supervised-session enumeration. Storage does not have to be separate from `AgentSession` persistence if the runtime has a first-class Coordinator identity marker and is excluded from every supervised-session enumeration path.
 
-The hard requirement is enumeration invisibility: restoring Coordinator state must retain the marker and must not create, restore, or promote the Coordinator as a supervised Agent Mode row in Coordinator mode, the Agent Mode sidebar/session list, or MCP `list_sessions` output.
+The hard requirement is enumeration invisibility and lifecycle protection: restoring Coordinator state must retain the marker and must not create, restore, or promote the Coordinator as a supervised Agent Mode row in any workspace-session enumeration surface. Because the Coordinator is a marked `TabSession`, every current or future surface that walks `sessionIndex` or equivalent workspace-session state must exclude the Coordinator marker at the enumeration boundary. Coordinator mode, the Agent Mode sidebar/session list, and MCP `list_sessions` are examples, not an exhaustive list.
+
+If Coordinator creation reuses background MCP Agent machinery, the marker must also prevent inappropriate background-agent lifecycle treatment. The Coordinator should not be silently reclaimed as a disposable background worker, nor targeted by cleanup/stop sweeps that act on MCP-originated sessions, unless a later accepted spec defines explicit user authorization and recovery semantics.
 
 ### 10. Instructions and actions are auditable; higher-level directives are deferred
 
@@ -210,7 +219,7 @@ This keeps the Coordinator role from becoming an ad hoc command box and aligns w
 
 The manual “Use as Coordinator” affordance and selected-session composer remain valid for demoing the current Coordinator view, but they are not the implementation path for the real Coordinator role. The future role may replace that composer target, coexist behind an explicit manual override, or remove the shim after migration.
 
-`CoordinatorModeSnapshotProjector` currently detects a demo Coordinator from workspace sessions. The real Coordinator runtime must have a distinct identity marker and must be excluded at the shared enumeration/projection boundaries so it never appears as a supervised row in `CoordinatorModeSnapshot.groups`, the Agent Mode sidebar/session list, or MCP `list_sessions`. This is an explicit identity predicate at enumeration inputs, not ad hoc filtering in leaf views.
+`CoordinatorModeSnapshotProjector` currently detects a demo Coordinator from workspace sessions. The real Coordinator runtime must have a distinct identity marker and must be excluded at the shared workspace-session enumeration boundary so it never appears as a supervised row in any `sessionIndex`-derived UI, service, or MCP session list. `CoordinatorModeSnapshot.groups`, the Agent Mode sidebar/session list, and MCP `list_sessions` must use that shared predicate or an equivalent enumeration-boundary filter. This is an explicit identity predicate at enumeration inputs, not ad hoc filtering in leaf views.
 
 ### 12. Cross-window control is deferred unless explicitly chosen
 
@@ -230,7 +239,8 @@ The first implementation should record its stance before enabling spawn/steer/re
 - **Existing MCP scope mismatch** → `agent_manage.list_sessions` child-scopes in-app agent callers; implement a Coordinator-specific bypass to active-workspace fleet membership rather than assuming global visibility exists.
 - **Over-broad Coordinator power** → Start delegate-only and require a later spec before exposing tab focus, file access, worktree mutation, approval/respond/cancel actions, or app-global visibility to the Coordinator.
 - **Hidden tool execution hole** → Do not rely on advertisement alone; enforce Coordinator's blocked whole tools at execution time.
-- **Coordinator appears as a supervised session** → Use a first-class Coordinator identity marker and exclude it from Coordinator mode, Agent Mode sidebar/session lists, and MCP `list_sessions`, with tests proving it never appears in supervised enumerations.
+- **Coordinator appears as a supervised session** → Use a first-class Coordinator identity marker and exclude it at the shared workspace-session enumeration boundary, with tests proving it never appears in generic `sessionIndex`-derived supervised enumerations rather than only in a few named leaf surfaces.
+- **Coordinator inherits disposable background-agent lifecycle** → If creation reuses MCP background-agent capacity/persistence paths, ensure the Coordinator marker exempts it from inappropriate idle eviction, cleanup, and stop targeting unless explicitly authorized.
 - **Instruction vs directive ambiguity** → Treat the current composer as Layer 1/demo instructions/messages. Reserve goal-like directives for a later spec with explicit autonomy, authorization, and audit semantics.
 
 ## Migration Plan
@@ -249,6 +259,7 @@ Rollback for the first implementation should leave the existing Coordinator view
 
 - Is the Coordinator runtime owned per window with lazy first-instruction creation as recommended here, or is there a concrete reason to choose another ownership/creation policy?
 - What is the exact human-to-Coordinator instruction delivery path once the real runtime exists, and how does it take precedence over the manual selected-session fallback?
+- If Coordinator creation reuses the MCP background compose-tab path, does the Coordinator marker exempt it from background-agent eviction/capacity cleanup, `cleanup_sessions`, and `stop_session` targeting, or is re-creation on next instruction an accepted behavior?
 - Should `respond` be in the first action set once authorization and stale-interaction failure semantics are defined, or should it remain deferred with cancel/approval actions?
 - Which dispatch-level guards are required in `agent_run` / `agent_manage` for Coordinator connections?
 - What evidence would justify adding direct tab focus later?

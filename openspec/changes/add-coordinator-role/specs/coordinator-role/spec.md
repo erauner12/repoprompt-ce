@@ -28,6 +28,16 @@ The system SHALL define a Coordinator role as a layer-above meta-agent identity 
 - **THEN** that path SHALL NOT by itself be treated as the real Coordinator runtime
 - **AND** the implementation SHALL use a dedicated launch path or additional runtime marker before granting Coordinator scope and policy.
 
+#### Scenario: Marked tab-session runtime is justified for v1
+- **WHEN** Coordinator v1 is implemented using the existing Agent Mode run path
+- **THEN** the design SHALL record that the non-enrolled provider-runtime alternative was considered and rejected for v1
+- **AND** the recorded rationale SHALL cite evidence that provider start, transcript persistence, file/worktree context assembly, terminal-commit publication, and loopback `agent_run` routing currently key off compose-tab-to-Agent-session binding.
+
+#### Scenario: Runtime extraction is requested during v1
+- **WHEN** implementation starts requiring `AgentModeRunService.startRun`-level extraction or a new non-enrolled runtime registry to make Coordinator v1 work
+- **THEN** that extraction SHALL be treated as out of scope for this v1 change
+- **AND** the work SHALL be re-scoped rather than silently expanding the Coordinator implementation.
+
 ### Requirement: Existing Agent run/session lifecycle surfaces
 The first Coordinator role SHALL use the existing `agent_run` and `agent_manage` lifecycle/control surfaces for v1 delegation rather than requiring a new native lifecycle subsystem.
 
@@ -74,6 +84,16 @@ The system SHALL define how the real Coordinator runtime is created, owned, pers
 - **WHEN** a user first interacts with the real Coordinator or opens a workspace/window with an available Coordinator
 - **THEN** the implementation SHALL define whether the runtime is created lazily on first instruction or eagerly when the surface appears
 - **AND** the created runtime SHALL receive the Coordinator identity marker and Coordinator-specific prompt/tool policy before it can supervise other sessions.
+
+#### Scenario: Background creation path is reused
+- **WHEN** Coordinator creation reuses an MCP background compose-tab or background-Agent creation path
+- **THEN** the implementation SHALL attach the Coordinator marker during creation
+- **AND** it SHALL define whether the Coordinator inherits or overrides background-Agent capacity, eviction, and cleanup behavior.
+
+#### Scenario: Coordinator runtime is protected from disposable-worker lifecycle
+- **WHEN** background-Agent lifecycle management would evict, reclaim, clean up, or stop MCP-originated background sessions
+- **THEN** the Coordinator marker SHALL prevent the Coordinator runtime from being treated as a disposable worker unless explicit Coordinator lifecycle semantics allow it
+- **AND** silent loss of the Coordinator runtime SHALL NOT be the default behavior.
 
 #### Scenario: Runtime is restored
 - **WHEN** the app or runtime restarts
@@ -180,6 +200,11 @@ The first Coordinator role implementation SHALL use a delegate-only tool contrac
 - **AND** execution policy SHALL reject Coordinator attempts to invoke blocked whole tools even if those tools are called by name
 - **AND** op-level or argument-level guards SHALL reject disallowed operations on otherwise-allowed tools, including Coordinator use of `agent_run.respond`, `agent_run.cancel`, `agent_manage.stop_session`, `agent_manage.cleanup_sessions`, and worktree creation/binding arguments on `agent_run.start` unless a later accepted spec grants access.
 
+#### Scenario: Coordinator runtime is targeted by cleanup or stop
+- **WHEN** any caller invokes session cleanup, stop, or other destructive session-management behavior against MCP-originated or background Agent sessions
+- **THEN** Coordinator-marked runtimes SHALL be excluded from destructive targeting unless a later accepted spec defines explicit authorization and recovery semantics
+- **AND** the Coordinator runtime SHALL NOT be removed merely because it was created through an MCP-originated background path.
+
 #### Scenario: Workspace investigation or mutation is requested
 - **WHEN** user intent requires direct codebase investigation, file reads/searches, file edits, selection changes, tab focus, or worktree mutation
 - **THEN** the first Coordinator role SHALL spawn or steer an appropriately scoped Agent Mode session to perform that work
@@ -191,7 +216,7 @@ The system SHALL keep Coordinator context, conversation history, and action/inst
 #### Scenario: Coordinator stores history
 - **WHEN** the Coordinator records conversation, instruction, or action history
 - **THEN** the system MAY reuse existing Agent session persistence or another control-plane store
-- **AND** storage choice SHALL NOT cause the Coordinator runtime to appear as a supervised workspace row in Coordinator mode, Agent Mode sidebar/session lists, or MCP session lists.
+- **AND** storage choice SHALL NOT cause the Coordinator runtime to appear as a supervised workspace row in any workspace-session enumeration surface, including but not limited to Coordinator mode, Agent Mode sidebar/session lists, or MCP session lists.
 
 #### Scenario: Coordinator state is restored
 - **WHEN** Coordinator state is restored after app or runtime restart
@@ -230,8 +255,13 @@ The system SHALL reconcile the real Coordinator runtime with existing Coordinato
 
 #### Scenario: Real Coordinator runtime is integrated with session enumeration
 - **WHEN** the real Coordinator runtime becomes available
-- **THEN** the system SHALL mark that runtime with a first-class Coordinator identity marker and exclude it at shared supervised-session enumeration inputs
-- **AND** the runtime SHALL NOT appear in `CoordinatorModeSnapshot.groups`, Agent Mode sidebar/session lists, or MCP `list_sessions` as a supervised row.
+- **THEN** the system SHALL mark that runtime with a first-class Coordinator identity marker and exclude it at the shared workspace-session enumeration boundary where feasible
+- **AND** the runtime SHALL NOT appear in any `sessionIndex`-derived UI, service, or MCP session enumeration as a supervised row, including `CoordinatorModeSnapshot.groups`, Agent Mode sidebar/session lists, and MCP `list_sessions`.
+
+#### Scenario: New session enumeration surface is added
+- **WHEN** a new UI, service, or MCP surface enumerates workspace Agent sessions
+- **THEN** it SHALL use the shared Coordinator-excluding enumeration path or apply the same identity predicate at its enumeration boundary
+- **AND** it SHALL NOT require a leaf-view-only special case to hide the Coordinator runtime.
 
 #### Scenario: Demo Coordinator detection remains available
 - **WHEN** the manual selected-session composer or auto-detected demo Coordinator session remains available during migration

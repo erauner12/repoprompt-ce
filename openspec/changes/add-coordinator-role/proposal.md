@@ -10,11 +10,12 @@ This change captures the architecture needed before implementation so the role i
 
 - Add a new `coordinator-role` capability describing the first real Coordinator runtime identity.
 - Define the Coordinator as a layer-above meta-agent, separate from Coordinator mode row/card projection.
+- Record the runtime separability verdict: Coordinator v1 uses a marked/background Agent `TabSession`, while a non-enrolled provider runtime is deferred because existing run paths key off compose-tab-to-Agent-session binding.
 - Reuse existing `agent_run` / `agent_manage` lifecycle/control surfaces for v1 delegation instead of requiring a new native lifecycle subsystem.
 - Use a delegate-only first Coordinator capability boundary: list/supervise sessions, spawn/message/steer agents through explicit APIs, poll/wait for deterministic lifecycle state, and report status/failure from existing snapshot fields; do not directly focus tabs, read files, mutate selections, control worktrees, approve/decline, cancel/stop, or inspect full logs in v1.
 - Give the Coordinator current-window active-workspace fleet visibility without applying the ordinary child-only agent filter.
-- Define Coordinator runtime ownership, launch/restore behavior, and the human-to-Coordinator instruction delivery path, with per-window lazy creation as the leading first implementation.
-- Require the Coordinator's identity marker to keep its context/history out of supervised-session enumeration surfaces, even if storage reuses existing Agent session persistence.
+- Define Coordinator runtime ownership, launch/restore behavior, and the human-to-Coordinator instruction delivery path, with per-window lazy creation as the leading first implementation and existing MCP background-tab creation as the likely seam to confirm.
+- Require the Coordinator's identity marker to keep its context/history out of all workspace-session enumeration surfaces at the enumeration boundary, and to protect the runtime from inappropriate background-agent eviction or destructive cleanup/stop targeting, even if storage reuses existing Agent session persistence.
 - Define v1 instruction/action audit semantics before adding higher-level directive, autonomy, or broader mutation powers.
 - Preserve the existing manual selected-session composer as Layer 1/demo behavior until the real role replaces or supersedes it.
 
@@ -34,5 +35,5 @@ None as a formal OpenSpec capability in this change. The existing in-flight `coo
 - Run-lease / connection-policy plumbing: should be refactored to a named policy context before threading the Coordinator privilege marker through the privilege boundary.
 - MCP binding/tool policy: Coordinator scope requires current-window active-workspace `list_sessions` visibility, execution-enforced whole-tool restrictions, whole-tool advertisement filtering, and op/arg-level guards for disallowed operations on otherwise-allowed tools.
 - Coordinator mode: must distinguish the temporary selected-session composer target from the real Coordinator runtime and define the real instruction delivery path.
-- Session enumeration: must exclude Coordinator-marked runtime state from Coordinator mode groups, Agent Mode sidebar/session lists, and MCP `list_sessions` so it is never shown as a supervised session.
+- Session enumeration and lifecycle targeting: must exclude Coordinator-marked runtime state at the shared workspace-session / `sessionIndex` enumeration boundary so it is never shown as a supervised session in current or future UI, service, or MCP session lists; destructive cleanup/stop flows must also skip Coordinator-marked runtimes unless explicitly authorized.
 - Instruction/action control APIs: requires explicit list/spawn/poll/wait/steer/status-reporting behavior and auditable action records before implementation; v1 may project action records from existing transcript tool-call items before adding a separate store; higher-level directives remain deferred.
