@@ -43,7 +43,7 @@ struct CoordinatorModeView: View {
     @State private var filterText = ""
     @State private var isRailCollapsed = false
     @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
-    @State private var preferredSplitColumn: NavigationSplitViewColumn = .content
+    @State private var preferredSplitColumn: NavigationSplitViewColumn = .sidebar
     @ObservedObject private var fontScale = FontScaleManager.shared
 
     private var visualMetrics: CoordinatorVisualMetrics {
@@ -107,13 +107,26 @@ struct CoordinatorModeView: View {
 
     private var coordinatorSplitVisibility: Binding<NavigationSplitViewVisibility> {
         Binding(
-            get: { splitColumnVisibility },
-            set: { newValue in
-                let resolvedVisibility = newValue == .detailOnly ? NavigationSplitViewVisibility.doubleColumn : newValue
-                splitColumnVisibility = resolvedVisibility
-                isRailCollapsed = resolvedVisibility == .doubleColumn
-            }
+            get: { isRailCollapsed ? .doubleColumn : splitColumnVisibility },
+            set: applyCoordinatorSplitVisibility
         )
+    }
+
+    private func applyCoordinatorSplitVisibility(_ requestedVisibility: NavigationSplitViewVisibility) {
+        switch requestedVisibility {
+        case .detailOnly, .doubleColumn:
+            preferredSplitColumn = .content
+            splitColumnVisibility = .doubleColumn
+            isRailCollapsed = true
+        case .all, .automatic:
+            preferredSplitColumn = .sidebar
+            splitColumnVisibility = .all
+            isRailCollapsed = false
+        default:
+            preferredSplitColumn = .sidebar
+            splitColumnVisibility = .all
+            isRailCollapsed = false
+        }
     }
 
     @ViewBuilder
@@ -130,7 +143,8 @@ struct CoordinatorModeView: View {
                 )
         } else {
             Color.clear
-                .navigationSplitViewColumnWidth(min: 0, ideal: 0, max: 0)
+                .accessibilityHidden(true)
+                .navigationSplitViewColumnWidth(min: 1, ideal: 1, max: 1)
         }
     }
 
