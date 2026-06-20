@@ -41,12 +41,160 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(submissions.first?.text, "Coordinate the child session")
         XCTAssertEqual(submissions.first?.sessionID, coordinatorID)
         XCTAssertEqual(submissions.first?.forceNewRuntime, false)
-        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.text), ["Coordinate the child session"])
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.user])
+        XCTAssertEqual(viewModel.railTranscriptEntries.first?.text, "Coordinate the child session")
         XCTAssertEqual(viewModel.snapshot.groups, rowsBeforeSubmit)
 
         viewModel.clearCoordinatorRailTranscript()
         XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
         XCTAssertNil(viewModel.composerNotice)
+    }
+
+    func testCoordinatorStatusMirrorsIntoConversationOncePerStatus() {
+        let coordinatorID = uuid(1)
+        let coordinatorTab = uuid(101)
+        var mcpSnapshots: [UUID: AgentRunMCPSnapshot] = [
+            coordinatorID: mcpSnapshot(
+                sessionID: coordinatorID,
+                tabID: coordinatorTab,
+                sessionName: "Coordinator",
+                status: .running,
+                statusText: "Starting delegated work",
+                assistantPreview: "I'll start the first child now.",
+                parent: nil
+            )
+        ]
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: coordinatorTab,
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .running,
+                            isMCP: true
+                        )
+                    ],
+                    mcpSnapshots: mcpSnapshots,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+
+        viewModel.refresh()
+        viewModel.refresh()
+
+        XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
+        XCTAssertEqual(viewModel.currentRailActivityText, "Starting delegated work")
+
+        mcpSnapshots[coordinatorID] = mcpSnapshot(
+            sessionID: coordinatorID,
+            tabID: coordinatorTab,
+            sessionName: "Coordinator",
+            status: .completed,
+            statusText: "Delegated work complete",
+            assistantPreview: "Done.",
+            parent: nil
+        )
+
+        viewModel.refresh()
+
+        XCTAssertNil(viewModel.currentRailActivityText)
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.coordinator])
+        XCTAssertEqual(viewModel.railTranscriptEntries.last?.text, "Done.")
+    }
+
+    func testCoordinatorTransportStatusesCoalesceIntoCurrentActivity() {
+        let coordinatorID = uuid(1)
+        let coordinatorTab = uuid(101)
+        var mcpSnapshots: [UUID: AgentRunMCPSnapshot] = [
+            coordinatorID: mcpSnapshot(
+                sessionID: coordinatorID,
+                tabID: coordinatorTab,
+                sessionName: "Coordinator",
+                status: .running,
+                statusText: "Queued to start",
+                assistantPreview: nil,
+                parent: nil
+            )
+        ]
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: coordinatorTab,
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .running,
+                            isMCP: true
+                        )
+                    ],
+                    mcpSnapshots: mcpSnapshots,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+
+        viewModel.refresh()
+
+        XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
+        XCTAssertEqual(viewModel.currentRailActivityText, "Queued to start")
+
+        mcpSnapshots[coordinatorID] = mcpSnapshot(
+            sessionID: coordinatorID,
+            tabID: coordinatorTab,
+            sessionName: "Coordinator",
+            status: .running,
+            statusText: "Connecting…",
+            assistantPreview: nil,
+            parent: nil
+        )
+
+        viewModel.refresh()
+
+        XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
+        XCTAssertEqual(viewModel.currentRailActivityText, "Connecting")
+
+        mcpSnapshots[coordinatorID] = mcpSnapshot(
+            sessionID: coordinatorID,
+            tabID: coordinatorTab,
+            sessionName: "Coordinator",
+            status: .running,
+            statusText: "Thinking…",
+            assistantPreview: nil,
+            parent: nil
+        )
+
+        viewModel.refresh()
+
+        XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
+        XCTAssertEqual(viewModel.currentRailActivityText, "Coordinator is thinking")
+
+        mcpSnapshots[coordinatorID] = mcpSnapshot(
+            sessionID: coordinatorID,
+            tabID: coordinatorTab,
+            sessionName: "Coordinator",
+            status: .completed,
+            statusText: "Run complete",
+            assistantPreview: "Done.",
+            parent: nil
+        )
+
+        viewModel.refresh()
+
+        XCTAssertNil(viewModel.currentRailActivityText)
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.coordinator])
+        XCTAssertEqual(viewModel.railTranscriptEntries.first?.text, "Done.")
     }
 
     func testVisibleLifecycleRefreshPublishesRunningDelegatedSnapshot() {

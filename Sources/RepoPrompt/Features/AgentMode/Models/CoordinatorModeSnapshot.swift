@@ -171,6 +171,8 @@ struct CoordinatorModeCoordinatorRail: Equatable {
 struct CoordinatorModeRailTranscriptEntry: Identifiable, Equatable {
     enum Role: String, Equatable {
         case user
+        case coordinator
+        case event
     }
 
     let id: UUID

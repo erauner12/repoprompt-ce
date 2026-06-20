@@ -274,82 +274,62 @@ struct CoordinatorModeView: View {
         return VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
             coordinatorRailTitlebarLane(metrics: metrics)
 
-            Group {
-                switch rail.state {
-                case .selected:
-                    VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
-                        Text(rail.title ?? "Agent Session")
-                            .font(metrics.cardTitle)
-                            .lineLimit(2)
-                        if let source = rail.selectionSource {
-                            Text(source.displayName)
-                                .font(metrics.micro)
-                                .foregroundStyle(.secondary)
-                        }
-                        statusChip(
-                            rail.isLiveInCurrentWindow ? "Live in this window" : "Persisted only",
-                            color: rail.isLiveInCurrentWindow ? .green : .secondary,
-                            metrics: metrics
-                        )
-                        openAgentChatButton(route: rail.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
-                        coordinatorRailStatusReport(rail.statusReport, metrics: metrics)
-                        Button("New Coordinator Run") {
-                            viewModel.startNewCoordinatorRun()
-                        }
-                        .buttonStyle(.link)
-                        .font(metrics.bodyMedium)
-                        Text("Follow-ups update this Coordinator rail/status. The board changes only when delegates are launched or updated.")
-                            .font(metrics.micro)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                case .chooseCoordinator:
-                    VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
-                        Text("No Coordinator selected")
-                            .font(metrics.cardTitle)
-                        Text(viewModel.isFreshCoordinatorRunPending ? "Next directive will start a new Codex Coordinator runtime." : "Send a directive to create the Coordinator runtime; the board will show only its delegated fleet.")
-                            .font(metrics.body)
-                            .foregroundStyle(viewModel.isFreshCoordinatorRunPending ? .primary : .secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button("New Coordinator Run") {
-                            viewModel.startNewCoordinatorRun()
-                        }
-                        .buttonStyle(.link)
-                        .font(metrics.bodyMedium)
-                        Text("Follow-ups update this Coordinator rail/status. The board changes only when delegates are launched or updated.")
-                            .font(metrics.micro)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(metrics.cardPadding)
-            .coordinatorCardBackground(
-                cornerRadius: metrics.cardCornerRadius,
-                fillOpacity: CoordinatorStyle.railCardFillOpacity,
-                strokeOpacity: 0
-            )
-
-            Group {
-                if rail.isComposerEnabled || rail.state == .chooseCoordinator {
-                    coordinatorComposer(rail, metrics: metrics)
-                } else {
-                    coordinatorComposerFallback(rail, metrics: metrics)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(metrics.cardPadding)
-            .coordinatorCardBackground(
-                cornerRadius: metrics.cardCornerRadius,
-                fillOpacity: CoordinatorStyle.railCardFillOpacity,
-                strokeOpacity: 0
-            )
-
-            Spacer()
+            coordinatorRailHeader(rail, metrics: metrics)
+            coordinatorConversation(rail, metrics: metrics)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxHeight: .infinity, alignment: .top)
         }
         .padding(metrics.outerPadding)
         .coordinatorSidebarPanel(edge: .trailing)
+    }
+
+    private func coordinatorRailHeader(
+        _ rail: CoordinatorModeCoordinatorRail,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(alignment: .top, spacing: metrics.controlSpacing) {
+            Image(systemName: "rectangle.3.group.bubble")
+                .font(.system(size: metrics.smallIconSize, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
+
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                Text(rail.title ?? "New Coordinator")
+                    .font(metrics.cardTitle)
+                    .lineLimit(2)
+
+                HStack(spacing: metrics.smallSpacing) {
+                    if let source = rail.selectionSource {
+                        Text(source.displayName)
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                    }
+                    statusChip(
+                        rail.isLiveInCurrentWindow ? "Live" : (rail.state == .chooseCoordinator ? "Ready" : "Persisted"),
+                        color: rail.isLiveInCurrentWindow ? .green : .secondary,
+                        metrics: metrics
+                    )
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Button {
+                viewModel.startNewCoordinatorRun()
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: metrics.smallIconSize, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .hoverTooltip("New Coordinator chat")
+        }
+        .padding(metrics.cardPadding)
+        .coordinatorCardBackground(
+            cornerRadius: metrics.cardCornerRadius,
+            fillOpacity: CoordinatorStyle.railCardFillOpacity,
+            strokeOpacity: 0
+        )
     }
 
     private enum SidebarTitlebarControlPlacement {
@@ -718,95 +698,191 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func coordinatorComposer(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
-        VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
-            HStack {
-                Label("Directive", systemImage: "paperplane")
+    private func coordinatorConversation(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: metrics.smallSpacing) {
+                Label("Conversation", systemImage: "bubble.left.and.text.bubble.right")
                     .font(metrics.cardTitle)
+                    .foregroundStyle(.secondary)
                 Spacer()
-                Button("Clear Chat") {
+                Button("Clear") {
                     viewModel.clearCoordinatorRailTranscript()
                 }
                 .buttonStyle(.link)
                 .font(metrics.micro)
                 .disabled(viewModel.railTranscriptEntries.isEmpty)
             }
+            .padding(.horizontal, metrics.cardPadding)
+            .padding(.top, metrics.cardPadding)
+            .padding(.bottom, metrics.smallSpacing)
 
-            if viewModel.railTranscriptEntries.isEmpty {
-                Text("Accepted directives appear here. Coordinator status below refreshes from run snapshots; child-session effects refresh through the board.")
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+                    if viewModel.railTranscriptEntries.isEmpty {
+                        coordinatorEmptyConversation(rail, metrics: metrics)
+                    } else {
                         ForEach(viewModel.railTranscriptEntries) { entry in
-                            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                                Text(entry.role.displayName)
-                                    .font(metrics.microMedium)
-                                    .foregroundStyle(.secondary)
-                                Text(entry.text)
-                                    .font(metrics.micro)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .padding(metrics.pendingPadding)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                                    .fill(Color(nsColor: .windowBackgroundColor))
-                            )
+                            coordinatorConversationEntry(entry, metrics: metrics)
                         }
                     }
                 }
-                .frame(maxHeight: 160)
+                .padding(.horizontal, metrics.cardPadding)
+                .padding(.vertical, metrics.smallSpacing)
+            }
+            .frame(minHeight: metrics.conversationMinHeight)
+
+            Divider()
+                .opacity(0.45)
+
+            coordinatorComposer(rail, metrics: metrics)
+                .padding(metrics.cardPadding)
+        }
+        .coordinatorCardBackground(
+            cornerRadius: metrics.cardCornerRadius,
+            fillOpacity: CoordinatorStyle.railCardFillOpacity,
+            strokeOpacity: 0
+        )
+    }
+
+    private func coordinatorEmptyConversation(
+        _ rail: CoordinatorModeCoordinatorRail,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            Text(rail.state == .chooseCoordinator ? "Start a Coordinator chat." : "Ask the Coordinator what to do next.")
+                .font(metrics.bodyMedium)
+                .foregroundStyle(.primary.opacity(0.82))
+            Text("Delegated sessions will appear on the board as this conversation creates work.")
+                .font(metrics.micro)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func coordinatorConversationEntry(
+        _ entry: CoordinatorModeRailTranscriptEntry,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let isUser = entry.role == .user
+        let isEvent = entry.role == .event
+        return HStack(alignment: .top) {
+            if isUser {
+                Spacer(minLength: metrics.controlSpacing)
             }
 
-            if rail.state == .selected, !rail.isComposerSendEnabled {
-                Text("Coordinator is mid-run. Send directives when it reaches an ordinary turn boundary.")
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                HStack(spacing: metrics.smallSpacing) {
+                    if !isUser {
+                        Image(systemName: entry.role.systemImage)
+                            .font(.system(size: metrics.microIconSize, weight: .medium))
+                    }
+                    Text(entry.role.displayName)
+                        .font(metrics.microMedium)
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(entry.role.labelColor)
+
+                Text(entry.text)
+                    .font(metrics.body)
+                    .foregroundStyle(isEvent ? .secondary : .primary)
+                    .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .padding(metrics.pendingPadding)
+            .frame(maxWidth: isUser ? metrics.userBubbleMaxWidth : .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                    .fill(entry.role.bubbleFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                    .stroke(entry.role.bubbleStroke, lineWidth: 0.5)
+            )
 
-            TextField("Message the Coordinator", text: $coordinatorDirectiveDraft, axis: .vertical)
-                .lineLimit(2 ... 5)
-                .textFieldStyle(.roundedBorder)
-                .font(metrics.body)
-                .disabled(isSubmittingCoordinatorDirective || (!rail.isComposerSendEnabled && rail.state != .chooseCoordinator))
-                .onSubmit {
-                    submitCoordinatorDirective()
-                }
+            if !isUser {
+                Spacer(minLength: metrics.controlSpacing)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+    }
 
-            HStack {
-                if let notice = viewModel.composerNotice, !notice.isEmpty {
-                    Text(notice)
-                        .font(metrics.micro)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-                Spacer()
-                Button(isSubmittingCoordinatorDirective ? "Sending…" : "Send") {
+    private func coordinatorComposer(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            if let activityText = viewModel.currentRailActivityText {
+                coordinatorActivityIndicator(activityText, metrics: metrics)
+            }
+
+            if rail.state == .selected, !rail.isComposerSendEnabled, viewModel.currentRailActivityText == nil {
+                coordinatorComposerNotice("Coordinator is working. You can send the next message when it reaches a turn boundary.", metrics: metrics)
+            } else if let notice = viewModel.composerNotice, !notice.isEmpty {
+                coordinatorComposerNotice(notice, metrics: metrics)
+            }
+
+            HStack(alignment: .bottom, spacing: metrics.smallSpacing) {
+                TextField("Message Coordinator...", text: $coordinatorDirectiveDraft, axis: .vertical)
+                    .lineLimit(2 ... 5)
+                    .textFieldStyle(.plain)
+                    .font(metrics.body)
+                    .disabled(isSubmittingCoordinatorDirective || (!rail.isComposerSendEnabled && rail.state != .chooseCoordinator))
+                    .onSubmit {
+                        submitCoordinatorDirective()
+                    }
+
+                Button {
                     submitCoordinatorDirective()
+                } label: {
+                    Image(systemName: isSubmittingCoordinatorDirective ? "hourglass" : "paperplane.fill")
+                        .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                        .frame(width: metrics.sendButtonSize, height: metrics.sendButtonSize)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .buttonStyle(.plain)
+                .foregroundStyle(canSubmitCoordinatorDirective ? Color.accentColor : Color.secondary.opacity(0.55))
                 .disabled(!canSubmitCoordinatorDirective)
+                .hoverTooltip(isSubmittingCoordinatorDirective ? "Sending" : "Send")
+            }
+            .padding(.horizontal, metrics.pendingPadding)
+            .padding(.vertical, metrics.pendingPadding)
+            .background(
+                RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
+                    .fill(Color(nsColor: .windowBackgroundColor).opacity(0.68))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
+                    .stroke(canSubmitCoordinatorDirective ? Color.accentColor.opacity(0.45) : CoordinatorStyle.hairline, lineWidth: 1)
+            )
+
+            if rail.openAgentChatRoute != nil {
+                openAgentChatButton(route: rail.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
+                    .font(metrics.micro)
             }
         }
     }
 
-    private func coordinatorComposerFallback(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
-        VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
-            Label("Coordinator composer unavailable", systemImage: "lock")
-                .font(metrics.cardTitle)
-            Text("The scoped composer is enabled only for a Coordinator with live state in this window.")
-                .font(metrics.micro)
+    private func coordinatorActivityIndicator(_ text: String, metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.smallSpacing) {
+            ProgressView()
+                .controlSize(.mini)
+                .scaleEffect(0.62)
+            Text(text)
+                .font(metrics.microMedium)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if rail.openAgentChatRoute != nil {
-                openAgentChatButton(route: rail.openAgentChatRoute, title: "Open agent chat", metrics: metrics)
-            }
+                .lineLimit(1)
         }
+        .padding(.horizontal, metrics.pendingPadding)
+        .padding(.vertical, metrics.miniPillVerticalPadding)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.22))
+        )
+    }
+
+    private func coordinatorComposerNotice(_ text: String, metrics: CoordinatorVisualMetrics) -> some View {
+        Text(text)
+            .font(metrics.micro)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var canSubmitCoordinatorDirective: Bool {
@@ -1296,6 +1372,26 @@ private struct CoordinatorVisualMetrics {
         fontPreset.scaledClamped(12, max: 16)
     }
 
+    var microIconSize: CGFloat {
+        fontPreset.scaledClamped(10, max: 13)
+    }
+
+    var sendButtonSize: CGFloat {
+        fontPreset.scaledClamped(28, min: 28, max: 34)
+    }
+
+    var conversationMinHeight: CGFloat {
+        fontPreset.scaledClamped(220, min: 220, max: 300)
+    }
+
+    var userBubbleMaxWidth: CGFloat {
+        fontPreset.scaledClamped(210, min: 210, max: 260)
+    }
+
+    var composerCornerRadius: CGFloat {
+        fontPreset.scaledClamped(12, max: 16)
+    }
+
     var emptyStateIconSize: CGFloat {
         fontPreset.scaledClamped(32, max: 40)
     }
@@ -1428,6 +1524,46 @@ private extension CoordinatorModeRailTranscriptEntry.Role {
     var displayName: String {
         switch self {
         case .user: "You"
+        case .coordinator: "Coordinator"
+        case .event: "Update"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .user: "person.fill"
+        case .coordinator: "sparkles"
+        case .event: "arrow.triangle.branch"
+        }
+    }
+
+    var labelColor: Color {
+        switch self {
+        case .user: .secondary
+        case .coordinator: .accentColor
+        case .event: .secondary
+        }
+    }
+
+    var bubbleFill: Color {
+        switch self {
+        case .user:
+            Color.accentColor.opacity(0.16)
+        case .coordinator:
+            Color(nsColor: .windowBackgroundColor).opacity(0.72)
+        case .event:
+            Color(nsColor: .controlBackgroundColor).opacity(0.26)
+        }
+    }
+
+    var bubbleStroke: Color {
+        switch self {
+        case .user:
+            Color.accentColor.opacity(0.22)
+        case .coordinator:
+            Color.secondary.opacity(0.10)
+        case .event:
+            Color.secondary.opacity(0.08)
         }
     }
 }

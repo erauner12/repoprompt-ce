@@ -16,6 +16,7 @@ final class CoordinatorModeViewModel: ObservableObject {
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
     @Published private(set) var railTranscriptEntries: [CoordinatorModeRailTranscriptEntry] = []
+    @Published private(set) var currentRailActivityText: String?
     @Published private(set) var composerNotice: String?
     @Published private(set) var isFreshCoordinatorRunPending = false
     @Published var sortMode: CoordinatorModeSortMode = .lastUpdated {
@@ -33,6 +34,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private var selectedCoordinatorIDByWorkspaceID: [UUID: UUID] = [:]
     private var lastPublishedFingerprint: CoordinatorModeSnapshotFingerprint?
     private var displayedTranscriptCoordinatorSessionID: UUID?
+    private var lastDurableRailStatusEntryKey: String?
     private(set) var isVisible = false
 
     init(
@@ -85,7 +87,9 @@ final class CoordinatorModeViewModel: ObservableObject {
         let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID
         coordinatorResetHandler(coordinatorSessionID)
         displayedTranscriptCoordinatorSessionID = nil
+        lastDurableRailStatusEntryKey = nil
         railTranscriptEntries.removeAll()
+        currentRailActivityText = nil
         composerNotice = "Next directive will start a new Codex Coordinator runtime."
         lastPublishedFingerprint = nil
         selectCoordinator(sessionID: nil)
@@ -97,6 +101,8 @@ final class CoordinatorModeViewModel: ObservableObject {
 
     func clearCoordinatorRailTranscript() {
         railTranscriptEntries.removeAll()
+        lastDurableRailStatusEntryKey = nil
+        currentRailActivityText = nil
         composerNotice = nil
     }
 
@@ -152,11 +158,113 @@ final class CoordinatorModeViewModel: ObservableObject {
             railTranscriptEntries.removeAll()
             composerNotice = nil
             displayedTranscriptCoordinatorSessionID = nextCoordinatorSessionID
+            currentRailActivityText = nil
+            lastDurableRailStatusEntryKey = nil
         }
+        updateRailStatusPresentation(from: nextSnapshot.coordinatorRail)
         let nextFingerprint = nextSnapshot.fingerprint
         guard lastPublishedFingerprint != nextFingerprint else { return }
         lastPublishedFingerprint = nextFingerprint
         snapshot = nextSnapshot
+    }
+
+    private func updateRailStatusPresentation(from rail: CoordinatorModeCoordinatorRail) {
+        guard let report = rail.statusReport,
+              let text = railStatusConversationText(from: report)
+        else {
+            currentRailActivityText = nil
+            return
+        }
+
+        switch railStatusVisibility(for: report) {
+        case .ephemeral:
+            currentRailActivityText = railEphemeralActivityText(from: report) ?? text
+            return
+        case .durable:
+            currentRailActivityText = nil
+        }
+
+        let key = [
+            String(describing: report.status),
+            report.statusText ?? "",
+            report.assistantPreview ?? "",
+            report.terminalOutput ?? "",
+            report.failureReason.map { String(describing: $0) } ?? ""
+        ].joined(separator: "\u{1F}")
+        guard key != lastDurableRailStatusEntryKey else { return }
+
+        lastDurableRailStatusEntryKey = key
+        railTranscriptEntries.append(CoordinatorModeRailTranscriptEntry(
+            id: UUID(),
+            role: report.status.isTerminal ? .coordinator : .event,
+            text: text,
+            createdAt: Date()
+        ))
+    }
+
+    private enum RailStatusVisibility {
+        case durable
+        case ephemeral
+    }
+
+    private func railStatusVisibility(for report: CoordinatorModeSessionStatusReport) -> RailStatusVisibility {
+        if report.status.isTerminal || report.status == .waitingForInput || report.failureReason != nil {
+            return .durable
+        }
+        if report.status == .running {
+            return .ephemeral
+        }
+        return .durable
+    }
+
+    private func railEphemeralActivityText(from report: CoordinatorModeSessionStatusReport) -> String? {
+        let statusText = report.statusText
+        return statusText.flatMap { text -> String? in
+            switch normalizedTransportStatusText(text) {
+            case "queued to start":
+                return "Queued to start"
+            case "connecting":
+                return "Connecting"
+            case "sending message":
+                return "Sending message"
+            case "waiting for response":
+                return "Waiting for response"
+            case "codex is active", "thinking":
+                return "Coordinator is thinking"
+            case "compacting context":
+                return "Compacting context"
+            default:
+                return text
+            }
+        } ?? "Coordinator is working"
+    }
+
+    private func railStatusConversationText(from report: CoordinatorModeSessionStatusReport) -> String? {
+        if report.status == .completed, let terminalOutput = report.terminalOutput {
+            return terminalOutput
+        }
+
+        var parts: [String] = []
+        if let statusText = report.statusText {
+            parts.append(statusText)
+        }
+        if let failureReason = report.failureReason {
+            parts.append("Failure: \(failureReason.displayLabel)")
+        }
+        if let assistantPreview = report.assistantPreview {
+            parts.append(assistantPreview)
+        }
+        if let terminalOutput = report.terminalOutput {
+            parts.append(terminalOutput)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
+    private func normalizedTransportStatusText(_ text: String) -> String {
+        text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".…"))
+            .lowercased()
     }
 }
 
