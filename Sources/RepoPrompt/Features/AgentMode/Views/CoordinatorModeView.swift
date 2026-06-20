@@ -555,6 +555,7 @@ struct CoordinatorModeView: View {
                 }
             }
             .padding(.horizontal, metrics.outerPadding)
+            .padding(.top, metrics.outerPadding)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
