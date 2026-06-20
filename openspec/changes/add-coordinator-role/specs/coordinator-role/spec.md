@@ -18,73 +18,78 @@ The system SHALL define a Coordinator role as a layer-above meta-agent identity 
 - **THEN** the system SHALL treat that selected session as Layer 1 demo behavior
 - **AND** it SHALL NOT treat that selected workspace session as the real Coordinator role identity.
 
-#### Scenario: Coordinator task label is added
-- **WHEN** the implementation adds or reserves a `coordinator` role label alongside `pair`, `explore`, `engineer`, and `design`
-- **THEN** that label alone SHALL NOT create an ordinary tab-backed Agent Mode session that is treated as the real Coordinator runtime
-- **AND** the real Coordinator runtime SHALL remain distinguishable by launch, scope, policy, and projection metadata.
+#### Scenario: Coordinator role is exposed
+- **WHEN** the implementation exposes the Coordinator as a selectable or launchable role
+- **THEN** it SHALL NOT rely solely on adding `coordinator` to ordinary `pair`, `explore`, `engineer`, and `design` task-label resolution
+- **AND** the real Coordinator runtime SHALL remain distinguishable by launch path, identity marker, scope, policy, and projection metadata.
 
-### Requirement: Native Agent run/session lifecycle contract
-The system SHALL define the native RepoPrompt Agent run/session lifecycle contract pieces needed for Coordinator supervision as the durable control-plane boundary underneath MCP tool schemas.
+#### Scenario: Ordinary role-label path would create the wrong runtime
+- **WHEN** a role catalog, model-selection, or MCP `model_id` path would spawn an ordinary tab-backed Agent Mode session
+- **THEN** that path SHALL NOT by itself be treated as the real Coordinator runtime
+- **AND** the implementation SHALL use a dedicated launch path or additional runtime marker before granting Coordinator scope and policy.
+
+### Requirement: Existing Agent run/session lifecycle surfaces
+The first Coordinator role SHALL use the existing `agent_run` and `agent_manage` lifecycle/control surfaces for v1 delegation rather than requiring a new native lifecycle subsystem.
 
 #### Scenario: Lifecycle state is queried
-- **WHEN** a Coordinator runtime or external caller observes an Agent run/session
-- **THEN** the system SHALL expose a stable run or session handle, deterministic status, and active/actionable/terminal classification
-- **AND** it SHALL NOT require the caller to infer completion, failure, or blockers from assistant prose.
+- **WHEN** a Coordinator runtime observes an Agent run/session
+- **THEN** it SHALL use stable run/session handles, deterministic status, and active/actionable/terminal classification exposed by existing lifecycle snapshots
+- **AND** it SHALL NOT infer completion, failure, or blockers from assistant prose.
 
 #### Scenario: Lifecycle status is represented
-- **WHEN** lifecycle status is reported through the native contract
-- **THEN** the status model SHALL distinguish active work, actionable input-required work, and terminal work
-- **AND** terminal work SHALL include a structured outcome such as completed, failed, or cancelled
-- **AND** additional outcomes such as expired MAY be added when supported by the runtime.
+- **WHEN** lifecycle status is reported to the Coordinator
+- **THEN** active/actionable/terminal categories SHALL map to existing Agent Mode and MCP-facing state vocabulary, including running, waiting-for-input/actionable, completed, failed, cancelled, and expired where present
+- **AND** expired handles SHALL be treated as terminal/untrackable lifecycle outcomes rather than silently ignored.
 
 #### Scenario: Pending interaction is visible
 - **WHEN** an Agent run/session requires user input, a question response, or an approval-like decision
-- **THEN** the lifecycle contract SHALL expose enough structured pending-interaction metadata for the Coordinator to surface actionable state
-- **AND** response-by-interaction-id behavior SHALL be required before Coordinator access to `respond` is enabled.
+- **THEN** the Coordinator SHALL be able to surface structured pending-interaction metadata from existing snapshot/summary state
+- **AND** Coordinator access to `respond` SHALL remain gated until authorization and stale-interaction failure semantics are accepted.
 
-#### Scenario: Summary and failure artifacts are exposed
-- **WHEN** summaries, compact supervision outputs, or bounded failure diagnostics are available for a run/session
-- **THEN** the lifecycle contract SHALL expose durable artifact references or compact diagnostic fields for those outputs
+#### Scenario: Summary and failure diagnostics are exposed
+- **WHEN** terminal output, status text, failure reason, summaries, or compact supervision outputs are available for a run/session
+- **THEN** the Coordinator SHALL be able to use those compact fields or references to explain status and failure
 - **AND** full logs, full transcripts, exported context, worktree metadata, and other broad artifact types SHALL remain gated or optional unless later Coordinator behavior requires them.
 
-### Requirement: MCP adapter over lifecycle contract
-The system SHALL treat MCP `agent_run` and `agent_manage` as adapters over the native Agent run/session lifecycle contract, not as the only durable source-of-truth boundary.
+#### Scenario: Native facade extraction is considered
+- **WHEN** implementation discovers duplicated MCP-specific lifecycle parsing or `Value`-level coupling
+- **THEN** extracting a typed native facade MAY be proposed as follow-up cleanup
+- **AND** that facade extraction SHALL NOT be required for the first Coordinator role unless the existing lifecycle/control surfaces cannot support the accepted v1 behavior.
 
-#### Scenario: Existing MCP lifecycle tools are used
-- **WHEN** an external caller uses `agent_run start`, `poll`, `wait`, or `steer`
-- **THEN** those operations SHALL map to native lifecycle start, observe, wait, and steer semantics
-- **AND** `respond` and `cancel` SHALL remain mapped or specified as lifecycle capabilities before Coordinator access to those operations is enabled.
+### Requirement: Coordinator runtime lifecycle and ownership
+The system SHALL define how the real Coordinator runtime is created, owned, persisted, restored, and addressed before integrating it with Coordinator mode.
 
-#### Scenario: Existing MCP management tools are used
-- **WHEN** an external caller uses `agent_manage list_sessions`, `get_log`, or export-like behavior
-- **THEN** those operations SHALL expose native lifecycle listing and durable artifact references where possible
-- **AND** implementation SHALL avoid creating a parallel control contract that only exists in MCP result prose.
+#### Scenario: Runtime ownership is selected
+- **WHEN** the Coordinator runtime is first made available
+- **THEN** the implementation SHALL define whether there is one Coordinator per window, per workspace, or another explicit ownership unit
+- **AND** that ownership unit SHALL determine restore, history, and active-workspace visibility semantics.
 
-#### Scenario: Public contract is tested
-- **WHEN** lifecycle adapter behavior is implemented or changed for Coordinator v1
-- **THEN** public contract tests SHALL cover caller-visible start, poll/status, wait, steer with wait semantics, lifecycle category/outcome, summary/failure artifact references, and clean rejection or gating for unsupported Coordinator operations.
+#### Scenario: Runtime is created
+- **WHEN** a user first interacts with the real Coordinator or opens a workspace/window with an available Coordinator
+- **THEN** the implementation SHALL define whether the runtime is created lazily on first instruction or eagerly when the surface appears
+- **AND** the created runtime SHALL receive the Coordinator identity marker and Coordinator-specific prompt/tool policy before it can supervise other sessions.
+
+#### Scenario: Runtime is restored
+- **WHEN** the app or runtime restarts
+- **THEN** restored Coordinator runtime state SHALL retain its ownership unit and Coordinator identity marker
+- **AND** restore behavior SHALL NOT promote the Coordinator into the supervised workspace fleet.
 
 ### Requirement: Coordinator runtime scope
 The Coordinator role SHALL use an explicit layer-above listing and control scope rather than ordinary child-only Agent Mode scoping.
 
-#### Scenario: First listing scope is selected
-- **WHEN** implementation begins for the Coordinator role
-- **THEN** the accepted design SHALL identify the first listing/control scope as active-workspace top-level, explicitly attached sessions, or app-global
-- **AND** app-global visibility SHALL remain unavailable unless cross-window ownership and visibility semantics are accepted.
-
-#### Scenario: Active-workspace top-level scope is selected
-- **WHEN** the accepted design chooses active-workspace top-level Coordinator visibility
-- **THEN** the Coordinator SHALL be able to list top-level visible Agent run/session state for the active workspace
+#### Scenario: Active-workspace top-level scope is used
+- **WHEN** the Coordinator runtime lists sessions in v1
+- **THEN** it SHALL see top-level visible Agent run/session state for the current window's active workspace
 - **AND** ordinary child-only scoping for agent sub-agents SHALL NOT hide sibling or top-level sessions from the Coordinator.
 
-#### Scenario: Existing MCP scope is insufficient
-- **WHEN** current MCP agent-control tools are window, workspace, tab, or child scoped in a way that cannot satisfy the accepted Coordinator scope
-- **THEN** the implementation SHALL add an explicit Coordinator binding, adapter scope, or native lifecycle surface before exposing Coordinator supervision
-- **AND** it SHALL NOT rely on tab focus as the source of Coordinator scope.
+#### Scenario: Existing MCP child scope is insufficient
+- **WHEN** `agent_manage list_sessions` would normally scope an in-app agent caller to sessions whose parent is the caller
+- **THEN** the Coordinator connection SHALL bypass that child-only listing scope and enumerate the active-workspace top-level fleet instead
+- **AND** the Coordinator runtime's model-visible session list SHALL match the Coordinator view's active-workspace fleet projection, excluding the Coordinator runtime itself.
 
 #### Scenario: Cross-window control is requested
-- **WHEN** a Coordinator behavior would observe or act beyond the current window
-- **THEN** the design SHALL record whether the implementation is current-window-only, routes to owning windows, or uses a shared session-control service
+- **WHEN** a Coordinator behavior would observe or act beyond the current window's active workspace
+- **THEN** the first implementation SHALL reject or defer that behavior unless a later accepted spec defines owning-window routing or a shared session-control service
 - **AND** it SHALL not silently create app-global cross-window control.
 
 ### Requirement: Coordinator role behavior contract
@@ -115,6 +120,24 @@ The system SHALL define a Coordinator-specific role behavior contract for the ru
 - **THEN** the runtime SHALL receive Coordinator-specific instructions matching this behavior contract
 - **AND** ordinary `pair`, `engineer`, `explore`, and `design` prompts SHALL NOT be reused without Coordinator-specific behavior and tool-boundary instructions.
 
+### Requirement: Coordinator instruction delivery
+The system SHALL define how user instructions reach the real Coordinator runtime without relying on the demo selected-session composer path as the final architecture.
+
+#### Scenario: User sends instruction to real Coordinator
+- **WHEN** the real Coordinator runtime is available and the user sends a Coordinator instruction
+- **THEN** the instruction SHALL be delivered to the real Coordinator runtime through an explicit addressing path
+- **AND** delivery SHALL NOT depend on treating a supervised workspace session as the Coordinator.
+
+#### Scenario: Real runtime and manual fallback both exist
+- **WHEN** both the real Coordinator runtime and the manual selected-session demo composer are available during migration
+- **THEN** the UI or view model SHALL define clear precedence and labeling for the real runtime versus manual fallback
+- **AND** the user SHALL NOT be led to believe a supervised fallback session is the real Coordinator role.
+
+#### Scenario: Coordinator starts child work during a turn
+- **WHEN** the Coordinator receives a coordination instruction that requires delegated agents
+- **THEN** the runtime SHALL be able to issue accepted lifecycle/control actions from that turn using its Coordinator-scoped tool policy
+- **AND** delegated child runs SHALL remain ordinary scoped Agent Mode sessions, not Coordinators.
+
 ### Requirement: Delegate-only first tool contract
 The first Coordinator role implementation SHALL use a delegate-only tool contract.
 
@@ -137,17 +160,17 @@ The first Coordinator role implementation SHALL use a delegate-only tool contrac
 
 #### Scenario: Respond capability is considered
 - **WHEN** the Coordinator needs to answer a pending interaction
-- **THEN** Coordinator access to `respond` SHALL remain unavailable until the accepted lifecycle contract defines stable pending interaction identifiers, response shape, authorization, and failure semantics
+- **THEN** Coordinator access to `respond` SHALL remain unavailable until authorization and stale-interaction failure semantics are accepted for Coordinator connections
 - **AND** any accepted Coordinator respond behavior SHALL be audited as a structured action record.
 
 #### Scenario: Direct tab and workspace mutation is requested
 - **WHEN** a Coordinator behavior would require direct tab focus, file-selection mutation, file read/search scoped to a focused tab, worktree mutation, approval/decline, cancel, stop, or full log read behavior
 - **THEN** the first Coordinator role SHALL reject or defer that behavior unless a later accepted spec grants the capability with authorization and audit semantics.
 
-#### Scenario: Tools are advertised to Coordinator
+#### Scenario: Tools and operations are restricted for Coordinator
 - **WHEN** tools are advertised or installed for the Coordinator runtime
-- **THEN** the system SHALL advertise only the accepted lifecycle/control-plane toolset
-- **AND** it SHALL NOT advertise ordinary tab-scoped file, selection, worktree, focus, approval, cancel, or stop tools unless a later accepted spec grants Coordinator access.
+- **THEN** the system SHALL advertise only the accepted lifecycle/control-plane toolset and hide ordinary tab-scoped file, selection, worktree, and focus tools
+- **AND** op-level or argument-level guards SHALL reject disallowed operations on otherwise-allowed tools, including Coordinator use of `agent_run.respond`, `agent_run.cancel`, `agent_manage.stop_session`, `agent_manage.cleanup_sessions`, and worktree creation/binding arguments on `agent_run.start` unless a later accepted spec grants access.
 
 #### Scenario: Workspace investigation or mutation is requested
 - **WHEN** user intent requires direct codebase investigation, file reads/searches, file edits, selection changes, tab focus, or worktree mutation
@@ -155,16 +178,16 @@ The first Coordinator role implementation SHALL use a delegate-only tool contrac
 - **AND** the Coordinator SHALL observe the delegated session through lifecycle state, structured action status, and artifact references instead of using those workspace tools directly.
 
 ### Requirement: Coordinator context and history ownership
-The system SHALL keep Coordinator context, conversation history, and action/instruction logs outside the supervised workspace row projection.
+The system SHALL keep Coordinator context, conversation history, and action/instruction logs invisible to the supervised workspace row projection.
 
 #### Scenario: Coordinator stores history
 - **WHEN** the Coordinator records conversation, instruction, or action history
-- **THEN** the system SHALL store that history in a control-plane location chosen by the accepted lifecycle/runtime design
-- **AND** it SHALL NOT require creating a supervised workspace row solely to persist Coordinator history.
+- **THEN** the system MAY reuse existing Agent session persistence or another control-plane store
+- **AND** storage choice SHALL NOT cause the Coordinator runtime to appear as a supervised workspace row.
 
 #### Scenario: Coordinator state is restored
 - **WHEN** Coordinator state is restored after app or runtime restart
-- **THEN** restored Coordinator state SHALL remain separate from workspace session rows
+- **THEN** restored Coordinator state SHALL retain its Coordinator identity marker
 - **AND** restoring it SHALL NOT create, restore, or promote a workspace Agent Mode session into the supervised fleet.
 
 ### Requirement: Structured Coordinator action records
@@ -199,7 +222,7 @@ The system SHALL reconcile the real Coordinator runtime with existing Coordinato
 
 #### Scenario: Real Coordinator runtime is integrated with Coordinator mode
 - **WHEN** the real Coordinator runtime becomes available to the Coordinator view
-- **THEN** the system SHALL define an explicit identity or exclusion predicate for that runtime
+- **THEN** the system SHALL mark that runtime with a first-class Coordinator identity marker and exclude it at the Coordinator mode projection-input boundary
 - **AND** the runtime SHALL NOT appear in `CoordinatorModeSnapshot.groups` as a supervised row.
 
 #### Scenario: Demo Coordinator detection remains available
@@ -207,15 +230,3 @@ The system SHALL reconcile the real Coordinator runtime with existing Coordinato
 - **THEN** the system SHALL label or treat it as demo/manual fallback behavior
 - **AND** it SHALL remain distinct from the real Coordinator role/runtime.
 
-### Requirement: Stakeholder design checkpoint
-The system SHALL require a focused design checkpoint before implementing the Coordinator role.
-
-#### Scenario: Chosen direction is recorded
-- **WHEN** the OpenSpec change is ready for implementation planning
-- **THEN** the team SHALL record that the Coordinator role is backed by a native Agent run/session lifecycle contract, with MCP as adapter and delegate-only first scope
-- **AND** any remaining listing-scope or cross-window decision SHALL be recorded before implementation begins.
-
-#### Scenario: Wren review occurs
-- **WHEN** the lifecycle-contract direction and first listing scope have been recorded
-- **THEN** the Coordinator role design SHALL be reviewed with wren around the delegate-vs-focus, lifecycle-contract-vs-MCP-schema, and active-workspace-top-level-vs-global forks
-- **AND** pvncher SHALL be able to review the resulting artifact without requiring the design discussion to happen in the group DM.
