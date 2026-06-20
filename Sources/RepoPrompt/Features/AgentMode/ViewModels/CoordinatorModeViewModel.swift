@@ -75,6 +75,10 @@ final class CoordinatorModeViewModel: ObservableObject {
     func clearCoordinator() {
         let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID
         coordinatorResetHandler(coordinatorSessionID)
+        displayedTranscriptCoordinatorSessionID = nil
+        railTranscriptEntries.removeAll()
+        composerNotice = nil
+        lastPublishedFingerprint = nil
         selectCoordinator(sessionID: nil)
     }
 
@@ -205,16 +209,45 @@ extension AgentModeViewModel {
     @MainActor
     private func clearCoordinatorRuntimeDemoTarget(preferredSessionID: UUID?) {
         for (tabID, session) in sessions {
-            guard session.isCoordinatorRuntimeDemo else { continue }
-            if let preferredSessionID, session.activeAgentSessionID != preferredSessionID {
-                continue
-            }
+            let isPreferredLiveSession = preferredSessionID != nil && session.activeAgentSessionID == preferredSessionID
+            guard session.isCoordinatorRuntimeDemo || isPreferredLiveSession else { continue }
             session.isCoordinatorRuntimeDemo = false
-            if coordinatorModeTabName(for: tabID) == Self.coordinatorRuntimeDemoSessionName {
-                renameSession(tabID: tabID, to: "\(Self.coordinatorRuntimeDemoSessionName) (cleared)")
-            }
+            renameCoordinatorRuntimeDemoTabForReset(tabID)
         }
     }
+
+    @MainActor
+    private func renameCoordinatorRuntimeDemoTabForReset(_ tabID: UUID) {
+        guard coordinatorModeTabName(for: tabID) == Self.coordinatorRuntimeDemoSessionName else { return }
+        let clearedName = "\(Self.coordinatorRuntimeDemoSessionName) (cleared)"
+        var tab = workspaceManager?.composeTab(with: tabID)
+        tab?.name = clearedName
+        tab?.lastModified = Date()
+        if let tab {
+            workspaceManager?.updateComposeTab(tab)
+            if let workspace = workspaceManager?.workspaces.first(where: { workspace in
+                workspace.composeTabs.contains(where: { $0.id == tabID })
+            }) {
+                promptManager?.loadComposeTabsFromWorkspace(workspace)
+            }
+        } else {
+            promptManager?.renameComposeTab(tabID, to: clearedName)
+        }
+    }
+
+    #if DEBUG
+        @MainActor
+        func test_clearCoordinatorRuntimeDemoTarget(preferredSessionID: UUID?) {
+            clearCoordinatorRuntimeDemoTarget(preferredSessionID: preferredSessionID)
+        }
+
+        @MainActor
+        func test_resolveOrCreateCoordinatorRuntimeDemoTarget(
+            preferredSessionID: UUID?
+        ) async throws -> (tabID: UUID, sessionID: UUID) {
+            try await resolveOrCreateCoordinatorRuntimeDemoTarget(preferredSessionID: preferredSessionID)
+        }
+    #endif
 
     @MainActor
     private func resolveOrCreateCoordinatorRuntimeDemoTarget(

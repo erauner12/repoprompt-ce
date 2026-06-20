@@ -9,7 +9,7 @@ Deliberate shortcuts / non-goals for the demo spine:
 - No `list_sessions` broadening or visibility-policy change is implemented.
 - No coordinator-runtime restore flow is implemented.
 - No eviction/stash exemption is implemented for the Coordinator runtime.
-- Clear Coordinator is a reproducibility reset, not a history cleanup: it drops the in-memory demo marker and renames the old demo runtime tab away from the magic fallback name so the next directive creates a fresh runtime, while board/history noise remains out of scope.
+- Clear Coordinator is a reproducibility reset, not a history cleanup: it drops live in-memory demo markers and renames cleared demo runtime tabs away from the magic fallback name so the next directive creates a fresh runtime, while board/history noise remains out of scope.
 - No production policy-context refactor is implemented beyond reusing the existing root MCP-control prompt/tool advertisement behavior.
 - The Coordinator runtime is hard-coded for the demo to Codex with the GPT-5.5 High model.
 - The Coordinator runtime prompt includes a hardcoded loopback proof step before fan-out: start one explore child and require a returned `session_id` before continuing.
