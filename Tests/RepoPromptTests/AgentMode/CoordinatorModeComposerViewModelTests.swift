@@ -49,6 +49,60 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.composerNotice)
     }
 
+    func testVisibleLifecycleRefreshPublishesRunningDelegatedSnapshot() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let coordinatorTab = uuid(101)
+        let childTab = uuid(102)
+        var mcpSnapshots: [UUID: AgentRunMCPSnapshot] = [:]
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: coordinatorTab,
+                            title: "Coordinator Runtime Demo",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            isMCP: true
+                        )
+                    ],
+                    mcpSnapshots: mcpSnapshots,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+        viewModel.setVisible(true)
+        XCTAssertEqual(viewModel.snapshot.counts.totalRows, 0)
+
+        viewModel.setVisible(false)
+        mcpSnapshots[childID] = mcpSnapshot(
+            sessionID: childID,
+            tabID: childTab,
+            sessionName: "Live delegate",
+            status: .running,
+            statusText: "Working on loopback proof",
+            assistantPreview: "COORDINATOR_LOOPBACK_WORKING",
+            parent: coordinatorID
+        )
+        XCTAssertFalse(viewModel.refreshIfVisible())
+        XCTAssertEqual(viewModel.snapshot.counts.totalRows, 0)
+
+        viewModel.setVisible(true)
+
+        let row = viewModel.snapshot.groups.first { $0.group == .working }?.rows.first
+        XCTAssertEqual(viewModel.snapshot.counts.totalRows, 1)
+        XCTAssertEqual(row?.sessionID, childID)
+        XCTAssertEqual(row?.title, "Live delegate")
+        XCTAssertEqual(row?.runState, .running)
+        XCTAssertEqual(row?.statusReport?.statusText, "Working on loopback proof")
+        XCTAssertEqual(row?.statusReport?.assistantPreview, "COORDINATOR_LOOPBACK_WORKING")
+    }
+
     func testMidRunCoordinatorRejectsDirectiveWithoutCallingSubmitter() async {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
@@ -230,6 +284,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         workspaceID: UUID? = UUID(uuidString: "00000000-0000-0000-0000-000000000090"),
         persisted: [CoordinatorModeSnapshotProjector.PersistedSession] = [],
         live: [CoordinatorModeSnapshotProjector.LiveSession] = [],
+        mcpSnapshots: [UUID: AgentRunMCPSnapshot] = [:],
         selectedCoordinatorID: UUID? = nil,
         sort: CoordinatorModeSortMode = .lastUpdated,
         demoCoordinatorIDs: Set<UUID> = []
@@ -239,9 +294,10 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             windowID: 7,
             persistedSessions: persisted,
             liveSessions: live,
+            mcpSnapshotsBySessionID: mcpSnapshots,
             selectedCoordinatorID: selectedCoordinatorID,
             sortMode: sort,
-            resolvableTabIDs: Set(persisted.map(\.tabID) + live.map(\.tabID)),
+            resolvableTabIDs: Set(persisted.map(\.tabID) + live.map(\.tabID) + mcpSnapshots.values.compactMap(\.tabID)),
             demoCoordinatorSessionIDs: demoCoordinatorIDs
         )
     }
@@ -283,6 +339,36 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             runState: state,
             parentSessionID: parent,
             isMCPOriginated: isMCP
+        )
+    }
+
+    private func mcpSnapshot(
+        sessionID: UUID,
+        tabID: UUID,
+        sessionName: String,
+        status: AgentRunMCPSnapshot.Status,
+        statusText: String?,
+        assistantPreview: String?,
+        parent: UUID?
+    ) -> AgentRunMCPSnapshot {
+        AgentRunMCPSnapshot(
+            sessionID: sessionID,
+            tabID: tabID,
+            sessionName: sessionName,
+            agentRaw: nil,
+            agentDisplayName: nil,
+            modelRaw: nil,
+            reasoningEffortRaw: nil,
+            status: status,
+            statusText: statusText,
+            latestAssistantPreview: assistantPreview,
+            interaction: nil,
+            transcriptItemCount: 1,
+            updatedAt: date(30),
+            parentSessionID: parent,
+            failureReason: nil,
+            worktreeBindings: [],
+            activeWorktreeMerges: []
         )
     }
 

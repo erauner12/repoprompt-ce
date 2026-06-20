@@ -66,6 +66,13 @@ final class CoordinatorModeViewModel: ObservableObject {
         publishIfChanged(projector.project(input))
     }
 
+    @discardableResult
+    func refreshIfVisible() -> Bool {
+        guard isVisible else { return false }
+        refresh()
+        return true
+    }
+
     func selectCoordinator(sessionID: UUID?, workspaceID explicitWorkspaceID: UUID? = nil) {
         let workspaceID = explicitWorkspaceID ?? snapshot.workspaceID ?? inputProvider(sortMode, nil).workspaceID
         guard let workspaceID else { return }
@@ -154,6 +161,12 @@ final class CoordinatorModeViewModel: ObservableObject {
 }
 
 extension AgentModeViewModel {
+    @MainActor
+    @discardableResult
+    func refreshCoordinatorModeForChildLifecycleIfVisible() -> Bool {
+        coordinatorModeViewModel.refreshIfVisible()
+    }
+
     @MainActor
     func makeCoordinatorModeViewModel() -> CoordinatorModeViewModel {
         CoordinatorModeViewModel { [weak self] sortMode, selectedCoordinatorID in
@@ -266,6 +279,11 @@ extension AgentModeViewModel {
                 preferredSessionID: preferredSessionID,
                 forceNewRuntime: forceNewRuntime
             )
+        }
+
+        @MainActor
+        func test_refreshCoordinatorModeForChildLifecycleIfVisible() -> Bool {
+            refreshCoordinatorModeForChildLifecycleIfVisible()
         }
     #endif
 

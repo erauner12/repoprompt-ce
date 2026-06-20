@@ -515,6 +515,7 @@ final class AgentModeViewModel: ObservableObject {
         didSet {
             syncSidebarUIState(refresh: true, reason: .runState)
             scheduleSidebarAutoArchiveIfReady(reason: .runProtectionChanged)
+            refreshCoordinatorModeForChildLifecycleIfVisible()
         }
     }
 
@@ -525,6 +526,7 @@ final class AgentModeViewModel: ObservableObject {
             syncSidebarUIState(refresh: true, reason: .mcpControl)
             syncComposerUIState()
             scheduleSidebarAutoArchiveIfReady(reason: .mcpProtectionChanged)
+            refreshCoordinatorModeForChildLifecycleIfVisible()
         }
     }
 
@@ -4260,6 +4262,7 @@ final class AgentModeViewModel: ObservableObject {
 
     private func handleObservedMCPStateChange(for session: TabSession) {
         guard !session.terminalCommitInProgress else { return }
+        refreshCoordinatorModeForChildLifecycleIfVisible()
         // Terminal waiter publication is owned exclusively by AgentRunTerminalCommitBarrier.
         // Legacy/special-purpose state changes without a canonical revision must not race it.
         if session.runState.isTerminalForCommit {

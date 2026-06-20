@@ -298,7 +298,7 @@ struct CoordinatorModeView: View {
                         }
                         .buttonStyle(.link)
                         .font(metrics.bodyMedium)
-                        Text("Starts a fresh Coordinator runtime; Clear Chat only removes rail messages.")
+                        Text("Follow-ups update this Coordinator rail/status. The board changes only when delegates are launched or updated.")
                             .font(metrics.micro)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -316,7 +316,7 @@ struct CoordinatorModeView: View {
                         }
                         .buttonStyle(.link)
                         .font(metrics.bodyMedium)
-                        Text("Starts a fresh Coordinator runtime; Clear Chat only removes rail messages.")
+                        Text("Follow-ups update this Coordinator rail/status. The board changes only when delegates are launched or updated.")
                             .font(metrics.micro)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
