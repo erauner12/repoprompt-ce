@@ -94,7 +94,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.10 Widen the production-demo Coordinator rail and render Coordinator/event messages through the shared Agent Mode Markdown renderer.
 - [x] 10.11 Restyle the Coordinator composer as a compact Agent Mode-like command surface without adding ordinary Agent Mode controls.
 - [x] 10.12 Keep the Coordinator composer text area editable and focused while send is gated by an active Coordinator run.
-- [x] 10.13 Scope Coordinator mode window titles to the Coordinator surface/workspace instead of the active Agent session tab.
+- [x] 10.13 Keep Coordinator mode window titles workspace-scoped instead of using the active Agent session tab.
 
 ## 11. Validation
 

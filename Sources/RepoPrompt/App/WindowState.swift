@@ -250,7 +250,7 @@ class WindowState: ObservableObject {
             let rawTitle = promptManager.activeComposeTabID.flatMap { workspaceManager.composeTabName(with: $0) }
             return AgentSessionRestoreSupport.normalizedSessionTitle(rawTitle)
         case .coordinatorMode:
-            return "Coordinator"
+            return nil
         }
     }
 

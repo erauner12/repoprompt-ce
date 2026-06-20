@@ -123,7 +123,7 @@ final class WindowStateDisplayedTitleTests: XCTestCase {
             try await waitForDisplayedTitle(
                 window,
                 and: nsWindow,
-                equalTo: "Coordinator — \(workspaceName)"
+                equalTo: workspaceName
             )
         } catch {
             await cleanup(window: window, rootURL: rootURL)

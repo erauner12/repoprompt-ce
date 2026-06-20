@@ -39,9 +39,7 @@ struct ContentView: View {
                 windowState: viewModel.state,
                 recommendationWizardViewModel: recommendationWizardViewModel,
                 showRecommendationsPopover: $showRecommendationsPopover,
-                showMCPServerPopover: $showMCPServerPopover,
-                mainSurfaceSelection: mainSurfaceSelection,
-                isMainSurfaceSwitchingAvailable: viewModel.canSelectMainSurface
+                showMCPServerPopover: $showMCPServerPopover
             )
         }
         .onAppear {
