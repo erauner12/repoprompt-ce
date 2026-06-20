@@ -41,8 +41,7 @@ struct CoordinatorModeView: View {
     @State private var selectedRowID: UUID?
     @State private var hoveredRowID: UUID?
     @State private var filterText = ""
-    @State private var coordinatorSplitVisibility: NavigationSplitViewVisibility = .all
-    @State private var preferredSplitColumn: NavigationSplitViewColumn = .sidebar
+    @State private var isCoordinatorRailVisible = true
     @ObservedObject private var fontScale = FontScaleManager.shared
 
     private var visualMetrics: CoordinatorVisualMetrics {
@@ -58,36 +57,15 @@ struct CoordinatorModeView: View {
             let useList = presentationMode == .list || proxy.size.width < 760
             let forceList = useList && presentationMode == .board
             let railIsAvailable = proxy.size.width >= 900
-            if railIsAvailable {
-                NavigationSplitView(
-                    columnVisibility: $coordinatorSplitVisibility,
-                    preferredCompactColumn: $preferredSplitColumn
-                ) {
-                    coordinatorRail(snapshot: snapshot, metrics: metrics)
-                        .navigationSplitViewColumnWidth(
-                            min: metrics.railWidth,
-                            ideal: metrics.railWidth,
-                            max: metrics.railWidth
-                        )
-                } detail: {
-                    coordinatorDetailColumn(
-                        snapshot: snapshot,
-                        sections: sections,
-                        selectedRow: selectedRow,
-                        useList: useList,
-                        forceList: forceList,
-                        metrics: metrics
-                    )
-                }
-            } else {
-                coordinatorContent(
-                    snapshot: snapshot,
-                    sections: sections,
-                    useList: useList,
-                    forceList: forceList,
-                    metrics: metrics
-                )
-            }
+            coordinatorShell(
+                snapshot: snapshot,
+                sections: sections,
+                selectedRow: selectedRow,
+                useList: useList,
+                forceList: forceList,
+                railIsAvailable: railIsAvailable,
+                metrics: metrics
+            )
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
@@ -101,26 +79,33 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func coordinatorDetailColumn(
+    private func coordinatorShell(
         snapshot: CoordinatorModeSnapshot,
         sections: [CoordinatorModeStatusSection],
         selectedRow: CoordinatorModeRow?,
         useList: Bool,
         forceList: Bool,
+        railIsAvailable: Bool,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         HStack(spacing: 0) {
+            if railIsAvailable, isCoordinatorRailVisible {
+                coordinatorRail(snapshot: snapshot, metrics: metrics)
+                    .frame(width: metrics.railWidth)
+                    .frame(maxHeight: .infinity)
+            }
+
             coordinatorContent(
                 snapshot: snapshot,
                 sections: sections,
                 useList: useList,
                 forceList: forceList,
                 metrics: metrics,
-                showRailToggle: coordinatorSplitVisibility == .detailOnly
+                showRailToggle: railIsAvailable && !isCoordinatorRailVisible
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if let selectedRow {
+            if railIsAvailable, let selectedRow {
                 inspector(row: selectedRow, metrics: metrics)
                     .frame(
                         minWidth: metrics.inspectorWidth,
@@ -342,7 +327,7 @@ struct CoordinatorModeView: View {
 
     private func toggleCoordinatorRail() {
         withAnimation(.easeInOut(duration: 0.2)) {
-            coordinatorSplitVisibility = coordinatorSplitVisibility == .detailOnly ? .all : .detailOnly
+            isCoordinatorRailVisible.toggle()
         }
     }
 
