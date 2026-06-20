@@ -1,4 +1,21 @@
+import AppKit
 import SwiftUI
+
+private struct CoordinatorSidebarMaterialView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.blendingMode = .withinWindow
+        view.state = .active
+        view.material = .sidebar
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.blendingMode = .withinWindow
+        nsView.state = .active
+        nsView.material = .sidebar
+    }
+}
 
 struct CoordinatorModeView: View {
     enum PresentationMode: String, CaseIterable, Identifiable {
@@ -22,52 +39,36 @@ struct CoordinatorModeView: View {
 
     @State private var presentationMode: PresentationMode = .board
     @State private var selectedRowID: UUID?
+    @State private var hoveredRowID: UUID?
     @State private var filterText = ""
     @State private var coordinatorDirectiveDraft = ""
     @State private var isSubmittingCoordinatorDirective = false
+    @State private var isCoordinatorRailVisible = true
+    @State private var isInspectorVisible = true
+    @ObservedObject private var fontScale = FontScaleManager.shared
+
+    private var visualMetrics: CoordinatorVisualMetrics {
+        CoordinatorVisualMetrics(fontPreset: fontScale.preset)
+    }
 
     var body: some View {
         GeometryReader { proxy in
             let snapshot = viewModel.snapshot
             let sections = filteredSections(from: snapshot)
             let selectedRow = selectedRow(in: sections)
+            let metrics = visualMetrics
             let useList = presentationMode == .list || proxy.size.width < 760
-            let showRail = proxy.size.width >= 900
-            let showInspector = proxy.size.width >= 1120 && selectedRow != nil
-
-            VStack(spacing: 0) {
-                header(snapshot: snapshot, forceList: useList && presentationMode == .board)
-
-                Divider()
-
-                HStack(spacing: 0) {
-                    if showRail {
-                        coordinatorRail(snapshot.coordinatorRail)
-                            .frame(width: 260)
-                        Divider()
-                    }
-
-                    Group {
-                        if snapshot.isEmpty {
-                            emptyState(snapshot: snapshot)
-                        } else if useList {
-                            listView(sections: sections)
-                        } else {
-                            boardView(sections: sections)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                    if showInspector, let selectedRow {
-                        Divider()
-                        inspector(row: selectedRow)
-                            .frame(width: 300)
-                    }
-                }
-
-                Divider()
-                mcpFooter(snapshot.mcpAwareness)
-            }
+            let forceList = useList && presentationMode == .board
+            let railIsAvailable = proxy.size.width >= 900
+            coordinatorShell(
+                snapshot: snapshot,
+                sections: sections,
+                selectedRow: selectedRow,
+                useList: useList,
+                forceList: forceList,
+                railIsAvailable: railIsAvailable,
+                metrics: metrics
+            )
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
@@ -81,199 +82,408 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func header(snapshot: CoordinatorModeSnapshot, forceList: Bool) -> some View {
-        VStack(spacing: 10) {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Coordinator")
-                        .font(CoordinatorTypography.headerTitle)
-                    Text("Read-only mission control for this workspace")
-                        .font(CoordinatorTypography.body)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                countPill("Total", snapshot.counts.totalRows, color: .secondary)
-                countPill("Needs you", snapshot.counts.needsYou, color: .orange)
-                countPill("Blocked", snapshot.counts.blocked, color: .red)
-                countPill("Working", snapshot.counts.working, color: .blue)
-                countPill("Stale", snapshot.counts.stalePersistedOnly, color: .secondary)
+    private func coordinatorShell(
+        snapshot: CoordinatorModeSnapshot,
+        sections: [CoordinatorModeStatusSection],
+        selectedRow: CoordinatorModeRow?,
+        useList: Bool,
+        forceList: Bool,
+        railIsAvailable: Bool,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(spacing: 0) {
+            if railIsAvailable, isCoordinatorRailVisible {
+                coordinatorRail(snapshot: snapshot, metrics: metrics)
+                    .frame(width: metrics.railWidth)
+                    .frame(maxHeight: .infinity)
             }
 
-            HStack(spacing: 10) {
-                Picker("Presentation", selection: $presentationMode) {
-                    ForEach(PresentationMode.allCases) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 160)
+            coordinatorContent(
+                snapshot: snapshot,
+                sections: sections,
+                useList: useList,
+                forceList: forceList,
+                metrics: metrics,
+                showRailToggle: railIsAvailable && !isCoordinatorRailVisible,
+                showInspectorToggle: railIsAvailable && selectedRow != nil && !isInspectorVisible
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                Picker("Sort", selection: $viewModel.sortMode) {
-                    ForEach(CoordinatorModeSortMode.allCases, id: \.self) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-                .frame(width: 160)
-
-                TextField("Filter sessions", text: $filterText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 220)
-
-                if forceList {
-                    Label("Board falls back to List at narrow widths", systemImage: "rectangle.split.2x1")
-                        .font(CoordinatorTypography.body)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
+            if railIsAvailable, isInspectorVisible, let selectedRow {
+                inspector(row: selectedRow, metrics: metrics)
+                    .frame(
+                        minWidth: metrics.inspectorWidth,
+                        idealWidth: metrics.inspectorWidth,
+                        maxWidth: metrics.inspectorWidth,
+                        maxHeight: .infinity
+                    )
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func coordinatorRail(_ rail: CoordinatorModeCoordinatorRail) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("Coordinator rail", systemImage: "person.2.wave.2")
-                .font(CoordinatorTypography.sectionTitle)
+    private func coordinatorContent(
+        snapshot: CoordinatorModeSnapshot,
+        sections: [CoordinatorModeStatusSection],
+        useList: Bool,
+        forceList: Bool,
+        metrics: CoordinatorVisualMetrics,
+        showRailToggle: Bool = false,
+        showInspectorToggle: Bool = false
+    ) -> some View {
+        VStack(spacing: 0) {
+            boardControls(
+                forceList: forceList,
+                metrics: metrics,
+                showRailToggle: showRailToggle,
+                showInspectorToggle: showInspectorToggle
+            )
+            .padding(.horizontal, metrics.outerPadding)
+            .padding(.vertical, metrics.headerPadding)
+            .background(.regularMaterial)
 
-            switch rail.state {
-            case .selected:
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(rail.title ?? "Agent Session")
-                        .font(CoordinatorTypography.cardTitle)
-                        .lineLimit(2)
-                    if let source = rail.selectionSource {
-                        Text(source.displayName)
-                            .font(CoordinatorTypography.micro)
-                            .foregroundStyle(.secondary)
-                    }
-                    statusChip(
-                        rail.isLiveInCurrentWindow ? "Live in this window" : "Persisted only",
-                        color: rail.isLiveInCurrentWindow ? .green : .secondary
-                    )
-                    openAgentChatButton(route: rail.openAgentChatRoute, title: "Open in Agent Mode")
-                }
-            case .chooseCoordinator:
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("No Coordinator selected")
-                        .font(CoordinatorTypography.cardTitle)
-                    Text("The board still shows workspace sessions. Coordinator identity can be selected or auto-detected by structured lineage in later layers.")
-                        .font(CoordinatorTypography.body)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            Group {
+                if snapshot.isEmpty {
+                    emptyState(snapshot: snapshot, metrics: metrics)
+                } else if useList {
+                    listView(sections: sections, metrics: metrics)
+                } else {
+                    boardView(sections: sections, metrics: metrics)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
+            mcpFooter(snapshot.mcpAwareness, metrics: metrics)
+        }
+    }
 
-            if rail.isComposerEnabled {
-                coordinatorComposer(rail)
-            } else {
-                coordinatorComposerFallback(rail)
+    private func boardControls(
+        forceList: Bool,
+        metrics: CoordinatorVisualMetrics,
+        showRailToggle: Bool,
+        showInspectorToggle: Bool
+    ) -> some View {
+        HStack(spacing: metrics.controlSpacing) {
+            if showRailToggle {
+                CoordinatorRailToggleButton(isRailVisible: false, metrics: metrics) {
+                    toggleCoordinatorRail()
+                }
             }
+
+            presentationPicker(metrics: metrics)
+            sortPicker(metrics: metrics)
+            filterSearchBox(metrics: metrics)
+                .frame(width: metrics.searchWidth)
+
+            if forceList {
+                forceListLabel(metrics: metrics)
+            }
+
+            Spacer(minLength: 0)
+
+            if showInspectorToggle {
+                CoordinatorRailToggleButton(
+                    isRailVisible: false,
+                    metrics: metrics,
+                    systemImage: "sidebar.right",
+                    visibleAccessibilityLabel: "Hide Inspector",
+                    hiddenAccessibilityLabel: "Show Inspector"
+                ) {
+                    isInspectorVisible = true
+                }
+            }
+        }
+    }
+
+    private func presentationPicker(metrics: CoordinatorVisualMetrics) -> some View {
+        Picker("View", selection: $presentationMode) {
+            ForEach(PresentationMode.allCases) { mode in
+                Text(mode.displayName).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .frame(width: metrics.controlWidth)
+        .accessibilityLabel("Presentation")
+    }
+
+    private func sortPicker(metrics: CoordinatorVisualMetrics) -> some View {
+        Picker("Sort", selection: $viewModel.sortMode) {
+            ForEach(CoordinatorModeSortMode.allCases, id: \.self) { mode in
+                Text(mode.displayName).tag(mode)
+            }
+        }
+        .frame(width: metrics.controlWidth)
+    }
+
+    private func forceListLabel(metrics: CoordinatorVisualMetrics) -> some View {
+        Label("Board falls back to List at narrow widths", systemImage: "rectangle.split.2x1")
+            .font(metrics.body)
+            .foregroundStyle(.secondary)
+    }
+
+    private func filterSearchBox(metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.searchElementSpacing) {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(Color(NSColor.labelColor).opacity(0.6))
+                .font(.system(size: metrics.searchIconSize))
+
+            TextField("Filter sessions", text: $filterText)
+                .textFieldStyle(PlainTextFieldStyle())
+                .font(metrics.searchFont)
+                .foregroundColor(Color(NSColor.labelColor))
+                .onKeyPress(.escape) {
+                    if !filterText.isEmpty {
+                        filterText = ""
+                        return .handled
+                    }
+                    return .ignored
+                }
+
+            if !filterText.isEmpty {
+                Button {
+                    filterText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: metrics.searchClearIconSize))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear Coordinator filter")
+            }
+        }
+        .padding(.horizontal, metrics.searchHorizontalPadding)
+        .padding(.vertical, metrics.searchVerticalPadding)
+        .frame(minHeight: metrics.searchControlHeight)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: metrics.searchCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.searchCornerRadius, style: .continuous)
+                .stroke(CoordinatorStyle.hairline, lineWidth: 0.5)
+        )
+    }
+
+    private func coordinatorRail(
+        snapshot: CoordinatorModeSnapshot,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let rail = snapshot.coordinatorRail
+
+        return VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
+            coordinatorRailTitlebarLane(metrics: metrics)
+
+            Group {
+                switch rail.state {
+                case .selected:
+                    VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+                        Text(rail.title ?? "Agent Session")
+                            .font(metrics.cardTitle)
+                            .lineLimit(2)
+                        if let source = rail.selectionSource {
+                            Text(source.displayName)
+                                .font(metrics.micro)
+                                .foregroundStyle(.secondary)
+                        }
+                        statusChip(
+                            rail.isLiveInCurrentWindow ? "Live in this window" : "Persisted only",
+                            color: rail.isLiveInCurrentWindow ? .green : .secondary,
+                            metrics: metrics
+                        )
+                        openAgentChatButton(route: rail.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
+                    }
+                case .chooseCoordinator:
+                    VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+                        Text("No Coordinator selected")
+                            .font(metrics.cardTitle)
+                        Text("The board still shows workspace sessions. Coordinator identity can be selected or auto-detected by structured lineage in later layers.")
+                            .font(metrics.body)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(metrics.cardPadding)
+            .coordinatorCardBackground(
+                cornerRadius: metrics.cardCornerRadius,
+                fillOpacity: CoordinatorStyle.railCardFillOpacity,
+                strokeOpacity: 0
+            )
+
+            Group {
+                if rail.isComposerEnabled {
+                    coordinatorComposer(rail, metrics: metrics)
+                } else {
+                    coordinatorComposerFallback(rail, metrics: metrics)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(metrics.cardPadding)
+            .coordinatorCardBackground(
+                cornerRadius: metrics.cardCornerRadius,
+                fillOpacity: CoordinatorStyle.railCardFillOpacity,
+                strokeOpacity: 0
+            )
 
             Spacer()
         }
-        .padding(16)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(CoordinatorStyle.panelFillOpacity))
+        .padding(metrics.outerPadding)
+        .coordinatorSidebarPanel(edge: .trailing)
     }
 
-    private func boardView(sections: [CoordinatorModeStatusSection]) -> some View {
-        ScrollView([.horizontal, .vertical]) {
-            HStack(alignment: .top, spacing: 12) {
-                ForEach(sections, id: \.group) { section in
-                    boardColumn(section: section)
-                        .frame(width: 245)
-                }
+    private enum SidebarTitlebarControlPlacement {
+        case leading
+        case trailing
+    }
+
+    private func coordinatorSidebarTitlebarLane(
+        metrics: CoordinatorVisualMetrics,
+        controlPlacement: SidebarTitlebarControlPlacement,
+        @ViewBuilder title: () -> some View,
+        @ViewBuilder control: () -> some View
+    ) -> some View {
+        HStack(spacing: metrics.smallSpacing) {
+            if controlPlacement == .leading {
+                control()
             }
-            .padding(16)
+
+            title()
+
+            Spacer(minLength: 0)
+
+            if controlPlacement == .trailing {
+                control()
+            }
+        }
+        .frame(height: metrics.railTitlebarLaneHeight)
+    }
+
+    private func coordinatorRailTitlebarLane(metrics: CoordinatorVisualMetrics) -> some View {
+        coordinatorSidebarTitlebarLane(metrics: metrics, controlPlacement: .trailing) {
+            Label("Coordinator", systemImage: "rectangle.3.group.bubble")
+                .font(metrics.bodyMedium)
+                .foregroundStyle(.secondary)
+                .labelStyle(.titleAndIcon)
+                .lineLimit(1)
+        } control: {
+            CoordinatorRailToggleButton(isRailVisible: true, metrics: metrics) {
+                toggleCoordinatorRail()
+            }
         }
     }
 
-    private func boardColumn(section: CoordinatorModeStatusSection) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private func toggleCoordinatorRail() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isCoordinatorRailVisible.toggle()
+        }
+    }
+
+    private func boardView(sections: [CoordinatorModeStatusSection], metrics: CoordinatorVisualMetrics) -> some View {
+        ScrollView([.horizontal, .vertical]) {
+            HStack(alignment: .top, spacing: metrics.boardColumnSpacing) {
+                ForEach(sections, id: \.group) { section in
+                    boardColumn(section: section, metrics: metrics)
+                        .frame(width: metrics.boardColumnWidth)
+                }
+            }
+            .padding(metrics.outerPadding)
+        }
+    }
+
+    private func boardColumn(section: CoordinatorModeStatusSection, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.columnSpacing) {
             HStack {
                 Text(section.group.displayName)
-                    .font(CoordinatorTypography.sectionTitle)
+                    .font(metrics.sectionTitle)
                 Spacer()
                 Text("\(section.rows.count)")
-                    .font(CoordinatorTypography.chip)
+                    .font(metrics.chip)
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                    .padding(.horizontal, metrics.miniPillHorizontalPadding)
+                    .padding(.vertical, metrics.miniPillVerticalPadding)
+                    .background(Capsule().fill(Color.secondary.opacity(0.08)))
+                    .overlay(
+                        Capsule().stroke(Color.secondary.opacity(0.12), lineWidth: 0.5)
+                    )
             }
 
             if section.rows.isEmpty {
                 Text("No sessions")
-                    .font(CoordinatorTypography.body)
-                    .foregroundStyle(.secondary)
+                    .font(metrics.micro)
+                    .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .coordinatorCardBackground(cornerRadius: 10, fillOpacity: CoordinatorStyle.groupedFillOpacity)
+                    .padding(metrics.emptyColumnPadding)
+                    .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius, fillOpacity: CoordinatorStyle.emptyColumnFillOpacity)
             } else {
                 ForEach(section.rows) { row in
-                    sessionCard(row)
+                    sessionCard(row, metrics: metrics)
                 }
             }
         }
-        .padding(10)
+        .padding(metrics.columnPadding)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(section.group.columnTint)
+            RoundedRectangle(cornerRadius: metrics.columnCornerRadius, style: .continuous)
+                .fill(section.group.columnTint(isEmpty: section.rows.isEmpty))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: metrics.columnCornerRadius, style: .continuous)
+                .stroke(CoordinatorStyle.hairline, lineWidth: 0.5)
         )
     }
 
-    private func sessionCard(_ row: CoordinatorModeRow) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private func sessionCard(_ row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
             HStack(alignment: .top) {
                 Text(row.title)
-                    .font(CoordinatorTypography.cardTitle)
+                    .font(metrics.cardTitle)
                     .foregroundStyle(.primary)
                     .lineLimit(2)
-                Spacer(minLength: 8)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
+                Spacer(minLength: metrics.controlSpacing)
                 if row.isCoordinator {
                     Image(systemName: "crown")
-                        .foregroundStyle(.yellow)
+                        .font(.system(size: metrics.smallIconSize))
+                        .foregroundStyle(.yellow.opacity(0.8))
                 }
             }
 
-            rowMetadata(row)
+            rowMetadata(row, metrics: metrics)
 
             if let pending = row.pendingInteraction {
-                pendingSummary(pending)
+                pendingSummary(pending, metrics: metrics)
             }
 
             if row.isPersistedOnly {
-                statusChip("Persisted only", color: .secondary)
+                statusChip("Persisted only", color: .secondary, metrics: metrics)
             }
 
-            openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode")
+            openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
         }
-        .padding(12)
+        .padding(metrics.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .coordinatorCardBackground(cornerRadius: 12, isSelected: row.id == selectedRowID)
+        .coordinatorCardBackground(
+            cornerRadius: metrics.cardCornerRadius,
+            isSelected: row.id == selectedRowID,
+            isHovered: row.id == hoveredRowID
+        )
         .contentShape(Rectangle())
         .onTapGesture {
             selectedRowID = row.id
+            isInspectorVisible = true
+        }
+        .onHover { hovering in
+            hoveredRowID = hovering ? row.id : (hoveredRowID == row.id ? nil : hoveredRowID)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Coordinator session \(row.title)")
     }
 
-    private func listView(sections: [CoordinatorModeStatusSection]) -> some View {
+    private func listView(sections: [CoordinatorModeStatusSection], metrics: CoordinatorVisualMetrics) -> some View {
         List(selection: $selectedRowID) {
             ForEach(sections, id: \.group) { section in
                 Section("\(section.group.displayName) (\(section.rows.count))") {
                     ForEach(section.rows) { row in
-                        listRow(row)
+                        listRow(row, metrics: metrics)
                             .tag(row.id)
                     }
                 }
@@ -282,158 +492,183 @@ struct CoordinatorModeView: View {
         .listStyle(.sidebar)
     }
 
-    private func listRow(_ row: CoordinatorModeRow) -> some View {
-        HStack(spacing: 10) {
+    private func listRow(_ row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.controlSpacing) {
             Circle()
-                .fill(row.statusGroup.accentColor)
-                .frame(width: 8, height: 8)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
+                .fill(row.statusGroup.accentColor.opacity(0.65))
+                .frame(width: metrics.statusDotSize, height: metrics.statusDotSize)
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                HStack(spacing: metrics.smallSpacing) {
                     Text(row.title)
-                        .font(CoordinatorTypography.cardTitle)
+                        .font(metrics.cardTitle)
                         .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(1)
                     if row.isCoordinator {
                         Label("Coordinator", systemImage: "crown")
                             .labelStyle(.iconOnly)
-                            .foregroundStyle(.yellow)
+                            .font(.system(size: metrics.smallIconSize))
+                            .foregroundStyle(.yellow.opacity(0.8))
                     }
                     if row.isPersistedOnly {
                         Text("stale")
-                            .font(CoordinatorTypography.microMedium)
+                            .font(metrics.microMedium)
                             .foregroundStyle(.secondary)
                     }
                 }
-                rowMetadata(row)
+                rowMetadata(row, metrics: metrics)
             }
             Spacer()
-            openAgentChatButton(route: row.openAgentChatRoute, title: "Open")
+            openAgentChatButton(route: row.openAgentChatRoute, title: "Open", metrics: metrics)
         }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(row.id == selectedRowID ? CoordinatorStyle.selectedFill : Color.clear)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(row.id == selectedRowID ? CoordinatorStyle.selectedBorder : Color.clear, lineWidth: 1)
+        .padding(.vertical, metrics.listRowVerticalPadding)
+        .padding(.horizontal, metrics.listRowHorizontalPadding)
+        .coordinatorCardBackground(
+            cornerRadius: metrics.cardCornerRadius,
+            isSelected: row.id == selectedRowID,
+            isHovered: row.id == hoveredRowID,
+            fillOpacity: 0
         )
         .listRowBackground(Color.clear)
         .contentShape(Rectangle())
         .onTapGesture {
             selectedRowID = row.id
+            isInspectorVisible = true
+        }
+        .onHover { hovering in
+            hoveredRowID = hovering ? row.id : (hoveredRowID == row.id ? nil : hoveredRowID)
         }
     }
 
-    private func inspector(row: CoordinatorModeRow) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 8) {
-                    Label("Inspector", systemImage: "sidebar.right")
-                        .font(CoordinatorTypography.sectionTitle)
-                    Spacer()
-                    Button {
-                        selectedRowID = nil
-                    } label: {
-                        Label("Hide Inspector", systemImage: "sidebar.right")
-                    }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .help("Hide Inspector")
-                    .accessibilityLabel("Hide Inspector")
+    private func inspector(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(spacing: 0) {
+            coordinatorSidebarTitlebarLane(metrics: metrics, controlPlacement: .leading) {
+                EmptyView()
+            } control: {
+                CoordinatorRailToggleButton(
+                    isRailVisible: true,
+                    metrics: metrics,
+                    systemImage: "sidebar.right",
+                    visibleAccessibilityLabel: "Hide Inspector",
+                    hiddenAccessibilityLabel: "Show Inspector"
+                ) {
+                    isInspectorVisible = false
                 }
-
-                Text(row.title)
-                    .font(CoordinatorTypography.inspectorTitle)
-                    .lineLimit(3)
-
-                inspectorGroup("Status") {
-                    keyValue("Group", row.statusGroup.displayName)
-                    keyValue("Run state", row.runState.displayName)
-                    keyValue("Updated", row.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                    keyValue("Source", row.isPersistedOnly ? "Persisted metadata" : "Current window live state")
-                }
-
-                inspectorGroup("Session") {
-                    keyValue("Provider", row.providerName ?? "Unknown")
-                    keyValue("Model", row.modelName ?? "Unknown")
-                    keyValue("Children", "\(row.childSessionIDs.count)")
-                    keyValue("MCP originated", row.isMCPOriginated ? "Yes" : "No")
-                    if let workstream = row.workstream {
-                        keyValue("Workstream", workstream.label)
-                        if let branch = workstream.branch {
-                            keyValue("Branch", branch)
-                        }
-                    }
-                }
-
-                if let merge = row.mergeAttention {
-                    inspectorGroup("Merge attention") {
-                        keyValue("Status", merge.status.rawValue)
-                        keyValue("Conflicts", "\(merge.conflictFileCount)")
-                    }
-                }
-
-                if let pending = row.pendingInteraction {
-                    inspectorGroup("Pending interaction") {
-                        keyValue("Kind", pending.kind.displayLabel)
-                        if let title = pending.title {
-                            keyValue("Title", title)
-                        }
-                        if let prompt = pending.prompt {
-                            Text(prompt)
-                                .font(CoordinatorTypography.body)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        ForEach(pending.details, id: \.label) { detail in
-                            keyValue(detail.label, detail.value)
-                        }
-                    }
-                }
-
-                openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode")
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, metrics.outerPadding)
+            .padding(.top, metrics.outerPadding)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
+                    HStack(spacing: metrics.controlSpacing) {
+                        Text("Inspector")
+                            .font(metrics.bodyMedium)
+                    }
+                    .coordinatorSidebarHeaderPill(cornerRadius: metrics.headerPillCornerRadius)
+
+                    VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                        Text(row.title)
+                            .font(metrics.inspectorTitle)
+                            .lineLimit(3)
+
+                        Text(inspectorObjectSubtitle(for: row))
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    .padding(.bottom, metrics.tightSpacing)
+
+                    inspectorGroup("Status", metrics: metrics) {
+                        keyValue("Group", row.statusGroup.displayName, metrics: metrics)
+                        keyValue("Run state", row.runState.displayName, metrics: metrics)
+                        keyValue("Updated", row.updatedAt.formatted(date: .abbreviated, time: .shortened), metrics: metrics)
+                        keyValue("Source", row.isPersistedOnly ? "Persisted metadata" : "Current window live state", metrics: metrics)
+                    }
+
+                    inspectorGroup("Session", metrics: metrics) {
+                        keyValue("Provider", row.providerName ?? "Unknown", metrics: metrics)
+                        keyValue("Model", row.modelName ?? "Unknown", metrics: metrics)
+                        keyValue("Children", "\(row.childSessionIDs.count)", metrics: metrics)
+                        keyValue("MCP originated", row.isMCPOriginated ? "Yes" : "No", metrics: metrics)
+                        if let workstream = row.workstream {
+                            keyValue("Workstream", workstream.label, metrics: metrics)
+                            if let branch = workstream.branch {
+                                keyValue("Branch", branch, metrics: metrics)
+                            }
+                        }
+                    }
+
+                    if let merge = row.mergeAttention {
+                        inspectorGroup("Merge attention", metrics: metrics) {
+                            keyValue("Status", merge.status.rawValue, metrics: metrics)
+                            keyValue("Conflicts", "\(merge.conflictFileCount)", metrics: metrics)
+                        }
+                    }
+
+                    if let pending = row.pendingInteraction {
+                        inspectorGroup("Pending interaction", metrics: metrics) {
+                            keyValue("Kind", pending.kind.displayLabel, metrics: metrics)
+                            if let title = pending.title {
+                                keyValue("Title", title, metrics: metrics)
+                            }
+                            if let prompt = pending.prompt {
+                                Text(prompt)
+                                    .font(metrics.body)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            ForEach(pending.details, id: \.label) { detail in
+                                keyValue(detail.label, detail.value, metrics: metrics)
+                            }
+                        }
+                    }
+
+                    openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
+                }
+                .padding(metrics.outerPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(CoordinatorStyle.panelFillOpacity))
+        .coordinatorSidebarPanel(edge: .leading)
     }
 
-    private func coordinatorComposer(_ rail: CoordinatorModeCoordinatorRail) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private func coordinatorComposer(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
             HStack {
                 Label("Directive", systemImage: "paperplane")
-                    .font(.subheadline.weight(.semibold))
+                    .font(metrics.cardTitle)
                 Spacer()
                 Button("Clear Chat") {
                     viewModel.clearCoordinatorRailTranscript()
                 }
                 .buttonStyle(.link)
-                .font(.caption)
+                .font(metrics.micro)
                 .disabled(viewModel.railTranscriptEntries.isEmpty)
             }
 
             if viewModel.railTranscriptEntries.isEmpty {
                 Text("Accepted directives appear here. Coordinator responses and child-session effects refresh through the board.")
-                    .font(.caption)
+                    .font(metrics.micro)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: metrics.tightSpacing) {
                         ForEach(viewModel.railTranscriptEntries) { entry in
-                            VStack(alignment: .leading, spacing: 3) {
+                            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
                                 Text(entry.role.displayName)
-                                    .font(.caption2.weight(.semibold))
+                                    .font(metrics.microMedium)
                                     .foregroundStyle(.secondary)
                                 Text(entry.text)
-                                    .font(.caption)
+                                    .font(metrics.micro)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
-                            .padding(8)
+                            .padding(metrics.pendingPadding)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .windowBackgroundColor)))
+                            .background(
+                                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                                    .fill(Color(nsColor: .windowBackgroundColor))
+                            )
                         }
                     }
                 }
@@ -442,7 +677,7 @@ struct CoordinatorModeView: View {
 
             if !rail.isComposerSendEnabled {
                 Text("Coordinator is mid-run. Send directives when it reaches an ordinary turn boundary.")
-                    .font(.caption)
+                    .font(metrics.micro)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -450,6 +685,7 @@ struct CoordinatorModeView: View {
             TextField("Message the Coordinator", text: $coordinatorDirectiveDraft, axis: .vertical)
                 .lineLimit(2 ... 5)
                 .textFieldStyle(.roundedBorder)
+                .font(metrics.body)
                 .disabled(isSubmittingCoordinatorDirective || !rail.isComposerSendEnabled)
                 .onSubmit {
                     submitCoordinatorDirective()
@@ -458,7 +694,7 @@ struct CoordinatorModeView: View {
             HStack {
                 if let notice = viewModel.composerNotice, !notice.isEmpty {
                     Text(notice)
-                        .font(.caption)
+                        .font(metrics.micro)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -473,16 +709,16 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func coordinatorComposerFallback(_ rail: CoordinatorModeCoordinatorRail) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private func coordinatorComposerFallback(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
             Label("Coordinator composer unavailable", systemImage: "lock")
-                .font(.subheadline.weight(.semibold))
+                .font(metrics.cardTitle)
             Text("The scoped composer is enabled only for a Coordinator with live state in this window.")
-                .font(.caption)
+                .font(metrics.micro)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if rail.openAgentChatRoute != nil {
-                openAgentChatButton(route: rail.openAgentChatRoute, title: "Open agent chat")
+                openAgentChatButton(route: rail.openAgentChatRoute, title: "Open agent chat", metrics: metrics)
             }
         }
     }
@@ -508,145 +744,148 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func mcpFooter(_ awareness: CoordinatorModeMCPAwareness) -> some View {
-        HStack(spacing: 10) {
+    private func inspectorObjectSubtitle(for row: CoordinatorModeRow) -> String {
+        var parts = [row.runState.displayName]
+        if let providerName = row.providerName {
+            parts.append(providerName)
+        }
+        parts.append(row.isMCPOriginated ? "MCP originated" : "App originated")
+        return parts.joined(separator: " · ")
+    }
+
+    private func mcpFooter(_ awareness: CoordinatorModeMCPAwareness, metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.controlSpacing) {
             Label(awareness.state.displayName, systemImage: awareness.state.systemImage)
-                .font(CoordinatorTypography.bodyMedium)
+                .font(metrics.bodyMedium)
             Text("Clients: \(awareness.connectedClientCount) connected, \(awareness.activeClientCount) active, \(awareness.idleClientCount) idle")
-                .font(CoordinatorTypography.body)
+                .font(metrics.body)
                 .foregroundStyle(.secondary)
             Text("In flight: \(awareness.inFlightToolCallCount)")
-                .font(CoordinatorTypography.body)
+                .font(metrics.body)
                 .foregroundStyle(.secondary)
             Spacer()
             if let recent = awareness.recentToolCalls.first {
                 Text("Recent: \(recent.clientName) → \(recent.toolName)")
-                    .font(CoordinatorTypography.body)
+                    .font(metrics.body)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             } else {
                 Text("No recent Coordinator MCP calls")
-                    .font(CoordinatorTypography.body)
+                    .font(metrics.body)
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(CoordinatorStyle.panelFillOpacity))
+        .padding(.horizontal, metrics.outerPadding)
+        .padding(.vertical, metrics.footerVerticalPadding)
+        .background(.regularMaterial)
     }
 
-    private func emptyState(snapshot: CoordinatorModeSnapshot) -> some View {
-        VStack(spacing: 10) {
+    private func emptyState(snapshot: CoordinatorModeSnapshot, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(spacing: metrics.columnSpacing) {
             Image(systemName: snapshot.workspaceID == nil ? "folder.badge.questionmark" : "rectangle.3.group.bubble")
-                .font(.system(size: 32))
+                .font(.system(size: metrics.emptyStateIconSize))
                 .foregroundStyle(.secondary)
             Text(snapshot.workspaceID == nil ? "Open a workspace" : "No agent sessions yet")
-                .font(CoordinatorTypography.headerTitle)
+                .font(metrics.headerTitle)
             Text("Coordinator mode renders active-workspace Agent Mode sessions when they exist.")
-                .font(CoordinatorTypography.sectionTitle)
+                .font(metrics.sectionTitle)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func rowMetadata(_ row: CoordinatorModeRow) -> some View {
-        HStack(spacing: 6) {
-            statusChip(row.runState.displayName, color: row.statusGroup.accentColor)
+    private func rowMetadata(_ row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.smallSpacing) {
+            statusChip(row.runState.displayName, color: row.statusGroup.accentColor, metrics: metrics)
             if let providerName = row.providerName {
                 Text(providerName)
-                    .font(CoordinatorTypography.body)
+                    .font(metrics.body)
                     .foregroundStyle(.secondary)
             }
             if let workstream = row.workstream {
                 Text(workstream.label)
-                    .font(CoordinatorTypography.body)
+                    .font(metrics.body)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
         }
     }
 
-    private func pendingSummary(_ pending: CoordinatorModePendingInteractionSummary) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+    private func pendingSummary(_ pending: CoordinatorModePendingInteractionSummary, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
             Label(pending.title ?? pending.kind.displayLabel, systemImage: "exclamationmark.bubble")
-                .font(CoordinatorTypography.bodySemibold)
-                .foregroundStyle(.orange)
+                .font(metrics.bodySemibold)
+                .foregroundStyle(.orange.opacity(0.85))
             if let prompt = pending.prompt {
                 Text(prompt)
-                    .font(CoordinatorTypography.body)
+                    .font(metrics.body)
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
             }
         }
-        .padding(8)
+        .padding(metrics.pendingPadding)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.orange.opacity(0.12))
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(Color.orange.opacity(0.08))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.orange.opacity(0.18), lineWidth: 1)
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(Color.orange.opacity(0.12), lineWidth: 1)
         )
     }
 
-    private func openAgentChatButton(route: AgentSessionDeepLinkRoute?, title: String) -> some View {
+    private func openAgentChatButton(route: AgentSessionDeepLinkRoute?, title: String, metrics: CoordinatorVisualMetrics) -> some View {
         Group {
             if let route {
                 Button(title) {
                     onOpenAgentChat(route)
                 }
                 .buttonStyle(.link)
-                .font(CoordinatorTypography.bodyMedium)
+                .font(metrics.bodyMedium)
             } else {
                 Text("Agent chat unavailable")
-                    .font(CoordinatorTypography.body)
+                    .font(metrics.body)
                     .foregroundStyle(.secondary)
             }
         }
     }
 
-    private func countPill(_ label: String, _ value: Int, color: Color) -> some View {
-        VStack(spacing: 2) {
-            Text("\(value)")
-                .font(CoordinatorTypography.countValue)
-            Text(label)
-                .font(CoordinatorTypography.micro)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Capsule().fill(color.opacity(0.12)))
-    }
-
-    private func statusChip(_ text: String, color: Color) -> some View {
+    private func statusChip(_ text: String, color: Color, metrics: CoordinatorVisualMetrics) -> some View {
         Text(text)
-            .font(CoordinatorTypography.chip)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(color.opacity(0.14)))
-            .foregroundStyle(color)
+            .font(metrics.chip)
+            .padding(.horizontal, metrics.miniPillHorizontalPadding)
+            .padding(.vertical, metrics.miniPillVerticalPadding)
+            .background(Capsule().fill(color.opacity(CoordinatorStyle.statusChipFillOpacity)))
+            .overlay(
+                Capsule().stroke(color.opacity(CoordinatorStyle.statusChipStrokeOpacity), lineWidth: 0.5)
+            )
+            .foregroundStyle(.secondary)
     }
 
-    private func inspectorGroup(_ title: String, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    private func inspectorGroup(
+        _ title: String,
+        metrics: CoordinatorVisualMetrics,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
             Text(title)
-                .font(CoordinatorTypography.cardTitle)
+                .font(metrics.cardTitle)
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .coordinatorCardBackground(cornerRadius: 10, fillOpacity: CoordinatorStyle.groupedFillOpacity)
+        .padding(metrics.cardPadding)
+        .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius, fillOpacity: CoordinatorStyle.groupedFillOpacity)
     }
 
-    private func keyValue(_ key: String, _ value: String) -> some View {
+    private func keyValue(_ key: String, _ value: String, metrics: CoordinatorVisualMetrics) -> some View {
         HStack(alignment: .top) {
             Text(key)
                 .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
+            Spacer(minLength: metrics.controlSpacing)
             Text(value)
                 .multilineTextAlignment(.trailing)
         }
-        .font(CoordinatorTypography.body)
+        .font(metrics.body)
     }
 
     private func filteredSections(from snapshot: CoordinatorModeSnapshot) -> [CoordinatorModeStatusSection] {
@@ -679,27 +918,273 @@ struct CoordinatorModeView: View {
     }
 }
 
-private enum CoordinatorTypography {
-    static let headerTitle = Font.system(size: 13, weight: .semibold)
-    static let sectionTitle = Font.system(size: 12, weight: .semibold)
-    static let inspectorTitle = Font.system(size: 14, weight: .semibold)
-    static let cardTitle = Font.system(size: 12, weight: .semibold)
-    static let body = Font.system(size: 11)
-    static let bodyMedium = Font.system(size: 11, weight: .medium)
-    static let bodySemibold = Font.system(size: 11, weight: .semibold)
-    static let micro = Font.system(size: 10)
-    static let microMedium = Font.system(size: 10, weight: .medium)
-    static let chip = Font.system(size: 10, weight: .medium)
-    static let countValue = Font.system(size: 13, weight: .semibold, design: .rounded).monospacedDigit()
+private struct CoordinatorRailToggleButton: View {
+    let isRailVisible: Bool
+    let metrics: CoordinatorVisualMetrics
+    var systemImage = "sidebar.left"
+    var visibleAccessibilityLabel = "Hide Coordinator Rail"
+    var hiddenAccessibilityLabel = "Show Coordinator Rail"
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: metrics.titlebarIconSize, weight: .medium))
+                .foregroundStyle(.primary.opacity(isHovering ? 0.95 : 0.68))
+                .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.titlebarButtonCornerRadius, style: .continuous)
+                .fill(titlebarButtonFill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.titlebarButtonCornerRadius, style: .continuous)
+                .stroke(CoordinatorStyle.hairline.opacity(isHovering ? 1 : 0), lineWidth: 0.5)
+        )
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                isHovering = hovering
+            }
+        }
+        .hoverTooltip(isRailVisible ? visibleAccessibilityLabel : hiddenAccessibilityLabel)
+        .accessibilityLabel(isRailVisible ? visibleAccessibilityLabel : hiddenAccessibilityLabel)
+    }
+
+    private var titlebarButtonFill: Color {
+        isHovering ? Color.primary.opacity(0.08) : Color.clear
+    }
+}
+
+private struct CoordinatorVisualMetrics {
+    let fontPreset: FontScalePreset
+
+    var headerTitle: Font {
+        fontPreset.swiftUIFont(sizeAtNormal: 13, weight: .semibold)
+    }
+
+    var sectionTitle: Font {
+        fontPreset.swiftUIFont(sizeAtNormal: 12, weight: .semibold)
+    }
+
+    var inspectorTitle: Font {
+        fontPreset.swiftUIFont(sizeAtNormal: 14, weight: .semibold)
+    }
+
+    var cardTitle: Font {
+        fontPreset.swiftUIFont(sizeAtNormal: 12, weight: .semibold)
+    }
+
+    var body: Font {
+        fontPreset.swiftUIFont(sizeAtNormal: 11)
+    }
+
+    var bodyMedium: Font {
+        fontPreset.swiftUIFont(sizeAtNormal: 11, weight: .medium)
+    }
+
+    var bodySemibold: Font {
+        fontPreset.swiftUIFont(sizeAtNormal: 11, weight: .semibold)
+    }
+
+    var micro: Font {
+        fontPreset.swiftUIFont(sizeAtNormal: 10)
+    }
+
+    var microMedium: Font {
+        fontPreset.swiftUIFont(sizeAtNormal: 10, weight: .medium)
+    }
+
+    var chip: Font {
+        fontPreset.swiftUIFont(sizeAtNormal: 10, weight: .medium)
+    }
+
+    var searchFont: Font {
+        fontPreset.swiftUIFont(sizeAtNormal: 13)
+    }
+
+    var railWidth: CGFloat {
+        fontPreset.scaledClamped(260, min: 260, max: 320)
+    }
+
+    var inspectorWidth: CGFloat {
+        fontPreset.scaledClamped(300, min: 300, max: 360)
+    }
+
+    var boardColumnWidth: CGFloat {
+        fontPreset.scaledClamped(245, min: 245, max: 300)
+    }
+
+    var controlWidth: CGFloat {
+        fontPreset.scaledClamped(160, min: 160, max: 190)
+    }
+
+    var searchWidth: CGFloat {
+        fontPreset.scaledClamped(220, min: 220, max: 280)
+    }
+
+    var outerPadding: CGFloat {
+        fontPreset.scaledClamped(16, max: 22)
+    }
+
+    var headerPadding: CGFloat {
+        fontPreset.scaledClamped(12, max: 16)
+    }
+
+    var railTitlebarLaneHeight: CGFloat {
+        fontPreset.scaledClamped(34, min: 34, max: 42)
+    }
+
+    var titlebarButtonSize: CGFloat {
+        fontPreset.scaledClamped(28, min: 28, max: 34)
+    }
+
+    var titlebarButtonCornerRadius: CGFloat {
+        fontPreset.scaledClamped(6, max: 8)
+    }
+
+    var titlebarIconSize: CGFloat {
+        fontPreset.scaledClamped(15, max: 18)
+    }
+
+    var sectionSpacing: CGFloat {
+        fontPreset.scaledClamped(14, max: 18)
+    }
+
+    var boardColumnSpacing: CGFloat {
+        fontPreset.scaledClamped(12, max: 16)
+    }
+
+    var columnSpacing: CGFloat {
+        fontPreset.scaledClamped(10, max: 14)
+    }
+
+    var controlSpacing: CGFloat {
+        fontPreset.scaledClamped(10, max: 14)
+    }
+
+    var smallSpacing: CGFloat {
+        fontPreset.scaledClamped(6, max: 8)
+    }
+
+    var tightSpacing: CGFloat {
+        fontPreset.scaledClamped(2, max: 3)
+    }
+
+    var cardInnerSpacing: CGFloat {
+        fontPreset.scaledClamped(8, max: 11)
+    }
+
+    var cardPadding: CGFloat {
+        fontPreset.scaledClamped(10, max: 14)
+    }
+
+    var emptyColumnPadding: CGFloat {
+        fontPreset.scaledClamped(8, max: 10)
+    }
+
+    var columnPadding: CGFloat {
+        fontPreset.scaledClamped(10, max: 14)
+    }
+
+    var pendingPadding: CGFloat {
+        fontPreset.scaledClamped(8, max: 12)
+    }
+
+    var footerVerticalPadding: CGFloat {
+        fontPreset.scaledClamped(8, max: 11)
+    }
+
+    var miniPillHorizontalPadding: CGFloat {
+        fontPreset.scaledClamped(7, max: 10)
+    }
+
+    var miniPillVerticalPadding: CGFloat {
+        fontPreset.scaledClamped(3, max: 5)
+    }
+
+    var listRowVerticalPadding: CGFloat {
+        fontPreset.scaledClamped(4, max: 6)
+    }
+
+    var listRowHorizontalPadding: CGFloat {
+        fontPreset.scaledClamped(6, max: 9)
+    }
+
+    var cardCornerRadius: CGFloat {
+        fontPreset.scaledClamped(10, max: 14)
+    }
+
+    var headerPillCornerRadius: CGFloat {
+        fontPreset.scaledClamped(16, max: 20)
+    }
+
+    var columnCornerRadius: CGFloat {
+        fontPreset.scaledClamped(14, max: 18)
+    }
+
+    var pendingCornerRadius: CGFloat {
+        fontPreset.scaledClamped(8, max: 12)
+    }
+
+    var searchCornerRadius: CGFloat {
+        fontPreset.scaledClamped(16, max: 20)
+    }
+
+    var searchElementSpacing: CGFloat {
+        fontPreset.scaledClamped(6, max: 8)
+    }
+
+    var searchHorizontalPadding: CGFloat {
+        fontPreset.scaledClamped(8, max: 12)
+    }
+
+    var searchVerticalPadding: CGFloat {
+        fontPreset.scaledClamped(6, max: 9)
+    }
+
+    var searchControlHeight: CGFloat {
+        fontPreset.scaledClamped(30, min: 30, max: 40)
+    }
+
+    var searchIconSize: CGFloat {
+        fontPreset.scaledClamped(14, max: 18)
+    }
+
+    var searchClearIconSize: CGFloat {
+        fontPreset.scaledClamped(12, max: 16)
+    }
+
+    var statusDotSize: CGFloat {
+        fontPreset.scaledClamped(8, max: 10)
+    }
+
+    var smallIconSize: CGFloat {
+        fontPreset.scaledClamped(12, max: 16)
+    }
+
+    var emptyStateIconSize: CGFloat {
+        fontPreset.scaledClamped(32, max: 40)
+    }
 }
 
 private enum CoordinatorStyle {
     static let cardFillOpacity = 0.35
-    static let panelFillOpacity = 0.35
-    static let groupedFillOpacity = 0.55
+    static let groupedFillOpacity = 0.18
+    static let railCardFillOpacity = 0.16
+    static let emptyColumnFillOpacity = 0.12
+    static let statusChipFillOpacity = 0.04
+    static let statusChipStrokeOpacity = 0.07
 
     static var hairline: Color {
         Color.secondary.opacity(0.15)
+    }
+
+    static var panelSeam: Color {
+        Color.secondary.opacity(0.10)
     }
 
     static var selectedFill: Color {
@@ -709,21 +1194,81 @@ private enum CoordinatorStyle {
     static var selectedBorder: Color {
         Color.accentColor.opacity(0.25)
     }
+
+    static var hoverBorder: Color {
+        Color.secondary.opacity(0.28)
+    }
+}
+
+private enum CoordinatorSidebarPanelEdge {
+    case leading
+    case trailing
+
+    var alignment: Alignment {
+        switch self {
+        case .leading: .leading
+        case .trailing: .trailing
+        }
+    }
 }
 
 private extension View {
+    func coordinatorSidebarPanel(edge: CoordinatorSidebarPanelEdge) -> some View {
+        background(
+            CoordinatorSidebarMaterialView()
+                .ignoresSafeArea(.container, edges: .top)
+        )
+        .overlay(alignment: edge.alignment) {
+            GeometryReader { proxy in
+                Rectangle()
+                    .fill(CoordinatorStyle.panelSeam)
+                    .frame(width: 0.5, height: proxy.size.height + proxy.safeAreaInsets.top)
+                    .offset(y: -proxy.safeAreaInsets.top)
+            }
+            .frame(width: 0.5)
+        }
+    }
+
+    func coordinatorSidebarHeaderPill(cornerRadius: CGFloat) -> some View {
+        padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(CoordinatorStyle.hairline, lineWidth: 0.5)
+            )
+    }
+
     func coordinatorCardBackground(
         cornerRadius: CGFloat,
         isSelected: Bool = false,
-        fillOpacity: Double = CoordinatorStyle.cardFillOpacity
+        isHovered: Bool = false,
+        fillOpacity: Double = CoordinatorStyle.cardFillOpacity,
+        strokeOpacity: Double = 0.15
     ) -> some View {
-        background(
+        let neutralFill = fillOpacity > 0
+            ? Color(nsColor: .controlBackgroundColor).opacity(fillOpacity)
+            : Color.clear
+        let resolvedFill = isSelected
+            ? CoordinatorStyle.selectedFill
+            : (isHovered ? Color(nsColor: .controlBackgroundColor).opacity(0.18) : neutralFill)
+        let neutralStroke = fillOpacity > 0 && strokeOpacity > 0
+            ? Color.secondary.opacity(strokeOpacity)
+            : Color.clear
+        let resolvedStroke = isSelected
+            ? CoordinatorStyle.selectedBorder
+            : (isHovered ? CoordinatorStyle.hoverBorder : neutralStroke)
+
+        return background(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(isSelected ? CoordinatorStyle.selectedFill : Color(nsColor: .controlBackgroundColor).opacity(fillOpacity))
+                .fill(resolvedFill)
         )
         .overlay(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(isSelected ? CoordinatorStyle.selectedBorder : CoordinatorStyle.hairline, lineWidth: 1)
+                .stroke(resolvedStroke, lineWidth: 1)
         )
     }
 }
@@ -767,8 +1312,8 @@ private extension CoordinatorModeStatusGroup {
         }
     }
 
-    var columnTint: Color {
-        accentColor.opacity(self == .idle || self == .done ? 0.055 : 0.075)
+    func columnTint(isEmpty: Bool) -> Color {
+        accentColor.opacity(isEmpty ? 0.015 : (self == .idle || self == .done ? 0.04 : 0.055))
     }
 }
 
