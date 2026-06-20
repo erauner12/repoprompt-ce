@@ -91,6 +91,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [ ] 10.7 Add UI previews or smoke states for board-default, board-card-selected, inspector-collapsed, list view, sort menu, Coordinator-composer enabled/disabled, empty workspace, active, needs-user, blocked, MCP-off, MCP-empty, MCP-active, filtered, zero-Coordinator, stale/persisted-only card/row, lower-priority column collapsed/de-emphasized, and multiple-Coordinator most-recent states.
 - [x] 10.8 Bind the PR3 Coordinator shell to Agent Mode font-scale, search-field, chip, card, and subtle selection/hover chrome without changing snapshot or write-control behavior.
 - [x] 10.9 Keep the production-demo rail visually framed as an agentic Coordinator conversation rather than an ordinary Agent Mode session proxy.
+- [x] 10.10 Widen the production-demo Coordinator rail and render Coordinator/event messages through the shared Agent Mode Markdown renderer.
 
 ## 11. Validation
 

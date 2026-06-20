@@ -139,6 +139,8 @@ The production-feeling demo may still deliver directives through a selected, aut
 
 Agent Mode deep links remain available for supervised delegate rows, pending summaries, and detail that belongs in Agent Mode. They should not be used to invite the user to inspect or drive the Coordinator backing runtime as if it were part of the supervised fleet. When a first-class Coordinator marker exists, the backing runtime should be excluded at the shared enumeration boundary used by Coordinator mode groups, Agent Mode sidebar/session lists, and MCP session-list surfaces. Before that marker exists, local Coordinator-rail suppression is an acceptable demo bridge, but it must be treated as temporary presentation behavior rather than final architecture.
 
+The rail conversation should also be wide and rich enough to read as a first-class command log. Coordinator responses may contain bullets, links, code fences, and inline code, so production-demo rows should reuse the same Markdown rendering substrate used by Agent Mode assistant messages instead of presenting raw Markdown as plain wrapped text.
+
 ### 14. Inspector stays sourced; full logs stay in Agent Mode
 
 The v1 inspector / trailing detail column shows sourced summaries only: status, pending interaction, blocker, worktree/merge, route, and MCP/session metadata. Full transcript, raw log, file, and diff inspection remain in Agent Mode via `Open agent chat`. A Coordinator-view-native full-log toggle is a follow-up unless backed by a sourced activity projection.

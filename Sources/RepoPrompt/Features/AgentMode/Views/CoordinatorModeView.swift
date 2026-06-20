@@ -59,7 +59,7 @@ struct CoordinatorModeView: View {
             let metrics = visualMetrics
             let forceList = proxy.size.width < 540 && presentationMode == .board
             let useList = presentationMode == .list || forceList
-            let railIsAvailable = proxy.size.width >= 980
+            let railIsAvailable = proxy.size.width >= metrics.railAvailableWidth
             let inspectorIsAvailable = proxy.size.width >= 1200
             coordinatorShell(
                 snapshot: snapshot,
@@ -784,11 +784,7 @@ struct CoordinatorModeView: View {
                 }
                 .foregroundStyle(entry.role.labelColor)
 
-                Text(entry.text)
-                    .font(metrics.body)
-                    .foregroundStyle(isEvent ? .secondary : .primary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                coordinatorConversationBody(entry, metrics: metrics)
             }
             .padding(metrics.pendingPadding)
             .frame(maxWidth: isUser ? metrics.userBubbleMaxWidth : .infinity, alignment: .leading)
@@ -806,6 +802,29 @@ struct CoordinatorModeView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+    }
+
+    @ViewBuilder
+    private func coordinatorConversationBody(
+        _ entry: CoordinatorModeRailTranscriptEntry,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        if entry.role == .user {
+            Text(entry.text)
+                .font(metrics.body)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            MarkdownTextView(
+                text: entry.text,
+                isMarkdown: true,
+                allowInteraction: true,
+                forceTextColor: entry.role == .event ? .secondary : nil
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private func coordinatorComposer(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
@@ -1207,8 +1226,12 @@ private struct CoordinatorVisualMetrics {
         fontPreset.swiftUIFont(sizeAtNormal: 13)
     }
 
+    var railAvailableWidth: CGFloat {
+        fontPreset.scaledClamped(1040, min: 1040, max: 1180)
+    }
+
     var railWidth: CGFloat {
-        fontPreset.scaledClamped(260, min: 260, max: 320)
+        fontPreset.scaledClamped(340, min: 340, max: 420)
     }
 
     var inspectorWidth: CGFloat {
@@ -1380,7 +1403,7 @@ private struct CoordinatorVisualMetrics {
     }
 
     var userBubbleMaxWidth: CGFloat {
-        fontPreset.scaledClamped(210, min: 210, max: 260)
+        fontPreset.scaledClamped(300, min: 300, max: 360)
     }
 
     var composerCornerRadius: CGFloat {
