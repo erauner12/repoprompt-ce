@@ -570,41 +570,92 @@ struct CoordinatorModeView: View {
     }
 
     private func listView(sections: [CoordinatorModeStatusSection], metrics: CoordinatorVisualMetrics) -> some View {
-        List(selection: $selectedRowID) {
-            ForEach(sections, id: \.group) { section in
-                Section("\(section.group.displayName) (\(section.rows.count))") {
-                    ForEach(section.rows) { row in
+        let rows = sortedListRows(from: sections)
+
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: metrics.listRowSpacing) {
+                if rows.isEmpty {
+                    Text("No matching sessions")
+                        .font(metrics.bodyMedium)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(metrics.outerPadding)
+                } else {
+                    ForEach(rows) { row in
                         listRow(row, metrics: metrics)
-                            .tag(row.id)
                     }
                 }
             }
+            .padding(metrics.outerPadding)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .listStyle(.sidebar)
+    }
+
+    private func sortedListRows(from sections: [CoordinatorModeStatusSection]) -> [CoordinatorModeRow] {
+        sections.flatMap(\.rows).sorted { lhs, rhs in
+            switch viewModel.sortMode {
+            case .lastUpdated:
+                if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+            case .name:
+                let compare = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+                if compare != .orderedSame { return compare == .orderedAscending }
+            case .priority:
+                switch (lhs.priority, rhs.priority) {
+                case let (lhsPriority?, rhsPriority?) where lhsPriority != rhsPriority:
+                    return lhsPriority > rhsPriority
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+                }
+            }
+            let titleCompare = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+            if titleCompare != .orderedSame { return titleCompare == .orderedAscending }
+            return lhs.sessionID.uuidString < rhs.sessionID.uuidString
+        }
     }
 
     private func listRow(_ row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
-        HStack(spacing: metrics.controlSpacing) {
-            Circle()
-                .fill(row.statusGroup.accentColor.opacity(0.65))
-                .frame(width: metrics.statusDotSize, height: metrics.statusDotSize)
-            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                HStack(spacing: metrics.smallSpacing) {
-                    Text(row.title)
-                        .font(metrics.cardTitle)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .layoutPriority(1)
-                    if row.isPersistedOnly {
-                        Text("stale")
-                            .font(metrics.microMedium)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                rowMetadata(row, metrics: metrics)
+        HStack(spacing: metrics.listColumnSpacing) {
+            statusChip(row.runState.displayName, color: row.statusGroup.accentColor, metrics: metrics)
+                .frame(width: metrics.listStateColumnWidth, alignment: .leading)
+
+            Text(row.title)
+                .font(metrics.cardTitle)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
+
+            if let identity = listIdentityText(for: row) {
+                Text(identity)
+                    .font(metrics.body)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(width: metrics.listIdentityColumnWidth, alignment: .leading)
+            } else {
+                Color.clear
+                    .frame(width: metrics.listIdentityColumnWidth)
             }
-            Spacer()
+
+            Text(listWorkstreamText(for: row))
+                .font(metrics.body)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(width: metrics.listWorkstreamColumnWidth, alignment: .leading)
+
+            Text(row.updatedAt.formatted(date: .omitted, time: .shortened))
+                .font(metrics.body)
+                .foregroundStyle(.tertiary)
+                .frame(width: metrics.listUpdatedColumnWidth, alignment: .trailing)
+
             openAgentChatButton(route: row.openAgentChatRoute, title: "Open", metrics: metrics)
+                .frame(width: metrics.listOpenColumnWidth, alignment: .trailing)
         }
         .padding(.vertical, metrics.listRowVerticalPadding)
         .padding(.horizontal, metrics.listRowHorizontalPadding)
@@ -612,9 +663,9 @@ struct CoordinatorModeView: View {
             cornerRadius: metrics.cardCornerRadius,
             isSelected: row.id == selectedRowID,
             isHovered: row.id == hoveredRowID,
-            fillOpacity: 0
+            fillOpacity: CoordinatorStyle.listRowFillOpacity,
+            strokeOpacity: 0.08
         )
-        .listRowBackground(Color.clear)
         .contentShape(Rectangle())
         .onTapGesture {
             selectedRowID = row.id
@@ -623,6 +674,27 @@ struct CoordinatorModeView: View {
         .onHover { hovering in
             hoveredRowID = hovering ? row.id : (hoveredRowID == row.id ? nil : hoveredRowID)
         }
+    }
+
+    private func listIdentityText(for row: CoordinatorModeRow) -> String? {
+        var parts: [String] = []
+        if let providerName = row.providerName {
+            parts.append(providerName)
+        }
+        if let modelName = row.modelName, modelName != row.providerName {
+            parts.append(modelName)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func listWorkstreamText(for row: CoordinatorModeRow) -> String {
+        guard let workstream = row.workstream else {
+            return row.isPersistedOnly ? "Persisted" : "Current window"
+        }
+        if let branch = workstream.branch, branch != workstream.label {
+            return "\(workstream.label) · \(branch)"
+        }
+        return workstream.label
     }
 
     private func inspector(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
@@ -1463,11 +1535,39 @@ private struct CoordinatorVisualMetrics {
     }
 
     var listRowVerticalPadding: CGFloat {
-        fontPreset.scaledClamped(4, max: 6)
+        fontPreset.scaledClamped(7, max: 9)
     }
 
     var listRowHorizontalPadding: CGFloat {
-        fontPreset.scaledClamped(6, max: 9)
+        fontPreset.scaledClamped(10, max: 14)
+    }
+
+    var listRowSpacing: CGFloat {
+        fontPreset.scaledClamped(6, max: 8)
+    }
+
+    var listColumnSpacing: CGFloat {
+        fontPreset.scaledClamped(12, max: 16)
+    }
+
+    var listStateColumnWidth: CGFloat {
+        fontPreset.scaledClamped(92, min: 92, max: 118)
+    }
+
+    var listIdentityColumnWidth: CGFloat {
+        fontPreset.scaledClamped(150, min: 150, max: 210)
+    }
+
+    var listWorkstreamColumnWidth: CGFloat {
+        fontPreset.scaledClamped(150, min: 150, max: 220)
+    }
+
+    var listUpdatedColumnWidth: CGFloat {
+        fontPreset.scaledClamped(72, min: 72, max: 92)
+    }
+
+    var listOpenColumnWidth: CGFloat {
+        fontPreset.scaledClamped(54, min: 54, max: 68)
     }
 
     var cardCornerRadius: CGFloat {
@@ -1586,6 +1686,7 @@ private enum CoordinatorStyle {
     static let emptyColumnFillOpacity = 0.12
     static let statusChipFillOpacity = 0.04
     static let statusChipStrokeOpacity = 0.07
+    static let listRowFillOpacity = 0.10
 
     static var hairline: Color {
         Color.secondary.opacity(0.15)
