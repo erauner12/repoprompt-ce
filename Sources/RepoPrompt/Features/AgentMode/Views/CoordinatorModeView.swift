@@ -544,15 +544,15 @@ struct CoordinatorModeView: View {
             coordinatorSidebarTitlebarLane(metrics: metrics, controlPlacement: .leading) {
                 EmptyView()
             } control: {
-                Button {
+                CoordinatorRailToggleButton(
+                    isRailVisible: true,
+                    metrics: metrics,
+                    systemImage: "sidebar.right",
+                    visibleAccessibilityLabel: "Hide Inspector",
+                    hiddenAccessibilityLabel: "Show Inspector"
+                ) {
                     isInspectorVisible = false
-                } label: {
-                    Image(systemName: "sidebar.right")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .hoverTooltip("Hide Inspector")
-                .accessibilityLabel("Hide Inspector")
             }
             .padding(.horizontal, metrics.outerPadding)
 
