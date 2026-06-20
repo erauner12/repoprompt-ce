@@ -175,6 +175,21 @@ The final storage decision depends on the lifecycle/runtime implementation, but 
 
 The first directive model should include a small set of explicit verbs: list, start/spawn, poll/wait, steer/message, and summarize/export. Each directive records source, target, action type, lifecycle handle, status, and failure information. Higher-risk Coordinator operations such as respond, cancel/stop, approvals, worktree mutation, and tab focus remain deferred until their authorization and audit semantics are designed.
 
+Coordinator v1 should feel like a human-directed command rail: the user gives a directive, the Coordinator decomposes or delegates within the accepted tool boundary, and the user can observe deterministic state as delegated sessions progress. Autonomy, including follow-up directives triggered by observed session lifecycle changes, is deferred to a later spec.
+
+
+#### Deferred autonomy examples
+
+These examples document the boundary only. Coordinator v1 does not perform these follow-up directives autonomously.
+
+| Observed condition | Coordinator v1 behavior | Later autonomy spec could allow |
+| --- | --- | --- |
+| Delegated agent completes | Update status/summaries and wait for user direction. | Summarize and start the next planned phase. |
+| Delegated agent is blocked or waiting | Surface actionable state to the user. | Ask the user a targeted question or route a response if authorized. |
+| Delegated agent reports failure | Record failed outcome and summarize artifacts. | Spawn a fix or investigation agent. |
+| Delegated agent appears stale or long-running | Surface stale/long-running state. | Request confirmation to cancel, restart, or reassign. |
+| Work appears ready to integrate | Report completion and artifact refs. | Start a review, merge, or check workflow under explicit policy. |
+
 Directive status should derive from native lifecycle state, pending-interaction records, and durable artifact refs. It should not rely on assistant prose or absence of an error message.
 
 This keeps the Coordinator role from becoming an ad hoc command box and aligns with the later Layer 2/3 direction already described by `add-coordinator-mode/end-state.md`.

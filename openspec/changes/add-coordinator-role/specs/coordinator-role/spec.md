@@ -144,6 +144,11 @@ The system SHALL represent Coordinator role actions as structured, auditable dir
 - **THEN** it SHALL limit directive actions to the accepted initial set, expected to include list, start or spawn, poll or wait, message or steer, and summarize or export
 - **AND** higher-risk actions SHALL remain unavailable until explicitly specified.
 
+#### Scenario: Session state changes without a user directive
+- **WHEN** a supervised Agent task/session changes state after the user's last directive
+- **THEN** the first Coordinator role MAY update status, summaries, and directive records from sourced lifecycle state
+- **AND** it SHALL NOT issue new directives from observed session lifecycle changes unless a later accepted autonomy spec grants that behavior.
+
 #### Scenario: Directive fails
 - **WHEN** a Coordinator directive cannot be delivered or completed
 - **THEN** the system SHALL surface a structured failure state to the Coordinator runtime or view

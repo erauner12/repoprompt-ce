@@ -47,7 +47,8 @@
 - [ ] 6.1 Define the structured Coordinator directive record with source, target, action type, lifecycle handle, status, and failure fields.
 - [ ] 6.2 Implement the initial directive verbs: list, start/spawn, poll/wait, message/steer, and summarize/export.
 - [ ] 6.3 Surface directive delivery/completion/failure states from native lifecycle state, pending interactions, and artifact refs without parsing assistant prose.
-- [ ] 6.4 Add tests for successful directives, failed delivery, terminal/actionable transitions, and unsupported higher-risk actions.
+- [ ] 6.4 Ensure Coordinator v1 remains human-directed: observed session lifecycle changes may update sourced status/summaries, but must not trigger new directives without a later accepted autonomy spec.
+- [ ] 6.5 Add tests for successful directives, failed delivery, terminal/actionable transitions, no-autonomous-dispatch from background session changes, and unsupported higher-risk actions.
 
 ## 7. Coordinator view integration
 
