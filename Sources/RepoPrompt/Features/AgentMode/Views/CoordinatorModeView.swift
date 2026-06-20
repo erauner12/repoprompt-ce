@@ -280,16 +280,8 @@ struct CoordinatorModeView: View {
         let rail = snapshot.coordinatorRail
 
         return VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
-            HStack(alignment: .top, spacing: metrics.controlSpacing) {
-                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                    Text("Coordinator")
-                        .font(metrics.headerTitle)
-                    Text("Read-only mission control for this workspace")
-                        .font(metrics.body)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: metrics.controlSpacing)
+            HStack {
+                Spacer(minLength: 0)
                 Button {
                     collapseCoordinatorRail()
                 } label: {
@@ -300,14 +292,12 @@ struct CoordinatorModeView: View {
                 .hoverTooltip("Hide Coordinator Rail")
                 .accessibilityLabel("Hide Coordinator Rail")
             }
-            .coordinatorSidebarHeaderPill(cornerRadius: metrics.headerPillCornerRadius)
+            .frame(height: metrics.railTitlebarLaneHeight, alignment: .topTrailing)
 
             Group {
                 switch rail.state {
                 case .selected:
                     VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
-                        Label("Coordinator rail", systemImage: "person.2.wave.2")
-                            .font(metrics.cardTitle)
                         Text(rail.title ?? "Agent Session")
                             .font(metrics.cardTitle)
                             .lineLimit(2)
@@ -325,8 +315,6 @@ struct CoordinatorModeView: View {
                     }
                 case .chooseCoordinator:
                     VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
-                        Label("Coordinator rail", systemImage: "person.2.wave.2")
-                            .font(metrics.cardTitle)
                         Text("No Coordinator selected")
                             .font(metrics.cardTitle)
                         Text("The board still shows workspace sessions. Coordinator identity can be selected or auto-detected by structured lineage in later layers.")
@@ -858,6 +846,10 @@ private struct CoordinatorVisualMetrics {
 
     var headerPadding: CGFloat {
         fontPreset.scaledClamped(12, max: 16)
+    }
+
+    var railTitlebarLaneHeight: CGFloat {
+        fontPreset.scaledClamped(34, min: 34, max: 42)
     }
 
     var sectionSpacing: CGFloat {
