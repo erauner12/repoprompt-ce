@@ -290,7 +290,7 @@ struct CoordinatorModeView: View {
                         )
                         openAgentChatButton(route: rail.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
                         Button("Clear Coordinator") {
-                            viewModel.selectCoordinator(sessionID: nil)
+                            viewModel.clearCoordinator()
                         }
                         .buttonStyle(.link)
                         .font(metrics.bodyMedium)

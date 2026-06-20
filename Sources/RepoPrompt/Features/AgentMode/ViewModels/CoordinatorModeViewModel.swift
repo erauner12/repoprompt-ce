@@ -12,6 +12,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias InputProvider = @MainActor (_ sortMode: CoordinatorModeSortMode, _ selectedCoordinatorID: UUID?) -> CoordinatorModeSnapshotProjector.Input
     typealias DashboardVisibilityHandler = @MainActor (_ visible: Bool) -> Void
     typealias DirectiveSubmitter = @MainActor (_ text: String, _ coordinatorSessionID: UUID?) async -> DirectiveSubmissionResult
+    typealias CoordinatorResetHandler = @MainActor (_ coordinatorSessionID: UUID?) -> Void
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
     @Published private(set) var railTranscriptEntries: [CoordinatorModeRailTranscriptEntry] = []
@@ -26,6 +27,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let inputProvider: InputProvider
     private let dashboardVisibilityHandler: DashboardVisibilityHandler
     private let directiveSubmitter: DirectiveSubmitter
+    private let coordinatorResetHandler: CoordinatorResetHandler
     private let projector: CoordinatorModeSnapshotProjector
     private var selectedCoordinatorIDByWorkspaceID: [UUID: UUID] = [:]
     private var lastPublishedFingerprint: CoordinatorModeSnapshotFingerprint?
@@ -38,11 +40,13 @@ final class CoordinatorModeViewModel: ObservableObject {
         directiveSubmitter: @escaping DirectiveSubmitter = { _, _ in
             .rejected(message: "Coordinator composer is unavailable.")
         },
+        coordinatorResetHandler: @escaping CoordinatorResetHandler = { _ in },
         projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector()
     ) {
         self.inputProvider = inputProvider
         self.dashboardVisibilityHandler = dashboardVisibilityHandler
         self.directiveSubmitter = directiveSubmitter
+        self.coordinatorResetHandler = coordinatorResetHandler
         self.projector = projector
     }
 
@@ -66,6 +70,12 @@ final class CoordinatorModeViewModel: ObservableObject {
         guard let workspaceID else { return }
         selectedCoordinatorIDByWorkspaceID[workspaceID] = sessionID
         refresh()
+    }
+
+    func clearCoordinator() {
+        let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID
+        coordinatorResetHandler(coordinatorSessionID)
+        selectCoordinator(sessionID: nil)
     }
 
     func clearCoordinatorRailTranscript() {
@@ -159,6 +169,8 @@ extension AgentModeViewModel {
             case let .blocked(message):
                 return .rejected(message: message)
             }
+        } coordinatorResetHandler: { [weak self] coordinatorSessionID in
+            self?.clearCoordinatorRuntimeDemoTarget(preferredSessionID: coordinatorSessionID)
         }
     }
 
@@ -187,6 +199,20 @@ extension AgentModeViewModel {
         }
         return await submitUserTurnCreatingSessionIfNeeded(text: text, target: target) {
             nil
+        }
+    }
+
+    @MainActor
+    private func clearCoordinatorRuntimeDemoTarget(preferredSessionID: UUID?) {
+        for (tabID, session) in sessions {
+            guard session.isCoordinatorRuntimeDemo else { continue }
+            if let preferredSessionID, session.activeAgentSessionID != preferredSessionID {
+                continue
+            }
+            session.isCoordinatorRuntimeDemo = false
+            if coordinatorModeTabName(for: tabID) == Self.coordinatorRuntimeDemoSessionName {
+                renameSession(tabID: tabID, to: "\(Self.coordinatorRuntimeDemoSessionName) (cleared)")
+            }
         }
     }
 

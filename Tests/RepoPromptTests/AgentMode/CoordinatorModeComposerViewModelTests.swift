@@ -83,6 +83,52 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
     }
 
+    func testClearCoordinatorResetsDemoRuntimeBeforeNextDirective() async {
+        let coordinatorID = uuid(1)
+        let coordinatorTab = uuid(101)
+        var demoCoordinatorIDs: Set<UUID> = [coordinatorID]
+        var resetCoordinatorID: UUID?
+        var submissions: [(text: String, sessionID: UUID?)] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator Runtime Demo", updatedAt: self.date(20), state: .idle, isMCP: true)
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: demoCoordinatorIDs
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { text, sessionID in
+                submissions.append((text, sessionID))
+                return .accepted
+            },
+            coordinatorResetHandler: { sessionID in
+                resetCoordinatorID = sessionID
+                if let sessionID {
+                    demoCoordinatorIDs.remove(sessionID)
+                }
+            }
+        )
+        viewModel.refresh()
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.selectionSource, .demoRuntime)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
+
+        viewModel.clearCoordinator()
+
+        XCTAssertEqual(resetCoordinatorID, coordinatorID)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.state, .chooseCoordinator)
+        XCTAssertNil(viewModel.snapshot.coordinatorRail.coordinatorSessionID)
+
+        let result = await viewModel.submitCoordinatorDirective("start fresh")
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(submissions.first?.text, "start fresh")
+        XCTAssertNil(submissions.first?.sessionID)
+    }
+
     func testUnreachableCoordinatorRejectsDirectiveWithoutCallingSubmitter() async {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
@@ -120,7 +166,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         persisted: [CoordinatorModeSnapshotProjector.PersistedSession] = [],
         live: [CoordinatorModeSnapshotProjector.LiveSession] = [],
         selectedCoordinatorID: UUID? = nil,
-        sort: CoordinatorModeSortMode = .lastUpdated
+        sort: CoordinatorModeSortMode = .lastUpdated,
+        demoCoordinatorIDs: Set<UUID> = []
     ) -> CoordinatorModeSnapshotProjector.Input {
         CoordinatorModeSnapshotProjector.Input(
             workspaceID: workspaceID,
@@ -129,7 +176,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             liveSessions: live,
             selectedCoordinatorID: selectedCoordinatorID,
             sortMode: sort,
-            resolvableTabIDs: Set(persisted.map(\.tabID) + live.map(\.tabID))
+            resolvableTabIDs: Set(persisted.map(\.tabID) + live.map(\.tabID)),
+            demoCoordinatorSessionIDs: demoCoordinatorIDs
         )
     }
 
