@@ -310,10 +310,6 @@ struct CoordinatorModeView: View {
 
     private func coordinatorRailTitlebarLane(metrics: CoordinatorVisualMetrics) -> some View {
         HStack(spacing: metrics.smallSpacing) {
-            CoordinatorRailToggleButton(isRailVisible: true, metrics: metrics) {
-                toggleCoordinatorRail()
-            }
-
             Label("Coordinator", systemImage: "rectangle.3.group.bubble")
                 .font(metrics.bodyMedium)
                 .foregroundStyle(.secondary)
@@ -321,6 +317,10 @@ struct CoordinatorModeView: View {
                 .lineLimit(1)
 
             Spacer(minLength: 0)
+
+            CoordinatorRailToggleButton(isRailVisible: true, metrics: metrics) {
+                toggleCoordinatorRail()
+            }
         }
         .frame(height: metrics.railTitlebarLaneHeight)
     }
@@ -494,22 +494,6 @@ struct CoordinatorModeView: View {
 
     private func inspector(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(spacing: 0) {
-            HStack {
-                Button {
-                    selectedRowID = nil
-                } label: {
-                    Image(systemName: "sidebar.right")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .hoverTooltip("Hide Inspector")
-                .accessibilityLabel("Hide Inspector")
-
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, metrics.outerPadding)
-            .frame(height: metrics.railTitlebarLaneHeight)
-
             ScrollView {
                 VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
                     HStack(spacing: metrics.controlSpacing) {
