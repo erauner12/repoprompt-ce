@@ -24,7 +24,7 @@ The system SHALL define a Coordinator role as a layer-above meta-agent identity 
 - **AND** the real Coordinator runtime SHALL remain distinguishable by launch, scope, policy, and projection metadata.
 
 ### Requirement: Native Agent run/session lifecycle contract
-The system SHALL define a native RepoPrompt Agent run/session lifecycle contract as the durable control-plane boundary underneath MCP tool schemas.
+The system SHALL define the native RepoPrompt Agent run/session lifecycle contract pieces needed for Coordinator supervision as the durable control-plane boundary underneath MCP tool schemas.
 
 #### Scenario: Lifecycle state is queried
 - **WHEN** a Coordinator runtime or external caller observes an Agent run/session
@@ -37,22 +37,23 @@ The system SHALL define a native RepoPrompt Agent run/session lifecycle contract
 - **AND** terminal work SHALL include a structured outcome such as completed, failed, or cancelled
 - **AND** additional outcomes such as expired MAY be added when supported by the runtime.
 
-#### Scenario: Pending interaction is exposed
+#### Scenario: Pending interaction is visible
 - **WHEN** an Agent run/session requires user input, a question response, or an approval-like decision
-- **THEN** the lifecycle contract SHALL expose a structured pending interaction shape with a stable interaction identifier
-- **AND** responses SHALL target that interaction identifier instead of relying on assistant prose.
+- **THEN** the lifecycle contract SHALL expose enough structured pending-interaction metadata for the Coordinator to surface actionable state
+- **AND** response-by-interaction-id behavior SHALL be required before Coordinator access to `respond` is enabled.
 
-#### Scenario: Artifacts are exposed
-- **WHEN** summaries, logs, exported context, worktree metadata, or related outputs are available for a run/session
-- **THEN** the lifecycle contract SHALL expose durable artifact references
-- **AND** callers SHALL be able to consume those references without loading full transcripts as part of the first-version supervision loop.
+#### Scenario: Summary and failure artifacts are exposed
+- **WHEN** summaries, compact supervision outputs, or bounded failure diagnostics are available for a run/session
+- **THEN** the lifecycle contract SHALL expose durable artifact references or compact diagnostic fields for those outputs
+- **AND** full logs, full transcripts, exported context, worktree metadata, and other broad artifact types SHALL remain gated or optional unless later Coordinator behavior requires them.
 
 ### Requirement: MCP adapter over lifecycle contract
 The system SHALL treat MCP `agent_run` and `agent_manage` as adapters over the native Agent run/session lifecycle contract, not as the only durable source-of-truth boundary.
 
 #### Scenario: Existing MCP lifecycle tools are used
-- **WHEN** an external caller uses `agent_run start`, `poll`, `wait`, `steer`, `respond`, or `cancel`
-- **THEN** those operations SHALL map to native lifecycle start, observe, wait, steer, respond, and cancel semantics.
+- **WHEN** an external caller uses `agent_run start`, `poll`, `wait`, or `steer`
+- **THEN** those operations SHALL map to native lifecycle start, observe, wait, and steer semantics
+- **AND** `respond` and `cancel` SHALL remain mapped or specified as lifecycle capabilities before Coordinator access to those operations is enabled.
 
 #### Scenario: Existing MCP management tools are used
 - **WHEN** an external caller uses `agent_manage list_sessions`, `get_log`, or export-like behavior
@@ -60,8 +61,8 @@ The system SHALL treat MCP `agent_run` and `agent_manage` as adapters over the n
 - **AND** implementation SHALL avoid creating a parallel control contract that only exists in MCP result prose.
 
 #### Scenario: Public contract is tested
-- **WHEN** lifecycle adapter behavior is implemented or changed
-- **THEN** public contract tests SHALL cover caller-visible start, poll/status, wait, steer with wait semantics, respond, cancel, lifecycle category/outcome, and artifact/export shapes.
+- **WHEN** lifecycle adapter behavior is implemented or changed for Coordinator v1
+- **THEN** public contract tests SHALL cover caller-visible start, poll/status, wait, steer with wait semantics, lifecycle category/outcome, summary/failure artifact references, and clean rejection or gating for unsupported Coordinator operations.
 
 ### Requirement: Coordinator runtime scope
 The Coordinator role SHALL use an explicit layer-above listing and control scope rather than ordinary child-only Agent Mode scoping.
@@ -119,8 +120,8 @@ The first Coordinator role implementation SHALL use a delegate-only tool contrac
 
 #### Scenario: Coordinator observes session state
 - **WHEN** the Coordinator needs to understand workspace work in progress
-- **THEN** it SHALL use explicit session/model listing, lifecycle status, compact metadata, and artifact reference APIs
-- **AND** it SHALL NOT load full transcripts, files, diffs, or logs as part of the first-version board supervision loop.
+- **THEN** it SHALL use explicit session/model listing, lifecycle status, compact metadata, compact failure diagnostics, and artifact reference APIs
+- **AND** it SHALL NOT load full transcripts, files, diffs, or unbounded full logs as part of the first-version board supervision loop.
 
 #### Scenario: Coordinator directs agents
 - **WHEN** the Coordinator needs work performed by an agent

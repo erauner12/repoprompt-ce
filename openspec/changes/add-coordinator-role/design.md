@@ -22,7 +22,7 @@ Important existing anchors:
 - **Coordinator mode/view**: the human-facing control-plane surface from `add-coordinator-mode`.
 - **Demo Coordinator session**: an ordinary selected or auto-detected Agent Mode session used by the current scoped composer.
 - **Coordinator role/runtime**: the new layer-above meta-agent identity defined by this change.
-- **Agent run/session lifecycle contract**: the native RepoPrompt control-plane contract for starting, observing, steering, responding to, cancelling, and exporting run/session state.
+- **Agent run/session lifecycle contract**: the native RepoPrompt control-plane contract for starting, observing, steering, and summarizing run/session state, with higher-risk response/cancel behavior gated for Coordinator v1.
 - **MCP adapter**: the external `agent_run` / `agent_manage` tool schema that exposes parts of the native lifecycle contract to MCP callers.
 
 ## Goals / Non-Goals
@@ -64,18 +64,18 @@ Alternatives considered:
 
 ### 2. Native Agent run/session lifecycle is the durable control-plane contract
 
-RepoPrompt should define the underlying Agent run/session lifecycle as a native contract. MCP `agent_run` and `agent_manage` expose that contract externally, but the MCP schema should not be the only durable boundary.
+RepoPrompt should define the Agent run/session lifecycle contract pieces the Coordinator needs instead of treating the MCP schema as the only durable boundary. MCP `agent_run` and `agent_manage` expose that contract externally, but this change should avoid growing into a general activity/provenance platform.
 
-The lifecycle contract should include:
+The first lifecycle contract slice should include:
 
 - stable run/session handles;
 - deterministic lifecycle status sufficient for Coordinator decisions;
 - active/actionable/terminal status classification;
-- pending interaction shape;
-- respond-by-interaction-id semantics;
-- cancel semantics;
-- durable artifact references for summaries, logs, exported context, worktree metadata, and related structured outputs;
-- public contract tests for caller-visible start, poll/status, wait, steer with `wait: true`, respond, cancel, and artifact/export shapes.
+- pending-interaction metadata sufficient to surface actionable state;
+- durable artifact references or compact diagnostic fields for summaries, compact supervision outputs, and bounded failure diagnostics;
+- public contract tests for caller-visible start, poll/status, wait, steer with `wait: true`, lifecycle category/outcome, summary/failure artifacts, and clean rejection/gating of unsupported Coordinator operations.
+
+`respond`, `cancel`, full logs, full transcripts, exported context, worktree metadata, and broader artifact shapes may exist in the underlying lifecycle or MCP adapters, but Coordinator v1 should not require full design of those surfaces unless the accepted first toolset grants access. Compact failure diagnostics are in scope so the Coordinator can explain delegated run failures without becoming a full log viewer.
 
 Coordinator needs functional state categories more than a final universal enum:
 
@@ -99,7 +99,7 @@ Alternatives considered:
 
 ### 3. Delegate-only is the first Coordinator capability boundary
 
-The first Coordinator role should list sessions, inspect compact metadata, spawn agents, poll/wait task state, steer/message agents, and summarize/export through durable artifact references. It should not directly focus tabs, read files through tab-scoped tools, mutate file selections, or control worktrees.
+The first Coordinator role should list sessions, inspect compact metadata, spawn agents, poll/wait run state, steer/message agents, and summarize/export through durable summary artifact references. It should not directly focus tabs, read files through tab-scoped tools, mutate file selections, or control worktrees.
 
 Rationale: delegate-only matches pvncher's “maybe coordinator doesnt focus tabs at all, and just talks to agents who do” direction. It avoids the session/tab/file-selection/worktree coupling that makes current in-app agents tab-scoped. Agents that need deep project context can focus/read/search in their own scoped sessions; the Coordinator coordinates them.
 
@@ -169,7 +169,7 @@ The enforcement seam is the MCP/Agent Mode tool policy and advertisement layer, 
 | `agent_run.steer` | Allowed to message/redirect delegated agents. | Allowed within the agent's own session scope. |
 | `agent_run.respond` | Lifecycle-supported but Coordinator access gated until authorization/audit semantics are accepted. | Target agent or user-facing Agent Mode UI handles pending interactions today. |
 | `agent_run.cancel`, `agent_manage.stop_session`, `cleanup_sessions` | Deferred/gated for Coordinator v1. | Existing UI/MCP paths keep their current semantics. |
-| `agent_manage.get_log` / export-like surfaces | Limited to compact summaries or durable artifact references by default. | Delegated agents may inspect deeper context when scoped to their task. |
+| `agent_manage.get_log` / export-like surfaces | Limited to compact summaries, bounded failure diagnostics, or durable artifact references by default. Full logs/transcripts remain gated. | Delegated agents may inspect deeper context when scoped to their task. |
 | `bind_context`, tab focus, workspace/tab switching | Not allowed for Coordinator v1. | Delegated agents operate within their own bound tab/session scope. |
 | `read_file`, `file_search`, `workspace_context`, `manage_selection` | Not allowed for Coordinator v1. | Delegated agents perform project reading/search/selection in their scoped context. |
 | `apply_edits`, `file_actions` | Not allowed for Coordinator v1. | Delegated implementation agents make file changes when assigned that work. |
