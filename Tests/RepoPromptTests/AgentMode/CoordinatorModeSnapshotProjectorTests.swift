@@ -152,7 +152,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertFalse(persistedOnlySnapshot.coordinatorRail.isLiveInCurrentWindow)
         XCTAssertFalse(persistedOnlySnapshot.coordinatorRail.isComposerEnabled)
         XCTAssertFalse(persistedOnlySnapshot.coordinatorRail.isComposerSendEnabled)
-        XCTAssertNotNil(persistedOnlySnapshot.coordinatorRail.openAgentChatRoute)
+        XCTAssertNil(persistedOnlySnapshot.coordinatorRail.openAgentChatRoute)
+        XCTAssertNotNil(allRows(in: persistedOnlySnapshot).first?.openAgentChatRoute)
     }
 
     func testComposerFallbackWhenCoordinatorIsUnreachable() {

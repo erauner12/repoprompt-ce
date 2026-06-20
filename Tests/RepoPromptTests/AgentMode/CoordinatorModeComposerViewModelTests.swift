@@ -422,10 +422,10 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
 
         let result = await viewModel.submitCoordinatorDirective("message")
 
-        XCTAssertEqual(result, .rejected(message: "Open agent chat to message this Coordinator."))
+        XCTAssertEqual(result, .rejected(message: "Coordinator is not available in this window."))
         XCTAssertFalse(submitterCalled)
         XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
-        XCTAssertEqual(viewModel.composerNotice, "Open agent chat to message this Coordinator.")
+        XCTAssertEqual(viewModel.composerNotice, "Coordinator is not available in this window.")
     }
 
     private func input(

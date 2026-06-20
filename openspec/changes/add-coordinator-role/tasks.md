@@ -81,6 +81,8 @@
 - [ ] 8.5 Wire Coordinator mode to show or address the real Coordinator runtime when available while preserving the existing manual selected-session composer as a demo/manual fallback until migration is decided.
 - [ ] 8.6 Decide whether to retire, hide, or keep the manual selected-session composer after the real role is stable.
 - [ ] 8.7 Add UI/snapshot coverage for no Coordinator runtime, real Coordinator runtime available, manual fallback states, instruction delivery precedence, and supervised-session enumeration invisibility.
+- [x] 8.8 Remove Coordinator-self `Open in Agent Mode` / `Open agent chat` affordances from the production-demo rail while keeping delegate/session-card navigation intact.
+- [ ] 8.9 Add the first durable Coordinator runtime marker and apply it at shared supervised-session enumeration boundaries when moving beyond local demo suppression.
 
 ## 9. Feature boundary and validation
 

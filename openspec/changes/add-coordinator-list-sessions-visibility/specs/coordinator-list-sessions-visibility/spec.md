@@ -13,6 +13,11 @@ The system SHALL define a Coordinator-specific `agent_manage.list_sessions` visi
 - **THEN** the Coordinator runtime itself SHALL be excluded from returned session rows
 - **AND** the Coordinator SHALL NOT appear as a supervised session in its own list output.
 
+#### Scenario: Delegated sessions remain visible
+- **WHEN** broad Coordinator session visibility excludes the Coordinator runtime itself
+- **THEN** delegated Agent Mode sessions in the accepted active-workspace scope SHALL remain visible when they satisfy the chosen membership rule
+- **AND** excluding the Coordinator runtime SHALL NOT remove the child/delegate sessions that users need to inspect or open in Agent Mode.
+
 #### Scenario: Coordinator role lacks broad visibility
 - **WHEN** the broad visibility capability is unavailable or deferred
 - **THEN** the Coordinator role SHALL still be able to supervise its launched delegated fleet through handles returned by `agent_run.start`

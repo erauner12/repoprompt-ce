@@ -852,11 +852,6 @@ struct CoordinatorModeView: View {
                 RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
                     .stroke(canSubmitCoordinatorDirective ? Color.accentColor.opacity(0.45) : CoordinatorStyle.hairline, lineWidth: 1)
             )
-
-            if rail.openAgentChatRoute != nil {
-                openAgentChatButton(route: rail.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
-                    .font(metrics.micro)
-            }
         }
     }
 

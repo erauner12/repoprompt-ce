@@ -140,6 +140,12 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **THEN** the Coordinator view SHALL disable the Coordinator composer or replace it with an `Open agent chat` affordance when route data is available
 - **AND** it SHALL NOT restore, steal, or create a session solely to enable the composer.
 
+#### Scenario: Coordinator backing runtime is the addressed actor
+- **WHEN** the Coordinator rail is addressing a real, marked, or production-demo Coordinator backing runtime
+- **THEN** the rail SHALL treat the composer as the user-facing path for talking to that Coordinator
+- **AND** it SHALL NOT expose `Open in Agent Mode` / `Open agent chat` for the Coordinator backing runtime itself
+- **AND** this restriction SHALL NOT remove Agent Mode deep links from supervised delegate rows or pending summaries.
+
 #### Scenario: User sends a Coordinator directive
 - **WHEN** the user submits text through the enabled Coordinator composer
 - **THEN** the Coordinator view SHALL deliver that text as an ordinary user message to the Coordinator session through the existing Agent Mode message path
@@ -303,6 +309,11 @@ The system SHALL deep-link Coordinator view rows to the existing Agent Mode sess
 - **THEN** the Coordinator view SHALL show the row without `Open agent chat`
 - **AND** it SHALL NOT attempt to create or restore a session as part of Coordinator view rendering.
 
+#### Scenario: Row is the Coordinator backing runtime
+- **WHEN** a session or runtime is identified as the Coordinator backing actor rather than a supervised delegate row
+- **THEN** the Coordinator view SHALL NOT expose it as an Agent chat deep-link target from the Coordinator rail or board/list fleet
+- **AND** the implementation SHALL prefer excluding it from supervised-session enumeration before leaf views need to hide it.
+
 ### Requirement: Compact MCP awareness
 The system SHALL provide compact MCP client/tool-call awareness without replacing existing MCP status surfaces.
 
@@ -331,6 +342,11 @@ The system SHALL keep the Coordinator view calm by default and expose detail onl
 - **WHEN** the Coordinator view renders the Coordinator rail in v1
 - **THEN** the rail SHALL focus on Coordinator identity, selection, optional context, and the scoped Coordinator composer
 - **AND** it SHALL NOT provide a separate `Agents` tab, agent roster, or "agents in current Coordinator context" surface that duplicates the board/list fleet view.
+
+#### Scenario: Coordinator rail is not a session proxy
+- **WHEN** the Coordinator rail renders the current Coordinator conversation
+- **THEN** it SHALL present the conversation as the place where the user talks to the Coordinator
+- **AND** it SHALL avoid chrome that frames the Coordinator as an ordinary supervised Agent Mode session, including Coordinator-self `Open in Agent Mode` affordances in the production-demo path.
 
 #### Scenario: Coordinator view first renders
 - **WHEN** the Coordinator view first renders

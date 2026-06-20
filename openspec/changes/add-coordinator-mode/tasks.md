@@ -78,6 +78,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.4 Do not define structured directive envelopes, cross-window directive routing, Coordinator-view-side interrupt/steer semantics, or direct child-session mutation in v1.
 - [x] 9.5 Echo accepted user directives into the Coordinator rail transcript when appropriate, while surfacing Coordinator responses and child-session effects through normal coarse snapshot refresh.
 - [x] 9.6 Add tests for composer enablement, unreachable Coordinator fallback, ordinary-message dispatch, and no direct board/session mutation.
+- [x] 9.7 Suppress `Open in Agent Mode` / `Open agent chat` for the Coordinator backing actor in the production-demo rail while preserving Agent Mode deep links for supervised delegate rows and pending summaries.
 
 ## 10. Coordinator view UI shell
 
@@ -89,6 +90,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.6 Keep the Coordinator rail focused on Coordinator identity/selection, optional context, and scoped current-window composer; do not add a separate by-agent roster or `Agents` tab in v1.
 - [ ] 10.7 Add UI previews or smoke states for board-default, board-card-selected, inspector-collapsed, list view, sort menu, Coordinator-composer enabled/disabled, empty workspace, active, needs-user, blocked, MCP-off, MCP-empty, MCP-active, filtered, zero-Coordinator, stale/persisted-only card/row, lower-priority column collapsed/de-emphasized, and multiple-Coordinator most-recent states.
 - [x] 10.8 Bind the PR3 Coordinator shell to Agent Mode font-scale, search-field, chip, card, and subtle selection/hover chrome without changing snapshot or write-control behavior.
+- [x] 10.9 Keep the production-demo rail visually framed as an agentic Coordinator conversation rather than an ordinary Agent Mode session proxy.
 
 ## 11. Validation
 

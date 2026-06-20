@@ -2,7 +2,7 @@
 
 Status: planning
 Scope owner: Erauner team
-Related changes: `add-mcp-coordinator-mode-consumer`, `add-coordinator-mode`
+Related changes: `add-mcp-coordinator-mode-consumer`, `add-coordinator-mode`, `add-coordinator-role`
 
 ## Goal
 
@@ -18,7 +18,7 @@ The Coordinator view should let a user:
 - understand what needs attention, what is blocked, what is working, and what is done;
 - inspect sourced activity/provenance without parsing assistant prose for meaning;
 - resolve structured pending interactions from the control plane when safe;
-- converse with an addressable Coordinator agent that can spawn or steer child agents;
+- converse with an addressable Coordinator agent that can spawn or steer child agents without presenting that Coordinator as another supervised fleet session;
 - jump into Agent Mode whenever detailed transcript, files, diffs, or provider-specific controls are needed.
 
 This is a control plane over Agent Mode, not a replacement for Agent Mode.
@@ -36,11 +36,18 @@ User capability:
 - See stale/persisted-only rows without false live urgency.
 - See compact MCP state.
 - Deep-link into Agent Mode for pending-interaction responses and deep detail.
-- Send ordinary user-message directives to a Coordinator session when that Coordinator is live in the current window.
+- Send ordinary user-message directives to a Coordinator actor when that Coordinator is live in the current window, while keeping any backing runtime implementation detail out of supervised fleet chrome.
 
 Primary contract:
 
 - `CoordinatorModeSnapshot` as the single Coordinator view render projection, composed from active-window Agent Mode state, active-workspace session metadata, and `MCPServerViewModel.dashboard`.
+
+Production-demo bridge:
+
+- The demo may reuse a selected, auto-detected, or marked/background Agent `TabSession` while the real Coordinator role lands.
+- The Coordinator rail should still read as its own command conversation, not as a proxy for opening that backing session in Agent Mode.
+- `Open in Agent Mode` remains appropriate for delegated/supervised sessions and pending-interaction detail; it should be suppressed for the Coordinator backing actor.
+- When a Coordinator marker exists, the backing runtime should be filtered at supervised-session enumeration boundaries instead of hidden ad hoc in each leaf view.
 
 Completion observation is in-process for v1. Unlike an external controller such as a CLI process driving RepoPrompt across a process boundary, Coordinator mode and the Coordinator share the app runtime with child sessions. A child session completing is already represented as session state, and the Coordinator view observes that transition through the normal coarse snapshot refresh. V1 therefore does not need a Codex-style polling/wait loop or a separate completion callback channel for the Coordinator view to reflect progress; the snapshot is the observation loop.
 
@@ -240,6 +247,8 @@ In v1 board mode, the board is the protected content region. The inspector / tra
 The end-state Coordinator chat should read as an auditable command log: user directives, Coordinator acknowledgments, spawned/steered work, and clarification requests should be visible as sourced conversational history. V1 includes a scoped composer only for Coordinators live in the current window. A v1 directive is an ordinary user message delivered through the existing Agent Mode message path.
 
 V1 does not define structured directive envelopes, cross-window directive routing, Coordinator-view-side interrupt/steer semantics, or direct child-session mutation. Coordinator responses and child-session effects should surface through normal coarse Coordinator mode snapshot refresh rather than a live token stream in the rail.
+
+For the production-feeling demo, the rail is also the boundary that prevents duplicate mental models: the user talks to the Coordinator here, and opens delegated work in Agent Mode from cards/rows when deeper detail is needed. The Coordinator backing runtime should not offer its own `Open in Agent Mode` link from the rail.
 
 ### Future agent roster/context views
 

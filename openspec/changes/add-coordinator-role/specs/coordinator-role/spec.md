@@ -13,6 +13,11 @@ The system SHALL define a Coordinator role as a layer-above meta-agent identity 
 - **THEN** it SHALL continue to render supervised workspace Agent Mode sessions from sourced projection state
 - **AND** it SHALL treat the Coordinator role as the supervising actor rather than one of the projected supervised sessions.
 
+#### Scenario: Coordinator rail addresses the Coordinator directly
+- **WHEN** the user is interacting with a real or production-demo Coordinator runtime from Coordinator mode
+- **THEN** the Coordinator rail SHALL be the user-facing conversation endpoint for that runtime
+- **AND** the UI SHALL NOT frame the Coordinator backing runtime as an ordinary Agent Mode chat to open from the rail.
+
 #### Scenario: Demo selected session remains distinct
 - **WHEN** the current manual selected-session composer is used before the real Coordinator role is available
 - **THEN** the system SHALL treat that selected session as Layer 1 demo behavior
@@ -275,3 +280,12 @@ The system SHALL reconcile the real Coordinator runtime with existing Coordinato
 - **THEN** the system SHALL label or treat it as demo/manual fallback behavior
 - **AND** it SHALL remain distinct from the real Coordinator role/runtime.
 
+#### Scenario: Coordinator-self Agent Mode navigation is suppressed during migration
+- **WHEN** the Coordinator view is using a real, marked, or production-demo Coordinator backing runtime
+- **THEN** the Coordinator rail SHALL hide Coordinator-self `Open in Agent Mode` / `Open agent chat` affordances
+- **AND** delegate session rows, child-session cards, and pending summaries SHALL keep their Agent Mode navigation when route data is available.
+
+#### Scenario: Production-demo bridge lacks a marker
+- **WHEN** the production-demo Coordinator still lacks a first-class runtime marker
+- **THEN** the UI MAY locally suppress Coordinator-self navigation to preserve the intended product model
+- **AND** the implementation SHALL still track the marker plus shared enumeration-exclusion work as the durable architecture.

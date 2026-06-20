@@ -582,7 +582,7 @@ struct CoordinatorModeSnapshotProjector {
             selectionSource: selection.source,
             title: row.title,
             isLiveInCurrentWindow: isLiveInCurrentWindow,
-            openAgentChatRoute: row.openAgentChatRoute,
+            openAgentChatRoute: nil,
             statusReport: row.statusReport,
             isComposerEnabled: isLiveInCurrentWindow,
             isComposerSendEnabled: isLiveInCurrentWindow && !row.runState.isActive

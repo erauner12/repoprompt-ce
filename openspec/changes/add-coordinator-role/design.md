@@ -42,6 +42,7 @@ Durable invariants: the Coordinator must not be part of the supervised fleet it 
 - Give the first Coordinator role a delegate-only tool boundary: observe/list sessions, spawn agents, poll/wait deterministic state, steer/message agents, and report status/failure from existing snapshot fields.
 - Let Coordinator v1 supervise its own launched delegated fleet through lifecycle handles returned by `agent_run.start`, without requiring broadened active-workspace `list_sessions` visibility.
 - Keep Coordinator runtime state out of all session-enumerating supervised-session surfaces, including Coordinator mode groups, Agent Mode sidebar/session lists, and MCP session lists.
+- Make the production-feeling demo align with that invariant by hiding Coordinator backing-runtime navigation/enumeration even while the runtime still reuses marked/background Agent Mode machinery.
 - Define auditable Coordinator action records for v1 instructions before adding higher-level directive/autonomy behavior.
 - Preserve the existing manual selected-session composer as a demo shim until the real role replaces or supersedes it.
 
@@ -224,6 +225,10 @@ This keeps the Coordinator role from becoming an ad hoc command box and aligns w
 The manual “Use as Coordinator” affordance and selected-session composer remain valid for demoing the current Coordinator view, but they are not the implementation path for the real Coordinator role. The future role may replace that composer target, coexist behind an explicit manual override, or remove the shim after migration.
 
 `CoordinatorModeSnapshotProjector` currently detects a demo Coordinator from workspace sessions. The real Coordinator runtime must have a distinct identity marker and must be excluded at the shared workspace-session enumeration boundary so it never appears as a supervised row in any `sessionIndex`-derived UI, service, or MCP session list. `CoordinatorModeSnapshot.groups`, the Agent Mode sidebar/session list, and MCP `list_sessions` must use that shared predicate or an equivalent enumeration-boundary filter. This is an explicit identity predicate at enumeration inputs, not ad hoc filtering in leaf views.
+
+The production-feeling demo should move in the same direction even before the full role is complete. If the Coordinator is still backed by a selected or marked Agent `TabSession`, the Coordinator rail should be the user-facing conversation endpoint and should not expose `Open in Agent Mode` for the Coordinator backing actor. Delegate rows and pending summaries may continue to deep-link to Agent Mode. This is not cosmetic only: it teaches the intended product model that the Coordinator supervises and delegates, while Agent Mode remains where delegated sessions do deep work.
+
+If no first-class marker exists yet, hiding the Coordinator-self route in the rail is an acceptable bridge. It must not be mistaken for the final identity boundary; the durable fix remains a Coordinator marker plus shared enumeration exclusion.
 
 ### 12. Cross-window control is deferred unless explicitly chosen
 

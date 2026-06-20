@@ -117,7 +117,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         let coordinatorSessionID = forceNewRuntime ? nil : snapshot.coordinatorRail.coordinatorSessionID
         if snapshot.coordinatorRail.state == .selected, !forceNewRuntime {
             guard snapshot.coordinatorRail.isComposerEnabled else {
-                let message = "Open agent chat to message this Coordinator."
+                let message = "Coordinator is not available in this window."
                 composerNotice = message
                 return .rejected(message: message)
             }

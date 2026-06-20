@@ -8,9 +8,12 @@ Naming convention for this change: **Coordinator mode** is the peer `.main` surf
 - `AgentModeSidebarSessionBuilder` already demonstrates lineage-aware session grouping, status vocabulary, attention state, and calm row presentation.
 - `AgentRunMCPSnapshot.Interaction` provides the existing MCP-facing normalized pending interaction shape for live MCP-controlled sessions.
 - `MCPServerViewModel.dashboard` exposes MCP connection/tool-call state through an existing MCP subscription lifecycle; the `add-mcp-coordinator-mode-consumer` prerequisite adds the named Coordinator view consumer for this lifecycle.
-- `AgentSessionDeepLinkRoute` and `WindowState.routeToAgentSession` already provide the basis for opening existing Agent Mode sessions.
+- `AgentSessionDeepLinkRoute` and `WindowState.routeToAgentSession` already provide the basis for opening existing supervised Agent Mode sessions.
+- `openspec/changes/add-coordinator-role/reference/coordinator-runtime-separability.md` shows that the current public run path can support a marked/background `TabSession`-backed Coordinator bridge, but not a fully non-enrolled Coordinator runtime without larger extraction.
 
 The Coordinator view should therefore be a sourced projection over existing state plus one deliberately scoped v1 write path: sending an ordinary user message to a current-window live Coordinator session. It is not a new runtime, protocol, or Agent UI replacement.
+
+For the production-feeling demo, the selected/detected Coordinator may still be backed by existing Agent Mode runtime machinery, but the user-facing surface should treat that backing runtime as a Coordinator actor, not as another supervised fleet session. Delegate/session cards can still deep-link to Agent Mode; the Coordinator rail should feel like the place where the user talks to the Coordinator, not a proxy panel for opening the Coordinator as an ordinary Agent chat.
 
 ## Goals / Non-Goals
 
@@ -20,8 +23,9 @@ The Coordinator view should therefore be a sourced projection over existing stat
 - Render all Coordinator view regions from one `CoordinatorModeSnapshot` projection.
 - Compose that projection from two independent upstream categories: Agent Mode state, including current-window live state plus active-workspace session metadata; and `MCPServerViewModel.dashboard`.
 - Scope v1 to active-workspace rows with current-window live-state enrichment.
-- Show Coordinator context when selected or detected, keep the board/list workspace useful without a Coordinator, group session cards/rows by total run-state-aware rules, render read-only pending interaction prompts, compact MCP awareness, and deep links to Agent Mode.
+- Show Coordinator context when selected or detected, keep the board/list workspace useful without a Coordinator, group session cards/rows by total run-state-aware rules, render read-only pending interaction prompts, compact MCP awareness, and deep links from supervised rows/pending summaries to Agent Mode.
 - Provide a Coordinator composer only when the selected/detected Coordinator is live in the current window; deliver each directive as an ordinary user message to that Coordinator session.
+- Keep Coordinator backing-runtime navigation and enumeration visually separate from supervised Agent Mode session navigation so the demo does not teach users that the Coordinator is one more child card/thread.
 - Use coarse observation and diff-before-publish behavior so streaming transcript/token deltas do not churn the Coordinator view.
 
 **Non-Goals:**
@@ -128,6 +132,12 @@ The v1 Coordinator view is board-first, with List as an alternate and narrow-wid
 The v1 Coordinator composer is enabled only when the selected/detected Coordinator is live in the current window, using the same current-window liveness predicate as Coordinator view live enrichment. If no Coordinator is selected/detected, or if the Coordinator is persisted-only or owned by another window, the composer is disabled and the rail should provide an `Open agent chat` affordance when route data is available.
 
 A v1 directive is an ordinary user message delivered to the Coordinator session through the existing Agent Mode message path. V1 does not define a structured directive envelope, cross-window directive routing, Coordinator-view-side interrupt/steer semantics, or direct mutation of child sessions. The composer may echo the user's sent directive into the rail transcript; Coordinator responses and child-session effects surface through normal coarse Coordinator view snapshot refresh rather than a live token stream in the rail. Clear Chat is a rail display reset only: it must not delete, truncate, or rewrite the underlying Coordinator session transcript, which persists and archives through the existing Agent Mode session lifecycle. If the Coordinator is mid-run, v1 may queue the directive as the next turn or disable send; it must not implement Coordinator-view-side interrupt or steering.
+
+### 13A. Production demo bridge hides Coordinator backing-session chrome
+
+The production-feeling demo may still deliver directives through a selected, auto-detected, or marked/background Agent `TabSession` while the real Coordinator role work lands. That runtime is an implementation bridge. The Coordinator rail should not expose `Open in Agent Mode` for the Coordinator itself once the rail is acting as the primary Coordinator conversation surface.
+
+Agent Mode deep links remain available for supervised delegate rows, pending summaries, and detail that belongs in Agent Mode. They should not be used to invite the user to inspect or drive the Coordinator backing runtime as if it were part of the supervised fleet. When a first-class Coordinator marker exists, the backing runtime should be excluded at the shared enumeration boundary used by Coordinator mode groups, Agent Mode sidebar/session lists, and MCP session-list surfaces. Before that marker exists, local Coordinator-rail suppression is an acceptable demo bridge, but it must be treated as temporary presentation behavior rather than final architecture.
 
 ### 14. Inspector stays sourced; full logs stay in Agent Mode
 
