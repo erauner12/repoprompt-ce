@@ -41,7 +41,7 @@ struct CoordinatorModeView: View {
     @State private var selectedRowID: UUID?
     @State private var hoveredRowID: UUID?
     @State private var filterText = ""
-    @State private var isRailCollapsed = false
+    @State private var coordinatorSplitVisibility: NavigationSplitViewVisibility = .all
     @State private var preferredSplitColumn: NavigationSplitViewColumn = .sidebar
     @ObservedObject private var fontScale = FontScaleManager.shared
 
@@ -60,7 +60,7 @@ struct CoordinatorModeView: View {
             let railIsAvailable = proxy.size.width >= 900
             if railIsAvailable {
                 NavigationSplitView(
-                    columnVisibility: coordinatorSplitVisibility,
+                    columnVisibility: $coordinatorSplitVisibility,
                     preferredCompactColumn: $preferredSplitColumn
                 ) {
                     coordinatorRail(snapshot: snapshot, metrics: metrics)
@@ -99,27 +99,6 @@ struct CoordinatorModeView: View {
         }
         .onChange(of: viewModel.snapshot) { _, _ in
             reconcileSelection()
-        }
-    }
-
-    private var coordinatorSplitVisibility: Binding<NavigationSplitViewVisibility> {
-        Binding(
-            get: { isRailCollapsed ? .detailOnly : .all },
-            set: applyCoordinatorSplitVisibility
-        )
-    }
-
-    private func applyCoordinatorSplitVisibility(_ requestedVisibility: NavigationSplitViewVisibility) {
-        switch requestedVisibility {
-        case .detailOnly, .doubleColumn:
-            preferredSplitColumn = .detail
-            isRailCollapsed = true
-        case .all, .automatic:
-            preferredSplitColumn = .sidebar
-            isRailCollapsed = false
-        default:
-            preferredSplitColumn = .sidebar
-            isRailCollapsed = false
         }
     }
 
