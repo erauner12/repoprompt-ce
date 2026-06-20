@@ -42,7 +42,6 @@ struct CoordinatorModeView: View {
     @State private var hoveredRowID: UUID?
     @State private var filterText = ""
     @State private var isRailCollapsed = false
-    @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
     @State private var preferredSplitColumn: NavigationSplitViewColumn = .sidebar
     @ObservedObject private var fontScale = FontScaleManager.shared
 
@@ -70,17 +69,15 @@ struct CoordinatorModeView: View {
                             ideal: metrics.railWidth,
                             max: metrics.railWidth
                         )
-                } content: {
-                    coordinatorContent(
+                } detail: {
+                    coordinatorDetailColumn(
                         snapshot: snapshot,
                         sections: sections,
+                        selectedRow: selectedRow,
                         useList: useList,
                         forceList: forceList,
                         metrics: metrics
                     )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } detail: {
-                    coordinatorInspectorColumn(selectedRow: selectedRow, metrics: metrics)
                 }
                 .navigationSplitViewStyle(.balanced)
             } else {
@@ -107,7 +104,7 @@ struct CoordinatorModeView: View {
 
     private var coordinatorSplitVisibility: Binding<NavigationSplitViewVisibility> {
         Binding(
-            get: { isRailCollapsed ? .doubleColumn : splitColumnVisibility },
+            get: { isRailCollapsed ? .detailOnly : .all },
             set: applyCoordinatorSplitVisibility
         )
     }
@@ -115,37 +112,46 @@ struct CoordinatorModeView: View {
     private func applyCoordinatorSplitVisibility(_ requestedVisibility: NavigationSplitViewVisibility) {
         switch requestedVisibility {
         case .detailOnly, .doubleColumn:
-            preferredSplitColumn = .content
-            splitColumnVisibility = .doubleColumn
+            preferredSplitColumn = .detail
             isRailCollapsed = true
         case .all, .automatic:
             preferredSplitColumn = .sidebar
-            splitColumnVisibility = .all
             isRailCollapsed = false
         default:
             preferredSplitColumn = .sidebar
-            splitColumnVisibility = .all
             isRailCollapsed = false
         }
     }
 
-    @ViewBuilder
-    private func coordinatorInspectorColumn(
+    private func coordinatorDetailColumn(
+        snapshot: CoordinatorModeSnapshot,
+        sections: [CoordinatorModeStatusSection],
         selectedRow: CoordinatorModeRow?,
+        useList: Bool,
+        forceList: Bool,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        if let selectedRow {
-            inspector(row: selectedRow, metrics: metrics)
-                .navigationSplitViewColumnWidth(
-                    min: metrics.inspectorWidth,
-                    ideal: metrics.inspectorWidth,
-                    max: metrics.inspectorWidth
-                )
-        } else {
-            Color.clear
-                .accessibilityHidden(true)
-                .navigationSplitViewColumnWidth(min: 1, ideal: 1, max: 1)
+        HStack(spacing: 0) {
+            coordinatorContent(
+                snapshot: snapshot,
+                sections: sections,
+                useList: useList,
+                forceList: forceList,
+                metrics: metrics
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if let selectedRow {
+                inspector(row: selectedRow, metrics: metrics)
+                    .frame(
+                        minWidth: metrics.inspectorWidth,
+                        idealWidth: metrics.inspectorWidth,
+                        maxWidth: metrics.inspectorWidth,
+                        maxHeight: .infinity
+                    )
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func coordinatorContent(
