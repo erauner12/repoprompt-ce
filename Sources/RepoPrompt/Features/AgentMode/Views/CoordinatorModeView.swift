@@ -494,10 +494,26 @@ struct CoordinatorModeView: View {
 
     private func inspector(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(spacing: 0) {
+            HStack {
+                Spacer(minLength: 0)
+
+                Button {
+                    selectedRowID = nil
+                } label: {
+                    Image(systemName: "sidebar.right")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .hoverTooltip("Hide Inspector")
+                .accessibilityLabel("Hide Inspector")
+            }
+            .padding(.horizontal, metrics.outerPadding)
+            .frame(height: metrics.railTitlebarLaneHeight)
+
             ScrollView {
                 VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
                     HStack(spacing: metrics.controlSpacing) {
-                        Label("Inspector", systemImage: "sidebar.right")
+                        Text("Inspector")
                             .font(metrics.bodyMedium)
                     }
                     .coordinatorSidebarHeaderPill(cornerRadius: metrics.headerPillCornerRadius)
