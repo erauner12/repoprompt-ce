@@ -42,6 +42,7 @@ struct CoordinatorModeView: View {
     @State private var hoveredRowID: UUID?
     @State private var filterText = ""
     @State private var isCoordinatorRailVisible = true
+    @State private var isInspectorVisible = true
     @ObservedObject private var fontScale = FontScaleManager.shared
 
     private var visualMetrics: CoordinatorVisualMetrics {
@@ -101,11 +102,12 @@ struct CoordinatorModeView: View {
                 useList: useList,
                 forceList: forceList,
                 metrics: metrics,
-                showRailToggle: railIsAvailable && !isCoordinatorRailVisible
+                showRailToggle: railIsAvailable && !isCoordinatorRailVisible,
+                showInspectorToggle: railIsAvailable && selectedRow != nil && !isInspectorVisible
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if railIsAvailable, let selectedRow {
+            if railIsAvailable, isInspectorVisible, let selectedRow {
                 inspector(row: selectedRow, metrics: metrics)
                     .frame(
                         minWidth: metrics.inspectorWidth,
@@ -124,13 +126,19 @@ struct CoordinatorModeView: View {
         useList: Bool,
         forceList: Bool,
         metrics: CoordinatorVisualMetrics,
-        showRailToggle: Bool = false
+        showRailToggle: Bool = false,
+        showInspectorToggle: Bool = false
     ) -> some View {
         VStack(spacing: 0) {
-            boardControls(forceList: forceList, metrics: metrics, showRailToggle: showRailToggle)
-                .padding(.horizontal, metrics.outerPadding)
-                .padding(.vertical, metrics.headerPadding)
-                .background(.regularMaterial)
+            boardControls(
+                forceList: forceList,
+                metrics: metrics,
+                showRailToggle: showRailToggle,
+                showInspectorToggle: showInspectorToggle
+            )
+            .padding(.horizontal, metrics.outerPadding)
+            .padding(.vertical, metrics.headerPadding)
+            .background(.regularMaterial)
 
             Group {
                 if snapshot.isEmpty {
@@ -151,7 +159,8 @@ struct CoordinatorModeView: View {
     private func boardControls(
         forceList: Bool,
         metrics: CoordinatorVisualMetrics,
-        showRailToggle: Bool
+        showRailToggle: Bool,
+        showInspectorToggle: Bool
     ) -> some View {
         HStack(spacing: metrics.controlSpacing) {
             if showRailToggle {
@@ -170,6 +179,18 @@ struct CoordinatorModeView: View {
             }
 
             Spacer(minLength: 0)
+
+            if showInspectorToggle {
+                CoordinatorRailToggleButton(
+                    isRailVisible: false,
+                    metrics: metrics,
+                    systemImage: "sidebar.right",
+                    visibleAccessibilityLabel: "Hide Inspector",
+                    hiddenAccessibilityLabel: "Show Inspector"
+                ) {
+                    isInspectorVisible = true
+                }
+            }
         }
     }
 
@@ -423,6 +444,7 @@ struct CoordinatorModeView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             selectedRowID = row.id
+            isInspectorVisible = true
         }
         .onHover { hovering in
             hoveredRowID = hovering ? row.id : (hoveredRowID == row.id ? nil : hoveredRowID)
@@ -486,6 +508,7 @@ struct CoordinatorModeView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             selectedRowID = row.id
+            isInspectorVisible = true
         }
         .onHover { hovering in
             hoveredRowID = hovering ? row.id : (hoveredRowID == row.id ? nil : hoveredRowID)
@@ -496,7 +519,7 @@ struct CoordinatorModeView: View {
         VStack(spacing: 0) {
             HStack {
                 Button {
-                    selectedRowID = nil
+                    isInspectorVisible = false
                 } label: {
                     Image(systemName: "sidebar.right")
                 }
@@ -761,13 +784,16 @@ struct CoordinatorModeView: View {
 private struct CoordinatorRailToggleButton: View {
     let isRailVisible: Bool
     let metrics: CoordinatorVisualMetrics
+    var systemImage = "sidebar.left"
+    var visibleAccessibilityLabel = "Hide Coordinator Rail"
+    var hiddenAccessibilityLabel = "Show Coordinator Rail"
     let action: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "sidebar.left")
+            Image(systemName: systemImage)
                 .font(.system(size: metrics.titlebarIconSize, weight: .medium))
                 .foregroundStyle(.primary.opacity(isHovering ? 0.95 : 0.68))
                 .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
@@ -787,8 +813,8 @@ private struct CoordinatorRailToggleButton: View {
                 isHovering = hovering
             }
         }
-        .hoverTooltip(isRailVisible ? "Hide Coordinator Rail" : "Show Coordinator Rail")
-        .accessibilityLabel(isRailVisible ? "Hide Coordinator Rail" : "Show Coordinator Rail")
+        .hoverTooltip(isRailVisible ? visibleAccessibilityLabel : hiddenAccessibilityLabel)
+        .accessibilityLabel(isRailVisible ? visibleAccessibilityLabel : hiddenAccessibilityLabel)
     }
 
     private var titlebarButtonFill: Color {
