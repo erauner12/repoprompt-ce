@@ -448,55 +448,87 @@ struct CoordinatorModeView: View {
     }
 
     private func boardView(sections: [CoordinatorModeStatusSection], metrics: CoordinatorVisualMetrics) -> some View {
-        ScrollView([.horizontal, .vertical]) {
-            HStack(alignment: .top, spacing: metrics.boardColumnSpacing) {
-                ForEach(sections, id: \.group) { section in
-                    boardColumn(section: section, metrics: metrics)
+        GeometryReader { proxy in
+            ScrollView([.horizontal, .vertical]) {
+                HStack(alignment: .top, spacing: metrics.boardColumnSpacing) {
+                    ForEach(sections, id: \.group) { section in
+                        boardColumn(
+                            section: section,
+                            metrics: metrics,
+                            minHeight: max(proxy.size.height - (metrics.outerPadding * 2), metrics.boardColumnMinHeight)
+                        )
                         .frame(width: metrics.boardColumnWidth)
+                    }
                 }
+                .padding(metrics.outerPadding)
+                .frame(
+                    minWidth: proxy.size.width,
+                    minHeight: proxy.size.height,
+                    alignment: .topLeading
+                )
+                .animation(.easeInOut(duration: 0.22), value: boardAnimationKey(for: sections))
             }
-            .padding(metrics.outerPadding)
         }
     }
 
-    private func boardColumn(section: CoordinatorModeStatusSection, metrics: CoordinatorVisualMetrics) -> some View {
+    private func boardAnimationKey(for sections: [CoordinatorModeStatusSection]) -> [String] {
+        sections.flatMap { section in
+            section.rows.map { "\(section.group.rawValue):\($0.id.uuidString)" }
+        }
+    }
+
+    private func boardColumn(
+        section: CoordinatorModeStatusSection,
+        metrics: CoordinatorVisualMetrics,
+        minHeight: CGFloat
+    ) -> some View {
         VStack(alignment: .leading, spacing: metrics.columnSpacing) {
-            HStack {
+            HStack(spacing: metrics.smallSpacing) {
+                Circle()
+                    .fill(section.group.accentColor.opacity(section.rows.isEmpty ? 0.55 : 0.9))
+                    .frame(width: metrics.statusDotSize, height: metrics.statusDotSize)
+
                 Text(section.group.displayName)
                     .font(metrics.sectionTitle)
+                    .foregroundStyle(.primary)
+
                 Spacer()
+
                 Text("\(section.rows.count)")
                     .font(metrics.chip)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, metrics.miniPillHorizontalPadding)
                     .padding(.vertical, metrics.miniPillVerticalPadding)
-                    .background(Capsule().fill(Color.secondary.opacity(0.08)))
+                    .background(Capsule().fill(section.group.accentColor.opacity(section.rows.isEmpty ? 0.05 : 0.10)))
                     .overlay(
-                        Capsule().stroke(Color.secondary.opacity(0.12), lineWidth: 0.5)
+                        Capsule().stroke(section.group.accentColor.opacity(section.rows.isEmpty ? 0.08 : 0.16), lineWidth: 0.5)
                     )
             }
+            .padding(.bottom, metrics.tightSpacing)
 
             if section.rows.isEmpty {
                 Text("No sessions")
                     .font(metrics.micro)
                     .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(metrics.emptyColumnPadding)
-                    .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius, fillOpacity: CoordinatorStyle.emptyColumnFillOpacity)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, metrics.emptyColumnPadding)
             } else {
                 ForEach(section.rows) { row in
                     sessionCard(row, metrics: metrics)
                 }
             }
+
+            Spacer(minLength: 0)
         }
         .padding(metrics.columnPadding)
+        .frame(minHeight: minHeight, alignment: .top)
         .background(
             RoundedRectangle(cornerRadius: metrics.columnCornerRadius, style: .continuous)
                 .fill(section.group.columnTint(isEmpty: section.rows.isEmpty))
         )
         .overlay(
             RoundedRectangle(cornerRadius: metrics.columnCornerRadius, style: .continuous)
-                .stroke(CoordinatorStyle.hairline, lineWidth: 0.5)
+                .stroke(section.group.laneStroke(isEmpty: section.rows.isEmpty), lineWidth: 0.75)
         )
     }
 
@@ -526,7 +558,7 @@ struct CoordinatorModeView: View {
 
             openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
         }
-        .padding(metrics.cardPadding)
+        .padding(metrics.sessionCardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .coordinatorCardBackground(
             cornerRadius: metrics.cardCornerRadius,
@@ -1361,7 +1393,11 @@ private struct CoordinatorVisualMetrics {
     }
 
     var boardColumnWidth: CGFloat {
-        fontPreset.scaledClamped(245, min: 245, max: 300)
+        fontPreset.scaledClamped(224, min: 224, max: 276)
+    }
+
+    var boardColumnMinHeight: CGFloat {
+        fontPreset.scaledClamped(360, min: 360, max: 480)
     }
 
     var controlWidth: CGFloat {
@@ -1456,12 +1492,16 @@ private struct CoordinatorVisualMetrics {
         fontPreset.scaledClamped(10, max: 14)
     }
 
+    var sessionCardPadding: CGFloat {
+        fontPreset.scaledClamped(9, max: 12)
+    }
+
     var emptyColumnPadding: CGFloat {
-        fontPreset.scaledClamped(8, max: 10)
+        fontPreset.scaledClamped(10, max: 12)
     }
 
     var columnPadding: CGFloat {
-        fontPreset.scaledClamped(10, max: 14)
+        fontPreset.scaledClamped(9, max: 12)
     }
 
     var pendingPadding: CGFloat {
@@ -1792,7 +1832,11 @@ private extension CoordinatorModeStatusGroup {
     }
 
     func columnTint(isEmpty: Bool) -> Color {
-        accentColor.opacity(isEmpty ? 0.015 : (self == .done ? 0.04 : 0.055))
+        accentColor.opacity(isEmpty ? 0.025 : (self == .done ? 0.055 : 0.075))
+    }
+
+    func laneStroke(isEmpty: Bool) -> Color {
+        accentColor.opacity(isEmpty ? 0.07 : 0.16)
     }
 }
 
