@@ -41,9 +41,9 @@ The system SHALL define a Coordinator role as a layer-above meta-agent identity 
 ### Requirement: Existing Agent run/session lifecycle surfaces
 The first Coordinator role SHALL use the existing `agent_run` and `agent_manage` lifecycle/control surfaces for v1 delegation rather than requiring a new native lifecycle subsystem.
 
-#### Scenario: Privilege context is prepared
+#### Scenario: Privilege context prerequisite is available
 - **WHEN** Coordinator privilege state is threaded through the run-lease and connection-policy path
-- **THEN** the implementation SHALL use a named policy context or equivalent typed structure rather than adding another ambiguous positional privilege argument
+- **THEN** the prerequisite `refactor-agent-mcp-policy-context` behavior SHALL be available so Coordinator privilege state is carried through a named policy context or equivalent typed structure
 - **AND** ordinary agents SHALL NOT receive Coordinator scope or tools because of positional argument miswiring.
 
 #### Scenario: Lifecycle state is queried
@@ -99,7 +99,8 @@ The system SHALL define how the real Coordinator runtime is created, owned, pers
 #### Scenario: Coordinator runtime is targeted by destructive session management
 - **WHEN** any caller invokes session cleanup, stop, or other destructive session-management behavior against MCP-originated or background Agent sessions
 - **THEN** Coordinator-marked runtimes SHALL be excluded from incidental destructive targeting unless a later accepted spec defines explicit authorization and recovery semantics
-- **AND** the Coordinator runtime SHALL NOT be removed merely because it was created through an MCP-originated background path.
+- **AND** the Coordinator runtime SHALL NOT be removed merely because it was created through an MCP-originated background path
+- **AND** this Coordinator-as-target protection SHALL be implemented separately from Coordinator-as-actor op/arg guards that block the Coordinator runtime from invoking cleanup or stop operations itself.
 
 #### Scenario: User intentionally resets the Coordinator
 - **WHEN** the Coordinator runtime is wedged or the user intentionally wants to tear it down
@@ -121,7 +122,7 @@ The first Coordinator role SHALL supervise its own launched delegated fleet thro
 
 #### Scenario: Broad workspace visibility is deferred
 - **WHEN** the Coordinator needs visibility into sessions it did not spawn, sibling sessions, or the full active-workspace supervised-session set
-- **THEN** that broader `list_sessions` visibility SHALL be treated as a separate visibility-boundary capability
+- **THEN** that broader `list_sessions` visibility SHALL be treated as a separate visibility-boundary capability specified by `add-coordinator-list-sessions-visibility`
 - **AND** it SHALL NOT be required for the first Coordinator role's core delegation loop.
 
 #### Scenario: Cross-window control is requested

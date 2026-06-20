@@ -7,11 +7,10 @@
 - [ ] 1.5 Review the narrowed design with wren, using delegate-vs-focus, runtime ownership, list-session scope, execution policy, op/arg guard, and projection marker seams as the explicit discussion forks.
 - [ ] 1.6 Update the spec/design with any accepted review changes before implementation begins.
 
-## 1A. Privilege plumbing prework
+## 1A. Prerequisite dependency
 
-- [ ] 1A.1 Refactor the run-lease / connection-policy installer from the current many-positional-argument closure into a named policy context struct or equivalent typed context without behavior changes.
-- [ ] 1A.2 Migrate existing callers to the named policy context before adding Coordinator privilege fields.
-- [ ] 1A.3 Add focused no-behavior-change coverage or review checks proving ordinary Agent Mode runs retain their existing restricted tools, additional tools, task label, external-control, and expected-PID policy behavior.
+- [ ] 1A.1 Ensure `refactor-agent-mcp-policy-context` is accepted and available before threading Coordinator privilege marker fields through run-lease / connection-policy seams.
+- [ ] 1A.2 Do not add Coordinator privilege state as another positional installer argument.
 
 ## 2. Existing Agent run/session lifecycle surfaces
 

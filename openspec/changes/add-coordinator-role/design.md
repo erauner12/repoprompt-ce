@@ -136,7 +136,7 @@ Alternatives considered:
 
 The existing external lifecycle is close to the desired Coordinator runtime: a parent-less MCP-controlled top-level Agent Mode session can already use `agent_run.start`, `poll`, `wait`, `steer`, and `agent_manage` through loopback MCP, and child sessions do not recursively receive external-control tools. Multi-run delegation can reuse `start(detach: true)`, returned session handles, `wait`/`poll` with multiple session IDs, and the wait-winner-then-wait-remaining pattern already documented for orchestration.
 
-Coordinator v1 does not need broadened active-workspace `list_sessions` visibility to perform its core delegation loop. It can supervise the delegated fleet it launched because each `agent_run.start` response returns a stable `session_id`, and subsequent `poll`, `wait`, and `steer` calls can operate on those handles. Visibility into sessions the Coordinator did not spawn is useful, but it is a separate visibility-boundary capability and should be specified in a focused follow-up change rather than treated as a role prerequisite.
+Coordinator v1 does not need broadened active-workspace `list_sessions` visibility to perform its core delegation loop. It can supervise the delegated fleet it launched because each `agent_run.start` response returns a stable `session_id`, and subsequent `poll`, `wait`, and `steer` calls can operate on those handles. Visibility into sessions the Coordinator did not spawn is useful, but it is a separate visibility-boundary capability specified by `add-coordinator-list-sessions-visibility` rather than a role prerequisite.
 
 Cross-window control remains deferred. In this architecture, active-workspace scope is effectively current-window active-workspace scope; app-global behavior should not appear unless a later spec grants owning-window routing or a shared session-control service.
 
@@ -168,7 +168,7 @@ Delegate-only must be enforced by execution policy, not just by prompt wording o
 
 The enforcement seam has two levels. Tool advertisement can hide whole tab-scoped tools such as file read/search/edit, selection, worktree, and focus tools from list output, but hidden tools remain callable if invoked by name. Coordinator therefore needs a Coordinator-specific execution restricted set for whole-tool blocking, plus op/arg guards in the `agent_run` / `agent_manage` dispatch path for disallowed operations such as `respond`, `cancel`, `stop_session`, `cleanup_sessions`, and worktree creation/binding arguments on `agent_run.start`.
 
-Before threading the Coordinator privilege marker, the run-lease / connection-policy installer should be collapsed from the current many-positional-argument closure into a named policy context struct. This is load-bearing privilege plumbing: adding a Coordinator flag as another positional argument would make a miswired call site compile while silently granting the wrong scope or tools.
+Before threading the Coordinator privilege marker, the run-lease / connection-policy installer should be collapsed from the current many-positional-argument closure into a named policy context struct by the prerequisite `refactor-agent-mcp-policy-context` change. This is load-bearing privilege plumbing: adding a Coordinator flag as another positional argument would make a miswired call site compile while silently granting the wrong scope or tools.
 
 #### Coordinator v1 tool boundary examples
 
@@ -239,7 +239,7 @@ The first implementation should record its stance before enabling spawn/steer/re
 
 - **Native lifecycle scope creep** → Reuse existing lifecycle/control surfaces for v1; defer typed facade extraction unless implementation proves it is needed.
 - **Role-label trap** → Do not equate a `coordinator` task label with the real Coordinator runtime unless launch path, identity marker, scope, policy, and projection semantics are also correct.
-- **Privilege marker miswiring** → Refactor the run-lease / connection-policy installer to use a named context struct before threading Coordinator privilege state through it.
+- **Privilege marker miswiring** → Depend on `refactor-agent-mcp-policy-context` so the run-lease / connection-policy installer uses a named context struct before Coordinator privilege state is threaded through it.
 - **Existing MCP scope mismatch** → `agent_manage.list_sessions` child-scopes in-app agent callers. Coordinator v1 can still supervise its own launched fleet via returned lifecycle handles; broadened visibility into sessions it did not spawn should be handled by a separate visibility-boundary change.
 - **Over-broad Coordinator power** → Start delegate-only and require a later spec before exposing tab focus, file access, worktree mutation, approval/respond/cancel actions, or app-global visibility to the Coordinator.
 - **Hidden tool execution hole** → Do not rely on advertisement alone; enforce Coordinator's blocked whole tools at execution time.
@@ -252,10 +252,10 @@ The first implementation should record its stance before enabling spawn/steer/re
 1. Create and validate this OpenSpec change.
 2. Record the accepted direction: Coordinator is a constrained top-level orchestrator runtime that reuses existing `agent_run` / `agent_manage` lifecycle/control surfaces with delegate-only v1 scope over its launched delegated fleet.
 3. Review the narrowed design with wren using delegate-vs-focus, runtime ownership, list-session scope, execution policy, op/arg guard, and projection marker seams as the discussion spine.
-4. Refactor the run-lease / connection-policy installer to use a named policy context before adding Coordinator privilege fields.
+4. Land `refactor-agent-mcp-policy-context` before adding Coordinator privilege fields.
 5. Implement the Coordinator role behind a feature boundary while preserving existing Coordinator mode behavior.
 6. Integrate the real role with Coordinator view/composer only after runtime ownership, instruction delivery, identity marker, scope, enumeration exclusion, and action records are stable.
-6. Retire, hide, or keep the manual selected-session composer as an explicit demo/manual override based on the accepted migration decision.
+7. Retire, hide, or keep the manual selected-session composer as an explicit demo/manual override based on the accepted migration decision.
 
 Rollback for the first implementation should leave the existing Coordinator view and manual selected-session composer intact. The real role should be additive until it is proven stable.
 
