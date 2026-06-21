@@ -754,6 +754,9 @@ struct CoordinatorModeView: View {
                         keyValue("Model", row.modelName ?? "Unknown", metrics: metrics)
                         keyValue("Children", "\(row.childSessionIDs.count)", metrics: metrics)
                         keyValue("MCP originated", row.isMCPOriginated ? "Yes" : "No", metrics: metrics)
+                        if let workflow = row.workflow {
+                            keyValue("Workflow", workflow.displayName, metrics: metrics)
+                        }
                         if let workstream = row.workstream {
                             keyValue("Workstream", workstream.label, metrics: metrics)
                             if let branch = workstream.branch {
@@ -837,10 +840,15 @@ struct CoordinatorModeView: View {
                     .font(metrics.inspectorTitle)
                     .lineLimit(3)
 
-                Text(inspectorObjectSubtitle(for: row))
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                HStack(spacing: metrics.smallSpacing) {
+                    Text(inspectorObjectSubtitle(for: row))
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    if let workflow = row.workflow {
+                        workflowBadge(workflow, metrics: metrics)
+                    }
+                }
             }
         }
     }
@@ -1018,6 +1026,9 @@ struct CoordinatorModeView: View {
                     Text(action.verb.displayName)
                         .font(metrics.microMedium)
                         .foregroundStyle(action.verb.tint)
+                    if let workflow = targetRow?.workflow {
+                        workflowBadge(workflow, metrics: metrics)
+                    }
                     Text(action.ownerTitle)
                         .font(metrics.microMedium)
                         .foregroundStyle(.secondary.opacity(0.85))
@@ -1480,6 +1491,9 @@ struct CoordinatorModeView: View {
     private func rowMetadata(_ row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
         HStack(spacing: metrics.smallSpacing) {
             statusChip(row.runState.displayName, color: row.statusGroup.accentColor, metrics: metrics)
+            if let workflow = row.workflow {
+                workflowBadge(workflow, metrics: metrics)
+            }
             if let identity = cardIdentityText(for: row) {
                 Text(identity)
                     .font(metrics.body)
@@ -1502,6 +1516,32 @@ struct CoordinatorModeView: View {
             parts.append(workstream.label)
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func workflowBadge(_ workflow: CoordinatorModeWorkflowDisplaySummary, metrics: CoordinatorVisualMetrics) -> some View {
+        let tint = workflowTint(workflow)
+        return HStack(spacing: metrics.miniPillIconSpacing) {
+            Image(systemName: workflow.iconName)
+                .font(.system(size: metrics.microIconSize, weight: .semibold))
+            Text(workflow.displayName)
+                .font(metrics.microMedium)
+                .lineLimit(1)
+        }
+        .foregroundStyle(tint.opacity(0.9))
+        .padding(.horizontal, metrics.miniPillHorizontalPadding)
+        .padding(.vertical, metrics.miniPillVerticalPadding)
+        .background(Capsule().fill(tint.opacity(0.12)))
+        .overlay(Capsule().stroke(tint.opacity(0.2), lineWidth: 0.5))
+    }
+
+    private func workflowTint(_ workflow: CoordinatorModeWorkflowDisplaySummary) -> Color {
+        if let builtIn = AgentWorkflow.allCases.first(where: { workflow.id == "builtin-\($0.rawValue)" }) {
+            return builtIn.accentColor
+        }
+        if let hex = workflow.accentColorHex, let color = Color(hex: hex) {
+            return color
+        }
+        return .secondary
     }
 
     private func openAgentChatButton(route: AgentSessionDeepLinkRoute?, title: String, metrics: CoordinatorVisualMetrics) -> some View {
@@ -2361,6 +2401,7 @@ private extension AgentSessionRunState {
                     updatedAt: now.addingTimeInterval(-120),
                     priority: 2,
                     workstream: .init(label: "coordinator/readonly-shell", branch: "coordinator/readonly-shell", colorHex: nil),
+                    workflow: CoordinatorModeWorkflowDisplaySummary(AgentWorkflow.orchestrate.definition),
                     mergeAttention: nil,
                     pendingInteraction: nil,
                     openAgentChatRoute: nil,
@@ -2383,6 +2424,7 @@ private extension AgentSessionRunState {
                     updatedAt: now.addingTimeInterval(-3600),
                     priority: nil,
                     workstream: nil,
+                    workflow: nil,
                     mergeAttention: nil,
                     pendingInteraction: nil,
                     openAgentChatRoute: nil,

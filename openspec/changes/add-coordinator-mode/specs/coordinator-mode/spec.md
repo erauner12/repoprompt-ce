@@ -180,10 +180,22 @@ The system SHALL project Coordinator mode session rows/cards from structured ses
 - **WHEN** a session appears as a Coordinator view card or list row
 - **THEN** the card or row SHALL derive identity, lineage, provider/model, worktree state, MCP origin, and run status from structured session metadata or live state.
 
-#### Scenario: Workflow labels are deferred
-- **WHEN** Coordinator view rows render in v1
-- **THEN** the row SHALL omit workflow labels
-- **AND** workflow index or transcript lookup policy SHALL remain a follow-up decision.
+#### Scenario: Workflow metadata is absent
+- **WHEN** a Coordinator view row has no sourced workflow metadata
+- **THEN** the row SHALL omit workflow labels.
+
+#### Scenario: Workflow metadata is present
+- **WHEN** a Coordinator view row has a sourced workflow display summary derived from real Agent Mode workflow metadata
+- **THEN** the card, list row, inspector, or related Coordinator action chip MAY render a compact read-only workflow label with display name, icon, and accent
+- **AND** the label SHALL NOT affect grouping, sorting, filtering, action creation, model/tool selection, permissions, or runtime behavior.
+
+#### Scenario: Workflow metadata changes
+- **WHEN** the latest sourced user-turn workflow for a live row changes
+- **THEN** the Coordinator view SHALL update the workflow label from the new display summary.
+
+#### Scenario: Workflow metadata clears
+- **WHEN** a later live user turn for the same row has no workflow metadata
+- **THEN** the Coordinator view SHALL clear the workflow label rather than preserving the previous workflow as stale context.
 
 #### Scenario: Objective label has no source
 - **WHEN** no structured objective source exists
@@ -316,6 +328,11 @@ The system SHALL deep-link Coordinator view rows to the existing Agent Mode sess
 - **THEN** the Coordinator view SHALL NOT expose it as an Agent chat deep-link target from the Coordinator rail or board/list fleet
 - **AND** the implementation SHALL prefer excluding it from supervised-session enumeration before leaf views need to hide it.
 
+#### Scenario: Row is Coordinator-internal housekeeping
+- **WHEN** a session is explicitly marked as Coordinator-internal housekeeping, such as a demo loopback proof child
+- **THEN** the Coordinator view SHALL exclude it from board/list fleet rows and Coordinator action-chip rows
+- **AND** the implementation SHALL NOT infer this internal state from session title text.
+
 ### Requirement: Compact MCP awareness
 The system SHALL provide compact MCP client/tool-call awareness without replacing existing MCP status surfaces.
 
@@ -360,6 +377,12 @@ The system SHALL keep the Coordinator view calm by default and expose detail onl
 - **WHEN** Coordinator or event conversation rows contain Markdown structures such as lists, links, inline code, or code fences
 - **THEN** the Coordinator rail SHALL render those rows through the shared Agent Mode Markdown rendering substrate where practical
 - **AND** the rail SHALL provide enough width for command-log responses to remain readable without excessive wrapping.
+
+#### Scenario: Coordinator action chip is result-derived
+- **WHEN** a newly visible supervised delegated row appears for the current Coordinator runtime
+- **THEN** the Coordinator rail MAY show a compact delegated action chip derived from that row/result
+- **AND** the chip SHALL reread current target-row status and workflow metadata at render time
+- **AND** it SHALL NOT claim to represent pending dispatch, collect/review/cancel actions, multi-action batches, or a complete tool-call event stream until a sourced action/activity model exists.
 
 #### Scenario: Coordinator composer matches Agent Mode visual language
 - **WHEN** the Coordinator rail renders its scoped composer

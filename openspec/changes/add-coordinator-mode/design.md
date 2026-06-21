@@ -84,7 +84,11 @@ V1 projects active-workspace sessions. Live run-state enrichment is current-wind
 
 ### 7. Labels are structured and conservative
 
-Workflow labels are omitted in v1. A future workflow label pass can choose between an index addition and shared request-anchor/transcript metadata lookup; that same lookup should be shared with workflow-based Coordinator detection if enabled. With no session-level workflow source in v1, the Orchestrate workflow auto-detection tier is inert; effective automatic Coordinator detection reduces to MCP-originated lineage-root candidates unless the deferred workflow lookup lands. Objective labels are deferred. Workstream chips may optionally render from worktree binding/logical-root metadata when present and useful for the UI; otherwise omit them. Session-title parsing is out of scope.
+Workflow labels are read-only display metadata in the production-demo path. The projector accepts a flat `WorkflowDisplaySummary` derived from real `AgentWorkflowDefinition` metadata (`id`, display name, SF Symbol, optional accent), not a Coordinator-only toy enum. Live rows derive the summary from the latest user-turn workflow already held in the Agent Mode transcript model, so a workflow chip can appear, change, or clear between turns without scanning transcripts per row. The label does not change grouping, sorting, filtering, action creation, or model/tool/policy selection.
+
+Action-chip workflow labels are render-time lookups from the current target row. The chip stores the delegated target session ID and verb/phase; the view rereads the row's current workflow/status metadata, so a later follow-up without a workflow clears the workflow affordance instead of leaving stale context on the chip.
+
+Objective labels are deferred. Workstream chips may optionally render from worktree binding/logical-root metadata when present and useful for the UI; otherwise omit them. Session-title parsing is out of scope.
 
 ### 8. Pending interactions are read-only and MCP-scoped in v1
 
@@ -139,6 +143,10 @@ The production-feeling demo may still deliver directives through a selected, aut
 
 Agent Mode deep links remain available for supervised delegate rows, pending summaries, and detail that belongs in Agent Mode. They should not be used to invite the user to inspect or drive the Coordinator backing runtime as if it were part of the supervised fleet. When a first-class Coordinator marker exists, the backing runtime should be excluded at the shared enumeration boundary used by Coordinator mode groups, Agent Mode sidebar/session lists, and MCP session-list surfaces. Before that marker exists, local Coordinator-rail suppression is an acceptable demo bridge, but it must be treated as temporary presentation behavior rather than final architecture.
 
+Coordinator housekeeping children are also distinct from supervised work. Demo-only loopback/proof children should be stamped with an explicit internal Coordinator marker at creation time and excluded from both board/list fleet rows and Coordinator action chips. The implementation must not infer this from session titles. In the demo this marker can remain in-memory like the demo Coordinator runtime marker; the production architecture should replace it with durable containment/activity metadata.
+
+Coordinator action chips are currently board/result-derived, not true tool-call-event-derived. They provide a readable "delegated" cue when a new supervised child row appears, but they do not yet model pending dispatch, collect/review/cancel actions, multi-action batches, or a general action/event stream. That future stream should feed chips and board rows from the same sourced activity model.
+
 Window-level chrome should follow the same rule. When Coordinator mode is the active main surface, the window title should remain workspace-scoped rather than borrowing the active Agent session tab title; the toolbar peer surface switcher identifies the active Coordinator surface. Parent/delegate session titles belong in board/list rows, inspector detail, or explicit Agent Mode deep links, not in the top-level Coordinator window title.
 
 The rail conversation should also be wide and rich enough to read as a first-class command log. Coordinator responses may contain bullets, links, code fences, and inline code, so production-demo rows should reuse the same Markdown rendering substrate used by Agent Mode assistant messages instead of presenting raw Markdown as plain wrapped text.
@@ -158,7 +166,7 @@ The v1 surface defaults to a read-only status board. List remains a first-class 
 - **Coordinator ambiguity** → Use precedence rules, most-recent auto-candidate fallback, and per-window user override instead of guessing from plain lineage.
 - **Multi-window stale rows** → Render stale/persisted-only state explicitly; keep live `Needs you` / `Working` counts current-window-only.
 - **Reactive firehose** → Observe coarse signals and diff snapshots before publishing.
-- **Workflow lookup cost** → Either add workflow to metadata/index or accept a shared transcript metadata read; do not repeatedly load transcripts per UI region.
+- **Workflow lookup cost** → Keep workflow display on cheap live request-anchor metadata; if persisted/off-window workflow labels are needed later, add index metadata or a shared cached lookup rather than loading transcripts per UI region.
 - **Pending decision asymmetry** → Run-state waiting values still enter `Needs you`; MCP-controlled live interactions only enrich the prompt/detail payload.
 - **Route gaps** → Store nullable routes on rows/summaries and hide navigation when route prerequisites are missing.
 

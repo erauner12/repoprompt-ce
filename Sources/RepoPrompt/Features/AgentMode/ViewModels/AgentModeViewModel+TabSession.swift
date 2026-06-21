@@ -148,6 +148,9 @@ extension AgentModeViewModel {
         /// Demo-only marker for the Coordinator runtime spine. This is intentionally
         /// in-memory/addressability-only until the full containment/restore design lands.
         var isCoordinatorRuntimeDemo: Bool = false
+        /// Demo-only marker for Coordinator housekeeping children that should not be
+        /// presented as supervised delegated work.
+        var isCoordinatorInternalSession: Bool = false
         /// Whether this session was originally created by an MCP client.
         var isMCPOriginated: Bool = false
         /// Persisted logical-root to worktree bindings for this Agent session.

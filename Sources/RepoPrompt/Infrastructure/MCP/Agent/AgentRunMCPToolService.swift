@@ -262,6 +262,7 @@ struct AgentRunMCPToolService {
             throw MCPError.invalidParams("agent_run.start always creates a new session. Use agent_run op=steer with session_id to continue an existing session.")
         }
         let detach = parseBool(args["detach"]) ?? false
+        let coordinatorInternal = parseBool(args["coordinator_internal"]) ?? false
         let timeoutSeconds = try Self.resolvedStartTimeoutSeconds(args["timeout"])
 
         let metadata = await captureRequestMetadata()
@@ -333,6 +334,9 @@ struct AgentRunMCPToolService {
             parentSessionID: spawnParentSessionID,
             inheritWorktreeBindings: worktreeStartRequest.inheritParentWorktreeBindings
         )
+        if coordinatorInternal {
+            await agentModeVM.mcpMarkCoordinatorInternalSession(tabID: target.tabID, isCoordinatorInternal: true)
+        }
         do {
             try await startWorktreeCoordinator.prepare(
                 request: worktreeStartRequest,

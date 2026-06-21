@@ -13,6 +13,7 @@ struct CoordinatorModeSnapshotProjector {
         var sortMode: CoordinatorModeSortMode
         var resolvableTabIDs: Set<UUID>
         var demoCoordinatorSessionIDs: Set<UUID>
+        var coordinatorInternalSessionIDs: Set<UUID>
 
         init(
             workspaceID: UUID?,
@@ -25,7 +26,8 @@ struct CoordinatorModeSnapshotProjector {
             selectedCoordinatorID: UUID? = nil,
             sortMode: CoordinatorModeSortMode = .lastUpdated,
             resolvableTabIDs: Set<UUID> = [],
-            demoCoordinatorSessionIDs: Set<UUID> = []
+            demoCoordinatorSessionIDs: Set<UUID> = [],
+            coordinatorInternalSessionIDs: Set<UUID> = []
         ) {
             self.workspaceID = workspaceID
             self.windowID = windowID
@@ -38,6 +40,7 @@ struct CoordinatorModeSnapshotProjector {
             self.sortMode = sortMode
             self.resolvableTabIDs = resolvableTabIDs
             self.demoCoordinatorSessionIDs = demoCoordinatorSessionIDs
+            self.coordinatorInternalSessionIDs = coordinatorInternalSessionIDs
         }
     }
 
@@ -53,7 +56,8 @@ struct CoordinatorModeSnapshotProjector {
         var isMCPOriginated: Bool
         var worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary]
         var activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary]
-        var workflowKind: WorkflowKind?
+        var workflow: CoordinatorModeWorkflowDisplaySummary?
+        var isCoordinatorInternal: Bool
         var priority: Int?
 
         init(
@@ -68,7 +72,8 @@ struct CoordinatorModeSnapshotProjector {
             isMCPOriginated: Bool = false,
             worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary] = [],
             activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary] = [],
-            workflowKind: WorkflowKind? = nil,
+            workflow: CoordinatorModeWorkflowDisplaySummary? = nil,
+            isCoordinatorInternal: Bool = false,
             priority: Int? = nil
         ) {
             self.id = id
@@ -82,7 +87,8 @@ struct CoordinatorModeSnapshotProjector {
             self.isMCPOriginated = isMCPOriginated
             self.worktreeBindingSummaries = worktreeBindingSummaries
             self.activeWorktreeMergeSummaries = activeWorktreeMergeSummaries
-            self.workflowKind = workflowKind
+            self.workflow = workflow
+            self.isCoordinatorInternal = isCoordinatorInternal
             self.priority = priority
         }
     }
@@ -99,7 +105,8 @@ struct CoordinatorModeSnapshotProjector {
         var isMCPOriginated: Bool
         var worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary]
         var activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary]
-        var workflowKind: WorkflowKind?
+        var workflow: CoordinatorModeWorkflowDisplaySummary?
+        var isCoordinatorInternal: Bool
         var priority: Int?
 
         init(
@@ -114,7 +121,8 @@ struct CoordinatorModeSnapshotProjector {
             isMCPOriginated: Bool = false,
             worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary] = [],
             activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary] = [],
-            workflowKind: WorkflowKind? = nil,
+            workflow: CoordinatorModeWorkflowDisplaySummary? = nil,
+            isCoordinatorInternal: Bool = false,
             priority: Int? = nil
         ) {
             self.sessionID = sessionID
@@ -128,7 +136,8 @@ struct CoordinatorModeSnapshotProjector {
             self.isMCPOriginated = isMCPOriginated
             self.worktreeBindingSummaries = worktreeBindingSummaries
             self.activeWorktreeMergeSummaries = activeWorktreeMergeSummaries
-            self.workflowKind = workflowKind
+            self.workflow = workflow
+            self.isCoordinatorInternal = isCoordinatorInternal
             self.priority = priority
         }
     }
@@ -139,7 +148,8 @@ struct CoordinatorModeSnapshotProjector {
         var updatedAt: Date
         var parentSessionID: UUID?
         var isMCPOriginated: Bool
-        var workflowKind: WorkflowKind?
+        var workflow: CoordinatorModeWorkflowDisplaySummary?
+        var isCoordinatorInternal: Bool
 
         init(
             id: UUID,
@@ -147,20 +157,17 @@ struct CoordinatorModeSnapshotProjector {
             updatedAt: Date,
             parentSessionID: UUID? = nil,
             isMCPOriginated: Bool = false,
-            workflowKind: WorkflowKind? = nil
+            workflow: CoordinatorModeWorkflowDisplaySummary? = nil,
+            isCoordinatorInternal: Bool = false
         ) {
             self.id = id
             self.title = title
             self.updatedAt = updatedAt
             self.parentSessionID = parentSessionID
             self.isMCPOriginated = isMCPOriginated
-            self.workflowKind = workflowKind
+            self.workflow = workflow
+            self.isCoordinatorInternal = isCoordinatorInternal
         }
-    }
-
-    enum WorkflowKind: String, Equatable {
-        case orchestrate
-        case other
     }
 
     func project(_ input: Input) -> CoordinatorModeSnapshot {
@@ -232,7 +239,8 @@ struct CoordinatorModeSnapshotProjector {
         var isMCPOriginated: Bool
         var worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary]
         var activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary]
-        var workflowKind: WorkflowKind?
+        var workflow: CoordinatorModeWorkflowDisplaySummary?
+        var isCoordinatorInternal: Bool
         var priority: Int?
         var isPersistedOnly: Bool
     }
@@ -243,7 +251,8 @@ struct CoordinatorModeSnapshotProjector {
         var updatedAt: Date
         var parentSessionID: UUID?
         var isMCPOriginated: Bool
-        var workflowKind: WorkflowKind?
+        var workflow: CoordinatorModeWorkflowDisplaySummary?
+        var isCoordinatorInternal: Bool
     }
 
     private struct CoordinatorSelection: Equatable {
@@ -278,7 +287,8 @@ struct CoordinatorModeSnapshotProjector {
                 isMCPOriginated: persisted.isMCPOriginated,
                 worktreeBindingSummaries: persisted.worktreeBindingSummaries,
                 activeWorktreeMergeSummaries: persisted.activeWorktreeMergeSummaries,
-                workflowKind: persisted.workflowKind,
+                workflow: persisted.workflow,
+                isCoordinatorInternal: persisted.isCoordinatorInternal || input.coordinatorInternalSessionIDs.contains(persisted.id),
                 priority: persisted.priority,
                 isPersistedOnly: true
             )
@@ -298,7 +308,8 @@ struct CoordinatorModeSnapshotProjector {
                 isMCPOriginated: live.isMCPOriginated || (previous?.isMCPOriginated ?? false),
                 worktreeBindingSummaries: live.worktreeBindingSummaries.isEmpty ? previous?.worktreeBindingSummaries ?? [] : live.worktreeBindingSummaries,
                 activeWorktreeMergeSummaries: live.activeWorktreeMergeSummaries.isEmpty ? previous?.activeWorktreeMergeSummaries ?? [] : live.activeWorktreeMergeSummaries,
-                workflowKind: live.workflowKind ?? previous?.workflowKind,
+                workflow: live.workflow,
+                isCoordinatorInternal: live.isCoordinatorInternal || input.coordinatorInternalSessionIDs.contains(live.sessionID),
                 priority: live.priority ?? previous?.priority,
                 isPersistedOnly: false
             )
@@ -322,7 +333,8 @@ struct CoordinatorModeSnapshotProjector {
                 activeWorktreeMergeSummaries: snapshot.activeWorktreeMerges.isEmpty
                     ? previous?.activeWorktreeMergeSummaries ?? []
                     : snapshot.activeWorktreeMerges,
-                workflowKind: previous?.workflowKind,
+                workflow: previous?.workflow,
+                isCoordinatorInternal: previous?.isCoordinatorInternal ?? input.coordinatorInternalSessionIDs.contains(snapshot.sessionID),
                 priority: previous?.priority,
                 isPersistedOnly: false
             )
@@ -367,6 +379,7 @@ struct CoordinatorModeSnapshotProjector {
             updatedAt: seed.updatedAt,
             priority: seed.priority,
             workstream: workstream(from: seed.worktreeBindingSummaries.first),
+            workflow: seed.workflow,
             mergeAttention: mergeAttention(from: seed.activeWorktreeMergeSummaries),
             pendingInteraction: pendingInteraction,
             openAgentChatRoute: route,
@@ -478,12 +491,8 @@ struct CoordinatorModeSnapshotProjector {
         return seeds.filter { seed in
             descendantIDs.contains(seed.id)
                 && !demoCoordinatorSessionIDs.contains(seed.id)
-                && !isDemoCoordinatorRuntimeTitle(seed.title)
+                && !seed.isCoordinatorInternal
         }
-    }
-
-    private func isDemoCoordinatorRuntimeTitle(_ title: String) -> Bool {
-        title == "Coordinator Runtime Demo" || title == "Coordinator Runtime Demo (cleared)"
     }
 
     private func childrenByParent(from seeds: [RowSeed]) -> [UUID: Set<UUID>] {
@@ -515,7 +524,8 @@ struct CoordinatorModeSnapshotProjector {
                     updatedAt: seed.updatedAt,
                     parentSessionID: seed.parentSessionID,
                     isMCPOriginated: seed.isMCPOriginated,
-                    workflowKind: seed.workflowKind
+                    workflow: seed.workflow,
+                    isCoordinatorInternal: seed.isCoordinatorInternal
                 )
             )
         })
@@ -528,7 +538,8 @@ struct CoordinatorModeSnapshotProjector {
                 updatedAt: previous?.updatedAt ?? session.updatedAt,
                 parentSessionID: session.parentSessionID ?? previous?.parentSessionID,
                 isMCPOriginated: session.isMCPOriginated || (previous?.isMCPOriginated ?? false),
-                workflowKind: session.workflowKind ?? previous?.workflowKind
+                workflow: session.workflow,
+                isCoordinatorInternal: session.isCoordinatorInternal || (previous?.isCoordinatorInternal ?? false)
             )
         }
 
@@ -756,7 +767,8 @@ extension CoordinatorModeSnapshotProjector.CoordinatorDetectionSession {
             updatedAt: persisted.updatedAt,
             parentSessionID: persisted.parentSessionID,
             isMCPOriginated: persisted.isMCPOriginated,
-            workflowKind: persisted.workflowKind
+            workflow: persisted.workflow,
+            isCoordinatorInternal: persisted.isCoordinatorInternal
         )
     }
 }
@@ -775,6 +787,17 @@ extension CoordinatorModeSnapshotProjector.PersistedSession {
             isMCPOriginated: entry.isMCPOriginated,
             worktreeBindingSummaries: entry.worktreeBindingSummaries,
             activeWorktreeMergeSummaries: entry.activeWorktreeMergeSummaries
+        )
+    }
+}
+
+extension CoordinatorModeWorkflowDisplaySummary {
+    init(_ workflow: AgentWorkflowDefinition) {
+        self.init(
+            id: workflow.id,
+            displayName: workflow.displayName,
+            iconName: workflow.iconName,
+            accentColorHex: workflow.accentColorHex
         )
     }
 }

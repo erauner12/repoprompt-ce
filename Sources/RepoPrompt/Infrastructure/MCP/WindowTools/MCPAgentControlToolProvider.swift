@@ -118,7 +118,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 description: """
                 Provide `op` plus operation-specific fields.
 
-                **start**: message (required), model_id? (defaults to pair), session_name?, workflow_id|workflow_name?, detach?, timeout?, inherit_worktree?, worktree|worktree_id|worktree_create? and worktree_* args. Use workflow_name="orchestrate" to plan, decompose, and dispatch sub-agents.
+                **start**: message (required), model_id? (defaults to pair), session_name?, workflow_id|workflow_name?, detach?, timeout?, inherit_worktree?, coordinator_internal?, worktree|worktree_id|worktree_create? and worktree_* args. Use workflow_name="orchestrate" to plan, decompose, and dispatch sub-agents.
                 **poll / wait**: session_id or session_ids (mutually exclusive), timeout? (wait only)
                 **cancel**: session_id (required)
                 **steer**: session_id (required, from a prior `start`/`steer` response), message (required), wait?, timeout_seconds?, workflow_id|workflow_name?
@@ -133,6 +133,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                     "session_name": .string(description: "[start] Display name for a new session."),
                     "workflow_id": .string(description: "[start, steer, respond] Workflow ID. Mutually exclusive with workflow_name."),
                     "workflow_name": .string(description: "[start, steer, respond] Workflow name. Mutually exclusive with workflow_id."),
+                    "coordinator_internal": .boolean(description: "[start] Coordinator-internal housekeeping session. Hides the child from Coordinator board/action-chip surfaces while preserving parentage and Agent Mode state. Default false."),
                     "detach": .boolean(description: "[start] Return immediately instead of waiting. Default false."),
                     "timeout": .number(description: "[start, wait] Max wait seconds. 0 = poll. Default \(defaultWaitSeconds)."),
                     "worktree": .string(description: "[start] Existing worktree selector to bind before provider startup: @current, @main, @branch:<name>, name, branch, path, or @id:<worktree_id>. Mutually exclusive with worktree_id and worktree_create."),

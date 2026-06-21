@@ -10424,6 +10424,11 @@ final class AgentModeViewModel: ObservableObject {
         scheduleSave(for: tabID)
     }
 
+    func mcpMarkCoordinatorInternalSession(tabID: UUID, isCoordinatorInternal: Bool) async {
+        let session = await ensureSessionReady(tabID: tabID)
+        session.isCoordinatorInternalSession = isCoordinatorInternal
+    }
+
     private func saveSession(for tabID: UUID) async {
         #if DEBUG
             let diagnosticsStartMS = AgentModePerfDiagnostics.timestampMSIfEnabled()

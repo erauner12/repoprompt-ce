@@ -111,10 +111,22 @@ struct CoordinatorModeRow: Identifiable, Equatable {
     let updatedAt: Date
     let priority: Int?
     let workstream: Workstream?
+    let workflow: CoordinatorModeWorkflowDisplaySummary?
     let mergeAttention: MergeAttention?
     let pendingInteraction: CoordinatorModePendingInteractionSummary?
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
     let statusReport: CoordinatorModeSessionStatusReport?
+}
+
+struct CoordinatorModeWorkflowDisplaySummary: Equatable {
+    let id: String
+    let displayName: String
+    let iconName: String
+    let accentColorHex: String?
+
+    var isOrchestrateWorkflow: Bool {
+        id == AgentWorkflow.orchestrate.definition.id
+    }
 }
 
 struct CoordinatorModeSessionStatusReport: Equatable {

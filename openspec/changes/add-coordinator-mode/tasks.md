@@ -96,9 +96,13 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.12 Keep the Coordinator composer text area editable and focused while send is gated by an active Coordinator run.
 - [x] 10.13 Keep Coordinator mode window titles workspace-scoped instead of using the active Agent session tab.
 - [x] 10.14 Move the Agent/Coordinator switcher to one window-toolbar location, remove sidebar/rail copies, and back it with live checked View-menu commands.
+- [x] 10.15 Project read-only workflow display metadata from real Agent Mode workflow definitions, render it on Coordinator rows/inspectors/action chips, and clear/update it between live turns.
+- [x] 10.16 Exclude explicitly marked Coordinator-internal housekeeping children from board/list and Coordinator action-chip surfaces without title matching.
+- [x] 10.17 Document that current Coordinator action chips are board/result-derived delegate cues, not a complete tool-call action/event stream.
 
 ## 11. Validation
 
 - [x] 11.1 Run the focused unit tests added for snapshot projection, Coordinator identity, Coordinator composer, pending interactions, MCP projection, and deep links.
 - [x] 11.2 Run the smallest relevant coordinated Swift validation lane for touched app/UI files.
 - [x] 11.3 Run `openspec validate add-coordinator-mode`.
+- [x] 11.4 Re-run focused Coordinator projector/composer tests, coordinated Swift build/style checks, and OpenSpec validation after the workflow/internal-action refinement.

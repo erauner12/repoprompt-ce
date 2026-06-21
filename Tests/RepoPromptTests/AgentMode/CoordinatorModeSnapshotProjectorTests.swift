@@ -1,6 +1,12 @@
 @testable import RepoPrompt
 import XCTest
 
+private extension CoordinatorModeWorkflowDisplaySummary {
+    static let orchestrate = CoordinatorModeWorkflowDisplaySummary(AgentWorkflow.orchestrate.definition)
+    static let review = CoordinatorModeWorkflowDisplaySummary(AgentWorkflow.review.definition)
+    static let investigate = CoordinatorModeWorkflowDisplaySummary(AgentWorkflow.investigate.definition)
+}
+
 final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
     private let projector = CoordinatorModeSnapshotProjector()
 
@@ -18,7 +24,7 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
                 live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(100), state: .idle),
                 live(id: directChildID, tab: uuid(102), title: "Delegate A", updatedAt: date(90), state: .waitingForApproval, parent: coordinatorID),
                 live(id: nestedChildID, tab: uuid(103), title: "Delegate B", updatedAt: date(80), state: .running, parent: directChildID),
-                live(id: proofID, tab: uuid(104), title: "Coordinator loopback proof", updatedAt: date(70), state: .completed, parent: coordinatorID),
+                live(id: proofID, tab: uuid(104), title: "Coordinator loopback proof", updatedAt: date(70), state: .completed, parent: coordinatorID, internalSession: true),
                 live(id: unrelatedID, tab: uuid(105), title: "Unrelated", updatedAt: date(60), state: .running),
                 live(id: previousCoordinatorID, tab: uuid(106), title: "Coordinator Runtime Demo (cleared)", updatedAt: date(50), state: .completed),
                 live(id: previousChildID, tab: uuid(107), title: "Previous child", updatedAt: date(40), state: .running, parent: previousCoordinatorID)
@@ -28,12 +34,12 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
 
         XCTAssertEqual(snapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
         XCTAssertEqual(snapshot.coordinatorRail.selectionSource, .demoRuntime)
-        XCTAssertEqual(Set(allRows(in: snapshot).map(\.sessionID)), [directChildID, nestedChildID, proofID])
+        XCTAssertEqual(Set(allRows(in: snapshot).map(\.sessionID)), [directChildID, nestedChildID])
         XCTAssertFalse(allRows(in: snapshot).contains { $0.sessionID == coordinatorID })
         XCTAssertFalse(allRows(in: snapshot).contains { $0.sessionID == unrelatedID })
         XCTAssertEqual(rows(in: snapshot, group: .needsYou).map(\.sessionID), [directChildID])
         XCTAssertEqual(rows(in: snapshot, group: .working).map(\.sessionID), [nestedChildID])
-        XCTAssertEqual(rows(in: snapshot, group: .done).map(\.sessionID), [proofID])
+        XCTAssertTrue(rows(in: snapshot, group: .done).isEmpty)
         XCTAssertEqual(allRows(in: snapshot).first { $0.sessionID == directChildID }?.childSessionIDs, [nestedChildID])
     }
 
@@ -345,6 +351,79 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(rows.map { $0.workstream?.label }, ["Visual", "Worktree", "Root", "branch", "repo"])
     }
 
+    func testWorkflowMetadataDefaultsToNil() {
+        let coordinatorID = uuid(10)
+        let sessionID = uuid(1)
+        let snapshot = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle),
+                live(id: sessionID, tab: uuid(101), title: "Plain", updatedAt: date(10), state: .running, parent: coordinatorID)
+            ],
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        XCTAssertNil(allRows(in: snapshot).first?.workflow)
+    }
+
+    func testWorkflowMetadataProjectsRealDisplaySummary() {
+        let coordinatorID = uuid(10)
+        let sessionID = uuid(1)
+        let snapshot = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle),
+                live(id: sessionID, tab: uuid(101), title: "Review README", updatedAt: date(10), state: .running, parent: coordinatorID, workflow: .review)
+            ],
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        let workflow = allRows(in: snapshot).first?.workflow
+        XCTAssertEqual(workflow?.id, AgentWorkflow.review.definition.id)
+        XCTAssertEqual(workflow?.displayName, "Review")
+        XCTAssertEqual(workflow?.iconName, "eye.fill")
+    }
+
+    func testLiveWorkflowNilClearsPersistedWorkflow() {
+        let coordinatorID = uuid(10)
+        let sessionID = uuid(1)
+        let tabID = uuid(101)
+        let snapshot = projector.project(input(
+            persisted: [
+                persisted(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(30)),
+                persisted(id: sessionID, tab: tabID, title: "Review README", updatedAt: date(20), parent: coordinatorID, workflow: .review)
+            ],
+            live: [
+                live(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(40), state: .idle),
+                live(id: sessionID, tab: tabID, title: "Review README", updatedAt: date(35), state: .completed, parent: coordinatorID)
+            ],
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        XCTAssertNil(allRows(in: snapshot).first { $0.sessionID == sessionID }?.workflow)
+    }
+
+    func testWorkflowMetadataChangesBetweenTurns() {
+        let coordinatorID = uuid(10)
+        let sessionID = uuid(1)
+        let first = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle),
+                live(id: sessionID, tab: uuid(101), title: "Investigate", updatedAt: date(10), state: .running, parent: coordinatorID, workflow: .investigate)
+            ],
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        let second = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(30), state: .idle),
+                live(id: sessionID, tab: uuid(101), title: "Review", updatedAt: date(25), state: .running, parent: coordinatorID, workflow: .review)
+            ],
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        XCTAssertEqual(allRows(in: first).first?.workflow?.id, AgentWorkflow.investigate.definition.id)
+        XCTAssertEqual(allRows(in: second).first?.workflow?.id, AgentWorkflow.review.definition.id)
+        XCTAssertNotEqual(first.fingerprint, second.fingerprint)
+    }
+
     func testCoordinatorRailAndRowsReportOnlySnapshotStatusFields() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
@@ -548,7 +627,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         selectedCoordinatorID: UUID? = nil,
         sort: CoordinatorModeSortMode = .lastUpdated,
         resolvableTabs: Set<UUID>? = nil,
-        demoCoordinatorIDs: Set<UUID> = []
+        demoCoordinatorIDs: Set<UUID> = [],
+        coordinatorInternalIDs: Set<UUID> = []
     ) -> CoordinatorModeSnapshotProjector.Input {
         let tabs = resolvableTabs ?? Set(persisted.map(\.tabID) + live.map(\.tabID))
         return CoordinatorModeSnapshotProjector.Input(
@@ -562,7 +642,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             selectedCoordinatorID: selectedCoordinatorID,
             sortMode: sort,
             resolvableTabIDs: tabs,
-            demoCoordinatorSessionIDs: demoCoordinatorIDs
+            demoCoordinatorSessionIDs: demoCoordinatorIDs,
+            coordinatorInternalSessionIDs: coordinatorInternalIDs
         )
     }
 
@@ -574,7 +655,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         state: AgentSessionRunState? = .idle,
         parent: UUID? = nil,
         isMCP: Bool = false,
-        workflow: CoordinatorModeSnapshotProjector.WorkflowKind? = nil,
+        workflow: CoordinatorModeWorkflowDisplaySummary? = nil,
+        internalSession: Bool = false,
         priority: Int? = nil,
         bindings: [AgentSessionWorktreeBindingSummary] = [],
         merges: [AgentSessionWorktreeMergeSummary] = []
@@ -589,7 +671,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             isMCPOriginated: isMCP,
             worktreeBindingSummaries: bindings,
             activeWorktreeMergeSummaries: merges,
-            workflowKind: workflow,
+            workflow: workflow,
+            isCoordinatorInternal: internalSession,
             priority: priority
         )
     }
@@ -602,7 +685,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         state: AgentSessionRunState,
         parent: UUID? = nil,
         isMCP: Bool = false,
-        workflow: CoordinatorModeSnapshotProjector.WorkflowKind? = nil,
+        workflow: CoordinatorModeWorkflowDisplaySummary? = nil,
+        internalSession: Bool = false,
         priority: Int? = nil,
         bindings: [AgentSessionWorktreeBindingSummary] = [],
         merges: [AgentSessionWorktreeMergeSummary] = []
@@ -617,7 +701,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             isMCPOriginated: isMCP,
             worktreeBindingSummaries: bindings,
             activeWorktreeMergeSummaries: merges,
-            workflowKind: workflow,
+            workflow: workflow,
+            isCoordinatorInternal: internalSession,
             priority: priority
         )
     }
@@ -628,7 +713,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         updatedAt: Date,
         parent: UUID? = nil,
         isMCP: Bool = false,
-        workflow: CoordinatorModeSnapshotProjector.WorkflowKind? = nil
+        workflow: CoordinatorModeWorkflowDisplaySummary? = nil,
+        internalSession: Bool = false
     ) -> CoordinatorModeSnapshotProjector.CoordinatorDetectionSession {
         CoordinatorModeSnapshotProjector.CoordinatorDetectionSession(
             id: id,
@@ -636,7 +722,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             updatedAt: updatedAt,
             parentSessionID: parent,
             isMCPOriginated: isMCP,
-            workflowKind: workflow
+            workflow: workflow,
+            isCoordinatorInternal: internalSession
         )
     }
 

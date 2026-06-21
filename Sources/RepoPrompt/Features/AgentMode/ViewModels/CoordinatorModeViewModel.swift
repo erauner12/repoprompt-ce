@@ -602,12 +602,11 @@ extension AgentModeViewModel {
                     ?? AgentSessionRestoreSupport.sidebarActivityDate(for: entry)
             )
         }
-        // Workflow and priority metadata remain nil here until Agent Mode exposes a cheap,
-        // structured source. Do not derive them from transcript text, assistant prose, or titles.
         let liveSessions = sessions.values.compactMap { session -> CoordinatorModeSnapshotProjector.LiveSession? in
             guard let sessionID = session.activeAgentSessionID,
                   resolvableTabIDs.contains(session.tabID)
             else { return nil }
+            let workflow = session.items.last(where: { $0.kind == .user })?.workflow
             return CoordinatorModeSnapshotProjector.LiveSession(
                 sessionID: sessionID,
                 tabID: session.tabID,
@@ -619,7 +618,9 @@ extension AgentModeViewModel {
                 parentSessionID: session.parentSessionID,
                 isMCPOriginated: session.isMCPOriginated,
                 worktreeBindingSummaries: session.worktreeBindings.worktreeBindingSummaries,
-                activeWorktreeMergeSummaries: session.worktreeMergeOperations.activeWorktreeMergeSummaries
+                activeWorktreeMergeSummaries: session.worktreeMergeOperations.activeWorktreeMergeSummaries,
+                workflow: workflow.map(CoordinatorModeWorkflowDisplaySummary.init),
+                isCoordinatorInternal: session.isCoordinatorInternalSession
             )
         }
         var mcpSnapshotsBySessionID: [UUID: AgentRunMCPSnapshot] = [:]
@@ -643,6 +644,9 @@ extension AgentModeViewModel {
             resolvableTabIDs: resolvableTabIDs,
             demoCoordinatorSessionIDs: Set(sessions.values.compactMap { session in
                 session.isCoordinatorRuntimeDemo ? session.activeAgentSessionID : nil
+            }),
+            coordinatorInternalSessionIDs: Set(sessions.values.compactMap { session in
+                session.isCoordinatorInternalSession ? session.activeAgentSessionID : nil
             })
         )
     }
