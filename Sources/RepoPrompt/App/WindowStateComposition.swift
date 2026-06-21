@@ -37,6 +37,7 @@ enum WindowStateCompositionFactory {
         codexModelPollingService: CodexModelPollingService = .shared
     ) -> WindowStateComposition {
         // 1) Workspace file context store + visible file-tree UI adapter
+        LegacyWorkspaceGlobalIgnoreDefaults.shared.update(GlobalSettingsStore.shared.globalIgnoreDefaults())
         #if DEBUG
             let defaultWorkspaceFileContextStore = WorkspaceFileContextStore(
                 enableCatalogShardShadowValidation: false

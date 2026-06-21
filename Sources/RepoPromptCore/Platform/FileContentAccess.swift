@@ -41,6 +41,11 @@ package protocol FileContentSnapshotReading: Sendable {
     func openReadOnlyFileHandle(atPath path: String) throws -> FileHandle
 }
 
+package enum FileContentSnapshotAccessError: Error, Equatable {
+    case notRegularFile
+    case operationFailed(errorNumber: Int32)
+}
+
 package struct DecodedFileContent: Equatable {
     package let string: String
     package let encodingRawValue: UInt

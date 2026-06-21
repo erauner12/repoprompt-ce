@@ -573,3 +573,215 @@ package struct WorkspacePathLookupResult: Equatable {
         self.folder = folder
     }
 }
+
+import Foundation
+
+package extension WorkspaceCodemapSnapshotBundle {
+    func renderedCodemap(for file: WorkspaceFileRecord, displayPath: String) -> RenderedCodemap? {
+        guard let api = snapshot(for: file)?.fileAPI else { return nil }
+        let text = api.getFullAPIDescription(displayPath: displayPath)
+        guard !text.isEmpty else { return nil }
+        return RenderedCodemap(
+            text: text,
+            tokenCount: TokenEstimator.estimateTokens(for: text)
+        )
+    }
+}
+
+package enum WorkspaceSearchCatalogAccess: Equatable {
+    case available(WorkspaceSearchCatalogSnapshot)
+    case unavailable(WorkspaceLookupRootScopeAvailability)
+}
+
+package enum WorkspaceExactPathLookupKind: Hashable {
+    case file
+    case folder
+    case either
+}
+
+package struct WorkspaceFolderExpansionResult: Equatable {
+    package let files: [WorkspaceFileRecord]
+    package let handled: Bool
+    package let displayPath: String?
+    package let issue: PathResolutionIssue?
+}
+
+package final class WorkspaceSearchCatalogGenerationLease: @unchecked Sendable {
+    private let retainedObjects: [AnyObject]
+
+    init(retaining retainedObjects: [AnyObject]) {
+        self.retainedObjects = retainedObjects
+    }
+}
+
+package struct WorkspaceSearchCatalogSnapshot: Equatable {
+    package let generation: UInt64
+    let rootScope: WorkspaceLookupRootScope
+    package let roots: [WorkspaceRootRecord]
+    package let files: [WorkspaceFileRecord]
+    package let entries: [WorkspaceSearchCatalogEntry]
+    package let rootPathIndexes: [WorkspaceSearchRootPathIndex]
+    package let diagnostics: WorkspaceCatalogDiagnostics
+    private let generationLease: WorkspaceSearchCatalogGenerationLease?
+
+    init(
+        generation: UInt64,
+        rootScope: WorkspaceLookupRootScope,
+        roots: [WorkspaceRootRecord],
+        files: [WorkspaceFileRecord],
+        entries: [WorkspaceSearchCatalogEntry],
+        rootPathIndexes: [WorkspaceSearchRootPathIndex] = [],
+        diagnostics: WorkspaceCatalogDiagnostics,
+        generationLease: WorkspaceSearchCatalogGenerationLease? = nil
+    ) {
+        self.generation = generation
+        self.rootScope = rootScope
+        self.roots = roots
+        self.files = files
+        self.entries = entries
+        self.rootPathIndexes = rootPathIndexes
+        self.diagnostics = diagnostics
+        self.generationLease = generationLease
+    }
+
+    func recordsOnlyProjection() -> WorkspaceSearchCatalogSnapshot {
+        guard !rootPathIndexes.isEmpty else { return self }
+        return WorkspaceSearchCatalogSnapshot(
+            generation: generation,
+            rootScope: rootScope,
+            roots: roots,
+            files: files,
+            entries: entries,
+            diagnostics: diagnostics,
+            generationLease: generationLease
+        )
+    }
+
+    package static func == (lhs: WorkspaceSearchCatalogSnapshot, rhs: WorkspaceSearchCatalogSnapshot) -> Bool {
+        lhs.generation == rhs.generation
+            && lhs.rootScope == rhs.rootScope
+            && lhs.roots == rhs.roots
+            && lhs.files == rhs.files
+            && lhs.entries == rhs.entries
+            && lhs.diagnostics == rhs.diagnostics
+    }
+}
+
+package struct WorkspaceDirectFolderChildrenSnapshot: Equatable {
+    package let generation: UInt64
+    package let root: WorkspaceRootRecord
+    package let folder: WorkspaceFolderRecord
+    package let childFolders: [WorkspaceFolderRecord]
+    package let childFiles: [WorkspaceFileRecord]
+
+    var isEmpty: Bool {
+        childFolders.isEmpty && childFiles.isEmpty
+    }
+}
+
+package struct WorkspaceExternalReadableFile: Equatable, Hashable {
+    package let absolutePath: String
+    package let displayPath: String
+
+    package init(absolutePath: String, displayPath: String) {
+        self.absolutePath = absolutePath
+        self.displayPath = displayPath
+    }
+}
+
+package enum WorkspaceReadableFileHandle: Equatable {
+    case workspace(WorkspaceFileRecord)
+    case external(WorkspaceExternalReadableFile)
+}
+
+package struct WorkspaceFileSystemDeltaEvent: Equatable {
+    package let rootID: UUID
+    package let rootPath: String
+    package let delta: FileSystemDelta
+}
+
+package struct WorkspaceIngressBarrierSample: Equatable {
+    package let rootID: UUID
+    package let rootPath: String
+    package let pendingRawEventCountBeforeFlush: Int
+    package let acceptedWatcherWatermark: UInt64
+    package let publishedServicePublicationSequence: UInt64
+    package let appliedServicePublicationSequence: UInt64
+    package let appliedWatcherWatermark: UInt64
+}
+
+package struct WorkspaceAppliedIndexRootSnapshot: Equatable {
+    package let root: WorkspaceRootRecord
+    package let generation: UInt64
+    package let files: [WorkspaceFileRecord]
+    package let folders: [WorkspaceFolderRecord]
+}
+
+package struct WorkspaceSliceRebasePathState: Equatable {
+    package let rootID: UUID
+    package let rootLifetimeID: UUID
+    package let rootKind: WorkspaceRootKind
+    package let appliedIndexGeneration: UInt64
+}
+
+package struct WorkspaceSliceRebaseSourceSnapshot: Equatable {
+    package let rootID: UUID
+    package let rootLifetimeID: UUID
+    package let fileID: UUID
+    package let relativePath: String
+    package let fullPath: String
+    package let text: String
+    package let modificationTime: Double
+}
+
+package struct WorkspaceAppliedIndexBatchEvent: Equatable {
+    package let rootID: UUID
+    package let rootPath: String
+    package let generation: UInt64
+    package let rootLifetimeID: UUID?
+    package let modifiedFileSourceSnapshotsByID: [UUID: WorkspaceSliceRebaseSourceSnapshot]
+    package let upsertedFiles: [WorkspaceFileRecord]
+    package let upsertedFolders: [WorkspaceFolderRecord]
+    package let removedFileIDs: [UUID]
+    package let removedFolderIDs: [UUID]
+    package let removedFilePaths: [String]
+    package let removedFolderPaths: [String]
+    package let modifiedFileIDs: [UUID]
+    package let modifiedFolderIDs: [UUID]
+    package let requiresFullResync: Bool
+    package let isRootUnload: Bool
+
+    package init(
+        rootID: UUID,
+        rootPath: String,
+        generation: UInt64,
+        rootLifetimeID: UUID? = nil,
+        modifiedFileSourceSnapshotsByID: [UUID: WorkspaceSliceRebaseSourceSnapshot] = [:],
+        upsertedFiles: [WorkspaceFileRecord] = [],
+        upsertedFolders: [WorkspaceFolderRecord] = [],
+        removedFileIDs: [UUID] = [],
+        removedFolderIDs: [UUID] = [],
+        removedFilePaths: [String] = [],
+        removedFolderPaths: [String] = [],
+        modifiedFileIDs: [UUID] = [],
+        modifiedFolderIDs: [UUID] = [],
+        requiresFullResync: Bool = false,
+        isRootUnload: Bool = false
+    ) {
+        self.rootID = rootID
+        self.rootPath = rootPath
+        self.generation = generation
+        self.rootLifetimeID = rootLifetimeID
+        self.modifiedFileSourceSnapshotsByID = modifiedFileSourceSnapshotsByID
+        self.upsertedFiles = upsertedFiles
+        self.upsertedFolders = upsertedFolders
+        self.removedFileIDs = removedFileIDs
+        self.removedFolderIDs = removedFolderIDs
+        self.removedFilePaths = removedFilePaths
+        self.removedFolderPaths = removedFolderPaths
+        self.modifiedFileIDs = modifiedFileIDs
+        self.modifiedFolderIDs = modifiedFolderIDs
+        self.requiresFullResync = requiresFullResync
+        self.isRootUnload = isRootUnload
+    }
+}

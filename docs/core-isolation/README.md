@@ -1,9 +1,9 @@
 # Core Isolation Execution Packet
 
 **Created:** 2026-06-21
-**Current phase:** Phase 3 — closed, see [phase-3.md](phases/phase-3.md)
-**Disposition:** **GO** for Phase 4 planning; Phase 4 implementation has not begun
-**Production behavior change:** none intended; neutral platform callbacks and low-level adapters only
+**Current phase:** Phase 4 — closed after approved lifecycle continuation; see [phase-4.md](phases/phase-4.md)
+**Disposition:** **GO**; Phase 5 implementation has not begun
+**Production behavior change:** none intended; workspace/file-context engine ownership extraction only
 **Activated isolated tests:** `RepoPromptCoreTests`, `RepoPromptCoreMacOSTests`, and `RepoPromptPOSIXSupportTests`
 
 This directory is the compact execution record for
@@ -18,7 +18,8 @@ with provenance rather than rewriting the Phase 0 census.
 | Phase 0 implementation base (`dev`, `main`, `origin/main`) | `8e42951159c9f1d6973a4538a309908baacdb371` |
 | Execution plan | `d3af73d32ae00d27fd8b09240986a579605b7d01245dea45c4e31533e3956464` |
 | Source investigation | `e70138f9c73cd9d4e8e4f70e58bb91ef2ca2a59bb1c18b8547a030c350432a92` |
-| Current `Package.swift` | `f8aee0f3d6b2f4397f1827f763b92ff58814b1611f15e33c27ef19a5b83586fd` |
+| Phase 0 `Package.swift` | `f8aee0f3d6b2f4397f1827f763b92ff58814b1611f15e33c27ef19a5b83586fd` |
+| Phase 4 final `Package.swift` | `2df851a230445e9199d4e84867de9c5211ead25f6f86fa54369168e6e92b0eca` |
 | Current `Package.resolved` | `619a752f9015f1544aa4d8438e5ebad106b8402aba4d6b7febe5bdb4b518dacc` |
 | Reference feature snapshot | `f86746c8007a2dc95faf40d78cd5467e59792086` |
 | Rebased reviewed snapshot | `444c599cb63d9a5439c5db961f819a3a74a2722b` |
@@ -47,11 +48,12 @@ contract. No later phase may depend on fetching those two objects.
 - [Behavior, hazards, tests, and performance](contracts/behavior-and-performance.md)
 - [Persistence schema and compatibility](contracts/persistence-schema.md)
 - [Standalone headless v1 contract](contracts/headless-v1.md)
-- [Phase 1–3 migration ledger](migration-ledger.tsv)
+- [Phase 1–4 migration ledger](migration-ledger.tsv)
 - [Phase 0 evidence and disposition](phases/phase-0.md)
 - [Phase 1 evidence and disposition](phases/phase-1.md)
 - [Phase 2 evidence and disposition](phases/phase-2.md)
 - [Phase 3 evidence and disposition](phases/phase-3.md)
+- [Phase 4 evidence, lifecycle continuation, and final GO disposition](phases/phase-4.md)
 - [Deferred Phase 9+ work](deferred-work.md)
 
 ## Mutation policy
@@ -83,8 +85,14 @@ Phase 0 freezes:
 
 Phase 1 added package/control-plane scaffolding. Phase 2 moved ledger-owned
 neutral declarations and faithful deterministic tests. Phase 3 added neutral
-platform contracts, moved only low-level macOS/POSIX/syntax ownership, and kept
-`WorkspaceFileContextStore`, root lifetime, accepted-ingress watermarks,
-coalescing/recovery, Combine publication, and app policy/orchestration in the
-app. The complete Phase 3 ladder passed from checkpoint `f131b789`; its close
-disposition is **GO** with no blockers. Phase 4 and Phase 5 remain unstarted.
+platform contracts and moved low-level macOS/POSIX/syntax ownership; its close
+disposition is **GO** with no blockers. Phase 4 now extracts the current
+workspace/file-context engine and its catalog, lookup, search, slice, codemap,
+neutral syntax, cache, ingress, and lifetime collaborators into Core while the
+legacy app still constructs one engine per window and remains the sole writable
+workspace authority. Its deterministic behavior, performance, lists/ledgers,
+style, guardrails, builds, full tests, and non-launching debug package gates are
+green. An explicitly approved continuation launched the matching packaged CE
+debug app, passed one cold and four warm app-proxy smokes, stopped the matching
+app, and confirmed no matching process remained. Phase 4 is **GO**. Phase 5
+remains unstarted.

@@ -730,7 +730,9 @@ class WorkspaceFilesViewModel: ObservableObject {
     private var fileSystemSettingsCancellable: AnyCancellable?
     private var forceReloadOnNextFileSystemSettingsRefresh = false
 
-    private let selectionSliceCoordinator = SelectionSliceCoordinator()
+    private let selectionSliceCoordinator = SelectionSliceCoordinator(
+        store: LegacyWorkspaceRuntimeFactory.partitionStore()
+    )
     private var currentSlicesByRoot: [String: [String: PartitionStore.StoredSlices]] = [:]
     @Published private(set) var selectionSlicesByFileID: [UUID: [LineRange]] = [:] {
         didSet {
@@ -1546,7 +1548,7 @@ class WorkspaceFilesViewModel: ObservableObject {
                   !targets.isEmpty
             else { continue }
             let eventSource = event.modifiedFileSourceSnapshotsByID[fileID]
-            let sourceSnapshot: SliceRebaseSourceSnapshot? = eventSource.flatMap { source in
+            let sourceSnapshot: SliceRebaseSourceSnapshot? = eventSource.flatMap { source -> SliceRebaseSourceSnapshot? in
                 guard source.rootID == event.rootID,
                       source.rootLifetimeID == rootLifetimeID,
                       source.fileID == fileID,
@@ -12445,30 +12447,6 @@ extension WorkspaceFilesViewModel {
     }
 }
 
-enum FileManagerError: Error, LocalizedError {
-    case failedToLoadFolder(Error)
-    case failedToLoadFile(Error)
-    case fileSystemServiceNotFound
-    case failedToLoadContent
-    // New: richer, contextual variant used by MCP tools and FS ops
-    case fileSystemServiceNotFoundWithContext(String)
-
-    var errorDescription: String? {
-        switch self {
-        case let .failedToLoadFolder(err):
-            "Failed to load folder: \(err.localizedDescription)"
-        case let .failedToLoadFile(err):
-            "Failed to load file: \(err.localizedDescription)"
-        case .fileSystemServiceNotFound:
-            "No matching workspace folder for the requested path."
-        case .failedToLoadContent:
-            "Failed to load content."
-        case let .fileSystemServiceNotFoundWithContext(context):
-            context
-        }
-    }
-}
-
 struct PathLocation {
     let rootPath: String
     let correctedPath: String
@@ -13314,6 +13292,7 @@ extension WorkspaceFilesViewModel {
     @MainActor
     private func syncFileSystemPreferencesFromGlobalSettings() {
         let settings = GlobalSettingsStore.shared.fileSystemSettingsSnapshot()
+        LegacyWorkspaceGlobalIgnoreDefaults.shared.update(settings.globalIgnoreDefaults)
         respectGitignore = settings.respectGitignore
         respectRepoIgnore = settings.respectRepoIgnore
         respectCursorignore = settings.respectCursorignore

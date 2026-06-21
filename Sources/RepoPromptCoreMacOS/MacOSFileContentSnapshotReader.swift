@@ -2,21 +2,16 @@ import Darwin
 import Foundation
 import RepoPromptCore
 
-package enum MacOSFileContentSnapshotError: Error, Equatable {
-    case notRegularFile
-    case operationFailed(errno: Int32)
-}
-
 package struct MacOSFileContentSnapshotReader: FileContentSnapshotReading {
     package init() {}
 
     package func fingerprint(atPath path: String) throws -> FileContentFingerprint {
         var info = stat()
         guard lstat(path, &info) == 0 else {
-            throw MacOSFileContentSnapshotError.operationFailed(errno: errno)
+            throw FileContentSnapshotAccessError.operationFailed(errorNumber: errno)
         }
         guard (info.st_mode & S_IFMT) == S_IFREG else {
-            throw MacOSFileContentSnapshotError.notRegularFile
+            throw FileContentSnapshotAccessError.notRegularFile
         }
         return fingerprint(from: info)
     }
@@ -24,10 +19,10 @@ package struct MacOSFileContentSnapshotReader: FileContentSnapshotReading {
     package func fingerprint(fileDescriptor: Int32) throws -> FileContentFingerprint {
         var info = stat()
         guard fstat(fileDescriptor, &info) == 0 else {
-            throw MacOSFileContentSnapshotError.operationFailed(errno: errno)
+            throw FileContentSnapshotAccessError.operationFailed(errorNumber: errno)
         }
         guard (info.st_mode & S_IFMT) == S_IFREG else {
-            throw MacOSFileContentSnapshotError.notRegularFile
+            throw FileContentSnapshotAccessError.notRegularFile
         }
         return fingerprint(from: info)
     }
@@ -35,7 +30,7 @@ package struct MacOSFileContentSnapshotReader: FileContentSnapshotReading {
     package func openReadOnlyFileHandle(atPath path: String) throws -> FileHandle {
         let descriptor = Darwin.open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
         guard descriptor >= 0 else {
-            throw MacOSFileContentSnapshotError.operationFailed(errno: errno)
+            throw FileContentSnapshotAccessError.operationFailed(errorNumber: errno)
         }
         return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     }
