@@ -153,6 +153,27 @@ The rail conversation should also be wide and rich enough to read as a first-cla
 
 The Coordinator composer should share Agent Mode's composer visual vocabulary without exposing Agent Mode's normal agent-session controls. It may use a rounded command surface, separated text area, compact status/identity strip, and send affordance, but it should not add model, workflow, tool, permission, attachment, or context controls until those controls represent real Coordinator-view behavior.
 
+### 13B. Demo fleet scope must become one-to-many
+
+The remaining demo constraint is the singleton Coordinator runtime. Today the bridge treats `isCoordinatorRuntimeDemo` as "the current Coordinator," projects the board from that one runtime's descendants, and lets the "new Coordinator" path clear the marker so a later directive starts from an empty board. That behavior is useful for reproducibility, but it undercuts the Coordinator story because a control-plane surface should be able to supervise multiple parent tasks without pretending each fresh conversation invalidates the previous fleet.
+
+The production-demo path should split three concepts that are currently bundled together:
+
+1. **Coordinator runtime set**: all marked Coordinator backing runtimes that belong to the current workspace-scoped demo fleet.
+2. **Selected Coordinator runtime**: the single runtime whose conversation is shown in the left rail and addressed by the composer.
+3. **Fleet reset/retirement**: an explicit operation that removes one runtime or clears the whole fleet, separate from starting another Coordinator conversation.
+
+In the near-term demo, the runtime set can remain an in-memory workspace-scoped registry, just like the existing marker. `New Coordinator` should create an additional Coordinator runtime and select it for the rail; it should not unmark previous Coordinator runtimes or discard their delegated descendants from the board. `Clear Chat` should remain a rail display reset and must not clear the fleet. If a destructive reset is needed for demos, it should be explicit, e.g. `Retire Coordinator` for the selected runtime or `Reset Fleet` for the whole workspace-scoped demo fleet.
+
+The board/list migration should be sequenced in two visible checkpoints so runtime identity and aggregate projection bugs do not blur together:
+
+1. **Selected-runtime board checkpoint**: multiple Coordinator runtimes can coexist, the rail targets the selected runtime, and the board/list shows that selected runtime's delegated descendants. Switching the selected Coordinator swaps the board. This proves runtime identity, selection, and name-fallback removal before aggregate projection changes.
+2. **Aggregate fleet board checkpoint**: board/list rows come from all eligible active-workspace Coordinator fleet roots, excluding Coordinator backing runtimes and explicitly marked Coordinator-internal housekeeping sessions. Switching the selected Coordinator changes the rail target, while the board remains the aggregate fleet view.
+
+Aggregate mode must make parent ownership visible, not merely retained in hidden metadata. Otherwise the board demonstrates "many cards" but not "multiple parents managed without confusion." Cards and rows should render a sourced parent indicator using a reserved neutral treatment distinct from lifecycle state color and workflow badges. The indicator can be a compact label or short parent identifier; it should avoid adding another competing status color. When a parent is selected in the rail while the aggregate board is shown, that selected parent's delegated rows should receive subtle emphasis so the user's active conversation and the board remain visually connected.
+
+This change preserves the rail's "talk to one Coordinator" model while letting the center board demonstrate the actual control-plane value: multiple parent tasks, launched sequentially or in parallel, can remain visible, attributed to their owning parent, and independently progress across `Needs you`, `Working`, `Blocked`, `Review`, and `Done`.
+
 ### 14. Inspector stays sourced; full logs stay in Agent Mode
 
 The v1 inspector / trailing detail column shows sourced summaries only: status, pending interaction, blocker, worktree/merge, route, and MCP/session metadata. Full transcript, raw log, file, and diff inspection remain in Agent Mode via `Open agent chat`. A Coordinator-view-native full-log toggle is a follow-up unless backed by a sourced activity projection.

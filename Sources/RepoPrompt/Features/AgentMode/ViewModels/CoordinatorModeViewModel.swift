@@ -13,7 +13,6 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias DashboardVisibilityHandler = @MainActor (_ visible: Bool) -> Void
     typealias DirectiveSubmitter = @MainActor (_ text: String, _ coordinatorSessionID: UUID?, _ forceNewRuntime: Bool) async -> DirectiveSubmissionResult
     typealias ChildDirectiveSubmitter = @MainActor (_ text: String, _ row: CoordinatorModeRow) async -> DirectiveSubmissionResult
-    typealias CoordinatorResetHandler = @MainActor (_ coordinatorSessionID: UUID?) -> Void
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
     @Published private(set) var railTranscriptEntries: [CoordinatorModeRailTranscriptEntry] = []
@@ -31,7 +30,6 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let dashboardVisibilityHandler: DashboardVisibilityHandler
     private let directiveSubmitter: DirectiveSubmitter
     private let childDirectiveSubmitter: ChildDirectiveSubmitter
-    private let coordinatorResetHandler: CoordinatorResetHandler
     private let projector: CoordinatorModeSnapshotProjector
     private var selectedCoordinatorIDByWorkspaceID: [UUID: UUID] = [:]
     private var lastPublishedFingerprint: CoordinatorModeSnapshotFingerprint?
@@ -49,14 +47,12 @@ final class CoordinatorModeViewModel: ObservableObject {
         childDirectiveSubmitter: @escaping ChildDirectiveSubmitter = { _, _ in
             .rejected(message: "Session replies are unavailable.")
         },
-        coordinatorResetHandler: @escaping CoordinatorResetHandler = { _ in },
         projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector()
     ) {
         self.inputProvider = inputProvider
         self.dashboardVisibilityHandler = dashboardVisibilityHandler
         self.directiveSubmitter = directiveSubmitter
         self.childDirectiveSubmitter = childDirectiveSubmitter
-        self.coordinatorResetHandler = coordinatorResetHandler
         self.projector = projector
     }
 
@@ -91,20 +87,18 @@ final class CoordinatorModeViewModel: ObservableObject {
 
     func startNewCoordinatorRun() {
         isFreshCoordinatorRunPending = true
-        let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID
-        coordinatorResetHandler(coordinatorSessionID)
         displayedTranscriptCoordinatorSessionID = nil
         lastDurableRailStatusEntryKey = nil
         displayedDelegateActionTargetIDs.removeAll()
         railTranscriptEntries.removeAll()
         currentRailActivityText = nil
-        composerNotice = "Next directive will start a new Codex Coordinator runtime."
         lastPublishedFingerprint = nil
         selectCoordinator(sessionID: nil)
+        composerNotice = "Next directive will start another Codex Coordinator runtime."
     }
 
     func clearCoordinator() {
-        startNewCoordinatorRun()
+        clearCoordinatorRailTranscript()
     }
 
     func clearCoordinatorRailTranscript() {
@@ -401,8 +395,6 @@ extension AgentModeViewModel {
             case let .blocked(message):
                 return .rejected(message: message)
             }
-        } coordinatorResetHandler: { [weak self] coordinatorSessionID in
-            self?.clearCoordinatorRuntimeDemoTarget(preferredSessionID: coordinatorSessionID)
         }
     }
 
@@ -524,7 +516,6 @@ extension AgentModeViewModel {
         forceNewRuntime: Bool = false
     ) async throws -> (tabID: UUID, sessionID: UUID) {
         if forceNewRuntime {
-            clearCoordinatorRuntimeDemoTarget(preferredSessionID: nil)
             return try await createCoordinatorRuntimeDemoTarget()
         }
 
@@ -535,21 +526,6 @@ extension AgentModeViewModel {
             session.isCoordinatorRuntimeDemo = true
             try await ensureCoordinatorRuntimeDemoControl(tabID: match.key, sessionID: preferredSessionID)
             return (match.key, preferredSessionID)
-        }
-
-        if let match = sessions.first(where: { $0.value.isCoordinatorRuntimeDemo }),
-           let sessionID = match.value.activeAgentSessionID
-        {
-            try await ensureCoordinatorRuntimeDemoControl(tabID: match.key, sessionID: sessionID)
-            return (match.key, sessionID)
-        }
-
-        if let match = sessions.first(where: { coordinatorModeTabName(for: $0.key) == Self.coordinatorRuntimeDemoSessionName }),
-           let sessionID = match.value.activeAgentSessionID
-        {
-            match.value.isCoordinatorRuntimeDemo = true
-            try await ensureCoordinatorRuntimeDemoControl(tabID: match.key, sessionID: sessionID)
-            return (match.key, sessionID)
         }
 
         return try await createCoordinatorRuntimeDemoTarget()

@@ -353,7 +353,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
     }
 
-    func testForceNewCoordinatorRuntimeCreatesDifferentRuntimeEvenWhenOldRuntimeIsMarked() async throws {
+    func testForceNewCoordinatorRuntimeAddsRuntimeEvenWhenOldRuntimeIsMarked() async throws {
         let oldTabID = uuid(301)
         let oldSessionID = uuid(302)
         var oldTab = ComposeTabState(id: oldTabID, name: "Coordinator Runtime Demo", activeAgentSessionID: oldSessionID)
@@ -371,49 +371,43 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
 
         XCTAssertNotEqual(next.tabID, oldTabID)
         XCTAssertNotEqual(next.sessionID, oldSessionID)
-        XCTAssertFalse(oldSession.isCoordinatorRuntimeDemo)
-        XCTAssertNotEqual(fixture.manager.composeTabName(with: oldTabID), "Coordinator Runtime Demo")
+        XCTAssertTrue(oldSession.isCoordinatorRuntimeDemo)
+        XCTAssertEqual(fixture.manager.composeTabName(with: oldTabID), "Coordinator Runtime Demo")
         XCTAssertTrue(viewModel.sessions[next.tabID]?.isCoordinatorRuntimeDemo == true)
     }
 
-    func testClearCoordinatorRuntimeDemoTargetForcesResolverToCreateDifferentRuntime() async throws {
+    func testResolverWithoutSelectedRuntimeCreatesInsteadOfGuessingByMarkerOrName() async throws {
         let oldTabID = uuid(201)
         let oldSessionID = uuid(202)
-        let replacementTabID = uuid(203)
-        let replacementSessionID = uuid(204)
+        let namedTabID = uuid(203)
+        let namedSessionID = uuid(204)
         var oldTab = ComposeTabState(id: oldTabID, name: "Coordinator Runtime Demo", activeAgentSessionID: oldSessionID)
         oldTab.lastModified = date(20)
-        var replacementTab = ComposeTabState(id: replacementTabID, name: "Coordinator Runtime Demo", activeAgentSessionID: replacementSessionID)
-        replacementTab.lastModified = date(30)
-        let fixture = makeAgentModeFixture(tabs: [oldTab, replacementTab], activeTabID: oldTabID)
+        var namedTab = ComposeTabState(id: namedTabID, name: "Coordinator Runtime Demo", activeAgentSessionID: namedSessionID)
+        namedTab.lastModified = date(30)
+        let fixture = makeAgentModeFixture(tabs: [oldTab, namedTab], activeTabID: oldTabID)
         let viewModel = fixture.viewModel
         let oldSession = await viewModel.ensureSessionReady(tabID: oldTabID)
         _ = viewModel.test_installPersistentSessionBinding(sessionID: oldSessionID, on: oldSession)
         oldSession.isCoordinatorRuntimeDemo = true
-        let replacementSession = await viewModel.ensureSessionReady(tabID: replacementTabID)
-        _ = viewModel.test_installPersistentSessionBinding(sessionID: replacementSessionID, on: replacementSession)
-
-        let original = try await viewModel.test_resolveOrCreateCoordinatorRuntimeDemoTarget(preferredSessionID: nil)
-        XCTAssertEqual(original.tabID, oldTabID)
-        XCTAssertEqual(original.sessionID, oldSessionID)
-
-        viewModel.test_clearCoordinatorRuntimeDemoTarget(preferredSessionID: uuid(999))
-
-        XCTAssertFalse(oldSession.isCoordinatorRuntimeDemo)
-        XCTAssertNotEqual(fixture.manager.composeTabName(with: oldTabID), "Coordinator Runtime Demo")
+        let namedSession = await viewModel.ensureSessionReady(tabID: namedTabID)
+        _ = viewModel.test_installPersistentSessionBinding(sessionID: namedSessionID, on: namedSession)
 
         let next = try await viewModel.test_resolveOrCreateCoordinatorRuntimeDemoTarget(preferredSessionID: nil)
 
-        XCTAssertEqual(next.tabID, replacementTabID)
-        XCTAssertEqual(next.sessionID, replacementSessionID)
-        XCTAssertTrue(replacementSession.isCoordinatorRuntimeDemo)
+        XCTAssertNotEqual(next.tabID, oldTabID)
+        XCTAssertNotEqual(next.tabID, namedTabID)
+        XCTAssertNotEqual(next.sessionID, oldSessionID)
+        XCTAssertNotEqual(next.sessionID, namedSessionID)
+        XCTAssertTrue(oldSession.isCoordinatorRuntimeDemo)
+        XCTAssertFalse(namedSession.isCoordinatorRuntimeDemo)
+        XCTAssertTrue(viewModel.sessions[next.tabID]?.isCoordinatorRuntimeDemo == true)
     }
 
-    func testClearCoordinatorResetsDemoRuntimeBeforeNextDirective() async {
+    func testNewCoordinatorRunPreservesExistingRuntimeBeforeNextDirective() async {
         let coordinatorID = uuid(1)
         let coordinatorTab = uuid(101)
-        var demoCoordinatorIDs: Set<UUID> = [coordinatorID]
-        var resetCoordinatorID: UUID?
+        let demoCoordinatorIDs: Set<UUID> = [coordinatorID]
         var submissions: [(text: String, sessionID: UUID?, forceNewRuntime: Bool)] = []
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in
@@ -430,12 +424,6 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             directiveSubmitter: { text, sessionID, forceNewRuntime in
                 submissions.append((text, sessionID, forceNewRuntime))
                 return .accepted
-            },
-            coordinatorResetHandler: { sessionID in
-                resetCoordinatorID = sessionID
-                if let sessionID {
-                    demoCoordinatorIDs.remove(sessionID)
-                }
             }
         )
         viewModel.refresh()
@@ -443,11 +431,11 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
 
         viewModel.startNewCoordinatorRun()
-        XCTAssertEqual(resetCoordinatorID, coordinatorID)
-        XCTAssertEqual(viewModel.snapshot.coordinatorRail.state, .chooseCoordinator)
-        XCTAssertNil(viewModel.snapshot.coordinatorRail.coordinatorSessionID)
+        XCTAssertEqual(demoCoordinatorIDs, [coordinatorID])
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.state, .selected)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
         XCTAssertTrue(viewModel.isFreshCoordinatorRunPending)
-        XCTAssertEqual(viewModel.composerNotice, "Next directive will start a new Codex Coordinator runtime.")
+        XCTAssertEqual(viewModel.composerNotice, "Next directive will start another Codex Coordinator runtime.")
 
         let result = await viewModel.submitCoordinatorDirective("start fresh")
 

@@ -100,6 +100,60 @@ The system SHALL identify the Coordinator session using explicit precedence.
 - **THEN** the Coordinator view SHALL use the most recent candidate within the highest-ranked matching precedence tier in v1
 - **AND** a valid user-selected Coordinator SHALL override that automatic choice.
 
+### Requirement: Coordinator fleet scope
+The production-demo Coordinator mode SHALL separate the selected Coordinator conversation from the workspace-scoped supervised fleet.
+
+#### Scenario: Multiple demo Coordinator runtimes exist
+- **WHEN** more than one Coordinator backing runtime is marked for the active workspace demo fleet
+- **THEN** the Coordinator view SHALL retain all marked runtimes as Coordinator fleet roots
+- **AND** it SHALL select one runtime for the rail and composer without treating the selected runtime as the only fleet root.
+
+#### Scenario: New Coordinator is started
+- **WHEN** the user starts a new Coordinator chat or run in the production-demo bridge
+- **THEN** the system SHALL create or select an additional Coordinator backing runtime for the active workspace
+- **AND** it SHALL make that runtime the selected rail conversation
+- **AND** it SHALL NOT unmark previous Coordinator backing runtimes or remove their supervised delegated descendants from the board/list.
+
+#### Scenario: Coordinator rail chat is cleared
+- **WHEN** the user clears the Coordinator rail chat display
+- **THEN** the Coordinator view SHALL clear only the rail display state for the selected Coordinator conversation
+- **AND** it SHALL NOT reset the workspace-scoped Coordinator fleet, unmark Coordinator runtimes, or remove delegated rows from the board/list.
+
+#### Scenario: Fleet reset is requested
+- **WHEN** the user explicitly resets or retires Coordinator fleet state
+- **THEN** the operation SHALL communicate whether it retires only the selected Coordinator runtime or clears the whole workspace-scoped fleet
+- **AND** destructive fleet reset semantics SHALL NOT be hidden behind `New Coordinator` or ordinary rail `Clear Chat`.
+
+#### Scenario: Selected-runtime board checkpoint is active
+- **WHEN** multiple demo Coordinator runtimes exist before aggregate fleet board projection is enabled
+- **THEN** the board and list SHALL project eligible delegated descendants from the selected Coordinator runtime only
+- **AND** changing the selected Coordinator runtime SHALL swap the board/list to that runtime's eligible delegated descendants
+- **AND** this checkpoint SHALL preserve the same exclusion rules for Coordinator backing runtimes and explicitly marked Coordinator-internal housekeeping sessions.
+
+#### Scenario: Board projects aggregate supervised fleet
+- **WHEN** the active workspace demo fleet has multiple Coordinator runtime roots with supervised delegated descendants
+- **THEN** the board and list SHALL project eligible delegated descendants from all active fleet roots
+- **AND** they SHALL exclude Coordinator backing runtimes and explicitly marked Coordinator-internal housekeeping sessions
+- **AND** they SHALL preserve existing status grouping, sorting, stale-row, workflow-label, and Agent Mode deep-link behavior.
+
+#### Scenario: Delegate belongs to a parent Coordinator runtime
+- **WHEN** a delegated row is projected from an aggregate fleet that contains multiple Coordinator runtime roots
+- **THEN** the row projection SHALL retain sourced parent or owner metadata sufficient for future grouping, filtering, action-chip attribution, and inspector context
+- **AND** the implementation SHALL NOT infer parent ownership from row titles or assistant prose.
+
+#### Scenario: Aggregate row shows parent ownership
+- **WHEN** a delegated row is projected in aggregate fleet mode
+- **THEN** the card, list row, or inspector SHALL provide a compact sourced parent indicator
+- **AND** the parent indicator SHALL use a reserved neutral treatment distinct from lifecycle state color and workflow badge styling
+- **AND** it SHALL NOT assign parent identity by parsing row titles or assistant prose.
+
+#### Scenario: Selected parent changes in aggregate mode
+- **WHEN** aggregate fleet mode is showing rows from multiple Coordinator runtime roots
+- **AND** the selected Coordinator runtime changes
+- **THEN** the rail and composer SHALL switch to the newly selected Coordinator runtime
+- **AND** the board/list SHALL remain scoped to the aggregate fleet instead of swapping to only the selected runtime
+- **AND** rows owned by the selected Coordinator runtime SHOULD receive subtle visual emphasis so the rail selection and board remain connected.
+
 ### Requirement: Board-first Coordinator view layout
 The system SHALL present v1 as a read-only status board by default, with a list view as an alternate and responsive fallback.
 

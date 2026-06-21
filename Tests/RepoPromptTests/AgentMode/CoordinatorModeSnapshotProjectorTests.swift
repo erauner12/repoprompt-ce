@@ -43,6 +43,28 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(allRows(in: snapshot).first { $0.sessionID == directChildID }?.childSessionIDs, [nestedChildID])
     }
 
+    func testSelectedDemoCoordinatorScopesBoardWhenMultipleDemoRuntimesExist() {
+        let firstCoordinatorID = uuid(1)
+        let firstChildID = uuid(2)
+        let secondCoordinatorID = uuid(3)
+        let secondChildID = uuid(4)
+
+        let snapshot = projector.project(input(
+            live: [
+                live(id: firstCoordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(100), state: .idle),
+                live(id: firstChildID, tab: uuid(102), title: "First delegate", updatedAt: date(90), state: .completed, parent: firstCoordinatorID),
+                live(id: secondCoordinatorID, tab: uuid(103), title: "Coordinator Runtime Demo", updatedAt: date(200), state: .idle),
+                live(id: secondChildID, tab: uuid(104), title: "Second delegate", updatedAt: date(190), state: .running, parent: secondCoordinatorID)
+            ],
+            selectedCoordinatorID: firstCoordinatorID,
+            demoCoordinatorIDs: [firstCoordinatorID, secondCoordinatorID]
+        ))
+
+        XCTAssertEqual(snapshot.coordinatorRail.coordinatorSessionID, firstCoordinatorID)
+        XCTAssertEqual(Set(allRows(in: snapshot).map(\.sessionID)), [firstChildID])
+        XCTAssertFalse(allRows(in: snapshot).contains { $0.sessionID == secondChildID })
+    }
+
     func testBoardIncludesRunningDelegatedSnapshotBeforePersistence() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
