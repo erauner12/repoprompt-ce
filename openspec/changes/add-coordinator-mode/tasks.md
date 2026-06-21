@@ -99,6 +99,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.15 Project read-only workflow display metadata from real Agent Mode workflow definitions, render it on Coordinator rows/inspectors/action chips, and clear/update it between live turns.
 - [x] 10.16 Exclude explicitly marked Coordinator-internal housekeeping children from board/list and Coordinator action-chip surfaces without title matching.
 - [x] 10.17 Document that current Coordinator action chips are board/result-derived delegate cues, not a complete tool-call action/event stream.
+- [x] 10.18 Retire the automatic loopback proof from the default Coordinator demo prompt while preserving the fan-out wait guidance and internal-housekeeping marker.
 
 ## 11. Validation
 

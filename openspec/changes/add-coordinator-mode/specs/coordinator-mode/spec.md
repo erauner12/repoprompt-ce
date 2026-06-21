@@ -329,7 +329,7 @@ The system SHALL deep-link Coordinator view rows to the existing Agent Mode sess
 - **AND** the implementation SHALL prefer excluding it from supervised-session enumeration before leaf views need to hide it.
 
 #### Scenario: Row is Coordinator-internal housekeeping
-- **WHEN** a session is explicitly marked as Coordinator-internal housekeeping, such as a demo loopback proof child
+- **WHEN** a session is explicitly marked as Coordinator-internal housekeeping
 - **THEN** the Coordinator view SHALL exclude it from board/list fleet rows and Coordinator action-chip rows
 - **AND** the implementation SHALL NOT infer this internal state from session title text.
 
