@@ -10,6 +10,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     }
 
     typealias InputProvider = @MainActor (_ sortMode: CoordinatorModeSortMode, _ selectedCoordinatorID: UUID?) -> CoordinatorModeSnapshotProjector.Input
+    typealias TranscriptProvider = @MainActor (_ coordinatorSessionID: UUID?) -> [CoordinatorModeRailTranscriptEntry]
     typealias DashboardVisibilityHandler = @MainActor (_ visible: Bool) -> Void
     typealias DirectiveSubmitter = @MainActor (_ text: String, _ coordinatorSessionID: UUID?, _ forceNewRuntime: Bool) async -> DirectiveSubmissionResult
     typealias ChildDirectiveSubmitter = @MainActor (_ text: String, _ row: CoordinatorModeRow) async -> DirectiveSubmissionResult
@@ -27,6 +28,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     }
 
     private let inputProvider: InputProvider
+    private let transcriptProvider: TranscriptProvider
     private let dashboardVisibilityHandler: DashboardVisibilityHandler
     private let directiveSubmitter: DirectiveSubmitter
     private let childDirectiveSubmitter: ChildDirectiveSubmitter
@@ -40,6 +42,7 @@ final class CoordinatorModeViewModel: ObservableObject {
 
     init(
         inputProvider: @escaping InputProvider,
+        transcriptProvider: @escaping TranscriptProvider = { _ in [] },
         dashboardVisibilityHandler: @escaping DashboardVisibilityHandler,
         directiveSubmitter: @escaping DirectiveSubmitter = { _, _, _ in
             .rejected(message: "Coordinator composer is unavailable.")
@@ -50,6 +53,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector()
     ) {
         self.inputProvider = inputProvider
+        self.transcriptProvider = transcriptProvider
         self.dashboardVisibilityHandler = dashboardVisibilityHandler
         self.directiveSubmitter = directiveSubmitter
         self.childDirectiveSubmitter = childDirectiveSubmitter
@@ -145,13 +149,7 @@ final class CoordinatorModeViewModel: ObservableObject {
                 )
             }
             refresh()
-            railTranscriptEntries.append(CoordinatorModeRailTranscriptEntry(
-                id: UUID(),
-                role: .user,
-                text: trimmed,
-                createdAt: Date(),
-                action: nil
-            ))
+            appendUserTranscriptEntryIfMissing(trimmed)
         case let .rejected(message):
             composerNotice = message.isEmpty ? nil : message
         }
@@ -245,10 +243,50 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
         updateRailStatusPresentation(from: nextSnapshot.coordinatorRail)
         updateRailActionPresentation(from: nextSnapshot)
+        syncRailConversationTranscript(for: nextCoordinatorSessionID)
         let nextFingerprint = nextSnapshot.fingerprint
         guard lastPublishedFingerprint != nextFingerprint else { return }
         lastPublishedFingerprint = nextFingerprint
         snapshot = nextSnapshot
+    }
+
+    private func appendUserTranscriptEntryIfMissing(_ text: String) {
+        let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedText.isEmpty else { return }
+        let alreadyVisible = railTranscriptEntries.contains { entry in
+            entry.role == .user
+                && entry.action == nil
+                && entry.text.trimmingCharacters(in: .whitespacesAndNewlines) == normalizedText
+        }
+        guard !alreadyVisible else { return }
+        railTranscriptEntries.append(CoordinatorModeRailTranscriptEntry(
+            id: UUID(),
+            role: .user,
+            text: normalizedText,
+            createdAt: Date(),
+            action: nil
+        ))
+    }
+
+    private func syncRailConversationTranscript(for coordinatorSessionID: UUID?) {
+        let transcriptEntries = transcriptProvider(coordinatorSessionID)
+        guard !transcriptEntries.isEmpty else { return }
+
+        var mergedEntries = railTranscriptEntries.filter { entry in
+            entry.role == .event || entry.action != nil
+        }
+        var seenIDs = Set(mergedEntries.map(\.id))
+        for entry in transcriptEntries where !seenIDs.contains(entry.id) {
+            mergedEntries.append(entry)
+            seenIDs.insert(entry.id)
+        }
+        mergedEntries.sort { lhs, rhs in
+            if lhs.createdAt == rhs.createdAt {
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            return lhs.createdAt < rhs.createdAt
+        }
+        railTranscriptEntries = mergedEntries
     }
 
     private func updateRailActionPresentation(from snapshot: CoordinatorModeSnapshot) {
@@ -419,6 +457,8 @@ extension AgentModeViewModel {
                 sortMode: sortMode,
                 selectedCoordinatorID: selectedCoordinatorID
             )
+        } transcriptProvider: { [weak self] coordinatorSessionID in
+            self?.coordinatorModeRailTranscriptEntries(for: coordinatorSessionID) ?? []
         } dashboardVisibilityHandler: { [weak self] visible in
             self?.setCoordinatorModeDashboardUpdatesVisible(visible)
         } directiveSubmitter: { [weak self] text, coordinatorSessionID, forceNewRuntime in
@@ -445,6 +485,39 @@ extension AgentModeViewModel {
             case let .blocked(message):
                 return .rejected(message: message)
             }
+        }
+    }
+
+    @MainActor
+    func coordinatorModeRailTranscriptEntries(for coordinatorSessionID: UUID?) -> [CoordinatorModeRailTranscriptEntry] {
+        guard let coordinatorSessionID,
+              let session = sessions.values.first(where: { session in
+                  session.activeAgentSessionID == coordinatorSessionID && session.isCoordinatorRuntime
+              })
+        else { return [] }
+
+        return session.items.compactMap { item in
+            guard let role = coordinatorModeRailRole(for: item.kind) else { return nil }
+            let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard AgentDisplayableText.hasDisplayableBody(text) else { return nil }
+            return CoordinatorModeRailTranscriptEntry(
+                id: item.id,
+                role: role,
+                text: text,
+                createdAt: item.timestamp,
+                action: nil
+            )
+        }
+    }
+
+    private func coordinatorModeRailRole(for itemKind: AgentChatItemKind) -> CoordinatorModeRailTranscriptEntry.Role? {
+        switch itemKind {
+        case .user:
+            .user
+        case .assistant, .assistantInline, .error:
+            .coordinator
+        case .toolCall, .toolResult, .system, .thinking:
+            nil
         }
     }
 

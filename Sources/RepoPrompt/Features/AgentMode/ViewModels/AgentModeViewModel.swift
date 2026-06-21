@@ -2836,6 +2836,9 @@ final class AgentModeViewModel: ObservableObject {
             // deferral cannot make durability depend on derived UI refresh work.
             scheduleSave(for: session.tabID)
             scheduleDerivedTranscriptRefresh(for: session, reason: .liveMutation, mutation: mutation)
+            if session.isCoordinatorRuntime {
+                refreshCoordinatorModeForChildLifecycleIfVisible()
+            }
         }
         newSession.onRunStateChanged = { [weak self] session in
             guard let self else { return }

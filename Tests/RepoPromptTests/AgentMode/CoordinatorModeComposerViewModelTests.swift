@@ -50,6 +50,108 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.composerNotice)
     }
 
+    func testCoordinatorRailRestoresSelectedRuntimeConversationTranscript() {
+        let firstCoordinatorID = uuid(1)
+        let secondCoordinatorID = uuid(2)
+        let firstTabID = uuid(101)
+        let secondTabID = uuid(102)
+        let transcriptByCoordinatorID: [UUID: [CoordinatorModeRailTranscriptEntry]] = [
+            firstCoordinatorID: [
+                transcriptEntry(id: uuid(1001), role: .user, text: "first directive", at: date(10)),
+                transcriptEntry(id: uuid(1002), role: .coordinator, text: "first answer", at: date(11))
+            ],
+            secondCoordinatorID: [
+                transcriptEntry(id: uuid(2001), role: .user, text: "second directive", at: date(20)),
+                transcriptEntry(id: uuid(2002), role: .coordinator, text: "second answer", at: date(21))
+            ]
+        ]
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: firstCoordinatorID,
+                            tab: firstTabID,
+                            title: "First coordinator",
+                            updatedAt: self.date(11),
+                            state: .idle,
+                            isMCP: true
+                        ),
+                        self.live(
+                            id: secondCoordinatorID,
+                            tab: secondTabID,
+                            title: "Second coordinator",
+                            updatedAt: self.date(21),
+                            state: .idle,
+                            isMCP: true
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [firstCoordinatorID, secondCoordinatorID]
+                )
+            },
+            transcriptProvider: { coordinatorID in
+                coordinatorID.flatMap { transcriptByCoordinatorID[$0] } ?? []
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+
+        viewModel.refresh()
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, secondCoordinatorID)
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.text), ["second directive", "second answer"])
+
+        viewModel.selectCoordinator(sessionID: firstCoordinatorID)
+
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, firstCoordinatorID)
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.text), ["first directive", "first answer"])
+    }
+
+    func testAcceptedDirectiveDoesNotDuplicateRuntimeBackedUserTranscriptEntry() async {
+        let coordinatorID = uuid(1)
+        let coordinatorTab = uuid(101)
+        var transcriptEntries: [CoordinatorModeRailTranscriptEntry] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: coordinatorTab,
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            isMCP: true
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            transcriptProvider: { _ in transcriptEntries },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { text, _, _ in
+                transcriptEntries = [
+                    self.transcriptEntry(
+                        id: self.uuid(1001),
+                        role: .user,
+                        text: text,
+                        at: self.date(30)
+                    )
+                ]
+                return .accepted
+            }
+        )
+        viewModel.refresh()
+
+        let result = await viewModel.submitCoordinatorDirective("what did it say?")
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.user])
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.text), ["what did it say?"])
+    }
+
     func testCoordinatorStatusMirrorsIntoConversationOncePerStatus() {
         let coordinatorID = uuid(1)
         let coordinatorTab = uuid(101)
@@ -781,6 +883,21 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
 
     private func uuid(_ value: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", value))!
+    }
+
+    private func transcriptEntry(
+        id: UUID,
+        role: CoordinatorModeRailTranscriptEntry.Role,
+        text: String,
+        at date: Date
+    ) -> CoordinatorModeRailTranscriptEntry {
+        CoordinatorModeRailTranscriptEntry(
+            id: id,
+            role: role,
+            text: text,
+            createdAt: date,
+            action: nil
+        )
     }
 }
 

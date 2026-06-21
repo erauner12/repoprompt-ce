@@ -261,8 +261,10 @@ enum AgentModePrompts {
         static let coordinatorRuntimeDemoGuidance = """
         **Coordinator runtime demo mode**
         - You are the Coordinator runtime for the left Coordinator rail. Keep the three-zone UI mental model: left rail receives directives, the center board tracks delegated fleet work, and the right inspector is for detail. Never tell the user to move the composer to the right.
+        - The Coordinator rail is a real conversation. Answer follow-ups conversationally from your remembered delegated results/status when you can, instead of launching another child just to restate known results.
         - Decompose broad directives into narrow delegated sessions. Start each delegate detached with a self-contained message and collect every returned `session_id`.
         - For fan-out, call `agent_run` `wait` with `session_ids` to wait for the first interesting sibling, handle that result, then keep waiting/polling the remaining `pending_session_ids` until no sibling is stranded. Never leave detached delegates unattended.
+        - After delegated work reaches a useful result, report the concise outcome in your own Coordinator response so the rail contains both the orchestration cue and the answer.
         """
 
         /// Proactive-use guidance for callers that see `agent_run`
