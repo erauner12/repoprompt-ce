@@ -50,21 +50,7 @@ final class AgentModeViewModel: ObservableObject {
     typealias HeadlessProviderFactory = (_ agent: AgentProviderKind, _ modelString: String?) -> HeadlessAgentProvider
     typealias ACPProviderFactory = (_ agent: AgentProviderKind, _ modelString: String?) -> (any ACPAgentProvider)?
     typealias ACPControllerFactory = (_ provider: any ACPAgentProvider, _ runRequest: ACPRunRequest) throws -> ACPAgentSessionController
-    typealias ConnectionPolicyInstaller = (
-        _ clientName: String,
-        _ windowID: Int,
-        _ restrictedTools: Set<String>,
-        _ oneShot: Bool,
-        _ reason: String?,
-        _ ttl: TimeInterval,
-        _ tabID: UUID?,
-        _ runID: UUID?,
-        _ additionalTools: Set<String>?,
-        _ purpose: MCPRunPurpose,
-        _ taskLabelKind: AgentModelCatalog.TaskLabelKind?,
-        _ allowsAgentExternalControlTools: Bool,
-        _ requiresExpectedAgentPID: Bool
-    ) async -> Void
+    typealias ConnectionPolicyInstaller = (_ context: AgentModeMCPPolicyContext) async -> Void
     typealias MCPServerEnabler = () async -> Void
     typealias MCPRunRoutingCleaner = (_ runID: UUID, _ windowID: Int, _ reason: String) async -> Void
     typealias MCPRunToolCanceller = (_ runID: UUID, _ reason: String?) -> Int
@@ -1332,34 +1318,22 @@ final class AgentModeViewModel: ObservableObject {
     }
 
     private nonisolated static func defaultConnectionPolicyInstaller(
-        clientName: String,
-        windowID: Int,
-        restrictedTools: Set<String>,
-        oneShot: Bool,
-        reason: String?,
-        ttl: TimeInterval,
-        tabID: UUID?,
-        runID: UUID?,
-        additionalTools: Set<String>?,
-        purpose: MCPRunPurpose,
-        taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
-        allowsAgentExternalControlTools: Bool = false,
-        requiresExpectedAgentPID: Bool = false
+        _ context: AgentModeMCPPolicyContext
     ) async {
         await ServerNetworkManager.shared.installClientConnectionPolicy(
-            for: clientName,
-            windowID: windowID,
-            restrictedTools: restrictedTools,
-            oneShot: oneShot,
-            reason: reason,
-            ttl: ttl,
-            tabID: tabID,
-            runID: runID,
-            additionalTools: additionalTools,
-            purpose: purpose,
-            taskLabelKind: taskLabelKind,
-            allowsAgentExternalControlTools: allowsAgentExternalControlTools,
-            requiresExpectedAgentPID: requiresExpectedAgentPID
+            for: context.clientName,
+            windowID: context.windowID,
+            restrictedTools: context.restrictedTools,
+            oneShot: context.oneShot,
+            reason: context.reason,
+            ttl: context.ttl,
+            tabID: context.tabID,
+            runID: context.runID,
+            additionalTools: context.additionalTools,
+            purpose: context.purpose,
+            taskLabelKind: context.taskLabelKind,
+            allowsAgentExternalControlTools: context.allowsAgentExternalControlTools,
+            requiresExpectedAgentPID: context.requiresExpectedAgentPID
         )
     }
 
@@ -1442,22 +1416,8 @@ final class AgentModeViewModel: ObservableObject {
         acpControllerFactory = { provider, runRequest in
             try ACPAgentSessionController(provider: provider, runRequest: runRequest)
         }
-        connectionPolicyInstaller = { clientName, windowID, restrictedTools, oneShot, reason, ttl, tabID, runID, additionalTools, purpose, taskLabelKind, allowsAgentExternalControlTools, requiresExpectedAgentPID in
-            await Self.defaultConnectionPolicyInstaller(
-                clientName: clientName,
-                windowID: windowID,
-                restrictedTools: restrictedTools,
-                oneShot: oneShot,
-                reason: reason,
-                ttl: ttl,
-                tabID: tabID,
-                runID: runID,
-                additionalTools: additionalTools,
-                purpose: purpose,
-                taskLabelKind: taskLabelKind,
-                allowsAgentExternalControlTools: allowsAgentExternalControlTools,
-                requiresExpectedAgentPID: requiresExpectedAgentPID
-            )
+        connectionPolicyInstaller = { context in
+            await Self.defaultConnectionPolicyInstaller(context)
         }
         mcpServerEnabler = { [weak mcpServer] in
             guard let mcpServer else { return }
@@ -1566,22 +1526,8 @@ final class AgentModeViewModel: ObservableObject {
             acpControllerFactory: @escaping ACPControllerFactory = { provider, runRequest in
                 try ACPAgentSessionController(provider: provider, runRequest: runRequest)
             },
-            connectionPolicyInstaller: @escaping ConnectionPolicyInstaller = { clientName, windowID, restrictedTools, oneShot, reason, ttl, tabID, runID, additionalTools, purpose, taskLabelKind, allowsAgentExternalControlTools, requiresExpectedAgentPID in
-                await AgentModeViewModel.defaultConnectionPolicyInstaller(
-                    clientName: clientName,
-                    windowID: windowID,
-                    restrictedTools: restrictedTools,
-                    oneShot: oneShot,
-                    reason: reason,
-                    ttl: ttl,
-                    tabID: tabID,
-                    runID: runID,
-                    additionalTools: additionalTools,
-                    purpose: purpose,
-                    taskLabelKind: taskLabelKind,
-                    allowsAgentExternalControlTools: allowsAgentExternalControlTools,
-                    requiresExpectedAgentPID: requiresExpectedAgentPID
-                )
+            connectionPolicyInstaller: @escaping ConnectionPolicyInstaller = { context in
+                await AgentModeViewModel.defaultConnectionPolicyInstaller(context)
             },
             mcpRunRoutingCleaner: @escaping MCPRunRoutingCleaner = { runID, windowID, reason in
                 await AgentModeViewModel.defaultMCPRunRoutingCleaner(

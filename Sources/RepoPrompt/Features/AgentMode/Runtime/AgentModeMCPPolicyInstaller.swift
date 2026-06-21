@@ -20,19 +20,21 @@ enum AgentModeMCPPolicyInstaller {
     ) async {
         guard let clientName = agent.mcpClientNameHint else { return }
         await connectionPolicyInstaller(
-            clientName,
-            windowID,
-            AgentModeMCPToolPolicy.restrictedTools,
-            true,
-            policyReason,
-            policyTTL,
-            tabID,
-            runID,
-            additionalTools(for: agent),
-            .agentModeRun,
-            taskLabelKind,
-            allowsAgentExternalControlTools,
-            agent.requiresExpectedPIDOwnedAgentModeMCPRouting
+            AgentModeMCPPolicyContext(
+                clientName: clientName,
+                windowID: windowID,
+                restrictedTools: AgentModeMCPToolPolicy.restrictedTools,
+                oneShot: true,
+                reason: policyReason,
+                ttl: policyTTL,
+                tabID: tabID,
+                runID: runID,
+                additionalTools: additionalTools(for: agent),
+                purpose: .agentModeRun,
+                taskLabelKind: taskLabelKind,
+                allowsAgentExternalControlTools: allowsAgentExternalControlTools,
+                requiresExpectedAgentPID: agent.requiresExpectedPIDOwnedAgentModeMCPRouting
+            )
         )
     }
 }

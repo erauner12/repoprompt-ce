@@ -29,6 +29,44 @@ struct MCPBootstrapLeaseSpec {
     /// When true, the queued policy is reserved until the MCP peer PID is a descendant
     /// of an explicitly registered expected agent process.
     let requiresExpectedAgentPID: Bool
+    /// Named Agent Mode policy context used by the behavior-preserving Agent Mode
+    /// installer path. Existing lease fields remain as compatibility accessors
+    /// for tests and generic lease diagnostics.
+    let agentModePolicyContext: AgentModeMCPPolicyContext?
+
+    init(
+        runID: UUID,
+        gateID: UUID,
+        windowID: Int,
+        tabID: UUID?,
+        clientName: String?,
+        restrictedTools: Set<String>,
+        additionalTools: Set<String>?,
+        oneShot: Bool,
+        reason: String?,
+        ttl: TimeInterval,
+        purpose: MCPRunPurpose,
+        taskLabelKind: AgentModelCatalog.TaskLabelKind?,
+        allowsAgentExternalControlTools: Bool,
+        requiresExpectedAgentPID: Bool,
+        agentModePolicyContext: AgentModeMCPPolicyContext? = nil
+    ) {
+        self.runID = runID
+        self.gateID = gateID
+        self.windowID = windowID
+        self.tabID = tabID
+        self.clientName = clientName
+        self.restrictedTools = restrictedTools
+        self.additionalTools = additionalTools
+        self.oneShot = oneShot
+        self.reason = reason
+        self.ttl = ttl
+        self.purpose = purpose
+        self.taskLabelKind = taskLabelKind
+        self.allowsAgentExternalControlTools = allowsAgentExternalControlTools
+        self.requiresExpectedAgentPID = requiresExpectedAgentPID
+        self.agentModePolicyContext = agentModePolicyContext
+    }
 }
 
 /// Unified lease actor for the MCP bootstrap policy and routing lifecycle.

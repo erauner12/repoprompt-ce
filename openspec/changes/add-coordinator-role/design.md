@@ -44,6 +44,20 @@ The role direction from pvncher's notes is no longer treated as open-ended in th
 
 The dependency order is therefore role identity, then typed policy context, then delegate-only execution policy, then widened Coordinator `list_sessions`, then UI composer/runtime wiring. Widened visibility must hang off the typed Coordinator policy context; it must not be implemented first against the demo boolean marker.
 
+Two Stage-0 dials remain intentionally named rather than defaulted:
+
+- **Broad visibility breadth:** `add-coordinator-list-sessions-visibility` currently leans toward the current-window active-workspace supervised-session set. Implementation must explicitly decide whether that means all supervised sessions in the current workspace, or a narrower "own fleet plus peer Coordinator roots" model. App-global and cross-window visibility remain out of scope either way.
+- **Blocked-child interaction handling:** because Coordinator v1 does not receive `agent_run.respond`, approval/decline, cancel, or stop, delegated sessions that become actionable should surface to the human through `Needs you` / Agent Mode affordances. The Coordinator may report that state from structured lifecycle metadata, but v1 does not answer child pending interactions on the user's behalf.
+
+### Stage-1 code grounding
+
+The first code seam check confirms the accepted ownership and launch direction:
+
+- **Ownership/creation:** Coordinator v1 should use one Coordinator runtime per window, created lazily on the first real Coordinator instruction. This matches the existing per-window Coordinator mode view model and avoids cross-window routing, which remains out of scope.
+- **Model selection vs runtime identity:** `AgentModelCatalog.TaskLabelKind` and `AgentMCPSelectionResolver` currently treat labels as model-selection shortcuts (`explore`, `engineer`, `pair`, `design`) that spawn ordinary Agent Mode sessions. A future `coordinator` label may participate in discovery/model binding, but it must not grant Coordinator scope by itself.
+- **Launch seam:** the current v1 launch seam is the MCP background compose-tab path: `AgentModeViewModel.mcpCreateBackgroundSessionTab(name:)` calls `createBackgroundComposeTab(..., capacityPolicy: .mcpBackgroundAgent)`, then `mcpActivateControlContext(...)` attaches MCP control state. A real Coordinator launch path can reuse this seam only if it attaches a durable Coordinator marker and typed policy context during creation/activation.
+- **Policy blocker:** runtime privilege state still flows through long positional installer arguments across `AgentModeMCPPolicyInstaller`, `AgentModeRunLease`, `MCPBootstrapLeaseSpec`, `AgentModeViewModel.ConnectionPolicyInstaller`, `CodexAgentModeCoordinator.ConnectionPolicyInstaller`, and `ServerNetworkManager.installClientConnectionPolicy`. Coordinator privilege fields must not be added to that path until `refactor-agent-mcp-policy-context` lands the named policy context.
+
 **Goals:**
 
 - Define the first real Coordinator role as a layer-above meta-agent, not a workspace session/card.

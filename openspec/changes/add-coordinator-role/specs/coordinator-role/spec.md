@@ -213,6 +213,13 @@ The first Coordinator role implementation SHALL use a delegate-only tool contrac
 - **THEN** Coordinator access to `respond` SHALL remain unavailable until authorization and stale-interaction failure semantics are accepted for Coordinator connections
 - **AND** any accepted Coordinator respond behavior SHALL be audited as a structured action record.
 
+#### Scenario: Delegated session needs human input in v1
+- **WHEN** a delegated Agent Mode session reaches a waiting-for-input, question, approval, or other actionable state
+- **AND** Coordinator `respond`, approval/decline, cancel, and stop capabilities remain unavailable in v1
+- **THEN** the Coordinator SHALL surface the actionable state from structured lifecycle metadata
+- **AND** the human SHALL resolve the interaction through the Agent Mode or Coordinator-view affordance that owns that pending interaction
+- **AND** the Coordinator SHALL NOT answer the delegated session's pending interaction on the user's behalf unless a later accepted spec grants and audits that capability.
+
 #### Scenario: Direct tab and workspace mutation is requested
 - **WHEN** a Coordinator behavior would require direct tab focus, file-selection mutation, file read/search scoped to a focused tab, worktree mutation, approval/decline, cancel, stop, or full log read behavior
 - **THEN** the first Coordinator role SHALL reject or defer that behavior unless a later accepted spec grants the capability with authorization and audit semantics.
