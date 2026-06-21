@@ -234,11 +234,12 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **AND** the demo Coordinator runtime root SHALL be modeled as a marked Coordinator backing runtime rather than as a separate non-tab runtime
 - **AND** delegated child sessions SHALL retain their normal tab-coupled selection, worktree, transcript, permission, and routing state.
 
-#### Scenario: Coordinator actor workflow is unresolved
+#### Scenario: Coordinator actor bridge remains distinct from the target role
 - **WHEN** v1 uses the production-demo Coordinator bridge
 - **THEN** the Coordinator actor itself SHALL NOT be specified as requiring `workflow_name="orchestrate"`
 - **AND** delegated child sessions MAY still carry real `workflow_id` or `workflow_name` metadata
-- **AND** a future first-class Coordinator role SHALL decide whether the Coordinator actor is the Orchestrate workflow, a distinct role that calls `agent_run`, or a policy layer over both.
+- **AND** the production-demo bridge SHALL be treated as a scaffold toward the first-class Coordinator role specified by `add-coordinator-role`
+- **AND** the bridge SHALL NOT be treated as the durable Coordinator role identity, policy, or session-visibility mechanism.
 
 #### Scenario: Directive is displayed after send
 - **WHEN** a Coordinator directive is accepted by the Coordinator view

@@ -34,6 +34,16 @@ Important existing anchors:
 
 Durable invariants: the Coordinator must not be part of the supervised fleet it controls, and Coordinator-visible state must come from structured lifecycle/action records rather than assistant prose. The delegate-only toolset, per-window/lazy ownership recommendation, snapshot-field reporting surface, and deferred `respond`/cancel/autonomy capabilities are v1 scope lines that may be relaxed by later accepted specs without weakening those invariants.
 
+### Accepted Stage-0 role policy decisions
+
+The role direction from pvncher's notes is no longer treated as open-ended in the Coordinator mode demo spec. The target is a first-class Coordinator meta-agent role, and this change owns the role, scope, and policy decisions that let the demo bridge become real:
+
+1. **Session scope:** Coordinator v1 supervises its launched delegated fleet through returned lifecycle handles. Broader active-workspace session visibility is a separate privilege, specified by `add-coordinator-list-sessions-visibility`, and should be current-window active-workspace before any app-global scope is considered.
+2. **Tab/worktree posture:** Coordinator v1 does not focus tabs and does not receive tab-scoped file, search, selection, edit, or worktree mutation tools. It talks to agents that own those scopes.
+3. **Toolset:** Coordinator v1 keeps lifecycle/control-plane tools for role/workflow discovery, spawning, polling, waiting, steering, and bounded status/failure reporting. It loses direct workspace-work tools and higher-risk operations such as respond, cancel, stop, cleanup, approval/decline, full-log access, and worktree creation/binding until later authorization and audit semantics are accepted.
+
+The dependency order is therefore role identity, then typed policy context, then delegate-only execution policy, then widened Coordinator `list_sessions`, then UI composer/runtime wiring. Widened visibility must hang off the typed Coordinator policy context; it must not be implemented first against the demo boolean marker.
+
 **Goals:**
 
 - Define the first real Coordinator role as a layer-above meta-agent, not a workspace session/card.
@@ -67,7 +77,7 @@ Decision 1 now rests on the separability spike in `openspec/changes/add-coordina
 
 Coordinator v1 therefore reuses the existing run path through a marked/background Agent `TabSession`. `AgentModeRunService.startRun` remains a possible future extraction seam, but pulling on that seam is explicitly out of v1 scope; if implementation starts requiring `startRun`-level runtime extraction, the work should stop and be re-scoped instead of becoming a creeping refactor.
 
-Adding a `coordinator` task label alongside `pair`, `engineer`, `explore`, and `design` is still the wrong default seam because `AgentMCPSelectionResolver`, `AgentModelCatalog.taskLabels`, and candidate chains currently mean “spawn an ordinary selectable Agent Mode role.” The real Coordinator needs a dedicated launch path or additional runtime marker before it receives Coordinator scope and policy. A plain task-label addition that starts an ordinary tab-backed, window-scoped Agent Mode session must not be treated as the real Coordinator runtime.
+A discoverable `coordinator` role label may exist alongside `pair`, `engineer`, `explore`, and `design` for role identity and model binding, but the existing task-label path is not sufficient by itself because `AgentMCPSelectionResolver`, `AgentModelCatalog.taskLabels`, and candidate chains currently mean “spawn an ordinary selectable Agent Mode role.” The real Coordinator needs a dedicated launch path or additional runtime marker plus typed Coordinator policy context before it receives Coordinator scope and policy. A plain task-label addition that starts an ordinary tab-backed, window-scoped Agent Mode session must not be treated as the real Coordinator runtime.
 
 Alternatives considered:
 

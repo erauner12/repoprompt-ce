@@ -4,7 +4,7 @@
 The system SHALL define a Coordinator-specific `agent_manage.list_sessions` visibility mode for active-workspace supervised sessions beyond the Coordinator's launched delegated fleet.
 
 #### Scenario: Coordinator lists broader active-workspace sessions
-- **WHEN** a Coordinator-marked connection calls `agent_manage.list_sessions` with broad visibility enabled
+- **WHEN** a connection with verified Coordinator role identity and typed Coordinator policy context calls `agent_manage.list_sessions` with broad visibility enabled
 - **THEN** the response SHALL include the current-window active-workspace supervised-session set for the chosen scope
 - **AND** that set MAY include sessions the Coordinator did not spawn.
 
@@ -31,8 +31,8 @@ The system SHALL preserve existing child-scoped listing behavior for ordinary in
 - **THEN** existing spawn-parent / child scoping SHALL continue to apply
 - **AND** the caller SHALL NOT receive Coordinator broad active-workspace visibility.
 
-#### Scenario: Coordinator marker is missing or invalid
-- **WHEN** a connection is not Coordinator-marked or the Coordinator marker cannot be verified
+#### Scenario: Coordinator policy context is missing or invalid
+- **WHEN** a connection does not have verified Coordinator role identity and typed Coordinator policy context
 - **THEN** `list_sessions` SHALL fall back to the existing caller-appropriate scope
 - **AND** it SHALL NOT use the Coordinator broad visibility mode.
 
@@ -43,6 +43,11 @@ The broad Coordinator list scope SHALL define a concrete parity target for the c
 - **WHEN** implementation defines the broad Coordinator list scope
 - **THEN** it SHALL name the Coordinator mode projection/input used as the membership source of truth
 - **AND** tests SHALL compare membership for that source, excluding ordering, pagination, and transient liveness differences.
+
+#### Scenario: Board does not see more than the Coordinator
+- **WHEN** Coordinator broad session visibility and the aggregate Coordinator board are both enabled for the same current-window active workspace
+- **THEN** the board's supervised-session membership SHALL match the Coordinator-visible `list_sessions` membership, excluding ordering, pagination, selected-parent emphasis, and transient liveness differences
+- **AND** the board SHALL NOT display a broader supervised fleet than the Coordinator role can see through its accepted visibility scope.
 
 #### Scenario: Cross-window visibility is requested
 - **WHEN** a Coordinator behavior would list sessions outside the current window's active workspace

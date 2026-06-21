@@ -28,6 +28,12 @@ The system SHALL define a Coordinator role as a layer-above meta-agent identity 
 - **THEN** it SHALL NOT rely solely on adding `coordinator` to ordinary `pair`, `explore`, `engineer`, and `design` task-label resolution
 - **AND** the real Coordinator runtime SHALL remain distinguishable by launch path, identity marker, scope, policy, and projection metadata.
 
+#### Scenario: Coordinator role identity is routed through the role system
+- **WHEN** the implementation introduces Coordinator role identity
+- **THEN** that identity SHALL be represented as a first-class role value or equivalent role-system entry rather than as only a renamed demo boolean
+- **AND** any `agent_manage.list_agents` / role-discovery exposure of `coordinator` SHALL describe model binding or launchability only
+- **AND** Coordinator scope and tools SHALL be granted only after the dedicated Coordinator launch path or marker has installed typed Coordinator policy context.
+
 #### Scenario: Ordinary role-label path would create the wrong runtime
 - **WHEN** a role catalog, model-selection, or MCP `model_id` path would spawn an ordinary tab-backed Agent Mode session
 - **THEN** that path SHALL NOT by itself be treated as the real Coordinator runtime
