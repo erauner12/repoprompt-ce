@@ -72,7 +72,8 @@ final class CoordinatorModeViewModel: ObservableObject {
     func refresh() {
         var input = inputProvider(sortMode, nil)
         input.selectedCoordinatorID = input.workspaceID.flatMap { selectedCoordinatorIDByWorkspaceID[$0] }
-        publishIfChanged(projector.project(input))
+        let projected = projector.project(input)
+        publishIfChanged(isFreshCoordinatorRunPending ? pendingFreshCoordinatorSnapshot(from: projected) : projected)
     }
 
     @discardableResult
@@ -85,6 +86,9 @@ final class CoordinatorModeViewModel: ObservableObject {
     func selectCoordinator(sessionID: UUID?, workspaceID explicitWorkspaceID: UUID? = nil) {
         let workspaceID = explicitWorkspaceID ?? snapshot.workspaceID ?? inputProvider(sortMode, nil).workspaceID
         guard let workspaceID else { return }
+        if sessionID != nil {
+            isFreshCoordinatorRunPending = false
+        }
         selectedCoordinatorIDByWorkspaceID[workspaceID] = sessionID
         refresh()
     }
@@ -97,7 +101,10 @@ final class CoordinatorModeViewModel: ObservableObject {
         railTranscriptEntries.removeAll()
         currentRailActivityText = nil
         lastPublishedFingerprint = nil
-        selectCoordinator(sessionID: nil)
+        if let workspaceID = snapshot.workspaceID ?? inputProvider(sortMode, nil).workspaceID {
+            selectedCoordinatorIDByWorkspaceID[workspaceID] = nil
+        }
+        refresh()
         composerNotice = "Next directive will start another Codex Coordinator runtime."
     }
 
@@ -193,6 +200,41 @@ final class CoordinatorModeViewModel: ObservableObject {
         ]
         .compactMap(\.self)
         .max() ?? .distantPast
+    }
+
+    private func pendingFreshCoordinatorSnapshot(from projected: CoordinatorModeSnapshot) -> CoordinatorModeSnapshot {
+        let options = projected.coordinatorRail.availableCoordinators.map { option in
+            CoordinatorModeCoordinatorOption(
+                sessionID: option.sessionID,
+                title: option.title,
+                selectionSource: option.selectionSource,
+                isSelected: false,
+                isLiveInCurrentWindow: option.isLiveInCurrentWindow,
+                updatedAt: option.updatedAt
+            )
+        }
+        let rail = CoordinatorModeCoordinatorRail(
+            state: .chooseCoordinator,
+            coordinatorSessionID: nil,
+            selectionSource: nil,
+            title: nil,
+            availableCoordinators: options,
+            isLiveInCurrentWindow: false,
+            openAgentChatRoute: nil,
+            statusReport: nil,
+            isComposerEnabled: false,
+            isComposerSendEnabled: false
+        )
+        return CoordinatorModeSnapshot(
+            workspaceID: projected.workspaceID,
+            sortMode: projected.sortMode,
+            counts: projected.counts,
+            groups: projected.groups,
+            coordinatorRail: rail,
+            pendingInteractions: projected.pendingInteractions,
+            mcpAwareness: projected.mcpAwareness,
+            isEmpty: projected.isEmpty
+        )
     }
 
     @discardableResult

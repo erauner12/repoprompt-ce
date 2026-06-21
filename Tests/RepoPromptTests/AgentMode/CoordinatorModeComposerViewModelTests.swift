@@ -613,6 +613,10 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         let coordinatorID = uuid(1)
         let coordinatorTab = uuid(101)
         let demoCoordinatorIDs: Set<UUID> = [coordinatorID]
+        let persistedTranscript = [
+            transcriptEntry(id: uuid(901), role: .user, text: "old directive", at: date(21)),
+            transcriptEntry(id: uuid(902), role: .coordinator, text: "old answer", at: date(22))
+        ]
         var submissions: [(text: String, sessionID: UUID?, forceNewRuntime: Bool)] = []
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in
@@ -625,6 +629,9 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                     demoCoordinatorIDs: demoCoordinatorIDs
                 )
             },
+            transcriptProvider: { sessionID in
+                sessionID == coordinatorID ? persistedTranscript : []
+            },
             dashboardVisibilityHandler: { _ in },
             directiveSubmitter: { text, sessionID, forceNewRuntime in
                 submissions.append((text, sessionID, forceNewRuntime))
@@ -634,11 +641,16 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         viewModel.refresh()
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.selectionSource, .demoRuntime)
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.text), ["old directive", "old answer"])
 
         viewModel.startNewCoordinatorRun()
         XCTAssertEqual(demoCoordinatorIDs, [coordinatorID])
-        XCTAssertEqual(viewModel.snapshot.coordinatorRail.state, .selected)
-        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.state, .chooseCoordinator)
+        XCTAssertNil(viewModel.snapshot.coordinatorRail.coordinatorSessionID)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.title, nil)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.availableCoordinators.map(\.sessionID), [coordinatorID])
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.availableCoordinators.map(\.isSelected), [false])
+        XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
         XCTAssertTrue(viewModel.isFreshCoordinatorRunPending)
         XCTAssertEqual(viewModel.composerNotice, "Next directive will start another Codex Coordinator runtime.")
 
@@ -649,6 +661,47 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertNil(submissions.first?.sessionID)
         XCTAssertEqual(submissions.first?.forceNewRuntime, true)
         XCTAssertFalse(viewModel.isFreshCoordinatorRunPending)
+    }
+
+    func testSelectingExistingCoordinatorCancelsPendingFreshRunAndRestoresTranscript() {
+        let coordinatorID = uuid(1)
+        let coordinatorTab = uuid(101)
+        let persistedTranscript = [
+            transcriptEntry(id: uuid(901), role: .user, text: "saved directive", at: date(21)),
+            transcriptEntry(id: uuid(902), role: .coordinator, text: "saved answer", at: date(22))
+        ]
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: coordinatorTab,
+                            title: "Saved coordinator",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            isMCP: true
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            transcriptProvider: { sessionID in
+                sessionID == coordinatorID ? persistedTranscript : []
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+        viewModel.refresh()
+
+        viewModel.startNewCoordinatorRun()
+        viewModel.selectCoordinator(sessionID: coordinatorID)
+
+        XCTAssertFalse(viewModel.isFreshCoordinatorRunPending)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.state, .selected)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.text), ["saved directive", "saved answer"])
     }
 
     func testNewCoordinatorDirectiveSelectsCreatedRuntime() async {
