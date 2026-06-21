@@ -324,6 +324,7 @@ struct AgentRunMCPToolService {
             defaultTaskLabel: defaultTaskLabel,
             availability: targetWindow.apiSettingsViewModel.agentModeAvailabilityContext
         )
+        try Self.rejectDedicatedLaunchRoleIfNeeded(selection.taskLabelKind, operation: "agent_run.start")
 
         let sessionName = normalizedString(args["session_name"])
         let target = try await agentModeVM.mcpResolveOrCreateSessionTarget(
@@ -395,6 +396,14 @@ struct AgentRunMCPToolService {
             workflow: workflow,
             initialDelivery: outcome.delivery
         )
+    }
+
+    private static func rejectDedicatedLaunchRoleIfNeeded(
+        _ taskLabelKind: AgentModelCatalog.TaskLabelKind?,
+        operation: String
+    ) throws {
+        guard taskLabelKind?.requiresDedicatedLaunchPath == true else { return }
+        throw MCPError.invalidParams("\(operation) cannot launch model_id 'coordinator' as an ordinary Agent Mode session. Use the dedicated Coordinator runtime launch path so the Coordinator marker and policy context are installed.")
     }
 
     private func executeWait(args: [String: Value], forcePoll: Bool = false) async throws -> Value {

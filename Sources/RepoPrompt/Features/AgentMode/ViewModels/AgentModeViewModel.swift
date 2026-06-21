@@ -3022,6 +3022,7 @@ final class AgentModeViewModel: ObservableObject {
         session.selectedModelRaw = normalizedSelection.modelRaw
         session.selectedReasoningEffortRaw = indexEntry.agentReasoningEffortRaw
         session.autoEditEnabled = indexEntry.autoEditEnabled
+        session.isCoordinatorRuntime = indexEntry.isCoordinatorRuntime
     }
 
     func applyTranscriptViewportBindingState(
@@ -3822,6 +3823,7 @@ final class AgentModeViewModel: ObservableObject {
         session.hasSentFirstMessage = payload.transcript.turns.contains { $0.request != nil }
         session.parentSessionID = agentSession.parentSessionID
         session.isMCPOriginated = agentSession.isMCPOriginated
+        session.isCoordinatorRuntime = agentSession.isCoordinatorRuntime
         session.worktreeBindings = agentSession.worktreeBindings
         session.worktreeMergeOperations = agentSession.worktreeMergeOperations
         session.nextSequenceIndex = payload.transcript.nextSequenceIndex
@@ -5683,6 +5685,7 @@ final class AgentModeViewModel: ObservableObject {
                 parentSessionID: parentSessionID,
                 hasUnknownConversationContent: existingEntry.hasUnknownConversationContent,
                 isMCPOriginated: existingEntry.isMCPOriginated || session.isMCPOriginated,
+                isCoordinatorRuntime: existingEntry.isCoordinatorRuntime || session.isCoordinatorRuntime,
                 worktreeBindingSummaries: existingEntry.worktreeBindingSummaries,
                 activeWorktreeMergeSummaries: existingEntry.activeWorktreeMergeSummaries
             )
@@ -5703,7 +5706,8 @@ final class AgentModeViewModel: ObservableObject {
             agentReasoningEffortRaw: session.selectedReasoningEffortRaw,
             autoEditEnabled: session.autoEditEnabled,
             parentSessionID: parentSessionID,
-            isMCPOriginated: session.isMCPOriginated
+            isMCPOriginated: session.isMCPOriginated,
+            isCoordinatorRuntime: session.isCoordinatorRuntime
         )
     }
 
@@ -5830,6 +5834,12 @@ final class AgentModeViewModel: ObservableObject {
             throw MCPError.invalidParams("Background agent session capacity is full. Wait for detached agents to finish, close or stash idle agent sessions, or raise agentMode.maxBackgroundAgentComposeTabs.")
         }
         return createdTab.id
+    }
+
+    func mcpCreateCoordinatorRuntimeTab(name: String?) async throws -> UUID {
+        let tabID = try await mcpCreateBackgroundSessionTab(name: name)
+        await mcpMarkCoordinatorRuntime(tabID: tabID, isCoordinatorRuntime: true)
+        return tabID
     }
 
     func mcpConfigureSession(
@@ -9061,6 +9071,7 @@ final class AgentModeViewModel: ObservableObject {
         parentSessionID: UUID? = nil,
         hasUnknownConversationContent: Bool = false,
         isMCPOriginated: Bool = false,
+        isCoordinatorRuntime: Bool = false,
         worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary] = [],
         activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary] = []
     ) {
@@ -9079,6 +9090,7 @@ final class AgentModeViewModel: ObservableObject {
             parentSessionID: parentSessionID,
             hasUnknownConversationContent: hasUnknownConversationContent,
             isMCPOriginated: isMCPOriginated,
+            isCoordinatorRuntime: isCoordinatorRuntime,
             worktreeBindingSummaries: worktreeBindingSummaries,
             activeWorktreeMergeSummaries: activeWorktreeMergeSummaries
         ))
@@ -10375,6 +10387,19 @@ final class AgentModeViewModel: ObservableObject {
         session.isCoordinatorInternalSession = isCoordinatorInternal
     }
 
+    func mcpMarkCoordinatorRuntime(tabID: UUID, isCoordinatorRuntime: Bool) async {
+        let session = await ensureSessionReady(tabID: tabID)
+        session.isCoordinatorRuntime = isCoordinatorRuntime
+        session.isDirty = true
+        if let sessionID = session.activeAgentSessionID {
+            if var entry = ownerValidatedSessionIndex[sessionID] {
+                entry.isCoordinatorRuntime = isCoordinatorRuntime
+                applyLocalSessionIndexUpsert(entry)
+            }
+            scheduleSave(for: tabID)
+        }
+    }
+
     private func saveSession(for tabID: UUID) async {
         #if DEBUG
             let diagnosticsStartMS = AgentModePerfDiagnostics.timestampMSIfEnabled()
@@ -10616,6 +10641,7 @@ final class AgentModeViewModel: ObservableObject {
             pendingHandoffSourceItemID: session.pendingHandoff.sourceItemID,
             pendingHandoffDefersProviderLockUntilSend: session.pendingHandoff.defersProviderLockUntilSend,
             isMCPOriginated: session.isMCPOriginated,
+            isCoordinatorRuntime: session.isCoordinatorRuntime,
             worktreeBindings: session.worktreeBindings,
             worktreeMergeOperations: session.worktreeMergeOperations
         )
@@ -10660,6 +10686,7 @@ final class AgentModeViewModel: ObservableObject {
                 autoEditEnabled: agentSession.autoEditEnabled,
                 parentSessionID: agentSession.parentSessionID,
                 isMCPOriginated: agentSession.isMCPOriginated,
+                isCoordinatorRuntime: agentSession.isCoordinatorRuntime,
                 worktreeBindingSummaries: agentSession.worktreeBindings.worktreeBindingSummaries,
                 activeWorktreeMergeSummaries: agentSession.worktreeMergeOperations.activeWorktreeMergeSummaries
             )

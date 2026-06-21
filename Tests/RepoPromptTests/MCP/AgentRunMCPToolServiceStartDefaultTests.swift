@@ -215,6 +215,24 @@ final class AgentRunMCPToolServiceStartDefaultTests: XCTestCase {
         XCTAssertEqual(resolved.agentRaw, AgentProviderKind.codexExec.rawValue)
         XCTAssertEqual(resolved.modelRaw, "explicit-model")
     }
+
+    func testCoordinatorRoleResolvesAsDedicatedLaunchRole() throws {
+        let resolved = try AgentMCPSelectionResolver.resolve(
+            modelID: "coordinator",
+            availability: AgentModelCatalog.AvailabilityContext(codexAvailable: true),
+            roleSelectionProvider: { role, _ in
+                XCTAssertEqual(role, .coordinator)
+                return AgentModelCatalog.NormalizedAgentSelection(
+                    agent: .codexExec,
+                    modelRaw: AgentModel.gpt55CodexHigh.rawValue
+                )
+            }
+        )
+
+        XCTAssertEqual(resolved.taskLabelKind, .coordinator)
+        XCTAssertTrue(try XCTUnwrap(resolved.taskLabelKind).requiresDedicatedLaunchPath)
+        XCTAssertEqual(resolved.agentRaw, AgentProviderKind.codexExec.rawValue)
+    }
 }
 
 private final class AgentRunFailingSecurePlainStringStore: SecurePlainStringStoring {

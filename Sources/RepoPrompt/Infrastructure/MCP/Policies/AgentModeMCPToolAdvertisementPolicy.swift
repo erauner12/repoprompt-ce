@@ -54,7 +54,7 @@ enum AgentModeMCPToolAdvertisementPolicy {
         switch taskLabelKind {
         case .explore:
             return exploreHiddenTools.union(exploreControlTools)
-        case .engineer, .pair, .design:
+        case .engineer, .pair, .design, .coordinator:
             return nonExploreRoleHiddenTools
         }
     }
@@ -71,7 +71,7 @@ enum AgentModeMCPToolAdvertisementPolicy {
             switch taskLabelKind {
             case .explore:
                 return false
-            case .engineer, .pair, .design:
+            case .engineer, .pair, .design, .coordinator:
                 return true
             }
         }
@@ -80,7 +80,7 @@ enum AgentModeMCPToolAdvertisementPolicy {
         switch taskLabelKind {
         case .explore:
             return !exploreHiddenTools.contains(toolName)
-        case .engineer, .pair, .design:
+        case .engineer, .pair, .design, .coordinator:
             return !nonExploreRoleHiddenTools.contains(toolName)
         }
     }

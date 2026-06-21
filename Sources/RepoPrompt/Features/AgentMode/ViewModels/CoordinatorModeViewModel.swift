@@ -583,12 +583,12 @@ extension AgentModeViewModel {
 
     @MainActor
     private func createCoordinatorRuntimeDemoTarget() async throws -> (tabID: UUID, sessionID: UUID) {
-        let tabID = try await mcpCreateBackgroundSessionTab(name: Self.coordinatorRuntimeDemoSessionName)
+        let tabID = try await mcpCreateCoordinatorRuntimeTab(name: Self.coordinatorRuntimeDemoSessionName)
         let session = await ensureSessionReady(tabID: tabID)
         guard let sessionID = ensureSessionBoundToTab(session) else {
             throw MCPError.invalidParams("The Coordinator runtime tab could not be bound to an agent session.")
         }
-        session.isCoordinatorRuntimeDemo = true
+        session.isCoordinatorRuntime = true
         try await ensureCoordinatorRuntimeDemoControl(tabID: tabID, sessionID: sessionID)
         return (tabID, sessionID)
     }
@@ -596,13 +596,13 @@ extension AgentModeViewModel {
     @MainActor
     private func ensureCoordinatorRuntimeDemoControl(tabID: UUID, sessionID: UUID) async throws {
         let session = await ensureSessionReady(tabID: tabID)
-        session.isCoordinatorRuntimeDemo = true
+        session.isCoordinatorRuntime = true
         if session.mcpControlContext?.sessionID != sessionID {
             try await mcpActivateControlContext(
                 forTabID: tabID,
                 sessionID: sessionID,
                 originatingConnectionID: nil,
-                taskLabelKind: nil,
+                taskLabelKind: .coordinator,
                 startPending: false
             )
         }
@@ -652,6 +652,7 @@ extension AgentModeViewModel {
         var mcpSnapshotsBySessionID: [UUID: AgentRunMCPSnapshot] = [:]
         for tabID in mcpControlledTabIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard let session = sessions[tabID],
+                  !session.isCoordinatorRuntime,
                   let snapshot = mcpSnapshot(for: session)
             else { continue }
             mcpSnapshotsBySessionID[snapshot.sessionID] = snapshot

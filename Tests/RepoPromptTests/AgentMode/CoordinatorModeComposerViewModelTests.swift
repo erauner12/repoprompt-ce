@@ -444,6 +444,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertTrue(oldSession.isCoordinatorRuntimeDemo)
         XCTAssertEqual(fixture.manager.composeTabName(with: oldTabID), "Coordinator Runtime Demo")
         XCTAssertTrue(viewModel.sessions[next.tabID]?.isCoordinatorRuntimeDemo == true)
+        XCTAssertTrue(viewModel.sessions[next.tabID]?.isCoordinatorRuntime == true)
     }
 
     func testResolverWithoutSelectedRuntimeCreatesInsteadOfGuessingByMarkerOrName() async throws {
@@ -472,6 +473,38 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertTrue(oldSession.isCoordinatorRuntimeDemo)
         XCTAssertFalse(namedSession.isCoordinatorRuntimeDemo)
         XCTAssertTrue(viewModel.sessions[next.tabID]?.isCoordinatorRuntimeDemo == true)
+        XCTAssertTrue(viewModel.sessions[next.tabID]?.isCoordinatorRuntime == true)
+    }
+
+    func testSnapshotInputKeepsCoordinatorRuntimeAsParentWithoutRenderingItAsWork() async {
+        let coordinatorTabID = uuid(301)
+        let coordinatorSessionID = uuid(302)
+        let childTabID = uuid(303)
+        let childSessionID = uuid(304)
+        let fixture = makeAgentModeFixture(tabs: [
+            ComposeTabState(id: coordinatorTabID, name: "Coordinator Runtime Demo", activeAgentSessionID: coordinatorSessionID),
+            ComposeTabState(id: childTabID, name: "Investigate README", activeAgentSessionID: childSessionID)
+        ], activeTabID: coordinatorTabID)
+        let viewModel = fixture.viewModel
+        let coordinator = await viewModel.ensureSessionReady(tabID: coordinatorTabID)
+        _ = viewModel.test_installPersistentSessionBinding(sessionID: coordinatorSessionID, on: coordinator)
+        coordinator.isCoordinatorRuntime = true
+        coordinator.runState = .idle
+        let child = await viewModel.ensureSessionReady(tabID: childTabID)
+        _ = viewModel.test_installPersistentSessionBinding(sessionID: childSessionID, on: child)
+        child.parentSessionID = coordinatorSessionID
+        child.isMCPOriginated = true
+        child.runState = .running
+
+        let snapshot = CoordinatorModeSnapshotProjector().project(
+            viewModel.coordinatorModeSnapshotInput(selectedCoordinatorID: coordinatorSessionID)
+        )
+
+        XCTAssertEqual(snapshot.coordinatorRail.coordinatorSessionID, coordinatorSessionID)
+        XCTAssertEqual(snapshot.counts.totalRows, 1)
+        XCTAssertEqual(snapshot.groups.flatMap(\.rows).map(\.sessionID), [childSessionID])
+        XCTAssertFalse(snapshot.groups.flatMap(\.rows).contains { $0.sessionID == coordinatorSessionID })
+        XCTAssertEqual(snapshot.groups.flatMap(\.rows).first?.parentSessionID, coordinatorSessionID)
     }
 
     func testNewCoordinatorRunPreservesExistingRuntimeBeforeNextDirective() async {

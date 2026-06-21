@@ -27,7 +27,7 @@
 - [ ] 3.1 Define the runtime ownership unit, with per-window lazy creation as the preferred first implementation unless a concrete alternative is accepted.
 - [ ] 3.2 Define lazy vs eager runtime creation and restore semantics for the chosen owner, including whether persisted-only Coordinator state is hydrated or leaves the composer disabled until live.
 - [x] 3.3 Confirm whether the Coordinator launch path can reuse the existing MCP background compose-tab / `.mcpBackgroundAgent` creation seam with the Coordinator marker attached.
-- [ ] 3.4 Implement or specify Coordinator role identity through the role system plus a dedicated launch path or additional runtime marker; do not rely solely on adding `coordinator` to `AgentModelCatalog.TaskLabelKind`, task labels, or candidate chains.
+- [x] 3.4 Implement or specify Coordinator role identity through the role system plus a dedicated launch path or additional runtime marker; do not rely solely on adding `coordinator` to `AgentModelCatalog.TaskLabelKind`, task labels, or candidate chains.
 - [ ] 3.5 Ensure Coordinator runtime identity is distinguishable from workspace Agent Mode sessions in state, logs, tool policy, restore metadata, and UI-facing metadata.
 - [ ] 3.6 Define whether the Coordinator marker exempts the runtime from background-Agent capacity eviction, idle cleanup, and MCP-originated incidental cleanup/stop targeting, or whether re-creation on next instruction is explicitly accepted with persisted Coordinator history/action restoration.
 - [ ] 3.7 Ensure typed Coordinator policy context is threaded through run lease / connection policy / tool policy seams before Coordinator scope or permissions are granted.
@@ -83,13 +83,13 @@
 - [ ] 8.6 Decide whether to retire, hide, or keep the manual selected-session composer after the real role is stable.
 - [ ] 8.7 Add UI/snapshot coverage for no Coordinator runtime, real Coordinator runtime available, manual fallback states, instruction delivery precedence, and supervised-session enumeration invisibility.
 - [x] 8.8 Remove Coordinator-self `Open in Agent Mode` / `Open agent chat` affordances from the production-demo rail while keeping delegate/session-card navigation intact.
-- [ ] 8.9 Add the first durable Coordinator runtime marker and apply it at shared supervised-session enumeration boundaries when moving beyond local demo suppression.
+- [x] 8.9 Add the first durable Coordinator runtime marker and apply it at shared supervised-session enumeration boundaries when moving beyond local demo suppression.
 
 ## 9. Feature boundary and validation
 
 - [ ] 9.1 Implement the Coordinator role behind a feature boundary or guarded availability path so rollback leaves existing Coordinator mode behavior intact.
 - [x] 9.2 Run `openspec validate add-coordinator-role` after each spec/design change.
-- [ ] 9.3 Run focused role/scope/action/lifecycle tests added by this implementation.
-- [ ] 9.4 Run the smallest relevant coordinated Swift build/test lanes for touched app/MCP files.
+- [x] 9.3 Run focused role/scope/action/lifecycle tests added by this implementation.
+- [x] 9.4 Run the smallest relevant coordinated Swift build/test lanes for touched app/MCP files.
 - [ ] 9.5 Follow `docs/testing.md` contract-ledger and authoritative XCTest-list workflow when adding, renaming, consolidating, or removing tests.
 - [ ] 9.6 Run contribution preflight before commit and push.

@@ -779,6 +779,20 @@ final class AgentModeViewModelInactiveRefreshTests: XCTestCase {
         XCTAssertFalse(viewModel.test_shouldAcceptSidebarIndexEntry(makeIndexEntry(id: currentID, tabID: tabID)))
     }
 
+    func testSidebarIndexAcceptsCoordinatorRuntimeEntriesForRelationshipResolution() async {
+        let viewModel = makeViewModel()
+        let coordinatorID = UUID()
+        let tabID = UUID()
+        let session = await viewModel.ensureSessionReady(tabID: tabID)
+        _ = viewModel.test_installPersistentSessionBinding(sessionID: coordinatorID, on: session)
+
+        XCTAssertTrue(viewModel.test_shouldAcceptSidebarIndexEntry(makeIndexEntry(
+            id: coordinatorID,
+            tabID: tabID,
+            isCoordinatorRuntime: true
+        )))
+    }
+
     func testDelayedStaleSystemWorkspaceHandlerCannotReplaceRealOwner() async {
         let viewModel = makeViewModel()
         let tabID = UUID()
@@ -1372,6 +1386,7 @@ final class AgentModeViewModelInactiveRefreshTests: XCTestCase {
         parentSessionID: UUID? = nil,
         lastUserMessageAt: Date? = nil,
         savedAt: Date = Date(),
+        isCoordinatorRuntime: Bool = false,
         activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary] = []
     ) -> AgentSessionIndexEntry {
         AgentSessionIndexEntry(
@@ -1389,6 +1404,7 @@ final class AgentModeViewModelInactiveRefreshTests: XCTestCase {
             parentSessionID: parentSessionID,
             hasUnknownConversationContent: false,
             isMCPOriginated: false,
+            isCoordinatorRuntime: isCoordinatorRuntime,
             worktreeBindingSummaries: [],
             activeWorktreeMergeSummaries: activeWorktreeMergeSummaries
         )

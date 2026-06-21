@@ -18,4 +18,37 @@ struct AgentModeMCPPolicyContext {
     let taskLabelKind: AgentModelCatalog.TaskLabelKind?
     let allowsAgentExternalControlTools: Bool
     let requiresExpectedAgentPID: Bool
+    let isCoordinatorRuntime: Bool
+
+    init(
+        clientName: String,
+        windowID: Int,
+        restrictedTools: Set<String>,
+        oneShot: Bool,
+        reason: String?,
+        ttl: TimeInterval,
+        tabID: UUID?,
+        runID: UUID?,
+        additionalTools: Set<String>?,
+        purpose: MCPRunPurpose,
+        taskLabelKind: AgentModelCatalog.TaskLabelKind?,
+        allowsAgentExternalControlTools: Bool,
+        requiresExpectedAgentPID: Bool,
+        isCoordinatorRuntime: Bool = false
+    ) {
+        self.clientName = clientName
+        self.windowID = windowID
+        self.restrictedTools = restrictedTools
+        self.oneShot = oneShot
+        self.reason = reason
+        self.ttl = ttl
+        self.tabID = tabID
+        self.runID = runID
+        self.additionalTools = additionalTools
+        self.purpose = purpose
+        self.taskLabelKind = taskLabelKind
+        self.allowsAgentExternalControlTools = allowsAgentExternalControlTools
+        self.requiresExpectedAgentPID = requiresExpectedAgentPID
+        self.isCoordinatorRuntime = isCoordinatorRuntime
+    }
 }

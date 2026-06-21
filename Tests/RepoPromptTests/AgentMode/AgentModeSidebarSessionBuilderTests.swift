@@ -3,6 +3,42 @@ import XCTest
 
 @MainActor
 final class AgentModeSidebarSessionBuilderTests: XCTestCase {
+    func testCoordinatorRuntimeTabsAreHiddenFromAgentSidebar() {
+        let coordinatorTabID = id(501)
+        let childTabID = id(502)
+        let coordinatorSessionID = id(601)
+        let childSessionID = id(602)
+        let tabs = [
+            tab(coordinatorTabID, sessionID: coordinatorSessionID),
+            tab(childTabID, sessionID: childSessionID)
+        ]
+        let index = sessionIndex([
+            entry(coordinatorSessionID, tabID: coordinatorTabID, lastUserMessageAt: date(20), isCoordinatorRuntime: true),
+            entry(childSessionID, tabID: childTabID, parentSessionID: coordinatorSessionID, lastUserMessageAt: date(30))
+        ])
+        let rows = build(
+            tabs: tabs,
+            sessions: [
+                coordinatorTabID: liveSession(
+                    tabID: coordinatorTabID,
+                    sessionID: coordinatorSessionID,
+                    lastUserMessageAt: date(20),
+                    isCoordinatorRuntime: true
+                ),
+                childTabID: liveSession(
+                    tabID: childTabID,
+                    sessionID: childSessionID,
+                    parentSessionID: coordinatorSessionID,
+                    lastUserMessageAt: date(30)
+                )
+            ],
+            sessionIndex: index
+        )
+
+        XCTAssertEqual(rows.map(\.tabID), [childTabID])
+        XCTAssertEqual(rows.first?.depth, 0)
+    }
+
     func testRestoredOnlyOrdersSiblingsByNewestActivityAndPreservesHierarchy() {
         let parentTabID = id(1)
         let olderChildTabID = id(2)
@@ -477,11 +513,13 @@ final class AgentModeSidebarSessionBuilderTests: XCTestCase {
         tabID: UUID,
         sessionID: UUID,
         parentSessionID: UUID? = nil,
-        lastUserMessageAt: Date
+        lastUserMessageAt: Date,
+        isCoordinatorRuntime: Bool = false
     ) -> AgentModeViewModel.TabSession {
         let session = AgentModeViewModel.TabSession(tabID: tabID)
         session.testInstallPersistentSessionBinding(sessionID: sessionID)
         session.parentSessionID = parentSessionID
+        session.isCoordinatorRuntime = isCoordinatorRuntime
         session.hasLoadedPersistedState = true
         session.lastUserMessageAt = lastUserMessageAt
         session.lastActivityAt = lastUserMessageAt
@@ -508,7 +546,8 @@ final class AgentModeSidebarSessionBuilderTests: XCTestCase {
         tabID: UUID,
         parentSessionID: UUID? = nil,
         lastUserMessageAt: Date?,
-        savedAt: Date? = nil
+        savedAt: Date? = nil,
+        isCoordinatorRuntime: Bool = false
     ) -> AgentSessionIndexEntry {
         AgentSessionIndexEntry(
             id: sessionID,
@@ -525,6 +564,7 @@ final class AgentModeSidebarSessionBuilderTests: XCTestCase {
             parentSessionID: parentSessionID,
             hasUnknownConversationContent: false,
             isMCPOriginated: false,
+            isCoordinatorRuntime: isCoordinatorRuntime,
             worktreeBindingSummaries: [],
             activeWorktreeMergeSummaries: []
         )

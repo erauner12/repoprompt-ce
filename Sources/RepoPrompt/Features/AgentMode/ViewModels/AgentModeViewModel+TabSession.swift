@@ -145,9 +145,14 @@ extension AgentModeViewModel {
         }
 
         var isMCPInstructionDispatchInProgress: Bool = false
-        /// Demo-only marker for the Coordinator runtime spine. This is intentionally
-        /// in-memory/addressability-only until the full containment/restore design lands.
-        var isCoordinatorRuntimeDemo: Bool = false
+        /// Durable marker for the layer-above Coordinator runtime.
+        var isCoordinatorRuntime: Bool = false
+        /// Compatibility name used by the production-demo Coordinator surface.
+        var isCoordinatorRuntimeDemo: Bool {
+            get { isCoordinatorRuntime }
+            set { isCoordinatorRuntime = newValue }
+        }
+
         /// Demo-only marker for Coordinator housekeeping children that should not be
         /// presented as supervised delegated work.
         var isCoordinatorInternalSession: Bool = false

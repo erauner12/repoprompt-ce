@@ -59,6 +59,7 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
     var autoEditEnabled: Bool
     var parentSessionID: UUID?
     var isMCPOriginated: Bool
+    var isCoordinatorRuntime: Bool
     var worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary]
     var activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary]
     var serializationVersion: Int?
@@ -88,6 +89,7 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
         autoEditEnabled: Bool,
         parentSessionID: UUID?,
         isMCPOriginated: Bool,
+        isCoordinatorRuntime: Bool = false,
         worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary] = [],
         activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary] = [],
         serializationVersion: Int?,
@@ -112,6 +114,7 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
         self.autoEditEnabled = autoEditEnabled
         self.parentSessionID = parentSessionID
         self.isMCPOriginated = isMCPOriginated
+        self.isCoordinatorRuntime = isCoordinatorRuntime
         self.worktreeBindingSummaries = worktreeBindingSummaries
         self.activeWorktreeMergeSummaries = activeWorktreeMergeSummaries
         self.serializationVersion = serializationVersion
@@ -138,6 +141,7 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
         case autoEditEnabled
         case parentSessionID
         case isMCPOriginated
+        case isCoordinatorRuntime
         case worktreeBindingSummaries
         case activeWorktreeMergeSummaries
         case serializationVersion
@@ -165,6 +169,7 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
         autoEditEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoEditEnabled) ?? true
         parentSessionID = try container.decodeIfPresent(UUID.self, forKey: .parentSessionID)
         isMCPOriginated = try container.decodeIfPresent(Bool.self, forKey: .isMCPOriginated) ?? false
+        isCoordinatorRuntime = try container.decodeIfPresent(Bool.self, forKey: .isCoordinatorRuntime) ?? false
         worktreeBindingSummaries = try container.decodeIfPresent([AgentSessionWorktreeBindingSummary].self, forKey: .worktreeBindingSummaries) ?? []
         activeWorktreeMergeSummaries = try container.decodeIfPresent([AgentSessionWorktreeMergeSummary].self, forKey: .activeWorktreeMergeSummaries) ?? []
         serializationVersion = try container.decodeIfPresent(Int.self, forKey: .serializationVersion)
@@ -190,6 +195,7 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
             parentSessionID: parentSessionID,
             hasUnknownConversationContent: hasUnknownConversationContent,
             isMCPOriginated: isMCPOriginated,
+            isCoordinatorRuntime: isCoordinatorRuntime,
             worktreeBindingSummaries: worktreeBindingSummaries,
             activeWorktreeMergeSummaries: activeWorktreeMergeSummaries
         )
@@ -207,6 +213,7 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
             lastRunState: lastRunStateRaw,
             parentSessionID: parentSessionID,
             isMCPOriginated: isMCPOriginated,
+            isCoordinatorRuntime: isCoordinatorRuntime,
             worktreeBindingSummaries: worktreeBindingSummaries,
             activeWorktreeMergeSummaries: activeWorktreeMergeSummaries
         )
@@ -230,6 +237,7 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
             && autoEditEnabled == other.autoEditEnabled
             && parentSessionID == other.parentSessionID
             && isMCPOriginated == other.isMCPOriginated
+            && isCoordinatorRuntime == other.isCoordinatorRuntime
             && worktreeBindingSummaries == other.worktreeBindingSummaries
             && activeWorktreeMergeSummaries == other.activeWorktreeMergeSummaries
             && serializationVersion == other.serializationVersion
@@ -262,6 +270,7 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
             autoEditEnabled: session.autoEditEnabled,
             parentSessionID: session.parentSessionID,
             isMCPOriginated: session.isMCPOriginated,
+            isCoordinatorRuntime: session.isCoordinatorRuntime,
             worktreeBindingSummaries: session.worktreeBindings.worktreeBindingSummaries,
             activeWorktreeMergeSummaries: session.worktreeMergeOperations.activeWorktreeMergeSummaries,
             serializationVersion: session.serializationVersion,

@@ -33,6 +33,8 @@ final class MCPAgentRoleDefaultsServiceTests: XCTestCase {
         XCTAssertEqual(resolutions[2].recommended.modelRaw, AgentModel.gpt55CodexHigh.rawValue)
         XCTAssertEqual(resolutions[3].recommended.agent, .codexExec)
         XCTAssertEqual(resolutions[3].recommended.modelRaw, AgentModel.gpt55CodexMedium.rawValue)
+        XCTAssertEqual(resolutions[4].recommended.agent, .codexExec)
+        XCTAssertEqual(resolutions[4].recommended.modelRaw, AgentModel.gpt55CodexHigh.rawValue)
     }
 
     func testResolutionsPreferRecommendationAvailabilityWhenItCanResolveRole() throws {

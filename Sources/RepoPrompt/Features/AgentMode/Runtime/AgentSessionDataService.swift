@@ -24,6 +24,7 @@ struct AgentSessionMeta {
     let lastRunState: String?
     let parentSessionID: UUID?
     let isMCPOriginated: Bool
+    let isCoordinatorRuntime: Bool
     let worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary]
     let activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary]
 }
@@ -165,6 +166,7 @@ actor AgentSessionDataService {
         let pendingHandoffSourceItemID: UUID?
         let pendingHandoffDefersProviderLockUntilSend: Bool?
         let isMCPOriginated: Bool?
+        let isCoordinatorRuntime: Bool?
     }
 
     private func computeLastUserMessageAt(in items: [AgentChatItemPersist]) -> Date? {
@@ -1082,6 +1084,7 @@ actor AgentSessionDataService {
                 pendingHandoffSourceItemID: header.pendingHandoffSourceItemID,
                 pendingHandoffDefersProviderLockUntilSend: header.pendingHandoffDefersProviderLockUntilSend ?? false,
                 isMCPOriginated: header.isMCPOriginated ?? false,
+                isCoordinatorRuntime: header.isCoordinatorRuntime ?? false,
                 worktreeBindings: header.worktreeBindings ?? [],
                 worktreeMergeOperations: header.worktreeMergeOperations ?? []
             )
@@ -1139,6 +1142,7 @@ actor AgentSessionDataService {
                         lastRunState: session.lastRunState,
                         parentSessionID: session.parentSessionID,
                         isMCPOriginated: session.isMCPOriginated,
+                        isCoordinatorRuntime: session.isCoordinatorRuntime,
                         worktreeBindingSummaries: session.worktreeBindings.worktreeBindingSummaries,
                         activeWorktreeMergeSummaries: session.worktreeMergeOperations.activeWorktreeMergeSummaries
                     )
@@ -1193,6 +1197,7 @@ actor AgentSessionDataService {
                             lastRunState: session.lastRunState,
                             parentSessionID: session.parentSessionID,
                             isMCPOriginated: session.isMCPOriginated,
+                            isCoordinatorRuntime: session.isCoordinatorRuntime,
                             worktreeBindingSummaries: session.worktreeBindings.worktreeBindingSummaries,
                             activeWorktreeMergeSummaries: session.worktreeMergeOperations.activeWorktreeMergeSummaries
                         )

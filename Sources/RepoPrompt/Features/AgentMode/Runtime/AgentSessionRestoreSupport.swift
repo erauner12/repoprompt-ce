@@ -324,6 +324,7 @@ enum AgentSessionRestoreSupport {
             parentSessionID: session.parentSessionID,
             hasUnknownConversationContent: hasUnknownConversationContent,
             isMCPOriginated: session.isMCPOriginated,
+            isCoordinatorRuntime: session.isCoordinatorRuntime,
             worktreeBindingSummaries: session.worktreeBindings.worktreeBindingSummaries,
             activeWorktreeMergeSummaries: session.worktreeMergeOperations.activeWorktreeMergeSummaries
         )

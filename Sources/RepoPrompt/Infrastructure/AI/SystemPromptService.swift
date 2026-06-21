@@ -695,7 +695,7 @@ class SystemPromptService {
                 agentKind: agentKind,
                 codeMapsDisabled: codeMapsDisabled
             )
-        case .pair, .design, nil:
+        case .pair, .design, .coordinator, nil:
             break // Fall through to standard prompt
         }
 
