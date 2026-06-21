@@ -174,6 +174,10 @@ Aggregate mode must make parent ownership visible, not merely retained in hidden
 
 This change preserves the rail's "talk to one Coordinator" model while letting the center board demonstrate the actual control-plane value: multiple parent tasks, launched sequentially or in parallel, can remain visible, attributed to their owning parent, and independently progress across `Needs you`, `Working`, `Blocked`, `Review`, and `Done`.
 
+The demo should make the parent/child distinction explicit instead of relying on the prompt text to imply it. A parent Coordinator is a conversation/control loop. A delegated child is work launched by that parent, often in its own worktree. Asking one Coordinator to launch three worktrees should therefore produce one parent with three children, not three parent Coordinators. Multiple parents are appropriate when the work represents independent missions that deserve separate conversation history, decision flow, and supervision, e.g. unrelated investigations, separate PR/workstream reviews, or long-running work that should not pollute a quick side task.
+
+Demo examples should cover the common patterns as gesture sequences, not just prompts: single delegation, one-parent fan-out, sequential multi-parent work, simultaneous multi-parent work, and switching back to supervise an earlier parent. Those examples live in `reference/coordinator-demo-use-cases.md` and should identify which checkpoint each pattern requires. The multi-parent examples depend on a visible way to select an existing Coordinator parent after `New Coordinator` creates another one; if the current UI can create new parents but not return to old ones, add that selection affordance before treating the demo taxonomy as fully runnable.
+
 ### 14. Inspector stays sourced; full logs stay in Agent Mode
 
 The v1 inspector / trailing detail column shows sourced summaries only: status, pending interaction, blocker, worktree/merge, route, and MCP/session metadata. Full transcript, raw log, file, and diff inspection remain in Agent Mode via `Open agent chat`. A Coordinator-view-native full-log toggle is a follow-up unless backed by a sourced activity projection.

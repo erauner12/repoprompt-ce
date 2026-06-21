@@ -109,7 +109,8 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [ ] 10.25 Preserve parent/owner metadata on projected rows for grouping/filtering, action-chip attribution, inspector context, and aggregate-mode selected-parent emphasis without parsing titles.
 - [ ] 10.26 Render a compact sourced parent indicator on aggregate board/list rows using a reserved neutral treatment that does not compete with lifecycle state color or workflow badges.
 - [ ] 10.27 Add focused aggregate-mode tests proving all eligible roots appear, parent indicators are sourced, selected-parent row emphasis updates with rail selection, and aggregate mode does not swap board scope when selection changes.
-- [ ] 10.28 Add demo prompt examples for one-parent fan-out across multiple worktrees and multi-parent sequential/parallel supervision.
+- [x] 10.28 Add a demo use-case taxonomy with gesture sequence, prompt text, expected result, and required checkpoint for single delegation, one-parent fan-out, sequential multi-parent work, simultaneous multi-parent work, and switch-back supervision.
+- [ ] 10.29 Confirm or add a visible parent-selection affordance so users can return to an earlier Coordinator runtime after `New Coordinator` creates another parent.
 
 ## 11. Validation
 
