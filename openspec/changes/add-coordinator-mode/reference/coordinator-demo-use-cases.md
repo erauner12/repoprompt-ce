@@ -59,7 +59,7 @@ Expected result:
 
 Facet: separate missions that should not share one conversation.
 
-Checkpoint required: selected-runtime board checkpoint; parent selection affordance must let the user return to an earlier parent.
+Checkpoint required: selected-runtime board checkpoint; the rail-header parent switcher must let the user return to an earlier parent.
 
 Gesture:
 
@@ -129,7 +129,7 @@ Gesture:
 1. Send a prompt to Parent A.
 2. Click `New Coordinator`.
 3. Send a prompt to Parent B.
-4. Select Parent A again.
+4. Use the rail-header parent switcher to select Parent A again.
 5. Send a follow-up to Parent A.
 
 Parent A prompt:

@@ -61,6 +61,10 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         ))
 
         XCTAssertEqual(snapshot.coordinatorRail.coordinatorSessionID, firstCoordinatorID)
+        XCTAssertEqual(snapshot.coordinatorRail.availableCoordinators.map(\.sessionID), [secondCoordinatorID, firstCoordinatorID])
+        XCTAssertEqual(snapshot.coordinatorRail.availableCoordinators.map(\.title), ["Coordinator Runtime Demo", "Coordinator Runtime Demo"])
+        XCTAssertEqual(snapshot.coordinatorRail.availableCoordinators.map(\.isSelected), [false, true])
+        XCTAssertEqual(snapshot.coordinatorRail.availableCoordinators.map(\.isLiveInCurrentWindow), [true, true])
         XCTAssertEqual(Set(allRows(in: snapshot).map(\.sessionID)), [firstChildID])
         XCTAssertFalse(allRows(in: snapshot).contains { $0.sessionID == secondChildID })
     }

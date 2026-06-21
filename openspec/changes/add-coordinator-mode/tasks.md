@@ -110,7 +110,8 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [ ] 10.26 Render a compact sourced parent indicator on aggregate board/list rows using a reserved neutral treatment that does not compete with lifecycle state color or workflow badges.
 - [ ] 10.27 Add focused aggregate-mode tests proving all eligible roots appear, parent indicators are sourced, selected-parent row emphasis updates with rail selection, and aggregate mode does not swap board scope when selection changes.
 - [x] 10.28 Add a demo use-case taxonomy with gesture sequence, prompt text, expected result, and required checkpoint for single delegation, one-parent fan-out, sequential multi-parent work, simultaneous multi-parent work, and switch-back supervision.
-- [ ] 10.29 Confirm or add a visible parent-selection affordance so users can return to an earlier Coordinator runtime after `New Coordinator` creates another parent.
+- [x] 10.29 Confirm or add a visible parent-selection affordance so users can return to an earlier Coordinator runtime after `New Coordinator` creates another parent.
+- [x] 10.30 Verify workflow-bearing demo prompts by proving `agent_run workflow_name` reaches delegated starts and returns workflow display metadata.
 
 ## 11. Validation
 

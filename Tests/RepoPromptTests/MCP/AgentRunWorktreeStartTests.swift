@@ -1610,6 +1610,30 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
         }
     }
 
+    func testAgentRunStartHonorsWorkflowName() async throws {
+        let root = try makeTemporaryDirectory(named: "agent-run-workflow-name")
+        let window = try await makeWindow(root: root)
+        let recorder = AgentRunStartRecorder()
+        let service = makeAgentRunStartService(window: window, sourceTabID: nil, recorder: recorder)
+
+        let value = try await service.execute(args: [
+            "op": .string("start"),
+            "message": .string("check the README with Investigate"),
+            "workflow_name": .string("Investigate"),
+            "detach": .bool(true),
+            "timeout": .int(0)
+        ])
+
+        let observation = try XCTUnwrap(recorder.observations.first)
+        XCTAssertEqual(recorder.observations.count, 1)
+        XCTAssertEqual(observation.workflow?.id, AgentWorkflow.investigate.definition.id)
+        XCTAssertEqual(observation.workflow?.displayName, AgentWorkflow.investigate.definition.displayName)
+
+        let object = try XCTUnwrap(value.objectValue)
+        XCTAssertEqual(object["workflow_id"]?.stringValue, AgentWorkflow.investigate.definition.id)
+        XCTAssertEqual(object["workflow_name"]?.stringValue, AgentWorkflow.investigate.definition.displayName)
+    }
+
     #if DEBUG
         @MainActor
         private final class BootstrapSocketNamespaceFixture {
@@ -2088,6 +2112,14 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
         }
     }
 
+    private final class AgentRunStartRecorder {
+        struct Observation {
+            let workflow: AgentWorkflowDefinition?
+        }
+
+        var observations: [Observation] = []
+    }
+
     private func makeAgentExploreStartService(
         window: WindowState,
         sourceTabID: UUID?,
@@ -2171,7 +2203,11 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
         )
     }
 
-    private func makeAgentRunStartService(window: WindowState, sourceTabID: UUID?) -> AgentRunMCPToolService {
+    private func makeAgentRunStartService(
+        window: WindowState,
+        sourceTabID: UUID?,
+        recorder: AgentRunStartRecorder? = nil
+    ) -> AgentRunMCPToolService {
         var service = AgentRunMCPToolService(
             toolName: MCPWindowToolName.agentRun,
             captureRequestMetadata: {
@@ -2183,12 +2219,13 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
             resolveSpawnParentSessionID: { _, _ in nil },
             bindCurrentRequestToTab: { _, _ in },
             withHeartbeat: { _, _, _, _, operation in try await operation() },
-            startRun: { target, _, _, _, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, _, _ in
+            startRun: { target, _, _, _, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, _, workflow in
                 guard let sessionID = target.sessionID else {
                     throw MCPError.internalError("Test start target did not resolve a session ID.")
                 }
                 let bindings = agentModeVM.worktreeBindings(forAgentSessionID: sessionID, tabID: target.tabID)
                 let session = agentModeVM.session(for: target.tabID)
+                recorder?.observations.append(.init(workflow: workflow))
                 let snapshot = AgentRunMCPSnapshot(
                     sessionID: sessionID,
                     tabID: target.tabID,

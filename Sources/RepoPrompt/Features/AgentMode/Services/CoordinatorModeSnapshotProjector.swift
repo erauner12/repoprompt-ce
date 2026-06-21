@@ -212,7 +212,18 @@ struct CoordinatorModeSnapshotProjector {
             CoordinatorModeStatusSection(group: group, rows: boardRows.filter { $0.statusGroup == group })
         }
 
-        let coordinatorRail = coordinatorRail(from: coordinator, rowsByID: Dictionary(uniqueKeysWithValues: allRows.map { ($0.sessionID, $0) }))
+        let rowsByID = Dictionary(uniqueKeysWithValues: allRows.map { ($0.sessionID, $0) })
+        let coordinatorOptions = coordinatorOptions(
+            from: detectionSeeds,
+            selection: coordinator,
+            rowsByID: rowsByID,
+            input: input
+        )
+        let coordinatorRail = coordinatorRail(
+            from: coordinator,
+            availableCoordinators: coordinatorOptions,
+            rowsByID: rowsByID
+        )
         let pendingInteractions = boardRows.compactMap(\.pendingInteraction)
 
         return CoordinatorModeSnapshot(
@@ -579,8 +590,37 @@ struct CoordinatorModeSnapshotProjector {
         }
     }
 
+    private func coordinatorOptions(
+        from detectionSeeds: [CoordinatorDetectionSeed],
+        selection: CoordinatorSelection?,
+        rowsByID: [UUID: CoordinatorModeRow],
+        input: Input
+    ) -> [CoordinatorModeCoordinatorOption] {
+        detectionSeeds
+            .filter { input.demoCoordinatorSessionIDs.contains($0.id) }
+            .sorted { lhs, rhs in
+                if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+                if lhs.title.localizedCaseInsensitiveCompare(rhs.title) != .orderedSame {
+                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+                }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            .map { seed in
+                let row = rowsByID[seed.id]
+                return CoordinatorModeCoordinatorOption(
+                    sessionID: seed.id,
+                    title: row?.title ?? seed.title,
+                    selectionSource: .demoRuntime,
+                    isSelected: seed.id == selection?.sessionID,
+                    isLiveInCurrentWindow: row.map { !$0.isPersistedOnly } ?? false,
+                    updatedAt: row?.updatedAt ?? seed.updatedAt
+                )
+            }
+    }
+
     private func coordinatorRail(
         from selection: CoordinatorSelection?,
+        availableCoordinators: [CoordinatorModeCoordinatorOption],
         rowsByID: [UUID: CoordinatorModeRow]
     ) -> CoordinatorModeCoordinatorRail {
         guard let selection, let row = rowsByID[selection.sessionID] else {
@@ -592,6 +632,7 @@ struct CoordinatorModeSnapshotProjector {
             coordinatorSessionID: row.sessionID,
             selectionSource: selection.source,
             title: row.title,
+            availableCoordinators: availableCoordinators,
             isLiveInCurrentWindow: isLiveInCurrentWindow,
             openAgentChatRoute: nil,
             statusReport: row.statusReport,

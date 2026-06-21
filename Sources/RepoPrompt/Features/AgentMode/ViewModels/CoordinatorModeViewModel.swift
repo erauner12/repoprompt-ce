@@ -118,6 +118,8 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
         let forceNewRuntime = isFreshCoordinatorRunPending
         let coordinatorSessionID = forceNewRuntime ? nil : snapshot.coordinatorRail.coordinatorSessionID
+        let previousCoordinatorIDs = Set(snapshot.coordinatorRail.availableCoordinators.map(\.sessionID))
+        let submissionWorkspaceID = snapshot.workspaceID
         if snapshot.coordinatorRail.state == .selected, !forceNewRuntime {
             guard snapshot.coordinatorRail.isComposerEnabled else {
                 let message = "Coordinator is not available in this window."
@@ -136,6 +138,12 @@ final class CoordinatorModeViewModel: ObservableObject {
         case .accepted:
             isFreshCoordinatorRunPending = false
             composerNotice = nil
+            if forceNewRuntime {
+                selectFreshCoordinatorRuntimeIfAvailable(
+                    previousCoordinatorIDs: previousCoordinatorIDs,
+                    workspaceID: submissionWorkspaceID
+                )
+            }
             refresh()
             railTranscriptEntries.append(CoordinatorModeRailTranscriptEntry(
                 id: UUID(),
@@ -148,6 +156,45 @@ final class CoordinatorModeViewModel: ObservableObject {
             composerNotice = message.isEmpty ? nil : message
         }
         return result
+    }
+
+    private func selectFreshCoordinatorRuntimeIfAvailable(
+        previousCoordinatorIDs: Set<UUID>,
+        workspaceID: UUID?
+    ) {
+        let input = inputProvider(sortMode, nil)
+        guard let workspaceID = workspaceID ?? input.workspaceID else { return }
+        let newCoordinatorIDs = input.demoCoordinatorSessionIDs.subtracting(previousCoordinatorIDs)
+        guard let selectedCoordinatorID = newestCoordinatorID(in: newCoordinatorIDs, input: input) else { return }
+        selectedCoordinatorIDByWorkspaceID[workspaceID] = selectedCoordinatorID
+    }
+
+    private func newestCoordinatorID(
+        in coordinatorIDs: Set<UUID>,
+        input: CoordinatorModeSnapshotProjector.Input
+    ) -> UUID? {
+        coordinatorIDs.max { lhs, rhs in
+            let lhsDate = coordinatorUpdatedAt(lhs, input: input)
+            let rhsDate = coordinatorUpdatedAt(rhs, input: input)
+            if lhsDate == rhsDate {
+                return lhs.uuidString < rhs.uuidString
+            }
+            return lhsDate < rhsDate
+        }
+    }
+
+    private func coordinatorUpdatedAt(
+        _ sessionID: UUID,
+        input: CoordinatorModeSnapshotProjector.Input
+    ) -> Date {
+        [
+            input.liveSessions.first { $0.sessionID == sessionID }?.updatedAt,
+            input.persistedSessions.first { $0.id == sessionID }?.updatedAt,
+            input.coordinatorDetectionSessions.first { $0.id == sessionID }?.updatedAt,
+            input.mcpSnapshotsBySessionID[sessionID]?.updatedAt
+        ]
+        .compactMap(\.self)
+        .max() ?? .distantPast
     }
 
     @discardableResult

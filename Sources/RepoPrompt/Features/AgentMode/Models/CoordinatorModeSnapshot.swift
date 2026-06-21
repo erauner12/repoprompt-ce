@@ -150,6 +150,7 @@ struct CoordinatorModeCoordinatorRail: Equatable {
         coordinatorSessionID: nil,
         selectionSource: nil,
         title: nil,
+        availableCoordinators: [],
         isLiveInCurrentWindow: false,
         openAgentChatRoute: nil,
         statusReport: nil,
@@ -173,11 +174,25 @@ struct CoordinatorModeCoordinatorRail: Equatable {
     let coordinatorSessionID: UUID?
     let selectionSource: SelectionSource?
     let title: String?
+    let availableCoordinators: [CoordinatorModeCoordinatorOption]
     let isLiveInCurrentWindow: Bool
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
     let statusReport: CoordinatorModeSessionStatusReport?
     let isComposerEnabled: Bool
     let isComposerSendEnabled: Bool
+}
+
+struct CoordinatorModeCoordinatorOption: Identifiable, Equatable {
+    var id: UUID {
+        sessionID
+    }
+
+    let sessionID: UUID
+    let title: String
+    let selectionSource: CoordinatorModeCoordinatorRail.SelectionSource
+    let isSelected: Bool
+    let isLiveInCurrentWindow: Bool
+    let updatedAt: Date
 }
 
 struct CoordinatorModeRailTranscriptEntry: Identifiable, Equatable {

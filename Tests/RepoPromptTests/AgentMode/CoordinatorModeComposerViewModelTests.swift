@@ -446,6 +446,64 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isFreshCoordinatorRunPending)
     }
 
+    func testNewCoordinatorDirectiveSelectsCreatedRuntime() async {
+        let firstCoordinatorID = uuid(1)
+        let secondCoordinatorID = uuid(2)
+        let firstTabID = uuid(101)
+        let secondTabID = uuid(102)
+        var liveSessions = [
+            live(
+                id: firstCoordinatorID,
+                tab: firstTabID,
+                title: "First coordinator",
+                updatedAt: date(20),
+                state: .idle,
+                isMCP: true
+            )
+        ]
+        var demoCoordinatorIDs: Set<UUID> = [firstCoordinatorID]
+        var submissions: [(text: String, sessionID: UUID?, forceNewRuntime: Bool)] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: liveSessions,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: demoCoordinatorIDs
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { text, sessionID, forceNewRuntime in
+                submissions.append((text, sessionID, forceNewRuntime))
+                liveSessions.append(self.live(
+                    id: secondCoordinatorID,
+                    tab: secondTabID,
+                    title: "Second coordinator",
+                    updatedAt: self.date(30),
+                    state: .idle,
+                    isMCP: true
+                ))
+                demoCoordinatorIDs.insert(secondCoordinatorID)
+                return .accepted
+            }
+        )
+        viewModel.refresh()
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, firstCoordinatorID)
+
+        viewModel.startNewCoordinatorRun()
+        let result = await viewModel.submitCoordinatorDirective("start another parent")
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(submissions.first?.sessionID, nil)
+        XCTAssertEqual(submissions.first?.forceNewRuntime, true)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, secondCoordinatorID)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.title, "Second coordinator")
+        XCTAssertEqual(
+            viewModel.snapshot.coordinatorRail.availableCoordinators.map(\.sessionID),
+            [secondCoordinatorID, firstCoordinatorID]
+        )
+    }
+
     func testUnreachableCoordinatorRejectsDirectiveWithoutCallingSubmitter() async {
         let coordinatorID = uuid(1)
         let childID = uuid(2)

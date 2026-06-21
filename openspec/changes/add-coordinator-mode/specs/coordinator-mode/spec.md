@@ -72,6 +72,12 @@ The system SHALL identify the Coordinator session using explicit precedence.
 - **THEN** the Coordinator view SHALL use that session as Coordinator ahead of auto-detected candidates
 - **AND** a future row/card selection affordance SHALL add explicit liveness and eligibility fall-through coverage before changing this precedence.
 
+#### Scenario: Multiple Coordinator parents can be selected in Coordinator mode
+- **WHEN** multiple valid Coordinator parent runtimes exist for the active workspace
+- **THEN** the Coordinator view SHALL expose a visible in-Coordinator selection affordance for returning to an existing parent
+- **AND** selecting a parent SHALL retarget the Coordinator rail to that parent without creating a new Coordinator runtime
+- **AND** selected-runtime board/list projection SHALL update to that selected parent's eligible delegated descendants.
+
 #### Scenario: Orchestrate workflow candidate exists
 - **WHEN** no user-selected Coordinator exists and a parent session has launch or first-request workflow metadata of `Orchestrate`
 - **THEN** the Coordinator view SHALL treat that parent session as a Coordinator candidate.

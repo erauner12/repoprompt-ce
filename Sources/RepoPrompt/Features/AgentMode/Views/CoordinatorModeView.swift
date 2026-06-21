@@ -390,6 +390,27 @@ struct CoordinatorModeView: View {
 
             Spacer(minLength: 0)
 
+            if rail.availableCoordinators.count > 1 {
+                Menu {
+                    ForEach(rail.availableCoordinators) { option in
+                        Button {
+                            viewModel.selectCoordinator(sessionID: option.sessionID)
+                        } label: {
+                            Label(option.title, systemImage: option.isSelected ? "checkmark" : "rectangle.3.group.bubble")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                        .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(.secondary)
+                .hoverTooltip("Switch Coordinator chat")
+            }
+
             Button {
                 viewModel.startNewCoordinatorRun()
             } label: {
@@ -2453,6 +2474,7 @@ private extension AgentSessionRunState {
                     coordinatorSessionID: coordinatorID,
                     selectionSource: .mcpLineageRoot,
                     title: "Coordinate PR stack",
+                    availableCoordinators: [],
                     isLiveInCurrentWindow: true,
                     openAgentChatRoute: nil,
                     statusReport: CoordinatorModeSessionStatusReport(
