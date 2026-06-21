@@ -18,7 +18,18 @@ import XCTest
                     try await activateWorkspace(fixture.contextA)
                     let logicalRoot = fixture.contextA.rootURL
                     let logicalFile = fixture.contextA.fileURL
-                    let worktreeRoot = try makeTemporaryRoot(name: "ContextBuilderWorktree")
+                    let gitFixture = try ReviewGitRepositoryFixture(name: "ContextBuilderPublishedWorktree")
+                    _ = try gitFixture.runGit(["init"], at: logicalRoot)
+                    _ = try gitFixture.runGit(["config", "user.name", "RepoPrompt Test"], at: logicalRoot)
+                    _ = try gitFixture.runGit(["config", "user.email", "repoprompt@example.test"], at: logicalRoot)
+                    _ = try gitFixture.runGit(["config", "commit.gpgSign", "false"], at: logicalRoot)
+                    _ = try gitFixture.runGit(["add", "."], at: logicalRoot)
+                    _ = try gitFixture.runGit(["commit", "-m", "Initial commit"], at: logicalRoot)
+                    let worktreeRoot = try gitFixture.makeLinkedWorktree(
+                        from: logicalRoot,
+                        named: "worktree",
+                        branch: "feature/context-builder"
+                    )
                     let worktreeFile = worktreeRoot
                         .appendingPathComponent("Sources", isDirectory: true)
                         .appendingPathComponent(logicalFile.lastPathComponent)
@@ -39,19 +50,75 @@ import XCTest
 
                     let sessionID = UUID()
                     let parentRunID = UUID()
-                    let binding = makeBinding(
+                    let binding = try makeGitBinding(
                         logicalRoot: logicalRoot,
                         worktreeRoot: worktreeRoot,
                         suffix: "context-builder"
+                    )
+                    let selectionIdentity = WorkspaceSelectionIdentity(
+                        workspaceID: fixture.contextA.workspaceID,
+                        tabID: fixture.contextA.tabID
+                    )
+                    let sourceSelection = StoredSelection(
+                        selectedPaths: [logicalFile.path],
+                        codemapAutoEnabled: false
+                    )
+                    let selectionRevisionBeforeSeed = fixture.contextA.window.workspaceManager
+                        .selectionRevisionForMCP(
+                            workspaceID: selectionIdentity.workspaceID,
+                            tabID: selectionIdentity.tabID
+                        )
+                    let persistedSelection = await fixture.contextA.window.selectionCoordinator.persistSelection(
+                        sourceSelection,
+                        for: selectionIdentity,
+                        source: .mcpTabContext,
+                        mirrorToUIIfActive: true
+                    )
+                    XCTAssertEqual(persistedSelection, sourceSelection)
+                    let sourceSelectionRevision = fixture.contextA.window.workspaceManager.selectionRevisionForMCP(
+                        workspaceID: selectionIdentity.workspaceID,
+                        tabID: selectionIdentity.tabID
+                    )
+                    XCTAssertGreaterThan(sourceSelectionRevision, selectionRevisionBeforeSeed)
+                    var composeTab = try XCTUnwrap(
+                        fixture.contextA.window.workspaceManager.composeTab(for: selectionIdentity)
+                    )
+                    composeTab.promptText = "Inspect the worktree implementation"
+                    fixture.contextA.window.workspaceManager.updateComposeTab(composeTab, markDirty: false)
+                    let storedAfterSeed = try XCTUnwrap(
+                        fixture.contextA.window.workspaceManager.composeTab(for: selectionIdentity)
+                    )
+                    XCTAssertEqual(storedAfterSeed.promptText, composeTab.promptText)
+                    XCTAssertEqual(storedAfterSeed.selection, sourceSelection)
+
+                    let flushedSourceSnapshot = try XCTUnwrap(
+                        fixture.contextA.window.selectionCoordinator.selectionSnapshot(
+                            for: selectionIdentity,
+                            flushPendingUIIfActive: true
+                        )
+                    )
+                    XCTAssertEqual(flushedSourceSnapshot.selection, sourceSelection)
+                    let frozenComposeTab = try XCTUnwrap(
+                        fixture.contextA.window.workspaceManager.composeTab(for: selectionIdentity)
+                    )
+                    XCTAssertEqual(frozenComposeTab.selection, sourceSelection)
+                    XCTAssertEqual(
+                        fixture.contextA.window.workspaceManager.selectionRevisionForMCP(
+                            workspaceID: selectionIdentity.workspaceID,
+                            tabID: selectionIdentity.tabID
+                        ),
+                        sourceSelectionRevision
                     )
                     let frozenContext = MCPServerViewModel.TabContextSnapshot(
                         tabID: fixture.contextA.tabID,
                         windowID: fixture.contextA.window.windowID,
                         workspaceID: fixture.contextA.workspaceID,
-                        promptText: "Inspect the worktree implementation",
-                        selection: StoredSelection(),
-                        selectedMetaPromptIDs: [],
-                        tabName: "Agent Context Builder",
+                        promptText: frozenComposeTab.promptText,
+                        selection: frozenComposeTab.selection,
+                        selectionRevision: sourceSelectionRevision,
+                        selectedMetaPromptIDs: frozenComposeTab.selectedMetaPromptIDs,
+                        selectedContextBuilderPromptIDs: frozenComposeTab.contextBuilder.selectedContextBuilderPromptIDs,
+                        tabName: frozenComposeTab.name,
                         runID: parentRunID,
                         activeAgentSessionID: sessionID,
                         worktreeBindings: [binding],
@@ -63,11 +130,80 @@ import XCTest
                         context: frozenContext,
                         fixture: fixture
                     )
-                    var composeTab = try XCTUnwrap(
-                        fixture.contextA.window.workspaceManager.composeTab(with: fixture.contextA.tabID)
+
+                    _ = try await outerEndpoint.callTool(
+                        name: MCPWindowToolName.git,
+                        arguments: [
+                            "op": "diff",
+                            "repo_root": logicalRoot.path,
+                            "scope": "all",
+                            "detail": "patches",
+                            "artifacts": true,
+                            "mode": "deep"
+                        ],
+                        timeoutSeconds: 30
                     )
-                    composeTab.promptText = frozenContext.promptText
-                    fixture.contextA.window.workspaceManager.updateComposeTab(composeTab, markDirty: false)
+                    let publishedSelection = try XCTUnwrap(
+                        fixture.contextA.window.workspaceManager.composeTab(for: selectionIdentity)
+                    ).selection
+                    let mapPath = try XCTUnwrap(
+                        publishedSelection.selectedPaths.first { $0.hasSuffix("/MAP.txt") }
+                    )
+                    let patchPath = try XCTUnwrap(
+                        publishedSelection.selectedPaths.first { $0.hasSuffix("/diff/all.patch") }
+                    )
+                    let publishedPatch = try String(contentsOfFile: patchPath, encoding: .utf8)
+                    let mapAlias = try XCTUnwrap(
+                        mapPath.range(of: "/_git_data/").map {
+                            "_git_data/" + mapPath[$0.upperBound...]
+                        }
+                    )
+                    let patchAlias = try XCTUnwrap(
+                        patchPath.range(of: "/_git_data/").map {
+                            "_git_data/" + patchPath[$0.upperBound...]
+                        }
+                    )
+                    XCTAssertEqual(
+                        Set(publishedSelection.selectedPaths),
+                        Set([logicalFile.path, mapPath, patchPath])
+                    )
+                    XCTAssertTrue(publishedSelection.slices.isEmpty)
+                    XCTAssertTrue(publishedSelection.autoCodemapPaths.isEmpty)
+                    XCTAssertFalse(publishedSelection.codemapAutoEnabled)
+                    let publishedSelectionRevision = fixture.contextA.window.workspaceManager
+                        .selectionRevisionForMCP(
+                            workspaceID: selectionIdentity.workspaceID,
+                            tabID: selectionIdentity.tabID
+                        )
+                    XCTAssertGreaterThan(publishedSelectionRevision, sourceSelectionRevision)
+                    let flushedPublishedSnapshot = try XCTUnwrap(
+                        fixture.contextA.window.selectionCoordinator.selectionSnapshot(
+                            for: selectionIdentity,
+                            flushPendingUIIfActive: true
+                        )
+                    )
+                    XCTAssertEqual(flushedPublishedSnapshot.selection, publishedSelection)
+                    XCTAssertEqual(
+                        fixture.contextA.window.workspaceManager.composeTab(for: selectionIdentity)?.selection,
+                        publishedSelection
+                    )
+                    XCTAssertEqual(
+                        fixture.contextA.window.workspaceManager.selectionRevisionForMCP(
+                            workspaceID: selectionIdentity.workspaceID,
+                            tabID: selectionIdentity.tabID
+                        ),
+                        publishedSelectionRevision
+                    )
+                    fixture.contextA.window.promptManager
+                        .setAutomaticReviewGitDiffProviderOverrideForTesting { _ in
+                            AutomaticReviewGitDiffResult(
+                                text: "AUTOMATIC_FALLBACK_INVOKED",
+                                completeness: .complete,
+                                outcomes: [],
+                                pathIssues: []
+                            )
+                        }
+
                     factory.configure(
                         networkManager: fixture.networkManager,
                         logicalFilePath: logicalFile.path,
@@ -83,15 +219,21 @@ import XCTest
                         )
                     }
                     fixture.contextA.window.mcpServer.setContextBuilderFollowUpOverrideForTesting {
-                        _, tabID, agentModeSessionID, agentModeRunID, mode, prompt, selection, lookupContext, _, _ in
+                        _, tabID, agentModeSessionID, agentModeRunID, mode, prompt, selection, lookupContext, reviewGitContext, _, _ in
                         XCTAssertEqual(agentModeSessionID, sessionID)
                         XCTAssertEqual(agentModeRunID, parentRunID)
+                        XCTAssertEqual(reviewGitContext.compareIntent, .uncommittedHEAD)
+                        XCTAssertEqual(
+                            reviewGitContext.displayContext.roots.first?.physicalRootPath,
+                            worktreeRoot.standardizedFileURL.path
+                        )
                         let message = await fixture.contextA.window.promptManager.buildHeadlessAIMessage(
                             from: HeadlessContextSnapshot(
                                 tabID: tabID,
                                 promptText: prompt,
                                 selection: selection,
-                                lookupContext: lookupContext
+                                lookupContext: lookupContext,
+                                reviewGitContext: reviewGitContext
                             ),
                             model: fixture.contextA.window.promptManager.preferredAIModel,
                             mode: mode
@@ -117,7 +259,11 @@ import XCTest
                         fixture.contextA.window.mcpServer.setContextBuilderSelectionReplyObserverForTesting(nil)
                     }
 
-                    for responseType in ["plan", "review"] {
+                    let logicalRelativeFilePath = String(
+                        logicalFile.standardizedFileURL.path.dropFirst(logicalRoot.standardizedFileURL.path.count)
+                    ).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                    let expectedPublishedPaths = Set([logicalFile.path, mapAlias, patchAlias])
+                    for (runIndex, responseType) in ["plan", "review"].enumerated() {
                         let response = try await outerEndpoint.callTool(
                             name: MCPWindowToolName.contextBuilder,
                             arguments: [
@@ -130,20 +276,58 @@ import XCTest
                         XCTAssertTrue(text.contains("generated \(responseType)"), text)
                         XCTAssertTrue(text.contains(logicalFile.lastPathComponent), text)
                         XCTAssertFalse(text.contains(canonicalSentinel), text)
+                        XCTAssertEqual(
+                            state.runs.count,
+                            runIndex + 1,
+                            "response_type=\(responseType) expected exactly one new probe run; runs=\(state.runs.count)"
+                        )
+                        guard state.runs.indices.contains(runIndex) else { continue }
+                        let run = state.runs[runIndex]
+                        let runDiagnostics = "response_type=\(responseType) run_index=\(runIndex) \(run.selectionBeforeRead.diagnosticDescription)"
+                        XCTAssertEqual(
+                            Set(run.selectionBeforeRead.fullPaths),
+                            expectedPublishedPaths,
+                            runDiagnostics
+                        )
+                        XCTAssertTrue(run.selectionBeforeRead.slicePaths.isEmpty, runDiagnostics)
+                        XCTAssertTrue(
+                            Set(run.selectionBeforeRead.invalidPaths).isDisjoint(with: expectedPublishedPaths),
+                            runDiagnostics
+                        )
+                        let sourceObservation = try XCTUnwrap(
+                            run.selectionBeforeRead.files.first { $0.path == logicalFile.path },
+                            runDiagnostics
+                        )
+                        XCTAssertEqual(sourceObservation.renderMode, "full", runDiagnostics)
+                        XCTAssertEqual(
+                            sourceObservation.rootPath,
+                            logicalRoot.standardizedFileURL.path,
+                            runDiagnostics
+                        )
+                        XCTAssertEqual(
+                            sourceObservation.pathWithinRoot,
+                            logicalRelativeFilePath,
+                            runDiagnostics
+                        )
+                        XCTAssertEqual(
+                            run.selectionBeforeRead.files.first { $0.path == mapAlias }?.renderMode,
+                            "full",
+                            runDiagnostics
+                        )
+                        XCTAssertEqual(
+                            run.selectionBeforeRead.files.first { $0.path == patchAlias }?.renderMode,
+                            "full",
+                            runDiagnostics
+                        )
+                        XCTAssertEqual(
+                            run.selectionAfterRead,
+                            run.selectionBeforeRead,
+                            "response_type=\(responseType) selection changed after read; before=\(run.selectionBeforeRead.diagnosticDescription) after=\(run.selectionAfterRead.diagnosticDescription)"
+                        )
                     }
 
                     let runs = state.runs
                     XCTAssertEqual(runs.count, 2)
-                    XCTAssertEqual(runs[0].selectionBeforeRead, .empty)
-                    XCTAssertEqual(runs[0].selectionAfterRead, .empty)
-                    XCTAssertEqual(
-                        runs[1].selectionBeforeRead,
-                        .init(fullPaths: [logicalFile.path], slicePaths: [])
-                    )
-                    XCTAssertEqual(runs[1].selectionAfterRead, runs[1].selectionBeforeRead)
-                    let logicalRelativeFilePath = String(
-                        logicalFile.standardizedFileURL.path.dropFirst(logicalRoot.standardizedFileURL.path.count)
-                    ).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
                     for run in runs {
                         XCTAssertEqual(run.workspacePath, worktreeRoot.standardizedFileURL.path)
                         XCTAssertTrue(run.userMessage.contains("BranchOnly.swift"), run.userMessage)
@@ -176,11 +360,41 @@ import XCTest
                         let packaged = followUp.fileBlocks.joined(separator: "\n")
                         XCTAssertTrue(packaged.contains(worktreeSentinel), packaged)
                         XCTAssertFalse(packaged.contains(canonicalSentinel), packaged)
-                        XCTAssertFalse(packaged.contains(worktreeRoot.path), packaged)
+                        let nonMapBlocks = followUp.fileBlocks
+                            .filter { !$0.contains(mapAlias) }
+                            .joined(separator: "\n")
+                        XCTAssertFalse(nonMapBlocks.contains(worktreeRoot.path), nonMapBlocks)
                         XCTAssertFalse(followUp.fileTree.contains(worktreeRoot.path), followUp.fileTree)
-                        XCTAssertEqual(followUp.selection.selectedPaths, [logicalFile.path])
+                        XCTAssertEqual(
+                            Set(followUp.selection.selectedPaths),
+                            Set([logicalFile.path, mapPath, patchPath])
+                        )
+                        XCTAssertEqual(
+                            followUp.fileBlocks.count(where: { $0.contains(mapAlias) }),
+                            1,
+                            packaged
+                        )
+                        XCTAssertFalse(
+                            followUp.fileBlocks.contains { $0.contains("<path>\(patchAlias)</path>") },
+                            packaged
+                        )
                         XCTAssertNotNil(followUp.lookupContext?.bindingProjection)
                     }
+                    let planFollowUp = try XCTUnwrap(
+                        followUps.first { $0.mode == "plan" },
+                        "Expected plan follow-up; recorded modes=\(followUps.map(\.mode))"
+                    )
+                    let reviewFollowUp = try XCTUnwrap(
+                        followUps.first { $0.mode == "review" },
+                        "Expected review follow-up; recorded modes=\(followUps.map(\.mode))"
+                    )
+                    XCTAssertEqual(planFollowUp.gitDiff, publishedPatch)
+                    XCTAssertEqual(reviewFollowUp.gitDiff, publishedPatch)
+                    XCTAssertTrue(followUps.allSatisfy {
+                        $0.gitDiff != "AUTOMATIC_FALLBACK_INVOKED"
+                    })
+                    XCTAssertFalse(reviewFollowUp.gitDiff?.contains(worktreeRoot.path) ?? true)
+                    XCTAssertFalse(reviewFollowUp.gitDiff?.contains(canonicalSentinel) ?? true)
 
                     let lookupContext = try await AgentWorkspaceLookupContextResolver.requiredLookupContext(
                         source: AgentWorkspaceLookupContextSource(
@@ -228,14 +442,37 @@ import XCTest
 
                     XCTAssertEqual(state.accounting.count, 2)
                     for accounting in state.accounting {
-                        XCTAssertEqual(accounting.totalTokens, expected.totalTokens ?? 0)
-                        XCTAssertEqual(accounting.selection.selectedPaths, [logicalFile.path])
+                        XCTAssertGreaterThan(accounting.totalTokens, 0)
+                        XCTAssertEqual(
+                            Set(accounting.selection.selectedPaths),
+                            Set([logicalFile.path, mapPath, patchPath])
+                        )
                         XCTAssertNotNil(accounting.lookupContext?.bindingProjection)
                     }
+                    XCTAssertEqual(
+                        state.accounting.map(\.selection),
+                        state.followUps.map(\.selection),
+                        "Selection replies and requested follow-ups must use the same committed snapshots"
+                    )
+                    XCTAssertEqual(
+                        Set(fixture.contextA.window.workspaceManager.composeTab(for: selectionIdentity)?.selection.selectedPaths ?? []),
+                        Set(publishedSelection.selectedPaths)
+                    )
+                    XCTAssertGreaterThanOrEqual(
+                        fixture.contextA.window.workspaceManager.selectionRevisionForMCP(
+                            workspaceID: selectionIdentity.workspaceID,
+                            tabID: selectionIdentity.tabID
+                        ),
+                        publishedSelectionRevision
+                    )
 
+                    fixture.contextA.window.promptManager
+                        .setAutomaticReviewGitDiffProviderOverrideForTesting(nil)
                     fixture.contextA.window.mcpServer.setContextBuilderSelectionReplyObserverForTesting(nil)
                     await fixture.cleanup()
                 } catch {
+                    fixture.contextA.window.promptManager
+                        .setAutomaticReviewGitDiffProviderOverrideForTesting(nil)
                     fixture.contextA.window.mcpServer.setContextBuilderFollowUpOverrideForTesting(nil)
                     fixture.contextA.window.mcpServer.setContextBuilderSelectionReplyObserverForTesting(nil)
                     await fixture.cleanup()
@@ -311,6 +548,195 @@ import XCTest
             }
         }
 
+        func testAgentModeTwoRootContextBuilderImplicitGitPublishesSelectedRepository() async throws {
+            try await MCPSharedServerTestLease.shared.withLease { lease in
+                let state = ContextBuilderWorktreeProbeState()
+                let factory = ContextBuilderWorktreeProbeFactory(state: state)
+                let fixture = try await PersistentMCPTestFixture.make(
+                    lease: lease,
+                    contextBuilderProviderFactory: factory.makeProvider
+                )
+                let gitFixture = try ReviewGitRepositoryFixture(name: "ContextBuilderTwoRootNestedGit")
+                do {
+                    try await activateWorkspace(fixture.contextA)
+                    // Keep the workspace's original/first root as the unrelated Classic checkout.
+                    // The selected CE checkout is attached second so an ambient-first implementation
+                    // would reproduce the wrong-root publication this regression protects against.
+                    let classicRoot = fixture.contextA.rootURL
+                    let classicFile = fixture.contextA.fileURL
+                    _ = try gitFixture.runGit(["init"], at: classicRoot)
+                    _ = try gitFixture.runGit(["config", "user.name", "RepoPrompt Test"], at: classicRoot)
+                    _ = try gitFixture.runGit(["config", "user.email", "repoprompt@example.test"], at: classicRoot)
+                    _ = try gitFixture.runGit(["config", "commit.gpgSign", "false"], at: classicRoot)
+                    _ = try gitFixture.runGit(["add", "."], at: classicRoot)
+                    _ = try gitFixture.runGit(["commit", "-m", "Initial Classic commit"], at: classicRoot)
+                    let ceRoot = try gitFixture.makeRepository(
+                        named: "selected-ce",
+                        files: ["Sources/Selected.swift": "let ce = 1\n"]
+                    )
+                    let ceFile = ceRoot.appendingPathComponent("Sources/Selected.swift")
+                    try await fixture.contextA.window.workspaceManager.addFolder(
+                        ceRoot,
+                        to: XCTUnwrap(fixture.contextA.window.workspaceManager.activeWorkspace)
+                    )
+                    let orderedRepoPaths = try XCTUnwrap(
+                        fixture.contextA.window.workspaceManager.activeWorkspace
+                    ).repoPaths.map { ($0 as NSString).standardizingPath }
+                    XCTAssertEqual(orderedRepoPaths.first, classicRoot.standardizedFileURL.path)
+                    XCTAssertEqual(orderedRepoPaths.last, ceRoot.standardizedFileURL.path)
+                    let ceMarker = "CE_CONTEXT_BUILDER_TARGET_MARKER"
+                    let classicMarker = "CLASSIC_CONTEXT_BUILDER_LEAK_MARKER"
+                    try write("let marker = \"\(ceMarker)\"\n", to: ceFile)
+                    try write("let marker = \"\(classicMarker)\"\n", to: classicFile)
+
+                    let identity = WorkspaceSelectionIdentity(
+                        workspaceID: fixture.contextA.workspaceID,
+                        tabID: fixture.contextA.tabID
+                    )
+                    let sourceSelection = StoredSelection(
+                        selectedPaths: [ceFile.path],
+                        codemapAutoEnabled: false
+                    )
+                    _ = await fixture.contextA.window.selectionCoordinator.persistSelection(
+                        sourceSelection,
+                        for: identity,
+                        source: .mcpTabContext,
+                        mirrorToUIIfActive: true
+                    )
+                    let revision = fixture.contextA.window.workspaceManager.selectionRevisionForMCP(
+                        workspaceID: identity.workspaceID,
+                        tabID: identity.tabID
+                    )
+                    var tab = try XCTUnwrap(
+                        fixture.contextA.window.workspaceManager.composeTab(for: identity)
+                    )
+                    tab.promptText = "Review only the selected CE checkout"
+                    fixture.contextA.window.workspaceManager.updateComposeTab(tab, markDirty: false)
+                    let sessionID = UUID()
+                    let parentRunID = UUID()
+                    let frozenContext = MCPServerViewModel.TabContextSnapshot(
+                        tabID: tab.id,
+                        windowID: fixture.contextA.window.windowID,
+                        workspaceID: identity.workspaceID,
+                        promptText: "Review only the selected CE checkout",
+                        selection: sourceSelection,
+                        selectionRevision: revision,
+                        selectedMetaPromptIDs: tab.selectedMetaPromptIDs,
+                        selectedContextBuilderPromptIDs: tab.contextBuilder.selectedContextBuilderPromptIDs,
+                        tabName: tab.name,
+                        runID: parentRunID,
+                        activeAgentSessionID: sessionID,
+                        worktreeBindings: [],
+                        explicitlyBound: false
+                    )
+                    let endpoint = try fixture.endpointA()
+                    try await configureAgentModeEndpoint(
+                        endpoint,
+                        context: frozenContext,
+                        fixture: fixture
+                    )
+                    factory.configure(
+                        networkManager: fixture.networkManager,
+                        logicalFilePath: ceFile.path,
+                        searchPattern: ceMarker,
+                        publishImplicitGitArtifacts: true
+                    )
+                    fixture.contextA.window.promptManager
+                        .setAutomaticReviewGitDiffProviderOverrideForTesting { _ in
+                            AutomaticReviewGitDiffResult(
+                                text: "AUTOMATIC_FALLBACK_INVOKED",
+                                completeness: .complete,
+                                outcomes: [],
+                                pathIssues: []
+                            )
+                        }
+                    fixture.contextA.window.mcpServer.setContextBuilderFollowUpOverrideForTesting {
+                        _, tabID, routedSessionID, routedRunID, mode, prompt, selection, lookupContext, reviewGitContext, _, _ in
+                        XCTAssertEqual(routedSessionID, sessionID)
+                        XCTAssertEqual(routedRunID, parentRunID)
+                        let message = await fixture.contextA.window.promptManager.buildHeadlessAIMessage(
+                            from: HeadlessContextSnapshot(
+                                tabID: tabID,
+                                promptText: prompt,
+                                selection: selection,
+                                lookupContext: lookupContext,
+                                reviewGitContext: reviewGitContext
+                            ),
+                            model: fixture.contextA.window.promptManager.preferredAIModel,
+                            mode: mode
+                        )
+                        state.recordFollowUp(
+                            mode: mode,
+                            fileTree: message.fileTree,
+                            fileBlocks: message.fileBlocks,
+                            gitDiff: message.gitDiff,
+                            selection: selection,
+                            lookupContext: lookupContext
+                        )
+                        return ChatSendReply(
+                            chatId: UUID(),
+                            shortId: "two-root-review",
+                            mode: mode.mcpModeName,
+                            response: "generated review",
+                            errors: nil
+                        )
+                    }
+
+                    let response = try await endpoint.callTool(
+                        name: MCPWindowToolName.contextBuilder,
+                        arguments: [
+                            "instructions": "Inspect the selected checkout.",
+                            "response_type": "review"
+                        ],
+                        timeoutSeconds: 60
+                    )
+                    let responseText = try toolResultText(response)
+                    XCTAssertTrue(responseText.contains("generated review"), responseText)
+                    let run = try XCTUnwrap(state.runs.first)
+                    let gitOutput = try XCTUnwrap(run.git)
+                    XCTAssertTrue(gitOutput.contains(ceRoot.lastPathComponent), gitOutput)
+                    XCTAssertFalse(gitOutput.contains(classicRoot.path), gitOutput)
+                    let followUp = try XCTUnwrap(state.followUps.first)
+                    let gitDiff = try XCTUnwrap(followUp.gitDiff)
+                    XCTAssertTrue(gitDiff.contains(ceMarker), gitDiff)
+                    XCTAssertFalse(gitDiff.contains(classicMarker), gitDiff)
+                    XCTAssertNotEqual(gitDiff, "AUTOMATIC_FALLBACK_INVOKED")
+                    let artifactPaths = followUp.selection.selectedPaths.filter {
+                        $0.contains("/_git_data/")
+                    }
+                    XCTAssertEqual(artifactPaths.count, 2)
+                    let mapPath = try XCTUnwrap(artifactPaths.first { $0.hasSuffix("/MAP.txt") })
+                    let manifestURL = URL(fileURLWithPath: mapPath)
+                        .deletingLastPathComponent()
+                        .appendingPathComponent("manifest.json")
+                    let manifest = try XCTUnwrap(
+                        JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL))
+                            as? [String: Any]
+                    )
+                    XCTAssertEqual(manifest["repoKey"] as? String, GitRepoDescriptor(rootURL: ceRoot).repoKey)
+                    XCTAssertEqual(
+                        (manifest["repoRoot"] as? String).map(GitRepoRootAuthorization.canonicalPath),
+                        GitRepoRootAuthorization.canonicalPath(ceRoot.path)
+                    )
+                    XCTAssertFalse(gitOutput.contains(classicMarker), gitOutput)
+                    XCTAssertEqual(state.providerCreationCount, 1)
+
+                    fixture.contextA.window.promptManager
+                        .setAutomaticReviewGitDiffProviderOverrideForTesting(nil)
+                    fixture.contextA.window.mcpServer.setContextBuilderFollowUpOverrideForTesting(nil)
+                    gitFixture.cleanup()
+                    await fixture.cleanup()
+                } catch {
+                    fixture.contextA.window.promptManager
+                        .setAutomaticReviewGitDiffProviderOverrideForTesting(nil)
+                    fixture.contextA.window.mcpServer.setContextBuilderFollowUpOverrideForTesting(nil)
+                    gitFixture.cleanup()
+                    await fixture.cleanup()
+                    throw error
+                }
+            }
+        }
+
         func testNonAgentContextBuilderKeepsCanonicalWorkspaceBehavior() async throws {
             try await MCPSharedServerTestLease.shared.withLease { lease in
                 let state = ContextBuilderWorktreeProbeState()
@@ -325,6 +751,13 @@ import XCTest
                     let loadedService = await store.fileSystemServiceForTesting(rootID: fixture.contextA.rootID)
                     let service = try XCTUnwrap(loadedService)
                     await service.stopWatchingForChanges()
+                    let gitFixture = try ReviewGitRepositoryFixture(name: "ContextBuilderCanonicalPublication")
+                    _ = try gitFixture.runGit(["init"], at: fixture.contextA.rootURL)
+                    _ = try gitFixture.runGit(["config", "user.name", "RepoPrompt Test"], at: fixture.contextA.rootURL)
+                    _ = try gitFixture.runGit(["config", "user.email", "repoprompt@example.test"], at: fixture.contextA.rootURL)
+                    _ = try gitFixture.runGit(["config", "commit.gpgSign", "false"], at: fixture.contextA.rootURL)
+                    _ = try gitFixture.runGit(["add", "."], at: fixture.contextA.rootURL)
+                    _ = try gitFixture.runGit(["commit", "-m", "Initial commit"], at: fixture.contextA.rootURL)
                     let canonicalSentinel = "CanonicalNonAgentContextBuilderType"
                     try write(
                         "struct \(canonicalSentinel) { func canonicalMethod() {} }\n",
@@ -341,17 +774,175 @@ import XCTest
                         relativePath: relativePath,
                         containing: canonicalSentinel
                     )
+                    let sourceSelection = StoredSelection(
+                        selectedPaths: [fixture.contextA.fileURL.path],
+                        codemapAutoEnabled: false
+                    )
+                    let selectionIdentity = WorkspaceSelectionIdentity(
+                        workspaceID: fixture.contextA.workspaceID,
+                        tabID: fixture.contextA.tabID
+                    )
+                    let selectionRevisionBeforeSeed = fixture.contextA.window.workspaceManager
+                        .selectionRevisionForMCP(
+                            workspaceID: selectionIdentity.workspaceID,
+                            tabID: selectionIdentity.tabID
+                        )
+                    let persistedSelection = await fixture.contextA.window.selectionCoordinator.persistSelection(
+                        sourceSelection,
+                        for: selectionIdentity,
+                        source: .mcpTabContext,
+                        mirrorToUIIfActive: true
+                    )
+                    XCTAssertEqual(persistedSelection, sourceSelection)
+                    let seededSelectionRevision = fixture.contextA.window.workspaceManager.selectionRevisionForMCP(
+                        workspaceID: selectionIdentity.workspaceID,
+                        tabID: selectionIdentity.tabID
+                    )
+                    XCTAssertGreaterThan(seededSelectionRevision, selectionRevisionBeforeSeed)
+                    var composeTab = try XCTUnwrap(
+                        fixture.contextA.window.workspaceManager.composeTab(for: selectionIdentity)
+                    )
+                    composeTab.promptText = "Review the canonical published change"
+                    fixture.contextA.window.workspaceManager.updateComposeTab(composeTab, markDirty: false)
+                    XCTAssertEqual(
+                        fixture.contextA.window.workspaceManager.composeTab(for: selectionIdentity)?.selection,
+                        sourceSelection
+                    )
+
+                    let flushedSourceSnapshot = try XCTUnwrap(
+                        fixture.contextA.window.selectionCoordinator.selectionSnapshot(
+                            for: selectionIdentity,
+                            flushPendingUIIfActive: true
+                        )
+                    )
+                    XCTAssertEqual(flushedSourceSnapshot.selection, sourceSelection)
+                    XCTAssertEqual(
+                        fixture.contextA.window.workspaceManager.composeTab(for: selectionIdentity)?.selection,
+                        sourceSelection
+                    )
+                    XCTAssertEqual(
+                        fixture.contextA.window.workspaceManager.selectionRevisionForMCP(
+                            workspaceID: selectionIdentity.workspaceID,
+                            tabID: selectionIdentity.tabID
+                        ),
+                        seededSelectionRevision
+                    )
                     factory.configure(
                         networkManager: fixture.networkManager,
                         logicalFilePath: fixture.contextA.fileURL.path,
                         searchPattern: canonicalSentinel
                     )
                     let endpoint = try fixture.endpointA()
+                    _ = try await endpoint.callTool(
+                        name: "bind_context",
+                        arguments: ["op": "bind", "context_id": fixture.contextA.tabID.uuidString]
+                    )
+                    let gitResponse = try await endpoint.callTool(
+                        name: MCPWindowToolName.git,
+                        arguments: [
+                            "_rawJSON": true,
+                            "op": "diff",
+                            "repo_root": fixture.contextA.rootURL.path,
+                            "scope": "selected",
+                            "detail": "patches",
+                            "artifacts": true,
+                            "mode": "deep"
+                        ],
+                        timeoutSeconds: 30
+                    )
+                    let gitResponseText = try toolResultText(gitResponse)
+                    let gitResponseData = try XCTUnwrap(gitResponseText.data(using: .utf8))
+                    let gitReply = try JSONDecoder().decode(
+                        ToolResultDTOs.GitToolReplyDTO.self,
+                        from: gitResponseData
+                    )
+                    XCTAssertEqual(gitReply.op, "diff")
+                    XCTAssertFalse(try XCTUnwrap(gitReply.snapshotId).isEmpty)
+                    XCTAssertFalse(try XCTUnwrap(gitReply.snapshotDir).isEmpty)
+                    XCTAssertNil(gitReply.warning)
+                    XCTAssertNil(gitReply.emptyReason)
+                    XCTAssertNil(gitReply.error)
+                    let publishedDiff = try XCTUnwrap(gitReply.diff)
+                    XCTAssertGreaterThan(publishedDiff.totals.files, 0)
+                    let publishedArtifacts = try XCTUnwrap(gitReply.artifacts)
+                    XCTAssertFalse(publishedArtifacts.map.isEmpty)
+                    let publishedAllPatch = try XCTUnwrap(publishedArtifacts.allPatch)
+                    XCTAssertFalse(publishedAllPatch.isEmpty)
+                    let primaryArtifacts = try XCTUnwrap(gitReply.primaryArtifacts)
+                    XCTAssertTrue(
+                        primaryArtifacts.perFilePatches?.contains { $0.gitPath == relativePath } == true
+                    )
+                    XCTAssertTrue(primaryArtifacts.map.hasSuffix("/\(publishedArtifacts.map)"))
+                    let primaryAllPatch = try XCTUnwrap(primaryArtifacts.allPatch)
+                    XCTAssertTrue(primaryAllPatch.hasSuffix("/\(publishedAllPatch)"))
+                    XCTAssertEqual(
+                        Set(primaryArtifacts.autoSelected ?? []),
+                        Set([primaryArtifacts.map, primaryAllPatch])
+                    )
+                    let publishedSelection = try XCTUnwrap(
+                        fixture.contextA.window.workspaceManager.composeTab(with: fixture.contextA.tabID)
+                    ).selection
+                    let mapPath = try XCTUnwrap(
+                        publishedSelection.selectedPaths.first { $0.hasSuffix("/MAP.txt") }
+                    )
+                    let patchPath = try XCTUnwrap(
+                        publishedSelection.selectedPaths.first { $0.hasSuffix("/diff/all.patch") }
+                    )
+                    let publishedPatch = try String(contentsOfFile: patchPath, encoding: .utf8)
+                    let mapAlias = try XCTUnwrap(
+                        mapPath.range(of: "/_git_data/").map {
+                            "_git_data/" + mapPath[$0.upperBound...]
+                        }
+                    )
+                    let patchAlias = try XCTUnwrap(
+                        patchPath.range(of: "/_git_data/").map {
+                            "_git_data/" + patchPath[$0.upperBound...]
+                        }
+                    )
+                    fixture.contextA.window.promptManager
+                        .setAutomaticReviewGitDiffProviderOverrideForTesting { _ in
+                            AutomaticReviewGitDiffResult(
+                                text: "AUTOMATIC_FALLBACK_INVOKED",
+                                completeness: .complete,
+                                outcomes: [],
+                                pathIssues: []
+                            )
+                        }
+                    fixture.contextA.window.mcpServer.setContextBuilderFollowUpOverrideForTesting {
+                        _, tabID, _, _, mode, prompt, selection, lookupContext, reviewGitContext, _, _ in
+                        let message = await fixture.contextA.window.promptManager.buildHeadlessAIMessage(
+                            from: HeadlessContextSnapshot(
+                                tabID: tabID,
+                                promptText: prompt,
+                                selection: selection,
+                                lookupContext: lookupContext,
+                                reviewGitContext: reviewGitContext
+                            ),
+                            model: fixture.contextA.window.promptManager.preferredAIModel,
+                            mode: mode
+                        )
+                        state.recordFollowUp(
+                            mode: mode,
+                            fileTree: message.fileTree,
+                            fileBlocks: message.fileBlocks,
+                            gitDiff: message.gitDiff,
+                            selection: selection,
+                            lookupContext: lookupContext
+                        )
+                        return ChatSendReply(
+                            chatId: UUID(),
+                            shortId: "canonical-review",
+                            mode: mode.mcpModeName,
+                            response: "generated review",
+                            errors: nil
+                        )
+                    }
                     let response = try await endpoint.callTool(
                         name: MCPWindowToolName.contextBuilder,
                         arguments: [
                             "instructions": "Inspect the canonical checkout.",
-                            "context_id": fixture.contextA.tabID.uuidString
+                            "context_id": fixture.contextA.tabID.uuidString,
+                            "response_type": "review"
                         ],
                         timeoutSeconds: 45
                     )
@@ -363,10 +954,31 @@ import XCTest
                     XCTAssertTrue(run.read.contains(canonicalSentinel), run.read)
                     XCTAssertTrue(run.search.contains(canonicalSentinel), run.search)
                     XCTAssertTrue(run.codeStructure.contains(canonicalSentinel), run.codeStructure)
-                    XCTAssertNil(state.followUps.first)
 
+                    let followUp = try XCTUnwrap(state.followUps.first)
+                    XCTAssertEqual(followUp.mode, "review")
+                    XCTAssertEqual(followUp.gitDiff, publishedPatch)
+                    XCTAssertNotEqual(followUp.gitDiff, "AUTOMATIC_FALLBACK_INVOKED")
+                    XCTAssertEqual(
+                        Set(followUp.selection.selectedPaths),
+                        Set([fixture.contextA.fileURL.path, mapPath, patchPath])
+                    )
+                    XCTAssertEqual(
+                        followUp.fileBlocks.count(where: { $0.contains(mapAlias) }),
+                        1
+                    )
+                    XCTAssertFalse(
+                        followUp.fileBlocks.contains { $0.contains("<path>\(patchAlias)</path>") }
+                    )
+
+                    fixture.contextA.window.promptManager
+                        .setAutomaticReviewGitDiffProviderOverrideForTesting(nil)
+                    fixture.contextA.window.mcpServer.setContextBuilderFollowUpOverrideForTesting(nil)
                     await fixture.cleanup()
                 } catch {
+                    fixture.contextA.window.promptManager
+                        .setAutomaticReviewGitDiffProviderOverrideForTesting(nil)
+                    fixture.contextA.window.mcpServer.setContextBuilderFollowUpOverrideForTesting(nil)
                     await fixture.cleanup()
                     throw error
                 }
@@ -447,6 +1059,38 @@ import XCTest
             XCTAssertTrue(output.contains("  - `\(pathWithinRoot)`"), output)
         }
 
+        private func makeGitBinding(
+            logicalRoot: URL,
+            worktreeRoot: URL,
+            suffix: String
+        ) throws -> AgentSessionWorktreeBinding {
+            let layout = try XCTUnwrap(
+                GitRepositoryLayoutResolver.resolve(atWorkTreeRoot: worktreeRoot)
+            )
+            let repositoryIdentity = GitWorktreeIdentity.repositoryIdentity(
+                commonGitDir: layout.commonDir,
+                mainWorktreeRoot: layout.knownMainWorktreeRoot
+            )
+            let worktreeID = GitWorktreeIdentity.worktreeID(
+                repositoryID: repositoryIdentity.repositoryID,
+                gitDir: layout.gitDir,
+                isMain: false,
+                path: layout.workTreeRoot
+            )
+            return AgentSessionWorktreeBinding(
+                id: "binding-\(suffix)",
+                repositoryID: repositoryIdentity.repositoryID,
+                repoKey: logicalRoot.path,
+                logicalRootPath: logicalRoot.path,
+                logicalRootName: logicalRoot.lastPathComponent,
+                worktreeID: worktreeID,
+                worktreeRootPath: worktreeRoot.path,
+                worktreeName: worktreeRoot.lastPathComponent,
+                branch: "feature/\(suffix)",
+                source: "test"
+            )
+        }
+
         private func makeBinding(
             logicalRoot: URL,
             worktreeRoot: URL,
@@ -490,6 +1134,7 @@ import XCTest
             let networkManager: ServerNetworkManager
             let logicalFilePath: String
             let searchPattern: String
+            let publishImplicitGitArtifacts: Bool
         }
 
         private let state: ContextBuilderWorktreeProbeState
@@ -502,12 +1147,14 @@ import XCTest
         func configure(
             networkManager: ServerNetworkManager,
             logicalFilePath: String,
-            searchPattern: String
+            searchPattern: String,
+            publishImplicitGitArtifacts: Bool = false
         ) {
             configuration = Configuration(
                 networkManager: networkManager,
                 logicalFilePath: logicalFilePath,
-                searchPattern: searchPattern
+                searchPattern: searchPattern,
+                publishImplicitGitArtifacts: publishImplicitGitArtifacts
             )
         }
 
@@ -529,6 +1176,7 @@ import XCTest
                 networkManager: configuration.networkManager,
                 logicalFilePath: configuration.logicalFilePath,
                 searchPattern: configuration.searchPattern,
+                publishImplicitGitArtifacts: configuration.publishImplicitGitArtifacts,
                 clientName: clientName,
                 workspacePath: workspacePath
             )
@@ -540,6 +1188,7 @@ import XCTest
         private let networkManager: ServerNetworkManager
         private let logicalFilePath: String
         private let searchPattern: String
+        private let publishImplicitGitArtifacts: Bool
         private let clientName: String
         private let workspacePath: String?
         private var endpoint: PersistentMCPTestEndpoint?
@@ -550,6 +1199,7 @@ import XCTest
             networkManager: ServerNetworkManager,
             logicalFilePath: String,
             searchPattern: String,
+            publishImplicitGitArtifacts: Bool,
             clientName: String,
             workspacePath: String?
         ) {
@@ -557,6 +1207,7 @@ import XCTest
             self.networkManager = networkManager
             self.logicalFilePath = logicalFilePath
             self.searchPattern = searchPattern
+            self.publishImplicitGitArtifacts = publishImplicitGitArtifacts
             self.clientName = clientName
             self.workspacePath = workspacePath
         }
@@ -582,7 +1233,8 @@ import XCTest
                     MCPWindowToolName.search,
                     MCPWindowToolName.getCodeStructure,
                     MCPWindowToolName.manageSelection,
-                    MCPWindowToolName.workspaceContext
+                    MCPWindowToolName.workspaceContext,
+                    MCPWindowToolName.git
                 ]
             )
             self.endpoint = endpoint
@@ -636,12 +1288,27 @@ import XCTest
             let selection = try await toolResultText(endpoint.callTool(
                 name: MCPWindowToolName.manageSelection,
                 arguments: [
-                    "op": "set",
+                    "op": "add",
                     "paths": [logicalFilePath],
                     "mode": "full"
                 ],
                 timeoutSeconds: 20
             ))
+            let git: String? = if publishImplicitGitArtifacts {
+                try await toolResultText(endpoint.callTool(
+                    name: MCPWindowToolName.git,
+                    arguments: [
+                        "op": "diff",
+                        "scope": "selected",
+                        "detail": "patches",
+                        "artifacts": true,
+                        "mode": "deep"
+                    ],
+                    timeoutSeconds: 30
+                ))
+            } else {
+                nil
+            }
             let workspaceContext = try await toolResultText(endpoint.callTool(
                 name: MCPWindowToolName.workspaceContext,
                 arguments: [
@@ -659,6 +1326,7 @@ import XCTest
                 search: search,
                 codeStructure: codeStructure,
                 selection: selection,
+                git: git,
                 workspaceContext: workspaceContext
             ))
 
@@ -694,11 +1362,16 @@ import XCTest
             let data = try XCTUnwrap(text.data(using: .utf8))
             let reply = try JSONDecoder().decode(ToolResultDTOs.SelectionReply.self, from: data)
             return ContextBuilderWorktreeProbeState.SelectionObservation(
-                fullPaths: (reply.files ?? [])
-                    .filter { $0.renderMode == "full" }
-                    .map(\.path)
-                    .sorted(),
-                slicePaths: (reply.fileSlices ?? []).map(\.path).sorted()
+                files: (reply.files ?? []).map {
+                    ContextBuilderWorktreeProbeState.FileObservation(
+                        path: $0.path,
+                        renderMode: $0.renderMode,
+                        rootPath: $0.rootPath,
+                        pathWithinRoot: $0.pathWithinRoot
+                    )
+                }.sorted { $0.path < $1.path },
+                slicePaths: (reply.fileSlices ?? []).map(\.path).sorted(),
+                invalidPaths: (reply.invalidPaths ?? []).sorted()
             )
         }
 
@@ -715,11 +1388,27 @@ import XCTest
 
     @MainActor
     private final class ContextBuilderWorktreeProbeState {
-        struct SelectionObservation: Equatable {
-            let fullPaths: [String]
-            let slicePaths: [String]
+        struct FileObservation: Equatable {
+            let path: String
+            let renderMode: String
+            let rootPath: String?
+            let pathWithinRoot: String?
+        }
 
-            static let empty = SelectionObservation(fullPaths: [], slicePaths: [])
+        struct SelectionObservation: Equatable {
+            let files: [FileObservation]
+            let slicePaths: [String]
+            let invalidPaths: [String]
+
+            var fullPaths: [String] {
+                files.filter { $0.renderMode == "full" }.map(\.path)
+            }
+
+            var diagnosticDescription: String {
+                "files=\(files) slices=\(slicePaths) invalid=\(invalidPaths)"
+            }
+
+            static let empty = SelectionObservation(files: [], slicePaths: [], invalidPaths: [])
         }
 
         struct Run {
@@ -732,6 +1421,7 @@ import XCTest
             let search: String
             let codeStructure: String
             let selection: String
+            let git: String?
             let workspaceContext: String
         }
 

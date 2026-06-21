@@ -48,6 +48,7 @@ final class ContextBuilderWorkspaceContextTests: XCTestCase {
         let context = try await ContextBuilderWorkspaceContext.resolve(
             from: snapshot,
             workspaceRepoPaths: [logicalRoot.path],
+            workspaceDirectoryPath: logicalRoot.path,
             store: store
         )
 
@@ -102,11 +103,13 @@ final class ContextBuilderWorkspaceContextTests: XCTestCase {
         let context = try await ContextBuilderWorkspaceContext.resolve(
             from: snapshot,
             workspaceRepoPaths: [logicalRoot.path],
+            workspaceDirectoryPath: logicalRoot.path,
             store: store
         )
 
         XCTAssertEqual(context.providerWorkspacePath, logicalRoot.standardizedFileURL.path)
         XCTAssertNil(context.lookupContext.bindingProjection)
+        XCTAssertEqual(context.reviewTargetResolution, .unavailable(.emptySelection))
 
         _ = try await store.loadRoot(path: otherWorkspaceRoot.path)
         let frozenRoots = await store.rootRefs(scope: context.lookupContext.rootScope)
@@ -117,6 +120,154 @@ final class ContextBuilderWorkspaceContextTests: XCTestCase {
         let nestedLookupContext = try XCTUnwrap(nested.frozenLookupContext)
         let nestedRoots = await store.rootRefs(scope: nestedLookupContext.rootScope)
         XCTAssertEqual(Set(nestedRoots.map(\.standardizedFullPath)), Set([logicalRoot.standardizedFileURL.path]))
+    }
+
+    func testTwoRootUnboundSliceElectsSelectedRepositoryAndIgnoresCrossRootAutoCodemap() async throws {
+        let fixture = try ReviewGitRepositoryFixture(name: "ContextBuilderTwoRootElection")
+        defer { fixture.cleanup() }
+        let classic = try fixture.makeRepository(
+            named: "classic",
+            files: ["Sources/Classic.swift": "let classic = true\n"]
+        )
+        let selected = try fixture.makeRepository(
+            named: "ce",
+            files: ["Sources/Selected.swift": "let selected = true\n"]
+        )
+        let classicFile = classic.appendingPathComponent("Sources/Classic.swift")
+        let selectedFile = selected.appendingPathComponent("Sources/Selected.swift")
+        let store = WorkspaceFileContextStore()
+        _ = try await store.loadRoot(path: classic.path, kind: .primaryWorkspace)
+        _ = try await store.loadRoot(path: selected.path, kind: .primaryWorkspace)
+
+        let snapshot = MCPServerViewModel.TabContextSnapshot(
+            tabID: UUID(),
+            windowID: 46,
+            workspaceID: UUID(),
+            promptText: "Review selected CE file",
+            selection: StoredSelection(
+                selectedPaths: [],
+                autoCodemapPaths: [classicFile.path],
+                slices: [selectedFile.path: [LineRange(start: 1, end: 1)]],
+                codemapAutoEnabled: true
+            ),
+            selectionRevision: 37,
+            selectedMetaPromptIDs: [],
+            tabName: "Two root",
+            runID: UUID(),
+            activeAgentSessionID: UUID(),
+            worktreeBindings: [],
+            explicitlyBound: false
+        )
+
+        let context = try await ContextBuilderWorkspaceContext.resolve(
+            from: snapshot,
+            workspaceRepoPaths: [classic.path, selected.path],
+            workspaceDirectoryPath: fixture.sandbox.path,
+            store: store
+        )
+
+        let target = try XCTUnwrap(context.reviewTargetResolution.availableTarget)
+        XCTAssertEqual(target.checkouts.count, 1)
+        XCTAssertEqual(
+            target.primaryCheckout.checkoutRootPath,
+            GitRepoRootAuthorization.canonicalPath(selected.path)
+        )
+        XCTAssertEqual(context.providerWorkspacePath, selected.standardizedFileURL.path)
+        XCTAssertFalse(target.initialOrdinarySelectionIdentities.contains(classicFile.path))
+        let nested = context.nestedDiscoveryTabContext(runID: UUID())
+        XCTAssertEqual(nested.selectionRevision, 37)
+        XCTAssertEqual(nested.contextBuilderReviewTargetResolution, context.reviewTargetResolution)
+
+        try await context.validateFinalReviewSelection(
+            StoredSelection(selectedPaths: [selectedFile.path], codemapAutoEnabled: false),
+            workspaceID: target.workspaceID,
+            tabID: target.tabID,
+            selectionRevision: 38,
+            store: store
+        )
+
+        do {
+            try await context.validateFinalReviewSelection(
+                StoredSelection(selectedPaths: [selectedFile.path], codemapAutoEnabled: false),
+                workspaceID: UUID(),
+                tabID: target.tabID,
+                selectionRevision: 39,
+                store: store
+            )
+            XCTFail("Expected final selection workspace provenance mismatch to fail")
+        } catch let reason as ContextBuilderReviewTargetUnavailableReason {
+            XCTAssertEqual(reason, .workspaceOrTabMismatch)
+        }
+
+        do {
+            try await context.validateFinalReviewSelection(
+                StoredSelection(selectedPaths: [classicFile.path], codemapAutoEnabled: false),
+                workspaceID: target.workspaceID,
+                tabID: target.tabID,
+                selectionRevision: 40,
+                store: store
+            )
+            XCTFail("Expected final selection ownership outside the frozen CE target to fail")
+        } catch let reason as ContextBuilderReviewTargetUnavailableReason {
+            XCTAssertEqual(reason, .selectionOwnershipChanged)
+        }
+
+        await store.unloadRoot(id: target.primaryCheckout.physicalWorkspaceRoot.id)
+        let staleReason = await ContextBuilderReviewTargetResolver().revalidate(target, store: store)
+        XCTAssertEqual(staleReason, .staleWorkspaceRoot)
+    }
+
+    func testResolveWithoutBindingsFreezesVisibleLinkedCheckoutAuthority() async throws {
+        let fixture = try ReviewGitRepositoryFixture(name: "ContextBuilderVisibleLinked")
+        defer { fixture.cleanup() }
+
+        let canonical = try fixture.makeRepository(named: "canonical")
+        let linked = try fixture.makeLinkedWorktree(
+            from: canonical,
+            named: "linked",
+            branch: "feature/context-builder-visible"
+        )
+        let workspaceDirectory = fixture.sandbox.appendingPathComponent(
+            "workspace",
+            isDirectory: true
+        )
+        let gitDataRoot = workspaceDirectory.appendingPathComponent("_git_data", isDirectory: true)
+        try FileManager.default.createDirectory(at: gitDataRoot, withIntermediateDirectories: true)
+
+        let store = WorkspaceFileContextStore()
+        _ = try await store.loadRoot(path: linked.path, kind: .primaryWorkspace)
+        _ = try await store.loadRoot(path: gitDataRoot.path, kind: .workspaceGitData)
+        let snapshot = MCPServerViewModel.TabContextSnapshot(
+            tabID: UUID(),
+            windowID: 45,
+            workspaceID: UUID(),
+            promptText: "Review visible linked checkout",
+            selection: StoredSelection(codemapAutoEnabled: false),
+            selectedMetaPromptIDs: [],
+            tabName: "Visible linked",
+            runID: UUID(),
+            activeAgentSessionID: UUID(),
+            worktreeBindings: [],
+            explicitlyBound: false
+        )
+
+        let context = try await ContextBuilderWorkspaceContext.resolve(
+            from: snapshot,
+            workspaceRepoPaths: [linked.path],
+            workspaceDirectoryPath: workspaceDirectory.path,
+            store: store
+        )
+
+        let capability = try XCTUnwrap(context.reviewGitContext.artifactCapability)
+        XCTAssertTrue(capability.boundCheckouts.isEmpty)
+        XCTAssertEqual(capability.visibleRootCheckouts.count, 1)
+        XCTAssertEqual(capability.visibleRootCheckouts.first?.kind, .linkedWorktree)
+        XCTAssertEqual(
+            capability.visibleRootCheckouts.first?.visibleRootPath,
+            GitRepoRootAuthorization.canonicalPath(linked.path)
+        )
+        XCTAssertEqual(context.providerWorkspacePath, linked.standardizedFileURL.path)
+        XCTAssertNil(context.lookupContext.bindingProjection)
     }
 
     func testResolveFailsClosedWhenWorktreeBindingStateIsUnhydrated() async throws {
@@ -142,6 +293,7 @@ final class ContextBuilderWorkspaceContextTests: XCTestCase {
             _ = try await ContextBuilderWorkspaceContext.resolve(
                 from: snapshot,
                 workspaceRepoPaths: [logicalRoot.path],
+                workspaceDirectoryPath: logicalRoot.path,
                 store: store
             )
             XCTFail("Expected unhydrated binding state to fail closed")
@@ -197,6 +349,7 @@ final class ContextBuilderWorkspaceContextTests: XCTestCase {
             _ = try await ContextBuilderWorkspaceContext.resolve(
                 from: snapshot,
                 workspaceRepoPaths: [logicalRoot.path],
+                workspaceDirectoryPath: logicalRoot.path,
                 store: store
             )
             XCTFail("Expected unavailable inherited worktree to fail closed")

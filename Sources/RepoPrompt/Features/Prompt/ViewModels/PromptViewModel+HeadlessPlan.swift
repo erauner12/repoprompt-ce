@@ -26,16 +26,21 @@ struct HeadlessContextSnapshot {
     /// Frozen logical-to-physical workspace projection for this request.
     let lookupContext: WorkspaceLookupContext?
 
+    /// Frozen artifact authority, comparison intent, and logical checkout labels.
+    let reviewGitContext: FrozenPromptGitReviewContext
+
     init(
         tabID: UUID,
         promptText: String,
         selection: StoredSelection,
-        lookupContext: WorkspaceLookupContext? = nil
+        lookupContext: WorkspaceLookupContext? = nil,
+        reviewGitContext: FrozenPromptGitReviewContext
     ) {
         self.tabID = tabID
         self.promptText = promptText
         self.selection = selection
         self.lookupContext = lookupContext
+        self.reviewGitContext = reviewGitContext
     }
 }
 
@@ -56,8 +61,7 @@ extension PromptViewModel {
         from snapshot: HeadlessContextSnapshot,
         model: AIModel,
         mode: HeadlessMode = .plan,
-        gitScopeOverride: GitInclusion? = nil,
-        gitBaseOverride: String? = nil
+        gitScopeOverride: GitInclusion? = nil
     ) async -> AIMessage {
         let effectiveGitScope = mode == .review ? (gitScopeOverride ?? .selected) : .none
         let headlessConfig = PromptContextResolved(
@@ -74,7 +78,7 @@ extension PromptViewModel {
             cfg: headlessConfig,
             selection: snapshot.selection,
             lookupContext: snapshot.lookupContext ?? allLoadedWorkspaceLookupContext(),
-            gitBaseOverride: gitBaseOverride
+            reviewGitContext: snapshot.reviewGitContext
         )
         let (_, codeEntries) = PromptPackagingService.partitionPromptEntriesForGitDiff(preAssembly.entries)
 

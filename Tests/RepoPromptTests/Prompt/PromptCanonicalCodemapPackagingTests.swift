@@ -285,7 +285,8 @@ final class PromptCanonicalCodemapPackagingTests: XCTestCase {
                     slices: [logicalSelectedURL.path: [LineRange(start: 2, end: 2)]],
                     codemapAutoEnabled: true
                 ),
-                lookupContext: lookupContext
+                lookupContext: lookupContext,
+                reviewGitContext: .automaticOnly()
             ),
             model: prompt.preferredAIModel,
             mode: .plan
