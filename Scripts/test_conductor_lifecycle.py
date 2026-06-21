@@ -672,9 +672,11 @@ class XCTestStallWatchdogTests(LifecycleTestCase):
         jobs = [
             ("build", {}, "pipe"),
             ("test", {}, "pipe"),
+            ("core-test", {}, "pipe"),
             ("provider-test", {}, "pipe"),
             ("test", {"list": True, "xctestStallSeconds": 5.0}, "pipe"),
             ("test", {"xctestStallSeconds": 5.0}, "pty"),
+            ("core-test", {"xctestStallSeconds": 5.0}, "pty"),
             ("provider-test", {"xctestStallSeconds": 5.0}, "pty"),
             ("test", {"xctestStallSeconds": 5.0, "xctestStallWakeProbe": True}, "pty"),
         ]
@@ -1236,13 +1238,27 @@ class XCTestStallWatchdogTests(LifecycleTestCase):
         root_argv, root_lanes, root_cwd, _env, _timeout = registry.prepare(
             {"operation": "test", "args": {"list": True}}
         )
+        core_argv, core_lanes, core_cwd, _env, _timeout = registry.prepare(
+            {"operation": "core-test", "args": {"list": True}}
+        )
         provider_argv, provider_lanes, provider_cwd, _env, _timeout = registry.prepare(
             {"operation": "provider-test", "args": {"list": True}}
         )
 
-        self.assertEqual(root_argv, ["swift", "test", "list"])
+        self.assertEqual(root_argv, [
+            sys.executable,
+            str(state.paths.repo_root / "Scripts" / "list_swift_tests.py"),
+            "RepoPromptTests",
+        ])
         self.assertEqual(root_lanes, ["build"])
         self.assertEqual(root_cwd, state.paths.repo_root)
+        self.assertEqual(core_argv, [
+            sys.executable,
+            str(state.paths.repo_root / "Scripts" / "list_swift_tests.py"),
+            "RepoPromptCoreTests",
+        ])
+        self.assertEqual(core_lanes, ["build"])
+        self.assertEqual(core_cwd, state.paths.repo_root)
         self.assertEqual(provider_argv, ["swift", "test", "list"])
         self.assertEqual(provider_lanes, ["build"])
         self.assertEqual(
@@ -1268,6 +1284,41 @@ class XCTestStallWatchdogTests(LifecycleTestCase):
                 {
                     "operation": "test",
                     "args": {"list": True, "filter": "ExampleTests"},
+                }
+            )
+
+    def test_test_filters_are_fenced_to_their_lane_module(self) -> None:
+        tmp, state = self.make_state()
+        self.addCleanup(tmp.cleanup)
+        registry = conductor.OperationRegistry(state.paths.repo_root)
+
+        root_argv, *_ = registry.prepare(
+            {"operation": "test", "args": {"filter": "ExampleTests/testBehavior"}}
+        )
+        core_argv, *_ = registry.prepare(
+            {"operation": "core-test", "args": {"filter": "ExampleTests/testBehavior"}}
+        )
+        self.assertEqual(
+            root_argv,
+            ["swift", "test", "--filter", "RepoPromptTests.ExampleTests/testBehavior"],
+        )
+        self.assertEqual(
+            core_argv,
+            ["swift", "test", "--filter", "RepoPromptCoreTests.ExampleTests/testBehavior"],
+        )
+
+        with self.assertRaisesRegex(conductor.ConductorError, "cannot target test module"):
+            registry.prepare(
+                {
+                    "operation": "core-test",
+                    "args": {"filter": "RepoPromptTests.ExampleTests/testBehavior"},
+                }
+            )
+        with self.assertRaisesRegex(conductor.ConductorError, "cannot target test module"):
+            registry.prepare(
+                {
+                    "operation": "test",
+                    "args": {"filter": "RepoPromptCoreTests.ExampleTests/testBehavior"},
                 }
             )
 

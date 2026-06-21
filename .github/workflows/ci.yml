@@ -64,6 +64,9 @@ jobs:
       - name: Build headless scaffold product
         run: swift build --product repoprompt-headless
 
+      - name: Run Core tests
+        run: swift test --filter RepoPromptCoreTests
+
       - name: Run app tests
         shell: bash
         run: |
@@ -90,7 +93,7 @@ jobs:
           suites = sorted({
               line.split("/", 1)[0]
               for line in listed.stdout.splitlines()
-              if "/" in line
+              if "/" in line and line.startswith("RepoPromptTests.")
           })
 
           def descendant_process_groups(root_pid):

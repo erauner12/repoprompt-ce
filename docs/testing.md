@@ -26,6 +26,8 @@ Focused daemon-coordinated examples:
 ```bash
 make dev-test FILTER=RepoPromptTests.ExampleTests
 make dev-test FILTER=RepoPromptTests.ExampleTests/testBehavior
+make dev-core-test FILTER=RepoPromptCoreTests.ExampleTests
+make dev-core-test FILTER=RepoPromptCoreTests.ExampleTests/testBehavior
 make dev-provider-test FILTER=RepoPromptClaudeCompatibleProviderTests.ExampleTests
 make dev-provider-test FILTER=RepoPromptClaudeCompatibleProviderTests.ExampleTests/testBehavior
 ```
@@ -38,6 +40,7 @@ Never derive the executable census from source text or a stale build. The curren
 
 ```bash
 make dev-test-list
+make dev-core-test-list
 make dev-provider-test-list
 ```
 
@@ -53,7 +56,7 @@ The seven reserved ledger prefixes and target names are:
 | `syntax-c-bridge/` | `RepoPromptSyntaxCBridgeTests` | `Tests/RepoPromptSyntaxCBridgeTests` |
 | `headless/` | `RepoPromptHeadlessTests` | `Tests/RepoPromptHeadlessTests` |
 
-`Scripts/test_suite_optimizer.py` reads the manifests before listing. A reserved prefix whose test target is absent contributes zero methods and triggers no conductor call. Once a test target is declared, its dedicated conductor/Make list lane is mandatory and must produce at least one executable XCTest ID. The declaration landing must document that new exact list command here.
+`Scripts/test_suite_optimizer.py` reads the manifests before listing. A reserved prefix whose test target is absent contributes zero methods and triggers no conductor call. Once a test target is declared, its dedicated conductor/Make list lane is mandatory and must produce at least one executable XCTest ID. `RepoPromptCoreTests` is now declared; use `make dev-core-test` and `make dev-core-test-list`. The other four isolated prefixes remain reserved and absent.
 
 Listed XCTest IDs are shaped as `<Module>.<Suite>/testMethod`; the curated ledger prepends the reserved prefix, for example:
 

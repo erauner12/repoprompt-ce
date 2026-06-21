@@ -153,9 +153,12 @@ make dev-swift-build PRODUCT=repoprompt-mcp         # focused product build (PRO
 make dev-swift-build TARGET=RepoPromptCore          # focused internal target build (the five Core-isolation production targets)
 make dev-run
 make dev-test                                       # full coordinated test suite
-make dev-test FILTER=WorkspaceFileContextStoreTests # focused coordinated test run
-make dev-test-list                                  # coordinated authoritative root XCTest method list
-make dev-provider-test                              # RepoPromptAgentProviders package tests (FILTER= also supported)
+make dev-test FILTER=WorkspaceFileContextStoreTests   # focused coordinated test run
+make dev-core-test FILTER=RepoPromptCoreTests.WorkspaceRootSyncTests
+```
+make dev-core-test                                   # isolated RepoPromptCore tests (FILTER= also supported)
+make dev-core-test-list                              # coordinated authoritative Core XCTest method list
+make dev-provider-test
 make dev-provider-test-list                         # coordinated authoritative provider XCTest method list
 make dev-smoke          # non-disruptive: requires an already-running CE debug app and installed debug CLI
 make dev-smoke-launch   # builds/launches the debug app, then runs the smoke flow

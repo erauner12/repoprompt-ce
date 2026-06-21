@@ -1,0 +1,143 @@
+import RepoPromptCore
+
+// Phase 2 temporary compatibility aliases.
+// Concrete implementations are owned by RepoPromptCore; these names preserve app call sites
+// until Phase 9 compatibility cleanup.
+
+// MARK: - Utilities and slices
+
+typealias StandardizedPath = RepoPromptCore.StandardizedPath
+typealias RelativePath = RepoPromptCore.RelativePath
+typealias CheckoutPathIdentity = RepoPromptCore.CheckoutPathIdentity
+typealias LineRange = RepoPromptCore.LineRange
+typealias SliceRangeMath = RepoPromptCore.SliceRangeMath
+typealias PathCharPolicy = RepoPromptCore.PathCharPolicy
+
+// MARK: - Workspace persistence
+
+typealias WorkspacePreset = RepoPromptCore.WorkspacePreset
+typealias StoredSelection = RepoPromptCore.StoredSelection
+typealias ContextBuilderOverrides = RepoPromptCore.ContextBuilderOverrides
+typealias ContextBuilderTabConfig = RepoPromptCore.ContextBuilderTabConfig
+typealias StashedTab = RepoPromptCore.StashedTab
+typealias ComposeTabState = RepoPromptCore.ComposeTabState
+typealias WorkspaceModel = RepoPromptCore.WorkspaceModel
+typealias CopyCustomizations = RepoPromptCore.CopyCustomizations
+typealias FileTreeOption = RepoPromptCore.FileTreeOption
+typealias CodeMapUsage = RepoPromptCore.CodeMapUsage
+typealias GitInclusion = RepoPromptCore.GitInclusion
+typealias FilesTab = RepoPromptCore.FilesTab
+
+// MARK: - Path matching and resolution
+
+typealias FileRecord = RepoPromptCore.FileRecord
+typealias FolderRecord = RepoPromptCore.FolderRecord
+typealias FileHierarchyReadable = RepoPromptCore.FileHierarchyReadable
+typealias FrozenFileRecord = RepoPromptCore.FrozenFileRecord
+typealias FrozenFolderRecord = RepoPromptCore.FrozenFolderRecord
+typealias PathMatchLocation = RepoPromptCore.PathMatchLocation
+typealias PathMatchCacheIdentity = RepoPromptCore.PathMatchCacheIdentity
+typealias PathLocateProfile = RepoPromptCore.PathLocateProfile
+typealias PathLocateOptions = RepoPromptCore.PathLocateOptions
+typealias FileCreationResult = RepoPromptCore.FileCreationResult
+typealias CreationResolutionMode = RepoPromptCore.CreationResolutionMode
+typealias FileCreationResolution = RepoPromptCore.FileCreationResolution
+typealias AnyItem = RepoPromptCore.AnyItem
+typealias WorkspaceRootRef = RepoPromptCore.WorkspaceRootRef
+typealias RootAliasOptions = RepoPromptCore.RootAliasOptions
+typealias RootAliasResolution = RepoPromptCore.RootAliasResolution
+typealias PathResolutionIssue = RepoPromptCore.PathResolutionIssue
+typealias ClientPathFormatter = RepoPromptCore.ClientPathFormatter
+
+// MARK: - Workspace context values
+
+typealias WorkspaceLookupRootScope = RepoPromptCore.WorkspaceLookupRootScope
+typealias LookupRootScope = RepoPromptCore.WorkspaceLookupRootScope
+typealias WorkspaceLookupRootScopeAvailability = RepoPromptCore.WorkspaceLookupRootScopeAvailability
+typealias WorkspaceRootKind = RepoPromptCore.WorkspaceRootKind
+typealias WorkspaceRootLoadFailure = RepoPromptCore.WorkspaceRootLoadFailure
+typealias WorkspaceSearchReadinessTicket = RepoPromptCore.WorkspaceSearchReadinessTicket
+typealias WorkspaceSearchReadinessWaitError = RepoPromptCore.WorkspaceSearchReadinessWaitError
+typealias WorkspaceSearchReadinessState = RepoPromptCore.WorkspaceSearchReadinessState
+typealias WorkspaceCatalogDiagnostics = RepoPromptCore.WorkspaceCatalogDiagnostics
+typealias WorkspaceSearchCatalogEntry = RepoPromptCore.WorkspaceSearchCatalogEntry
+typealias WorkspaceSearchCatalogAccessRequirement = RepoPromptCore.WorkspaceSearchCatalogAccessRequirement
+typealias WorkspaceSearchQueryResult = RepoPromptCore.WorkspaceSearchQueryResult
+typealias WorkspaceResolvedCandidates = RepoPromptCore.WorkspaceResolvedCandidates
+typealias WorkspaceCodemapOnlyCandidates = RepoPromptCore.WorkspaceCodemapOnlyCandidates
+typealias WorkspaceRootRecord = RepoPromptCore.WorkspaceRootRecord
+typealias WorkspaceFolderRecord = RepoPromptCore.WorkspaceFolderRecord
+typealias WorkspaceFileRecord = RepoPromptCore.WorkspaceFileRecord
+typealias ResolvedWorkspaceSelection = RepoPromptCore.ResolvedWorkspaceSelection
+typealias ResolvedPromptFileEntry = RepoPromptCore.ResolvedPromptFileEntry
+typealias ResolvedPromptFileEntryRole = RepoPromptCore.ResolvedPromptFileEntryRole
+typealias ResolvedPromptFileBlockRecord = RepoPromptCore.ResolvedPromptFileBlockRecord
+typealias ResolvedPromptFileEntryID = RepoPromptCore.ResolvedPromptFileEntryID
+typealias PromptFileEntryMode = RepoPromptCore.PromptFileEntryMode
+typealias WorkspaceCodemapSnapshot = RepoPromptCore.WorkspaceCodemapSnapshot
+typealias WorkspaceCodemapSnapshotBundle = RepoPromptCore.WorkspaceCodemapSnapshotBundle
+typealias WorkspaceCodemapRepairResult = RepoPromptCore.WorkspaceCodemapRepairResult
+typealias WorkspaceCodemapUpdateEvent = RepoPromptCore.WorkspaceCodemapUpdateEvent
+typealias WorkspacePathLookupRequest = RepoPromptCore.WorkspacePathLookupRequest
+typealias WorkspacePathLocation = RepoPromptCore.WorkspacePathLocation
+typealias WorkspacePathLookupResult = RepoPromptCore.WorkspacePathLookupResult
+
+// MARK: - Search
+
+typealias RepoSearchQuery = RepoPromptCore.RepoSearchQuery
+typealias RepoSearchQueryFactory = RepoPromptCore.RepoSearchQueryFactory
+typealias PathSearchIndex = RepoPromptCore.PathSearchIndex
+
+// MARK: - Prompt and codemap values
+
+typealias PromptFileEntrySnapshot = RepoPromptCore.PromptFileEntrySnapshot
+typealias TokenCalculationFileTreeInput = RepoPromptCore.TokenCalculationFileTreeInput
+typealias TokenCalculationSnapshot = RepoPromptCore.TokenCalculationSnapshot
+typealias TokenEstimator = RepoPromptCore.TokenEstimator
+typealias FileTreeSelectionSnapshot = RepoPromptCore.FileTreeSelectionSnapshot
+typealias FileTreeFolderSnapshot = RepoPromptCore.FileTreeFolderSnapshot
+typealias FileTreeFileSnapshot = RepoPromptCore.FileTreeFileSnapshot
+typealias FileTreeNodeSnapshot = RepoPromptCore.FileTreeNodeSnapshot
+typealias InterfaceInfo = RepoPromptCore.InterfaceInfo
+typealias TypeAliasInfo = RepoPromptCore.TypeAliasInfo
+typealias ClassInfo = RepoPromptCore.ClassInfo
+typealias FunctionInfo = RepoPromptCore.FunctionInfo
+typealias ParameterInfo = RepoPromptCore.ParameterInfo
+typealias PropertyInfo = RepoPromptCore.PropertyInfo
+typealias VariableInfo = RepoPromptCore.VariableInfo
+typealias EnumInfo = RepoPromptCore.EnumInfo
+typealias FileAPI = RepoPromptCore.FileAPI
+
+// MARK: - Regex
+
+typealias RepoPromptRegexRuntime = RepoPromptCore.RepoPromptRegexRuntime
+typealias RepoPromptPCRE2MatchPolicy = RepoPromptCore.RepoPromptPCRE2MatchPolicy
+typealias RepoPromptPCRE2CompileResult = RepoPromptCore.RepoPromptPCRE2CompileResult
+typealias RepoPromptPCRE2CompileRequest = RepoPromptCore.RepoPromptPCRE2CompileRequest
+typealias RepoPromptPCRE2Adapter = RepoPromptCore.RepoPromptPCRE2Adapter
+typealias RegexPatternFailure = RepoPromptCore.RegexPatternFailure
+typealias RegexToolkit = RepoPromptCore.RegexToolkit
+typealias SearchPatternErrorFormatter = RepoPromptCore.SearchPatternErrorFormatter
+typealias SearchPatternError = RepoPromptCore.SearchPatternError
+typealias SearchPatternTooComplexError = RepoPromptCore.SearchPatternTooComplexError
+typealias PCRE2LimitKind = RepoPromptCore.PCRE2LimitKind
+typealias PCRE2Error = RepoPromptCore.PCRE2Error
+typealias PCRE2BuildConfiguration = RepoPromptCore.PCRE2BuildConfiguration
+typealias PCRE2JITStatus = RepoPromptCore.PCRE2JITStatus
+typealias PCRE2Literal = RepoPromptCore.PCRE2Literal
+typealias PCRE2Match = RepoPromptCore.PCRE2Match
+typealias PCRE2CompileOptions = RepoPromptCore.PCRE2CompileOptions
+typealias PCRE2MatchOptions = RepoPromptCore.PCRE2MatchOptions
+typealias PCRE2MatchLimits = RepoPromptCore.PCRE2MatchLimits
+typealias PCRE2JITMode = RepoPromptCore.PCRE2JITMode
+typealias PCRE2Regex = RepoPromptCore.PCRE2Regex
+typealias PCRE2LinePrefilter = RepoPromptCore.PCRE2LinePrefilter
+typealias PCRE2LineScanOptions = RepoPromptCore.PCRE2LineScanOptions
+typealias PCRE2LineScanResult = RepoPromptCore.PCRE2LineScanResult
+typealias PCRE2LineRangeHit = RepoPromptCore.PCRE2LineRangeHit
+typealias PCRE2LineRangeScanResult = RepoPromptCore.PCRE2LineRangeScanResult
+typealias PCRE2LineMode = RepoPromptCore.PCRE2LineMode
+typealias PCRE2ASCIIMarkerLinePattern = RepoPromptCore.PCRE2ASCIIMarkerLinePattern
+typealias PCRE2ASCIIWholeWordLiteral = RepoPromptCore.PCRE2ASCIIWholeWordLiteral
+typealias PCRE2AnchoredDeclarationLinePattern = RepoPromptCore.PCRE2AnchoredDeclarationLinePattern
+typealias PCRE2PathSuffixPattern = RepoPromptCore.PCRE2PathSuffixPattern

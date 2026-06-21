@@ -128,8 +128,7 @@ actor TokenCalculationService {
     /// Compute tokens from raw text using a cheap UTF-8 byte count plus a safety multiplier.
     @inline(__always)
     static func estimateTokens(for text: String) -> Int {
-        let bytes = text.utf8.count
-        return Int((Double(bytes) / 4.0) * 1.05)
+        TokenEstimator.estimateTokens(for: text)
     }
 
     /// Middle-truncate text that exceeds `maxTokens`, keeping equal halves from head and tail

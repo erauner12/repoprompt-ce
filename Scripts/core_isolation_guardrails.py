@@ -28,6 +28,14 @@ RESERVED_TEST_PATHS = {
     "RepoPromptHeadlessTests": "Tests/RepoPromptHeadlessTests",
 }
 
+TEST_TARGET_DEPENDENCIES = {
+    "RepoPromptCoreTests": {"RepoPromptCore"},
+    "RepoPromptCoreMacOSTests": {"RepoPromptCoreMacOS"},
+    "RepoPromptPOSIXSupportTests": {"RepoPromptPOSIXSupport"},
+    "RepoPromptSyntaxCBridgeTests": {"RepoPromptSyntaxCBridge"},
+    "RepoPromptHeadlessTests": {"RepoPromptHeadless"},
+}
+
 EXPECTED_DEPENDENCIES = {
     "RepoPromptSyntaxCBridge": {
         ("target", "TreeSitterScannerSupport", ""),
@@ -221,7 +229,7 @@ IMPORT_RE = re.compile(
     re.MULTILINE,
 )
 DECL_RE = re.compile(
-    r"^\s*(?:(?:public|internal|private|fileprivate|open|final|indirect|nonisolated)\s+)*"
+    r"^\s*(?:(?:public|internal|package|private|fileprivate|open|final|indirect|nonisolated)\s+)*"
     r"(?:struct|enum|class|actor|protocol)\s+([A-Za-z_][A-Za-z0-9_]*)\b",
     re.MULTILINE,
 )
@@ -279,9 +287,25 @@ def validate_package(package: dict[str, Any]) -> list[str]:
                 f"{name} direct dependencies drifted: expected {sorted(expected)}, got {sorted(actual)}"
             )
 
-    for name in RESERVED_TEST_PATHS:
-        if name in targets:
-            errors.append(f"reserved test target {name} must remain undeclared until it owns a meaningful test")
+    for name, expected_path in RESERVED_TEST_PATHS.items():
+        target = targets.get(name)
+        if target is None:
+            continue
+        if target.get("path") != expected_path:
+            errors.append(f"{name} path must remain {expected_path}")
+        if target.get("type") != "test":
+            errors.append(f"{name} must remain a test target")
+        actual_targets = {
+            key[1]
+            for key in (dependency_key(item) for item in target.get("dependencies", []))
+            if key[0] == "target"
+        }
+        expected_targets = TEST_TARGET_DEPENDENCIES[name]
+        if actual_targets != expected_targets:
+            errors.append(
+                f"{name} local dependencies drifted: expected {sorted(expected_targets)}, "
+                f"got {sorted(actual_targets)}"
+            )
 
     for name, expected in EXPECTED_EXISTING_LOCAL_DEPENDENCIES.items():
         target = targets.get(name)
@@ -338,8 +362,12 @@ def swift_files(root: Path, relative: str) -> list[Path]:
 def validate_sources(root: Path) -> list[str]:
     errors: list[str] = []
     for name, relative in RESERVED_TEST_PATHS.items():
-        if (root / relative).exists():
-            errors.append(f"reserved test root {relative} must remain absent with undeclared target {name}")
+        directory = root / relative
+        if not directory.exists():
+            continue
+        files = swift_files(root, relative)
+        if not files or not any("XCTestCase" in file.read_text(encoding="utf-8") for file in files):
+            errors.append(f"test root {relative} must contain a meaningful XCTestCase before {name} is declared")
     for target, relative in TARGET_PATHS.items():
         directory = root / relative
         if not directory.is_dir():

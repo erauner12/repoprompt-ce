@@ -162,7 +162,7 @@ class CoreIsolationGuardrailTests(unittest.TestCase):
             errors = validate_sources(root)
             self.assertTrue(any("package_app.sh must remain app/proxy-only" in error for error in errors))
 
-    def test_placeholder_test_target_and_root_are_rejected(self) -> None:
+    def test_declared_test_target_requires_a_meaningful_test_root(self) -> None:
         package = copy.deepcopy(valid_package())
         package["targets"].append(
             {
@@ -172,7 +172,7 @@ class CoreIsolationGuardrailTests(unittest.TestCase):
                 "dependencies": [dependency(("target", "RepoPromptCore", ""))],
             }
         )
-        self.assertTrue(any("must remain undeclared" in error for error in validate_package(package)))
+        self.assertEqual(validate_package(package), [])
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -180,7 +180,7 @@ class CoreIsolationGuardrailTests(unittest.TestCase):
             reserved = root / RESERVED_TEST_PATHS["RepoPromptCoreTests"]
             reserved.mkdir(parents=True)
             (reserved / "PlaceholderTests.swift").write_text("// placeholder\n")
-            self.assertTrue(any("must remain absent" in error for error in validate_sources(root)))
+            self.assertTrue(any("must contain a meaningful XCTestCase" in error for error in validate_sources(root)))
 
     def test_phase_two_declaration_duplicate_in_any_production_root_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

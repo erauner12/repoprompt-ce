@@ -319,6 +319,7 @@ allowed_tracked_docs=(
   "docs/core-isolation/migration-ledger.tsv"
   "docs/core-isolation/phases/phase-0.md"
   "docs/core-isolation/phases/phase-1.md"
+  "docs/core-isolation/phases/phase-2.md"
   "docs/investigations/core-isolation-reconstruction-2026-06-20.md"
   "docs/investigations/mcp-tool-throughput-wi3-baseline-2026-06-11.md"
   "docs/investigations/test-coverage-value-audit-ledger-2026-05-29.md"

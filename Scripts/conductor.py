@@ -95,6 +95,7 @@ IMPLEMENTED_OPERATIONS = {
     "build",
     "package",
     "test",
+    "core-test",
     "provider-test",
     "install-debug-cli",
     "debug-cli-status",
@@ -140,6 +141,7 @@ Operation commands:
   ./conductor build
   ./conductor package debug|release
   ./conductor test [--list | --filter <filter>] [--xctest-stall-seconds <seconds>] [--xctest-stall-wake-probe]
+  ./conductor core-test [--list | --filter <filter>] [--xctest-stall-seconds <seconds>] [--xctest-stall-wake-probe]
   ./conductor provider-test [--list | --filter <filter>] [--xctest-stall-seconds <seconds>] [--xctest-stall-wake-probe]
   ./conductor install-debug-cli
   ./conductor debug-cli-status
@@ -1078,7 +1080,7 @@ class OperationRegistry:
         if operation not in IMPLEMENTED_OPERATIONS:
             raise ConductorError(f"operation '{operation}' is not implemented")
 
-        if operation in {"test", "provider-test"}:
+        if operation in {"test", "core-test", "provider-test"}:
             self._validate_xctest_stall_options(args)
 
         env = self._base_env(verbose, request)
@@ -1124,11 +1126,14 @@ class OperationRegistry:
             lanes = ["build", "debugArtifact"] + (["release"] if config == "release" else [])
             return [script("package_app.sh"), config], lanes, cwd, env, effective_timeout
         if operation == "test":
-            argv = ["swift", "test"]
             if args.get("list"):
-                argv.append("list")
-            elif args.get("filter"):
-                argv.extend(["--filter", str(args["filter"])])
+                return [sys.executable, script("list_swift_tests.py"), "RepoPromptTests"], ["build"], cwd, env, effective_timeout
+            argv = ["swift", "test", "--filter", self._scoped_test_filter(args, "RepoPromptTests")]
+            return argv, ["build"], cwd, env, effective_timeout
+        if operation == "core-test":
+            if args.get("list"):
+                return [sys.executable, script("list_swift_tests.py"), "RepoPromptCoreTests"], ["build"], cwd, env, effective_timeout
+            argv = ["swift", "test", "--filter", self._scoped_test_filter(args, "RepoPromptCoreTests")]
             return argv, ["build"], cwd, env, effective_timeout
         if operation == "provider-test":
             argv = ["swift", "test"]
@@ -1180,6 +1185,20 @@ class OperationRegistry:
                 return self._internal_argv("release_preflight_missing", {}), ["release"], cwd, env, effective_timeout
 
         raise ConductorError(f"invalid arguments for operation '{operation}'")
+
+    @staticmethod
+    def _scoped_test_filter(args: Dict[str, Any], module: str) -> str:
+        requested = str(args.get("filter") or "").strip()
+        if not requested:
+            return module
+        qualifier = requested.split(".", 1)[0]
+        if qualifier.endswith("Tests") and qualifier != module:
+            raise ConductorError(
+                f"filter for {module} cannot target test module {qualifier}"
+            )
+        if qualifier == module:
+            return requested
+        return f"{module}.{requested}"
 
     @staticmethod
     def _validate_xctest_stall_options(args: Dict[str, Any]) -> None:
@@ -1895,7 +1914,7 @@ class DaemonState:
 
     def _xctest_watchdog_enabled(self, job: Job) -> bool:
         return (
-            job.operation in {"test", "provider-test"}
+            job.operation in {"test", "core-test", "provider-test"}
             and not bool(job.args.get("list"))
             and job.args.get("xctestStallSeconds") is not None
         )
@@ -3734,7 +3753,7 @@ def handle_real_operation(paths: Paths, operation: str, argv: List[str]) -> int:
         parser.add_argument("config", choices=["debug", "release"])
         ns = parser.parse_args(rest)
         args["config"] = ns.config
-    elif operation in {"test", "provider-test"}:
+    elif operation in {"test", "core-test", "provider-test"}:
         parser = argparse.ArgumentParser(prog=f"conductor {operation}")
         mode = parser.add_mutually_exclusive_group()
         mode.add_argument("--list", action="store_true")

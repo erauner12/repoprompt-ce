@@ -1,10 +1,10 @@
 # Core Isolation Execution Packet
 
 **Created:** 2026-06-21
-**Current phase:** Phase 1 — closed, see [phase-1.md](phases/phase-1.md)
-**Disposition:** GO for Phase 2 as a separate declaration/test-move change
-**Production behavior change:** none
-**Phase 1 scaffolding present:** yes; five production targets and the no-I/O `repoprompt-headless` executable scaffold
+**Current phase:** Phase 2 — closed, see [phase-2.md](phases/phase-2.md)
+**Disposition:** **GO** for Phase 3 planning; Phase 3 implementation has not begun
+**Production behavior change:** none intended; neutral declaration ownership only
+**Phase 1 scaffolding present:** yes; `RepoPromptCoreTests` is now the first activated isolated test target
 
 This directory is the compact execution record for
 [Core Isolation Reconstruction](../plans/core-isolation-reconstruction-2026-06-20.md).
@@ -50,6 +50,7 @@ contract. No later phase may depend on fetching those two objects.
 - [Phase 1–2 migration ledger](migration-ledger.tsv)
 - [Phase 0 evidence and disposition](phases/phase-0.md)
 - [Phase 1 evidence and disposition](phases/phase-1.md)
+- [Phase 2 evidence and disposition](phases/phase-2.md)
 - [Deferred Phase 9+ work](deferred-work.md)
 
 ## Mutation policy
@@ -79,7 +80,8 @@ Phase 0 freezes:
   four comparable warm packaged app-proxy smoke samples, and one cold lifecycle
   smoke sample.
 
-Phase 1 added and validated package/control-plane scaffolding only. Runtime
-ownership remains unchanged. Phase 2 may move only its ledger-owned neutral
-declarations with faithful tests; later behavior remains out of scope until its
-owning phase.
+Phase 1 added and validated package/control-plane scaffolding only. Phase 2
+moved only ledger-owned neutral declarations and faithful deterministic tests;
+runtime authority, platform/C bridges, mutable engines, and later-phase behavior
+remain unchanged and out of scope. The complete Phase 2 ladder passed from
+checkpoint `b3eb2222`; its close disposition is **GO** with no blockers.
