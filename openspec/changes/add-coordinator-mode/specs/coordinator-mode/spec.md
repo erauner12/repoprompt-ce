@@ -140,16 +140,20 @@ The production-demo Coordinator mode SHALL separate the selected Coordinator con
 - **WHEN** the active workspace demo fleet has multiple Coordinator runtime roots with supervised delegated descendants
 - **THEN** the board and list SHALL project eligible delegated descendants from all active fleet roots
 - **AND** they SHALL exclude Coordinator backing runtimes and explicitly marked Coordinator-internal housekeeping sessions
+- **AND** delegated descendants MAY include read-only probe descendants that are not immediate children of a Coordinator root
 - **AND** they SHALL preserve existing status grouping, sorting, stale-row, workflow-label, and Agent Mode deep-link behavior.
 
 #### Scenario: Delegate belongs to a parent Coordinator runtime
 - **WHEN** a delegated row is projected from an aggregate fleet that contains multiple Coordinator runtime roots
-- **THEN** the row projection SHALL retain sourced parent or owner metadata sufficient for future grouping, filtering, action-chip attribution, and inspector context
+- **THEN** the row projection SHALL retain sourced immediate parent metadata and resolved owner Coordinator metadata sufficient for future grouping, filtering, action-chip attribution, inspector context, and selected-parent emphasis
+- **AND** owner Coordinator metadata SHALL be resolved by walking structured `parentSessionID` lineage upward until an active fleet-root Coordinator runtime is reached
+- **AND** a row's owner Coordinator SHALL NOT be assumed to be the same value as its immediate `parentSessionID`
 - **AND** the implementation SHALL NOT infer parent ownership from row titles or assistant prose.
 
 #### Scenario: Aggregate row shows parent ownership
 - **WHEN** a delegated row is projected in aggregate fleet mode
 - **THEN** the card, list row, or inspector SHALL provide a compact sourced parent indicator
+- **AND** the indicator SHALL identify the resolved owner Coordinator runtime root rather than a non-Coordinator immediate parent session
 - **AND** the parent indicator SHALL use a reserved neutral treatment distinct from lifecycle state color and workflow badge styling
 - **AND** it SHALL NOT assign parent identity by parsing row titles or assistant prose.
 
@@ -159,6 +163,17 @@ The production-demo Coordinator mode SHALL separate the selected Coordinator con
 - **THEN** the rail and composer SHALL switch to the newly selected Coordinator runtime
 - **AND** the board/list SHALL remain scoped to the aggregate fleet instead of swapping to only the selected runtime
 - **AND** rows owned by the selected Coordinator runtime SHOULD receive subtle visual emphasis so the rail selection and board remain connected.
+
+#### Scenario: Delegated worker has read-only probe descendants
+- **WHEN** a delegated worker session has a read-only `agent_explore` descendant
+- **AND** that descendant is projected as part of the aggregate fleet
+- **THEN** the descendant SHALL be attributed to the same resolved owner Coordinator runtime root as the worker
+- **AND** the descendant SHALL NOT be presented as a separate Coordinator parent solely because it has lineage depth below a delegated worker.
+
+#### Scenario: Hierarchical Coordinator delegation is requested
+- **WHEN** a future design needs a delegated session to become a supervising Coordinator runtime with its own fleet
+- **THEN** that behavior SHALL be treated as a separate hierarchical Coordinator design
+- **AND** it SHALL require durable containment metadata and path-style attribution rather than reusing the v1 single owner Coordinator badge.
 
 ### Requirement: Board-first Coordinator view layout
 The system SHALL present v1 as a read-only status board by default, with a list view as an alternate and responsive fallback.
@@ -212,6 +227,18 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **WHEN** the user submits text through the enabled Coordinator composer
 - **THEN** the Coordinator view SHALL deliver that text as an ordinary user message to the Coordinator session through the existing Agent Mode message path
 - **AND** it SHALL NOT wrap the directive in a new structured command envelope in v1.
+
+#### Scenario: Production-demo Coordinator bridge dispatches children
+- **WHEN** the production-demo Coordinator runtime delegates work
+- **THEN** delegation SHALL use the existing Agent Mode MCP control-plane primitive, such as `agent_run.start`, to create normal tab-scoped Agent sessions
+- **AND** the demo Coordinator runtime root SHALL be modeled as a marked Coordinator backing runtime rather than as a separate non-tab runtime
+- **AND** delegated child sessions SHALL retain their normal tab-coupled selection, worktree, transcript, permission, and routing state.
+
+#### Scenario: Coordinator actor workflow is unresolved
+- **WHEN** v1 uses the production-demo Coordinator bridge
+- **THEN** the Coordinator actor itself SHALL NOT be specified as requiring `workflow_name="orchestrate"`
+- **AND** delegated child sessions MAY still carry real `workflow_id` or `workflow_name` metadata
+- **AND** a future first-class Coordinator role SHALL decide whether the Coordinator actor is the Orchestrate workflow, a distinct role that calls `agent_run`, or a policy layer over both.
 
 #### Scenario: Directive is displayed after send
 - **WHEN** a Coordinator directive is accepted by the Coordinator view

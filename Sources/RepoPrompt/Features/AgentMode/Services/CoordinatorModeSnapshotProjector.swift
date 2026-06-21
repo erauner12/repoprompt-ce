@@ -181,19 +181,34 @@ struct CoordinatorModeSnapshotProjector {
             resolvableTabIDs: input.resolvableTabIDs
         )
 
+        let boardOwnerIDs = fleetOwnerIDs(
+            childrenByParent: renderedChildrenByParent,
+            demoCoordinatorSessionIDs: input.demoCoordinatorSessionIDs,
+            selectedCoordinatorID: coordinator?.sessionID
+        )
         let boardSeeds = delegatedFleetSeeds(
             from: rowSeeds,
-            coordinatorID: coordinator?.sessionID,
-            childrenByParent: renderedChildrenByParent,
+            ownerIDs: boardOwnerIDs,
             demoCoordinatorSessionIDs: input.demoCoordinatorSessionIDs
         )
         let boardSeedIDs = Set(boardSeeds.map(\.id))
         let boardChildrenByParent = eligibleChildrenByParent(from: boardSeeds, visibleIDs: boardSeedIDs)
+        let coordinatorTitlesByID = Dictionary(
+            uniqueKeysWithValues: detectionSeeds
+                .filter { input.demoCoordinatorSessionIDs.contains($0.id) }
+                .map { ($0.id, $0.title) }
+        )
         let boardRows = sortedRows(boardSeeds.map { seed in
             row(
                 from: seed,
                 childSessionIDs: Array(boardChildrenByParent[seed.id, default: []]).sorted { $0.uuidString < $1.uuidString },
                 isCoordinator: false,
+                parentCoordinator: parentCoordinator(
+                    for: seed,
+                    ownerIDs: boardOwnerIDs,
+                    coordinatorTitlesByID: coordinatorTitlesByID,
+                    selectedCoordinatorID: coordinator?.sessionID
+                ),
                 input: input,
                 routeBuilder: routeBuilder
             )
@@ -203,6 +218,7 @@ struct CoordinatorModeSnapshotProjector {
                 from: seed,
                 childSessionIDs: Array(renderedChildrenByParent[seed.id, default: []]).sorted { $0.uuidString < $1.uuidString },
                 isCoordinator: seed.id == coordinator?.sessionID,
+                parentCoordinator: nil,
                 input: input,
                 routeBuilder: routeBuilder
             )
@@ -364,6 +380,7 @@ struct CoordinatorModeSnapshotProjector {
         from seed: RowSeed,
         childSessionIDs: [UUID],
         isCoordinator: Bool,
+        parentCoordinator: CoordinatorModeRow.ParentCoordinator?,
         input: Input,
         routeBuilder: RouteBuilder
     ) -> CoordinatorModeRow {
@@ -383,6 +400,7 @@ struct CoordinatorModeSnapshotProjector {
             runState: seed.runState,
             statusGroup: statusGroup(for: seed),
             parentSessionID: seed.parentSessionID,
+            parentCoordinator: parentCoordinator,
             childSessionIDs: childSessionIDs,
             isMCPOriginated: seed.isMCPOriginated,
             isPersistedOnly: seed.isPersistedOnly,
@@ -487,23 +505,52 @@ struct CoordinatorModeSnapshotProjector {
 
     private func delegatedFleetSeeds(
         from seeds: [RowSeed],
-        coordinatorID: UUID?,
-        childrenByParent: [UUID: Set<UUID>],
+        ownerIDs: [UUID: UUID],
         demoCoordinatorSessionIDs: Set<UUID>
     ) -> [RowSeed] {
-        guard let coordinatorID else { return [] }
-        var descendantIDs: Set<UUID> = []
-        var stack = Array(childrenByParent[coordinatorID, default: []])
-        while let sessionID = stack.popLast() {
-            guard !descendantIDs.contains(sessionID), sessionID != coordinatorID else { continue }
-            descendantIDs.insert(sessionID)
-            stack.append(contentsOf: childrenByParent[sessionID, default: []])
-        }
-        return seeds.filter { seed in
-            descendantIDs.contains(seed.id)
+        seeds.filter { seed in
+            ownerIDs[seed.id] != nil
                 && !demoCoordinatorSessionIDs.contains(seed.id)
                 && !seed.isCoordinatorInternal
         }
+    }
+
+    private func fleetOwnerIDs(
+        childrenByParent: [UUID: Set<UUID>],
+        demoCoordinatorSessionIDs: Set<UUID>,
+        selectedCoordinatorID: UUID?
+    ) -> [UUID: UUID] {
+        var ownerIDs: [UUID: UUID] = [:]
+        let coordinatorIDs = demoCoordinatorSessionIDs.sorted { lhs, rhs in
+            if lhs == selectedCoordinatorID { return true }
+            if rhs == selectedCoordinatorID { return false }
+            return lhs.uuidString < rhs.uuidString
+        }
+        for coordinatorID in coordinatorIDs {
+            var stack = Array(childrenByParent[coordinatorID, default: []])
+            while let sessionID = stack.popLast() {
+                guard ownerIDs[sessionID] == nil, sessionID != coordinatorID else { continue }
+                ownerIDs[sessionID] = coordinatorID
+                stack.append(contentsOf: childrenByParent[sessionID, default: []])
+            }
+        }
+        return ownerIDs
+    }
+
+    private func parentCoordinator(
+        for seed: RowSeed,
+        ownerIDs: [UUID: UUID],
+        coordinatorTitlesByID: [UUID: String],
+        selectedCoordinatorID: UUID?
+    ) -> CoordinatorModeRow.ParentCoordinator? {
+        guard let ownerID = ownerIDs[seed.id],
+              let parentTitle = coordinatorTitlesByID[ownerID]
+        else { return nil }
+        return CoordinatorModeRow.ParentCoordinator(
+            sessionID: ownerID,
+            title: parentTitle,
+            isSelected: ownerID == selectedCoordinatorID
+        )
     }
 
     private func childrenByParent(from seeds: [RowSeed]) -> [UUID: Set<UUID>] {

@@ -316,6 +316,76 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.railTranscriptEntries.compactMap(\.action).count, 1)
     }
 
+    func testSelectingCoordinatorRebuildsDelegateActionEntriesForSelectedParent() {
+        let firstCoordinatorID = uuid(1)
+        let firstChildID = uuid(2)
+        let secondCoordinatorID = uuid(3)
+        let secondChildID = uuid(4)
+        var liveSessions = [
+            live(
+                id: firstCoordinatorID,
+                tab: uuid(101),
+                title: "Parent A",
+                updatedAt: date(20),
+                state: .idle,
+                isMCP: true
+            ),
+            live(
+                id: firstChildID,
+                tab: uuid(102),
+                title: "A child",
+                updatedAt: date(30),
+                state: .completed,
+                parent: firstCoordinatorID,
+                isMCP: true
+            ),
+            live(
+                id: secondCoordinatorID,
+                tab: uuid(103),
+                title: "Parent B",
+                updatedAt: date(40),
+                state: .idle,
+                isMCP: true
+            )
+        ]
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: liveSessions,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [firstCoordinatorID, secondCoordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+
+        viewModel.refresh()
+
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, secondCoordinatorID)
+        XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
+
+        liveSessions.append(live(
+            id: secondChildID,
+            tab: uuid(104),
+            title: "B child",
+            updatedAt: date(50),
+            state: .completed,
+            parent: secondCoordinatorID,
+            isMCP: true
+        ))
+        viewModel.refresh()
+
+        XCTAssertEqual(viewModel.railTranscriptEntries.compactMap(\.action).map(\.targetSessionID), [secondChildID])
+        XCTAssertEqual(viewModel.railTranscriptEntries.compactMap(\.action).first?.ownerCoordinatorSessionID, secondCoordinatorID)
+
+        viewModel.selectCoordinator(sessionID: firstCoordinatorID)
+
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, firstCoordinatorID)
+        XCTAssertEqual(viewModel.railTranscriptEntries.compactMap(\.action).map(\.targetSessionID), [firstChildID])
+        XCTAssertEqual(viewModel.railTranscriptEntries.compactMap(\.action).first?.ownerCoordinatorSessionID, firstCoordinatorID)
+    }
+
     func testMidRunCoordinatorRejectsDirectiveWithoutCallingSubmitter() async {
         let coordinatorID = uuid(1)
         let childID = uuid(2)

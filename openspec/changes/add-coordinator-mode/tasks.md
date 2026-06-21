@@ -105,10 +105,10 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.21 Remove or narrow name-based Coordinator runtime fallback so multiple demo runtimes with similar titles cannot be confused.
 - [x] 10.22 Checkpoint selected-runtime board behavior first: project board/list rows from the selected Coordinator runtime's eligible descendants while multiple runtime roots coexist.
 - [x] 10.23 Add focused tests proving two Coordinator runtime roots can coexist, selection changes the rail target and selected-runtime board, `New Coordinator` preserves previous fleet membership, and explicit fleet reset is the only board-clearing operation.
-- [ ] 10.24 Project aggregate board/list rows from all eligible Coordinator fleet roots in the active workspace, excluding Coordinator backing runtimes and explicitly internal housekeeping sessions.
-- [ ] 10.25 Preserve parent/owner metadata on projected rows for grouping/filtering, action-chip attribution, inspector context, and aggregate-mode selected-parent emphasis without parsing titles.
-- [ ] 10.26 Render a compact sourced parent indicator on aggregate board/list rows using a reserved neutral treatment that does not compete with lifecycle state color or workflow badges.
-- [ ] 10.27 Add focused aggregate-mode tests proving all eligible roots appear, parent indicators are sourced, selected-parent row emphasis updates with rail selection, and aggregate mode does not swap board scope when selection changes.
+- [x] 10.24 Project aggregate board/list rows from all eligible Coordinator fleet roots in the active workspace, excluding Coordinator backing runtimes and explicitly internal housekeeping sessions.
+- [x] 10.25 Preserve parent/owner metadata on projected rows for grouping/filtering, action-chip attribution, inspector context, and aggregate-mode selected-parent emphasis without parsing titles.
+- [x] 10.26 Render a compact sourced parent indicator on aggregate board/list rows using a reserved neutral treatment that does not compete with lifecycle state color or workflow badges.
+- [x] 10.27 Add focused aggregate-mode tests proving all eligible roots appear, parent indicators are sourced, selected-parent row emphasis updates with rail selection, and aggregate mode does not swap board scope when selection changes.
 - [x] 10.28 Add a demo use-case taxonomy with gesture sequence, prompt text, expected result, and required checkpoint for single delegation, one-parent fan-out, sequential multi-parent work, simultaneous multi-parent work, and switch-back supervision.
 - [x] 10.29 Confirm or add a visible parent-selection affordance so users can return to an earlier Coordinator runtime after `New Coordinator` creates another parent.
 - [x] 10.30 Verify workflow-bearing demo prompts by proving `agent_run workflow_name` reaches delegated starts and returns workflow display metadata.
@@ -119,4 +119,4 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 11.2 Run the smallest relevant coordinated Swift validation lane for touched app/UI files.
 - [x] 11.3 Run `openspec validate add-coordinator-mode`.
 - [x] 11.4 Re-run focused Coordinator projector/composer tests, coordinated Swift build/style checks, and OpenSpec validation after the workflow/internal-action refinement.
-- [ ] 11.5 Re-run focused Coordinator projector/composer tests, coordinated Swift build/style checks, and OpenSpec validation after the multi-runtime fleet-scope refinement.
+- [x] 11.5 Re-run focused Coordinator projector/composer tests, coordinated Swift build/style checks, and OpenSpec validation after the multi-runtime fleet-scope refinement.

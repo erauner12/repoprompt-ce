@@ -586,6 +586,9 @@ struct CoordinatorModeView: View {
             isSelected: row.id == selectedRowID,
             isHovered: row.id == hoveredRowID
         )
+        .overlay(alignment: .leading) {
+            selectedParentEmphasis(row, metrics: metrics)
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             selectedRowID = row.id
@@ -651,13 +654,18 @@ struct CoordinatorModeView: View {
             statusChip(row.runState.displayName, color: row.statusGroup.accentColor, metrics: metrics)
                 .frame(width: metrics.listStateColumnWidth, alignment: .leading)
 
-            Text(row.title)
-                .font(metrics.cardTitle)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(1)
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                Text(row.title)
+                    .font(metrics.cardTitle)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if let parentCoordinator = row.parentCoordinator {
+                    parentCoordinatorBadge(parentCoordinator, metrics: metrics)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
 
             if let identity = listIdentityText(for: row) {
                 Text(identity)
@@ -695,6 +703,9 @@ struct CoordinatorModeView: View {
             fillOpacity: CoordinatorStyle.listRowFillOpacity,
             strokeOpacity: 0.08
         )
+        .overlay(alignment: .leading) {
+            selectedParentEmphasis(row, metrics: metrics)
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             selectedRowID = row.id
@@ -775,6 +786,9 @@ struct CoordinatorModeView: View {
                         keyValue("Model", row.modelName ?? "Unknown", metrics: metrics)
                         keyValue("Children", "\(row.childSessionIDs.count)", metrics: metrics)
                         keyValue("MCP originated", row.isMCPOriginated ? "Yes" : "No", metrics: metrics)
+                        if let parentCoordinator = row.parentCoordinator {
+                            keyValue("Coordinator", parentCoordinator.title, metrics: metrics)
+                        }
                         if let workflow = row.workflow {
                             keyValue("Workflow", workflow.displayName, metrics: metrics)
                         }
@@ -1502,7 +1516,7 @@ struct CoordinatorModeView: View {
                 .foregroundStyle(.secondary)
             Text(snapshot.workspaceID == nil ? "Open a workspace" : "No delegated sessions yet")
                 .font(metrics.headerTitle)
-            Text("The board shows only descendants delegated by the current Coordinator runtime.")
+            Text("The board shows delegated sessions from the Coordinator fleet.")
                 .font(metrics.sectionTitle)
                 .foregroundStyle(.secondary)
         }
@@ -1514,6 +1528,9 @@ struct CoordinatorModeView: View {
             statusChip(row.runState.displayName, color: row.statusGroup.accentColor, metrics: metrics)
             if let workflow = row.workflow {
                 workflowBadge(workflow, metrics: metrics)
+            }
+            if let parentCoordinator = row.parentCoordinator {
+                parentCoordinatorBadge(parentCoordinator, metrics: metrics)
             }
             if let identity = cardIdentityText(for: row) {
                 Text(identity)
@@ -1537,6 +1554,36 @@ struct CoordinatorModeView: View {
             parts.append(workstream.label)
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func parentCoordinatorBadge(
+        _ parentCoordinator: CoordinatorModeRow.ParentCoordinator,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(spacing: metrics.miniPillIconSpacing) {
+            Image(systemName: "rectangle.3.group.bubble")
+                .font(.system(size: metrics.microIconSize, weight: .semibold))
+            Text(parentCoordinator.title)
+                .font(metrics.microMedium)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, metrics.miniPillHorizontalPadding)
+        .padding(.vertical, metrics.miniPillVerticalPadding)
+        .background(Capsule().fill(Color.secondary.opacity(parentCoordinator.isSelected ? 0.14 : 0.08)))
+        .overlay(Capsule().stroke(Color.secondary.opacity(parentCoordinator.isSelected ? 0.24 : 0.16), lineWidth: 0.5))
+    }
+
+    @ViewBuilder
+    private func selectedParentEmphasis(_ row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
+        if row.parentCoordinator?.isSelected == true {
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .fill(Color.secondary.opacity(0.34))
+                .frame(width: 2)
+                .padding(.vertical, metrics.smallSpacing)
+                .padding(.leading, 1)
+        }
     }
 
     private func workflowBadge(_ workflow: CoordinatorModeWorkflowDisplaySummary, metrics: CoordinatorVisualMetrics) -> some View {
@@ -2415,6 +2462,7 @@ private extension AgentSessionRunState {
                     runState: .waitingForApproval,
                     statusGroup: .needsYou,
                     parentSessionID: coordinatorID,
+                    parentCoordinator: .init(sessionID: coordinatorID, title: "Coordinate PR stack", isSelected: true),
                     childSessionIDs: [],
                     isMCPOriginated: false,
                     isPersistedOnly: false,
@@ -2438,6 +2486,7 @@ private extension AgentSessionRunState {
                     runState: .failed,
                     statusGroup: .blocked,
                     parentSessionID: coordinatorID,
+                    parentCoordinator: .init(sessionID: coordinatorID, title: "Coordinate PR stack", isSelected: true),
                     childSessionIDs: [],
                     isMCPOriginated: false,
                     isPersistedOnly: true,

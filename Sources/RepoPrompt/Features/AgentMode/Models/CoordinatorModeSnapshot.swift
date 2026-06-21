@@ -95,6 +95,12 @@ struct CoordinatorModeRow: Identifiable, Equatable {
         let updatedAt: Date
     }
 
+    struct ParentCoordinator: Equatable {
+        let sessionID: UUID
+        let title: String
+        let isSelected: Bool
+    }
+
     let id: UUID
     let sessionID: UUID
     let tabID: UUID?
@@ -104,6 +110,7 @@ struct CoordinatorModeRow: Identifiable, Equatable {
     let runState: AgentSessionRunState
     let statusGroup: CoordinatorModeStatusGroup
     let parentSessionID: UUID?
+    let parentCoordinator: ParentCoordinator?
     let childSessionIDs: [UUID]
     let isMCPOriginated: Bool
     let isPersistedOnly: Bool

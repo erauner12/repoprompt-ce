@@ -2,11 +2,12 @@
 
 This demo script distinguishes the three axes that can otherwise blur together:
 
-- **Parent Coordinator**: one Coordinator conversation/control loop, created by the existing Coordinator runtime or by `New Coordinator`.
-- **Delegated child**: an agent session launched by a parent Coordinator.
-- **Worktree**: the workspace used by a delegated child; multiple worktrees do not imply multiple parents.
+- **Coordinator runtime root**: one top-level Coordinator conversation/control loop, created by the existing Coordinator runtime or by `New Coordinator`.
+- **Delegated session**: a normal tab-scoped Agent Mode session launched by a Coordinator runtime root.
+- **Owner Coordinator**: the Coordinator runtime root that owns a board row's attribution; this is resolved from structured lineage and is not necessarily the row's immediate `parentSessionID`.
+- **Worktree**: the workspace used by a delegated session; multiple worktrees do not imply multiple Coordinator runtime roots.
 
-The rule of thumb: prompt text can ask one parent to launch many children, while `New Coordinator` creates another parent.
+The rule of thumb: prompt text can ask one Coordinator runtime root to launch many delegated sessions, while `New Coordinator` creates another Coordinator runtime root. Read-only probe descendants under a delegated worker still attribute to the same owner Coordinator; they are not separate parent Coordinators.
 
 ## 1. Single Delegation
 

@@ -226,12 +226,22 @@ final class CoordinatorModeViewModel: ObservableObject {
     private func publishIfChanged(_ nextSnapshot: CoordinatorModeSnapshot) {
         let nextCoordinatorSessionID = nextSnapshot.coordinatorRail.coordinatorSessionID
         if displayedTranscriptCoordinatorSessionID != nextCoordinatorSessionID {
+            let previousCoordinatorSessionID = displayedTranscriptCoordinatorSessionID
             railTranscriptEntries.removeAll()
             composerNotice = nil
             displayedTranscriptCoordinatorSessionID = nextCoordinatorSessionID
             currentRailActivityText = nil
             lastDurableRailStatusEntryKey = nil
-            displayedDelegateActionTargetIDs = delegatedActionTargetIDs(in: nextSnapshot)
+            if previousCoordinatorSessionID == nil,
+               let coordinatorSessionID = nextCoordinatorSessionID
+            {
+                displayedDelegateActionTargetIDs = Set(directDelegatedRows(
+                    in: nextSnapshot,
+                    coordinatorSessionID: coordinatorSessionID
+                ).map(\.sessionID))
+            } else {
+                displayedDelegateActionTargetIDs.removeAll()
+            }
         }
         updateRailStatusPresentation(from: nextSnapshot.coordinatorRail)
         updateRailActionPresentation(from: nextSnapshot)
@@ -273,13 +283,6 @@ final class CoordinatorModeViewModel: ObservableObject {
                 )
             ))
         }
-    }
-
-    private func delegatedActionTargetIDs(in snapshot: CoordinatorModeSnapshot) -> Set<UUID> {
-        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID else {
-            return []
-        }
-        return Set(directDelegatedRows(in: snapshot, coordinatorSessionID: coordinatorSessionID).map(\.sessionID))
     }
 
     private func directDelegatedRows(
