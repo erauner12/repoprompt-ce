@@ -696,7 +696,8 @@ package actor WorkspaceSessionController {
         envelope: WorkspaceSessionCommandEnvelope
     ) -> WorkspaceSessionCommandResult {
         let workspaceID: UUID = switch command {
-        case let .create(id, _, _), let .patch(id, _, _), let .patchStashed(id, _, _), let .remove(id, _),
+        case let .create(id, _, _), let .patchTitle(id, _, _, _), let .patch(id, _, _),
+             let .patchStashed(id, _, _), let .remove(id, _),
              let .activate(id, _), let .reorder(id, _), let .stash(id, _, _, _), let .restore(id, _),
              let .deleteStashed(id, _):
             id
@@ -713,6 +714,15 @@ package actor WorkspaceSessionController {
             }
             workspace.composeTabs.append(tab)
             if makeActive { workspace.activeComposeTabID = tab.id }
+        case let .patchTitle(_, tabID, name, lastModified):
+            guard let tabIndex = workspace.composeTabs.firstIndex(where: { $0.id == tabID }) else {
+                return .rejected(.tabNotFound(workspaceID: workspaceID, tabID: tabID))
+            }
+            guard workspace.composeTabs[tabIndex].name != name else {
+                return .unchanged(receipt(for: envelope.commandID))
+            }
+            workspace.composeTabs[tabIndex].name = name
+            workspace.composeTabs[tabIndex].lastModified = lastModified
         case let .patch(_, tabID, patch):
             guard let tabIndex = workspace.composeTabs.firstIndex(where: { $0.id == tabID }) else {
                 return .rejected(.tabNotFound(workspaceID: workspaceID, tabID: tabID))

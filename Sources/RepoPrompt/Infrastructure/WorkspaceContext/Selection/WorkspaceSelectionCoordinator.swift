@@ -50,6 +50,7 @@ protocol WorkspaceSelectionHost: AnyObject {
     func composeTab(with id: UUID) -> ComposeTabState?
     func composeTab(for identity: WorkspaceSelectionIdentity) -> ComposeTabState?
     func publishActiveComposeTabSnapshot(commitToMemory: Bool, touchModified: Bool)
+    func awaitPendingUISnapshotCommands() async
     func commitSelectionThroughSelectedSession(
         _ selection: StoredSelection,
         for identity: WorkspaceSelectionIdentity,
@@ -83,6 +84,8 @@ extension WorkspaceSelectionHost {
     var liveUISelectionRevision: UInt64 {
         0
     }
+
+    func awaitPendingUISnapshotCommands() async {}
 
     func updateComposeTabSelectionPresentation(_: StoredSelection, for _: WorkspaceSelectionIdentity) {}
 
@@ -397,12 +400,45 @@ final class WorkspaceSelectionCoordinator {
         peerMutationFence: MCPSelectionPeerMutationFence? = nil
     ) async -> WorkspaceSelectionMutationOutcome {
         guard let workspaceManager,
-              let currentSelection = workspaceManager.composeTab(for: identity)?.selection
+              let selectionBeforePendingSnapshots = workspaceManager.composeTab(for: identity)?.selection
         else {
             return mutationOutcome(
                 .identityChanged,
                 previous: selection,
                 selection: selection,
+                attempts: 0
+            )
+        }
+
+        let pendingSnapshotFence = makeMutationFence(for: identity, workspaceManager: workspaceManager)
+        await workspaceManager.awaitPendingUISnapshotCommands()
+        if Task.isCancelled {
+            return mutationOutcome(
+                .activationChanged,
+                previous: selectionBeforePendingSnapshots,
+                selection: workspaceManager.composeTab(for: identity)?.selection ?? selectionBeforePendingSnapshots,
+                revision: workspaceManager.committedSelectionRevision(for: identity),
+                attempts: 0
+            )
+        }
+        if let failure = mutationFenceFailure(
+            pendingSnapshotFence,
+            for: identity,
+            workspaceManager: workspaceManager
+        ) {
+            return mutationOutcome(
+                failure,
+                previous: selectionBeforePendingSnapshots,
+                selection: workspaceManager.composeTab(for: identity)?.selection ?? selectionBeforePendingSnapshots,
+                revision: workspaceManager.committedSelectionRevision(for: identity),
+                attempts: 0
+            )
+        }
+        guard let currentSelection = workspaceManager.composeTab(for: identity)?.selection else {
+            return mutationOutcome(
+                .identityChanged,
+                previous: selectionBeforePendingSnapshots,
+                selection: selectionBeforePendingSnapshots,
                 attempts: 0
             )
         }

@@ -124,6 +124,7 @@ import XCTest
                     workspaceID: childWorkspaceID,
                     agentSessionID: childSessionID,
                     activationID: UUID(),
+                    initialSelectionRevision: 0,
                     expectedParentSessionID: sourceSessionID,
                     worktreeBindings: [],
                     validationFailure: nil
@@ -957,6 +958,14 @@ import XCTest
             )
         }
 
+        func testAgentRunCanonicalChildSelectionMutationUsesChildArtifactsInsteadOfLaunchTabDecoy() async throws {
+            try await assertOracleReviewTransportUsesPublishedPatch(
+                repositoryKind: .canonical,
+                delegateToChildRun: true,
+                childPublishesAuthoritativeArtifact: true
+            )
+        }
+
         func testAgentRunLinkedWorktreeFreshAndContinuingOracleInheritsLaunchArtifact() async throws {
             try await assertOracleReviewTransportUsesPublishedPatch(
                 repositoryKind: .linkedWorktree,
@@ -1095,6 +1104,9 @@ import XCTest
                         try XCTUnwrap(window.workspaceManager.composeTab(with: targetTabID))
                             .selection.selectedPaths.isEmpty
                     )
+                    let initialTargetSelection = try XCTUnwrap(
+                        window.workspaceManager.composeTab(with: targetTabID)?.selection
+                    )
 
                     let endpoint = try fixture.endpointA()
                     try await configureAgentModeEndpoint(
@@ -1104,7 +1116,7 @@ import XCTest
                             windowID: window.windowID,
                             workspaceID: fixture.contextA.workspaceID,
                             promptText: "Blank child",
-                            selection: StoredSelection(codemapAutoEnabled: false),
+                            selection: initialTargetSelection,
                             selectedMetaPromptIDs: [],
                             tabName: "Automatic fallback child",
                             runID: resolvedTargetRunID,
@@ -1278,7 +1290,8 @@ import XCTest
             repositoryKind: ProductionOracleRepositoryKind,
             delegateToChildRun: Bool = false,
             childInheritWorktreeBindings: Bool = true,
-            childCreateWorktree: Bool = false
+            childCreateWorktree: Bool = false,
+            childPublishesAuthoritativeArtifact: Bool = false
         ) async throws {
             try await MCPSharedServerTestLease.shared.withLease { lease in
                 let fixture = try await PersistentMCPTestFixture.make(lease: lease)
@@ -1503,7 +1516,10 @@ import XCTest
                         timeoutSeconds: 30
                     )
 
-                    let awaitedPublishedSelection = await waitForPublishedArtifactSelection(fixture.contextA)
+                    let awaitedPublishedSelection = await waitForPublishedArtifactSelection(
+                        fixture.contextA,
+                        patchContains: expectedMarker
+                    )
                     let publishedSelection = try XCTUnwrap(awaitedPublishedSelection)
                     let mapPath = try XCTUnwrap(
                         publishedSelection.selectedPaths.first { $0.hasSuffix("/MAP.txt") }
@@ -1541,6 +1557,14 @@ import XCTest
                     var expectedDelegationID: UUID?
                     var expectedPackagedSourceMarker = expectedMarker
                     var directOracleConnectionID: UUID?
+                    var expectedPackagingTabID = fixture.contextA.tabID
+                    var expectedSelectionRevision = committedRevision
+                    var expectedPublishedSelection = publishedSelection
+                    var expectedMapPath = mapPath
+                    var expectedPatchPath = patchPath
+                    var expectedPatchText = patchText
+                    var expectedMapAlias = mapAlias
+                    var expectedPatchAlias = patchAlias
 
                     if delegateToChildRun {
                         let window = fixture.contextA.window
@@ -1696,12 +1720,15 @@ import XCTest
                         conversationTabID = targetTabID
                         conversationSessionID = targetSessionID
                         conversationRunID = resolvedTargetRunID
+                        let initialChildSelection = try XCTUnwrap(
+                            window.workspaceManager.composeTab(with: targetTabID)?.selection
+                        )
                         let childContext = MCPServerViewModel.TabContextSnapshot(
                             tabID: targetTabID,
                             windowID: fixture.contextA.window.windowID,
                             workspaceID: fixture.contextA.workspaceID,
                             promptText: "Child conversation prompt",
-                            selection: StoredSelection(codemapAutoEnabled: false),
+                            selection: initialChildSelection,
                             selectedMetaPromptIDs: [],
                             tabName: "Delegated Oracle child",
                             runID: resolvedTargetRunID,
@@ -1746,6 +1773,75 @@ import XCTest
                                 clientName: "linked-public-child-oracle",
                                 windowID: window.windowID,
                                 runPurpose: .agentModeRun
+                            ))
+                        }
+
+                        if childPublishesAuthoritativeArtifact {
+                            XCTAssertTrue(bindings.isEmpty)
+                            XCTAssertFalse(childCreateWorktree)
+                            _ = try await endpoint.callTool(
+                                name: MCPWindowToolName.manageSelection,
+                                arguments: [
+                                    "op": "set",
+                                    "paths": [sourceFile.path],
+                                    "mode": "full",
+                                    "strict": true
+                                ],
+                                timeoutSeconds: 30
+                            )
+                            _ = try await endpoint.callTool(
+                                name: MCPWindowToolName.git,
+                                arguments: [
+                                    "op": "diff",
+                                    "repo_root": publicationRoot.path,
+                                    "scope": "selected",
+                                    "detail": "patches",
+                                    "artifacts": true,
+                                    "mode": "deep"
+                                ],
+                                timeoutSeconds: 30
+                            )
+                            let awaitedChildSelection = await waitForPublishedArtifactSelection(
+                                window: window,
+                                workspaceID: fixture.contextA.workspaceID,
+                                tabID: targetTabID,
+                                patchContains: liveMarker
+                            )
+                            let childSelection = try XCTUnwrap(awaitedChildSelection)
+                            expectedMapPath = try XCTUnwrap(
+                                childSelection.selectedPaths.first { $0.hasSuffix("/MAP.txt") }
+                            )
+                            expectedPatchPath = try XCTUnwrap(
+                                childSelection.selectedPaths.first { $0.hasSuffix("/diff/all.patch") }
+                            )
+                            expectedPatchText = try String(
+                                contentsOfFile: expectedPatchPath,
+                                encoding: .utf8
+                            )
+                            expectedMapAlias = try XCTUnwrap(
+                                expectedMapPath.range(of: "/_git_data/").map {
+                                    "_git_data/" + expectedMapPath[$0.upperBound...]
+                                }
+                            )
+                            expectedPatchAlias = try XCTUnwrap(
+                                expectedPatchPath.range(of: "/_git_data/").map {
+                                    "_git_data/" + expectedPatchPath[$0.upperBound...]
+                                }
+                            )
+                            expectedPublishedSelection = childSelection
+                            expectedPackagingTabID = targetTabID
+                            expectedSelectionRevision = window.workspaceManager
+                                .selectionRevisionForMCP(
+                                    workspaceID: fixture.contextA.workspaceID,
+                                    tabID: targetTabID
+                                )
+                            expectedDelegationID = nil
+                            XCTAssertTrue(expectedPatchText.contains(liveMarker), expectedPatchText)
+                            XCTAssertNil(try agentModeViewModel.mcpDelegatedAgentRunOracleReviewContext(
+                                tabID: targetTabID,
+                                workspaceID: fixture.contextA.workspaceID,
+                                sessionID: targetSessionID,
+                                runID: resolvedTargetRunID
                             ))
                         }
                     }
@@ -1888,7 +1984,7 @@ import XCTest
 
                     let messages = transportCapture.messages
                     let expectedFingerprint =
-                        OracleReviewPackagingDiagnostics.fingerprint(patchText)
+                        OracleReviewPackagingDiagnostics.fingerprint(expectedPatchText)
                     XCTAssertEqual(messages.count, 2)
                     XCTAssertEqual(
                         transportCapture.serializedGitDiffFingerprints,
@@ -1914,15 +2010,15 @@ import XCTest
                         XCTAssertEqual(frozen.origin, .askOracle)
                         XCTAssertEqual(frozen.conversationTabID, conversationTabID)
                         XCTAssertEqual(frozen.conversationWorkspaceID, fixture.contextA.workspaceID)
-                        XCTAssertEqual(frozen.sourceTabID, fixture.contextA.tabID)
+                        XCTAssertEqual(frozen.sourceTabID, expectedPackagingTabID)
                         XCTAssertEqual(frozen.sourceWorkspaceID, fixture.contextA.workspaceID)
-                        XCTAssertEqual(frozen.sourceSelectionRevision, committedRevision)
+                        XCTAssertEqual(frozen.sourceSelectionRevision, expectedSelectionRevision)
                         XCTAssertEqual(frozen.delegationID, expectedDelegationID)
                         XCTAssertEqual(frozen.conversationAgentSessionID, conversationSessionID)
                         XCTAssertEqual(frozen.conversationAgentRunID, conversationRunID)
                         XCTAssertEqual(
                             Set(frozen.selectedIdentityHashes),
-                            Set(publishedSelection.selectedPaths.map(
+                            Set(expectedPublishedSelection.selectedPaths.map(
                                 OracleReviewPackagingDiagnostics.identityHash
                             ))
                         )
@@ -1932,7 +2028,7 @@ import XCTest
                         )
                         XCTAssertEqual(
                             frozen.capability?.creatorTabID,
-                            fixture.contextA.tabID
+                            expectedPackagingTabID
                         )
                         XCTAssertEqual(
                             Set(frozen.capability?.boundRepositoryIDs ?? []),
@@ -1962,7 +2058,7 @@ import XCTest
                         XCTAssertEqual(preassembly.fileBlocks, submission.fileBlocks)
                         XCTAssertTrue(
                             preassembly.artifactDispositions.contains {
-                                $0.pathHash == OracleReviewPackagingDiagnostics.identityHash(mapPath)
+                                $0.pathHash == OracleReviewPackagingDiagnostics.identityHash(expectedMapPath)
                                     && $0.status == .authorized
                                     && $0.kind == SelectedGitArtifactKind.map.rawValue
                                     && $0.detail == "readable"
@@ -1970,7 +2066,7 @@ import XCTest
                         )
                         XCTAssertTrue(
                             preassembly.artifactDispositions.contains {
-                                $0.pathHash == OracleReviewPackagingDiagnostics.identityHash(patchPath)
+                                $0.pathHash == OracleReviewPackagingDiagnostics.identityHash(expectedPatchPath)
                                     && $0.status == .authorized
                                     && $0.kind == SelectedGitArtifactKind.patch.rawValue
                                     && $0.detail == "readable"
@@ -1987,19 +2083,19 @@ import XCTest
                         messages,
                         transportCapture.serializedUserContents
                     ) {
-                        XCTAssertEqual(message.gitDiff, patchText)
+                        XCTAssertEqual(message.gitDiff, expectedPatchText)
                         XCTAssertTrue(
                             serializedUserContent.contains(
-                                "<git_diff>\n" + patchText + "\n</git_diff>"
+                                "<git_diff>\n" + expectedPatchText + "\n</git_diff>"
                             )
                         )
                         XCTAssertEqual(
                             serializedUserContent.components(
-                                separatedBy: mapAlias
+                                separatedBy: expectedMapAlias
                             ).count - 1,
                             1
                         )
-                        XCTAssertFalse(serializedUserContent.contains(patchAlias))
+                        XCTAssertFalse(serializedUserContent.contains(expectedPatchAlias))
                         XCTAssertTrue(serializedUserContent.contains(expectedPackagedSourceMarker))
                         if let forbiddenMarker {
                             XCTAssertFalse(
@@ -2007,12 +2103,12 @@ import XCTest
                             )
                         }
                         XCTAssertEqual(
-                            message.fileBlocks.count { $0.contains(mapAlias) },
+                            message.fileBlocks.count { $0.contains(expectedMapAlias) },
                             1
                         )
                         XCTAssertFalse(
                             message.fileBlocks.contains {
-                                $0.contains("<path>" + patchAlias + "</path>")
+                                $0.contains("<path>" + expectedPatchAlias + "</path>")
                             }
                         )
                         let packagedSources = message.fileBlocks.joined(separator: "\n")
@@ -2432,16 +2528,37 @@ import XCTest
         }
 
         private func waitForPublishedArtifactSelection(
-            _ context: PersistentMCPTestContext
+            _ context: PersistentMCPTestContext,
+            patchContains marker: String? = nil
+        ) async -> StoredSelection? {
+            await waitForPublishedArtifactSelection(
+                window: context.window,
+                workspaceID: context.workspaceID,
+                tabID: context.tabID,
+                patchContains: marker
+            )
+        }
+
+        private func waitForPublishedArtifactSelection(
+            window: WindowState,
+            workspaceID _: UUID,
+            tabID: UUID,
+            patchContains marker: String? = nil
         ) async -> StoredSelection? {
             let published = await waitUntil(timeout: .seconds(5)) {
-                guard let selection = context.window.workspaceManager.composeTab(with: context.tabID)?.selection
+                guard let selection = window.workspaceManager.composeTab(with: tabID)?.selection
                 else { return false }
-                return selection.selectedPaths.contains { $0.hasSuffix("/MAP.txt") }
-                    && selection.selectedPaths.contains { $0.hasSuffix("/diff/all.patch") }
+                guard selection.selectedPaths.contains(where: { $0.hasSuffix("/MAP.txt") }),
+                      let patchPath = selection.selectedPaths.first(where: {
+                          $0.hasSuffix("/diff/all.patch")
+                      })
+                else { return false }
+                guard let marker else { return true }
+                return (try? String(contentsOfFile: patchPath, encoding: .utf8))?
+                    .contains(marker) == true
             }
             guard published else { return nil }
-            return context.window.workspaceManager.composeTab(with: context.tabID)?.selection
+            return window.workspaceManager.composeTab(with: tabID)?.selection
         }
 
         private func waitUntil(

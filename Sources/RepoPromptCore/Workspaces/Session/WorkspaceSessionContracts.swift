@@ -808,6 +808,7 @@ package struct ComposeTabNonSelectionPatch: @unchecked Sendable, Equatable {
 
 package enum ComposeTabCommand: @unchecked Sendable, Equatable {
     case create(workspaceID: UUID, tab: ComposeTabState, makeActive: Bool)
+    case patchTitle(workspaceID: UUID, tabID: UUID, name: String, lastModified: Date)
     case patch(workspaceID: UUID, tabID: UUID, patch: ComposeTabNonSelectionPatch)
     case patchStashed(workspaceID: UUID, stashedTabID: UUID, patch: ComposeTabNonSelectionPatch)
     case remove(workspaceID: UUID, tabID: UUID)

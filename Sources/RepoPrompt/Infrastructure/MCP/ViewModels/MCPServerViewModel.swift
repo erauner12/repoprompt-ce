@@ -5193,7 +5193,31 @@ final class MCPServerViewModel: ObservableObject {
             return nil
         }
 
+        let identity = WorkspaceSelectionIdentity(
+            workspaceID: capability.workspaceID,
+            tabID: context.tabID
+        )
+        let grantSnapshot: MCPGitArtifactAdvertisementSnapshot
+        switch gitArtifactAdvertisementRegistry.lookup(
+            exactAlias: displayPath,
+            identity: identity,
+            capability: capability
+        ) {
+        case let .granted(artifact, snapshot)
+            where artifact.absolutePath == entry.file.standardizedFullPath:
+            grantSnapshot = snapshot
+        case .granted, .rejected:
+            throw MCPError.invalidParams(
+                "Cannot read '\(requestedPath)'. Git-data artifacts must already be selected and authorized."
+            )
+        }
+
         let preparedContent = await WorkspaceInteractiveReadProcessor.prepareOffActor(content)
+        guard gitArtifactAdvertisementRegistry.isCurrent(grantSnapshot) else {
+            throw MCPError.invalidParams(
+                "Cannot read '\(requestedPath)'. Git-data artifacts must already be selected and authorized."
+            )
+        }
         do {
             let preparedReply = try await MCPReadFileToolProjection.makeBaseReply(
                 preparedContent: preparedContent,

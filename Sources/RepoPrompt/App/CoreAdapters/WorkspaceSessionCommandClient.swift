@@ -3,12 +3,21 @@ import RepoPromptCore
 
 @MainActor
 final class WorkspaceSessionCommandClient {
+    struct ComposeTabTitleProjectionReceipt: Equatable {
+        let sessionID: WorkspaceSessionID
+        let activationID: UUID
+        let workspaceID: UUID
+        let tabID: UUID
+        let title: String
+        let snapshotSequence: UInt64
+    }
+
     let sessionID: WorkspaceSessionID
     let ingress: any WorkspaceSessionCommandIngress
 
     private(set) var snapshot: WorkspaceSessionSnapshot?
     private(set) var admissionToken: WorkspaceSessionAdmissionToken?
-    private var projectionWaiter: (@MainActor (UInt64) async -> Void)?
+    private var projectionWaiter: (@MainActor (UInt64) async -> Bool)?
     private var trackedTasks: [UUID: Task<WorkspaceSessionCommandResult, Never>] = [:]
     private var commandTail: Task<Void, Never>?
 
@@ -17,7 +26,7 @@ final class WorkspaceSessionCommandClient {
         self.ingress = ingress
     }
 
-    func bindProjectionWaiter(_ waiter: @escaping @MainActor (UInt64) async -> Void) {
+    func bindProjectionWaiter(_ waiter: @escaping @MainActor (UInt64) async -> Bool) {
         precondition(projectionWaiter == nil, "workspace projection waiter may be bound only once")
         projectionWaiter = waiter
     }
@@ -82,11 +91,76 @@ final class WorkspaceSessionCommandClient {
             guard receipt.sessionID == sessionID,
                   receipt.activationID == token.activationID
             else { return .rejected(.expiredActivation) }
-            await projectionWaiter?(receipt.snapshotSequence)
+            if let projectionWaiter,
+               await !projectionWaiter(receipt.snapshotSequence)
+            {
+                return .failed(WorkspaceSessionFailure("authoritative projection wait was cancelled"))
+            }
         default:
             break
         }
         return result
+    }
+
+    func patchComposeTabTitle(
+        tabID: UUID,
+        title: String,
+        lastModified: Date,
+        source: WorkspaceSessionCommandSource
+    ) async -> ComposeTabTitleProjectionReceipt? {
+        await commandTail?.value
+        guard !Task.isCancelled,
+              let snapshot,
+              snapshot.sessionID == sessionID,
+              let admissionToken,
+              admissionToken.sessionID == sessionID
+        else { return nil }
+
+        let matches = snapshot.workspaces.compactMap { workspace in
+            workspace.composeTabs.contains(where: { $0.id == tabID }) ? workspace.id : nil
+        }
+        guard matches.count == 1, let workspaceID = matches.first else { return nil }
+
+        let result = await executeNow(
+            .composeTab(.patchTitle(
+                workspaceID: workspaceID,
+                tabID: tabID,
+                name: title,
+                lastModified: lastModified
+            )),
+            source: source,
+            exactAdmissionToken: admissionToken,
+            expectedGeneration: snapshot.stateGeneration
+        )
+        guard !Task.isCancelled,
+              self.admissionToken?.sessionID == sessionID,
+              self.admissionToken?.activationID == admissionToken.activationID
+        else { return nil }
+
+        let receipt: WorkspaceSessionCommandReceipt
+        switch result {
+        case let .committed(commandReceipt), let .unchanged(commandReceipt):
+            receipt = commandReceipt
+        case .stale, .notReady, .rejected, .failed:
+            return nil
+        }
+        guard receipt.sessionID == sessionID,
+              receipt.activationID == admissionToken.activationID,
+              let projected = self.snapshot,
+              projected.sessionID == sessionID,
+              projected.snapshotSequence >= receipt.snapshotSequence,
+              projected.workspaces.first(where: { $0.id == workspaceID })?
+              .composeTabs.first(where: { $0.id == tabID })?.name == title
+        else { return nil }
+
+        return ComposeTabTitleProjectionReceipt(
+            sessionID: sessionID,
+            activationID: admissionToken.activationID,
+            workspaceID: workspaceID,
+            tabID: tabID,
+            title: title,
+            snapshotSequence: receipt.snapshotSequence
+        )
     }
 
     func replaceSelection(

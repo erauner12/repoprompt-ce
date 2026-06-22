@@ -412,6 +412,10 @@ class WorkspaceManagerViewModel: ObservableObject {
         workspaceSessionClient?.sessionID
     }
 
+    var hasSelectedWorkspaceSession: Bool {
+        workspaceSessionClient != nil
+    }
+
     var selectedWorkspaceSessionActivationID: UUID? {
         workspaceSessionClient?.admissionToken?.activationID
     }
@@ -568,6 +572,32 @@ class WorkspaceManagerViewModel: ObservableObject {
             command,
             source: WorkspaceSessionCommandSource(kind: source)
         )
+    }
+
+    func patchComposeTabTitle(
+        tabID: UUID,
+        title: String,
+        source: String
+    ) async -> WorkspaceSessionCommandClient.ComposeTabTitleProjectionReceipt? {
+        guard let workspaceSessionClient, !Task.isCancelled else { return nil }
+        let expectedSessionID = workspaceSessionClient.sessionID
+        guard let receipt = await workspaceSessionClient.patchComposeTabTitle(
+            tabID: tabID,
+            title: title,
+            lastModified: Date(),
+            source: WorkspaceSessionCommandSource(kind: source)
+        ),
+            !Task.isCancelled,
+            self.workspaceSessionClient === workspaceSessionClient,
+            receipt.sessionID == expectedSessionID,
+            workspaceSessionClient.admissionToken?.activationID == receipt.activationID,
+            workspaceSessionClient.snapshot?.snapshotSequence ?? 0 >= receipt.snapshotSequence,
+            composeTab(for: WorkspaceSelectionIdentity(
+                workspaceID: receipt.workspaceID,
+                tabID: receipt.tabID
+            ))?.name == receipt.title
+        else { return nil }
+        return receipt
     }
 
     private func isCommittedOrUnchanged(_ result: WorkspaceSessionCommandResult?) -> Bool {
@@ -888,6 +918,18 @@ class WorkspaceManagerViewModel: ObservableObject {
         searchService: workspaceSearchService
     )
     private weak var selectionCoordinator: WorkspaceSelectionCoordinator?
+    private var authoritativeProjectionApplyDepth = 0
+    private var uiSnapshotCommandTail: Task<Void, Never>?
+    private var uiSnapshotCommandGeneration: UInt64 = 0
+    #if DEBUG
+        enum AuthoritativeProjectionFeedbackSource {
+            case selectedFiles
+            case promptText
+            case selectionSlices
+        }
+
+        private var authoritativeProjectionFeedbackEventHandler: ((AuthoritativeProjectionFeedbackSource, Bool) -> Void)?
+    #endif
 
     var liveUISelectionRevision: UInt64 {
         fileManager.selectionStateRevision
@@ -1699,14 +1741,32 @@ class WorkspaceManagerViewModel: ObservableObject {
 
         // Track when the file selection changes to detect if active preset is dirty
         fileManager.$selectedFiles
-            // Debounce to avoid rapid consecutive events
-            .debounce(for: .seconds(0.15), scheduler: DispatchQueue.main)
             .sink { [weak self] newSelection in
                 guard let self, !self.isSwitchingWorkspace else { return }
+                let originatedDuringAuthoritativeProjection = authoritativeProjectionApplyDepth > 0
+                #if DEBUG
+                    authoritativeProjectionFeedbackEventHandler?(
+                        .selectedFiles,
+                        originatedDuringAuthoritativeProjection
+                    )
+                #endif
+                guard !originatedDuringAuthoritativeProjection else { return }
                 checkIfActivePresetIsDirty(with: newSelection)
                 bumpStateVersion(for: activeWorkspaceID)
-                // No disk save here - publish in-memory snapshot for mirroring
-                publishActiveComposeTabSnapshot(commitToMemory: true)
+                let currentSelection = fileManager.snapshotSelection()
+                let emittedSelection = StoredSelection(
+                    selectedPaths: newSelection.map(\.standardizedFullPath),
+                    autoCodemapPaths: currentSelection.autoCodemapPaths,
+                    slices: currentSelection.slices,
+                    codemapAutoEnabled: currentSelection.codemapAutoEnabled
+                )
+                // @Published emits before selectedFiles is assigned. Carry its emitted value into
+                // the synchronous Core write instead of re-reading the previous UI selection.
+                publishActiveComposeTabSnapshot(
+                    commitToMemory: true,
+                    touchModified: false,
+                    selectionOverride: emittedSelection
+                )
             }
             .store(in: &cancellables)
 
@@ -1722,9 +1782,21 @@ class WorkspaceManagerViewModel: ObservableObject {
 
         promptViewModel.$promptText
             .removeDuplicates()
+            .map { [weak self] _ in
+                self?.authoritativeProjectionApplyDepth ?? 0 > 0
+            }
             .debounce(for: .milliseconds(120), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
+            .sink { [weak self] originatedDuringAuthoritativeProjection in
                 guard let self, !self.isSwitchingWorkspace else { return }
+                #if DEBUG
+                    authoritativeProjectionFeedbackEventHandler?(
+                        .promptText,
+                        originatedDuringAuthoritativeProjection
+                    )
+                #endif
+                guard !originatedDuringAuthoritativeProjection else {
+                    return
+                }
                 bumpStateVersion(for: activeWorkspaceID)
                 // No disk save here - publish in-memory snapshot for mirroring
                 publishActiveComposeTabSnapshot(commitToMemory: true)
@@ -1736,9 +1808,21 @@ class WorkspaceManagerViewModel: ObservableObject {
         // snapshot, causing stale slices to reappear in mirrored tab contexts.
         fileManager.$selectionSlicesByFileID
             .removeDuplicates()
+            .map { [weak self] _ in
+                self?.authoritativeProjectionApplyDepth ?? 0 > 0
+            }
             .debounce(for: .milliseconds(60), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
+            .sink { [weak self] originatedDuringAuthoritativeProjection in
                 guard let self, !self.isSwitchingWorkspace else { return }
+                #if DEBUG
+                    authoritativeProjectionFeedbackEventHandler?(
+                        .selectionSlices,
+                        originatedDuringAuthoritativeProjection
+                    )
+                #endif
+                guard !originatedDuringAuthoritativeProjection else {
+                    return
+                }
                 bumpStateVersion(for: activeWorkspaceID)
                 // Commit to memory so composeTab(with:) reflects the new slice state immediately.
                 publishActiveComposeTabSnapshot(commitToMemory: true)
@@ -3921,6 +4005,33 @@ class WorkspaceManagerViewModel: ObservableObject {
         selectionCoordinator = coordinator
     }
 
+    func awaitPendingUISnapshotCommands() async {
+        while let tail = uiSnapshotCommandTail {
+            let generation = uiSnapshotCommandGeneration
+            await tail.value
+            guard !Task.isCancelled else { return }
+            if generation == uiSnapshotCommandGeneration {
+                return
+            }
+        }
+    }
+
+    func withAuthoritativeProjection(_ apply: () -> Void) {
+        // This scope is deliberately synchronous: user actions cannot interleave with it, while
+        // prompt/slice publisher events emitted here retain their origin through debounce.
+        authoritativeProjectionApplyDepth += 1
+        defer { authoritativeProjectionApplyDepth -= 1 }
+        apply()
+    }
+
+    #if DEBUG
+        func test_setAuthoritativeProjectionFeedbackEventHandler(
+            _ handler: ((AuthoritativeProjectionFeedbackSource, Bool) -> Void)?
+        ) {
+            authoritativeProjectionFeedbackEventHandler = handler
+        }
+    #endif
+
     func collectComposeTabSnapshot(name: String, base: ComposeTabState? = nil) -> ComposeTabState {
         let resolvedName = name.isEmpty ? (base?.name ?? "Tab") : name
         var snapshot = base ?? ComposeTabState(name: resolvedName)
@@ -4053,7 +4164,23 @@ class WorkspaceManagerViewModel: ObservableObject {
     /// Build a fresh snapshot of the active tab, optionally commit to memory, then publish.
     /// This does NOT write to disk.
     @MainActor
-    func publishActiveComposeTabSnapshot(commitToMemory: Bool = true, touchModified: Bool = false) {
+    func publishActiveComposeTabSnapshot(
+        commitToMemory: Bool = true,
+        touchModified: Bool = false
+    ) {
+        publishActiveComposeTabSnapshot(
+            commitToMemory: commitToMemory,
+            touchModified: touchModified,
+            selectionOverride: nil
+        )
+    }
+
+    @MainActor
+    private func publishActiveComposeTabSnapshot(
+        commitToMemory: Bool,
+        touchModified: Bool,
+        selectionOverride: StoredSelection?
+    ) {
         let (name, base) = activeComposeTabContext()
 
         // NEW: Suppress snapshot emissions for non-target tabs while an MCP tab-context apply is running
@@ -4064,13 +4191,19 @@ class WorkspaceManagerViewModel: ObservableObject {
         if selectionCoordinator?.isApplyingSelectionMirror == true {
             return
         }
+        if authoritativeProjectionApplyDepth > 0 {
+            return
+        }
         if let activeBase = base,
            activationSnapshotSuspendedTabIDs.contains(activeBase.id)
         {
             return
         }
 
-        let snapshot = collectComposeTabSnapshot(name: name, base: base)
+        var snapshot = collectComposeTabSnapshot(name: name, base: base)
+        if let selectionOverride {
+            snapshot.selection = selectionOverride
+        }
 
         // Respect per-tab suspension: avoid mutating composeTabs during UI apply,
         // so mirroring can treat these as transient snapshots.
@@ -4082,9 +4215,15 @@ class WorkspaceManagerViewModel: ObservableObject {
            let workspaceID = activeWorkspaceID,
            let base
         {
-            let expectedRevision = selectionRevisionForMCP(workspaceID: workspaceID, tabID: snapshot.id)
-            Task { @MainActor [weak self] in
+            let predecessor = uiSnapshotCommandTail
+            uiSnapshotCommandGeneration &+= 1
+            let task = Task { @MainActor [weak self] in
+                await predecessor?.value
                 guard let self else { return }
+                let expectedRevision = selectionRevisionForMCP(
+                    workspaceID: workspaceID,
+                    tabID: snapshot.id
+                )
                 let result = await executeSelectedWorkspaceCommand(
                     .selectionAndPatch(
                         WorkspaceSelectionAndTabPatchCommand(
@@ -4106,6 +4245,7 @@ class WorkspaceManagerViewModel: ObservableObject {
                     _ = base
                 }
             }
+            uiSnapshotCommandTail = task
             return
         }
         if shouldCommit {

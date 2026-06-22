@@ -11355,6 +11355,17 @@ extension WorkspaceFilesViewModel {
         commitSelectionState([], [])
     }
 
+    #if DEBUG
+        @MainActor
+        func test_emitEmptySelectionForAuthoritativeProjectionFeedback() {
+            if selectedFiles.isEmpty {
+                selectedFiles = []
+            } else {
+                resetSelection()
+            }
+        }
+    #endif
+
     /// Remove a single file from selection state if present. Returns true if a change occurred.
     @MainActor
     @discardableResult

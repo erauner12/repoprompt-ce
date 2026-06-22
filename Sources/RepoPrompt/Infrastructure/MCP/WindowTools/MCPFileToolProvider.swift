@@ -424,6 +424,43 @@ final class MCPFileToolProvider: MCPWindowToolProviding {
         limit: Int?,
         context: MCPRuntimeFileToolContext
     ) async throws -> Value {
+        let metadata = await EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.providerRequestMetadata) {
+            await dependencies.captureRequestMetadata()
+        }
+        try Task.checkCancellation()
+        let resolvedPath = context.lookupContext.translateInputPath(path)
+        let authorizedArtifact = try await EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.providerReadEnvelope) {
+            try await dependencies.readSelectedAuthorizedGitArtifact(
+                path,
+                resolvedPath,
+                startLine1Based,
+                limit,
+                metadata,
+                context.lookupContext
+            )
+        }
+        if let artifact = authorizedArtifact {
+            let worktreeScope = ToolResultDTOs.WorktreeScopeDTO.sessionBound(
+                from: context.lookupContext.bindingProjection
+            )
+            let reply = try await EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.providerReplyProjection) {
+                try await MCPReadFileToolProjection.projectReply(
+                    artifact.reply,
+                    displayPath: artifact.reply.displayPath,
+                    worktreeScope: worktreeScope
+                )
+            }
+            try Task.checkCancellation()
+            let value = try await EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.providerValueEncoding) {
+                try await MCPProviderProjectionWorker.encode(
+                    reply,
+                    toolName: MCPWindowToolName.readFile
+                )
+            }
+            EditFlowPerf.lifecycleEvent(EditFlowPerf.Lifecycle.ReadFile.providerResultReady)
+            return value
+        }
+        try Task.checkCancellation()
         let runtimeResult = try await MCPRuntimeFileToolServices.readFile(
             path: path,
             startLine1Based: startLine1Based,
@@ -436,10 +473,6 @@ final class MCPFileToolProvider: MCPWindowToolProviding {
                 runtimeResult.reply,
                 toolName: MCPWindowToolName.readFile
             )
-        }
-        try Task.checkCancellation()
-        let metadata = await EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.providerRequestMetadata) {
-            await dependencies.captureRequestMetadata()
         }
         try Task.checkCancellation()
         await EditFlowPerf.measure(

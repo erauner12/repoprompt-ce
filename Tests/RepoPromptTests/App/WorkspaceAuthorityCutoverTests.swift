@@ -444,7 +444,14 @@ final class WorkspaceAuthorityCutoverTests: XCTestCase {
             applySnapshot: { applied.append($0.snapshotSequence) }
         )
         await bridge.applyFirstAuthoritativeSnapshot(snapshot)
-        await bridge.waitUntilApplied(sequence: 1)
+        _ = await bridge.waitUntilApplied(sequence: 1)
+        let cancelledWaiter = Task { @MainActor in
+            await bridge.waitUntilApplied(sequence: 2)
+        }
+        await Task.yield()
+        cancelledWaiter.cancel()
+        let cancelledWaitResult = await cancelledWaiter.value
+        XCTAssertFalse(cancelledWaitResult)
         XCTAssertEqual(applied, [1])
         XCTAssertEqual(bridge.projectionApplyDepth, 0)
     }

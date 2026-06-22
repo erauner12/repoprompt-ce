@@ -18,7 +18,10 @@ final class WorkspaceSessionObservationBridge: ObservableObject {
     private let observationProvider: @Sendable (UInt64?) async -> AsyncStream<WorkspaceSessionSnapshot>
     private let applySnapshot: SnapshotApplier
     private var observationTask: Task<Void, Never>?
-    private var appliedSequenceWaiters: [UInt64: [CheckedContinuation<Void, Never>]] = [:]
+    private var appliedSequenceWaiters: [UInt64: [UUID: CheckedContinuation<Bool, Never>]] = [:]
+    #if DEBUG
+        private var beforeApplyForTesting: (@MainActor (WorkspaceSessionSnapshot) async -> Void)?
+    #endif
 
     init(
         snapshotProvider: @escaping @Sendable () async -> WorkspaceSessionSnapshot?,
@@ -53,20 +56,38 @@ final class WorkspaceSessionObservationBridge: ObservableObject {
         }
     }
 
-    func waitUntilApplied(sequence: UInt64) async {
-        if let snapshot, snapshot.snapshotSequence >= sequence { return }
-        await withCheckedContinuation { continuation in
-            appliedSequenceWaiters[sequence, default: []].append(continuation)
+    func waitUntilApplied(sequence: UInt64) async -> Bool {
+        if let snapshot, snapshot.snapshotSequence >= sequence { return true }
+        guard !Task.isCancelled else { return false }
+        let waiterID = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                appliedSequenceWaiters[sequence, default: [:]][waiterID] = continuation
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelAppliedWaiter(sequence: sequence, waiterID: waiterID)
+            }
         }
     }
 
     func stop() {
         observationTask?.cancel()
         observationTask = nil
-        let waiters = appliedSequenceWaiters.values.flatMap(\.self)
+        let waiters = appliedSequenceWaiters.values.flatMap(\.values)
         appliedSequenceWaiters.removeAll()
-        waiters.forEach { $0.resume() }
+        waiters.forEach { $0.resume(returning: false) }
     }
+
+    #if DEBUG
+        func test_setBeforeApply(_ handler: (@MainActor (WorkspaceSessionSnapshot) async -> Void)?) {
+            beforeApplyForTesting = handler
+        }
+    #endif
 
     private func receive(_ incoming: WorkspaceSessionSnapshot) async {
         guard let current = snapshot else {
@@ -89,6 +110,9 @@ final class WorkspaceSessionObservationBridge: ObservableObject {
     }
 
     private func apply(_ value: WorkspaceSessionSnapshot) async {
+        #if DEBUG
+            await beforeApplyForTesting?(value)
+        #endif
         projectionApplyDepth += 1
         defer { projectionApplyDepth -= 1 }
         await applySnapshot(value)
@@ -99,8 +123,16 @@ final class WorkspaceSessionObservationBridge: ObservableObject {
     private func resumeAppliedWaiters(through sequence: UInt64) {
         let completed = appliedSequenceWaiters.keys.filter { $0 <= sequence }
         for key in completed {
-            let waiters = appliedSequenceWaiters.removeValue(forKey: key) ?? []
-            waiters.forEach { $0.resume() }
+            let waiters = appliedSequenceWaiters.removeValue(forKey: key).map { Array($0.values) } ?? []
+            waiters.forEach { $0.resume(returning: true) }
         }
+    }
+
+    private func cancelAppliedWaiter(sequence: UInt64, waiterID: UUID) {
+        guard let waiter = appliedSequenceWaiters[sequence]?.removeValue(forKey: waiterID) else { return }
+        if appliedSequenceWaiters[sequence]?.isEmpty == true {
+            appliedSequenceWaiters.removeValue(forKey: sequence)
+        }
+        waiter.resume(returning: false)
     }
 }

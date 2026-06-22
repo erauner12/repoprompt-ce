@@ -2739,11 +2739,49 @@ class PromptViewModel: ObservableObject {
     @MainActor
     func renameComposeTab(_ id: UUID, to newName: String) {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard applyLegacyComposeTabRename(id, to: trimmed) else { return }
+        postComposeTabNameChanged(tabID: id, name: trimmed)
+    }
+
+    @MainActor
+    func renameComposeTabAuthoritatively(_ id: UUID, to newName: String) async -> String? {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let manager = workspaceManager else { return nil }
+
+        if manager.hasSelectedWorkspaceSession {
+            guard let receipt = await manager.patchComposeTabTitle(
+                tabID: id,
+                title: trimmed,
+                source: "prompt-rename-compose-tab"
+            ),
+                !Task.isCancelled,
+                receipt.tabID == id,
+                receipt.title == trimmed,
+                manager.composeTab(for: WorkspaceSelectionIdentity(
+                    workspaceID: receipt.workspaceID,
+                    tabID: receipt.tabID
+                ))?.name == trimmed,
+                currentComposeTabs.first(where: { $0.id == id })?.name == trimmed
+            else { return nil }
+        } else {
+            guard applyLegacyComposeTabRename(id, to: trimmed),
+                  manager.composeTabName(with: id) == trimmed,
+                  currentComposeTabs.first(where: { $0.id == id })?.name == trimmed
+            else { return nil }
+        }
+
+        postComposeTabNameChanged(tabID: id, name: trimmed)
+        return trimmed
+    }
+
+    @MainActor
+    private func applyLegacyComposeTabRename(_ id: UUID, to trimmed: String) -> Bool {
         guard !trimmed.isEmpty,
               let manager = workspaceManager,
               let workspace = manager.activeWorkspace,
               let index = manager.workspaces.firstIndex(where: { $0.id == workspace.id }),
-              let tabIndex = manager.workspaces[index].composeTabs.firstIndex(where: { $0.id == id }) else { return }
+              manager.workspaces[index].composeTabs.contains(where: { $0.id == id })
+        else { return false }
         manager.mutateWorkspaceReceiptFirst(
             workspaceID: workspace.id,
             source: "prompt-rename-compose-tab"
@@ -2755,13 +2793,18 @@ class PromptViewModel: ObservableObject {
         manager.markWorkspaceDirty()
         manager.pollAndSaveState()
         loadComposeTabsFromWorkspace(manager.workspaces[index])
+        return true
+    }
+
+    @MainActor
+    private func postComposeTabNameChanged(tabID: UUID, name: String) {
         NotificationCenter.default.post(
             name: .composeTabNameChanged,
             object: nil,
             userInfo: [
-                "tabID": id,
+                "tabID": tabID,
                 "windowID": windowID,
-                "name": trimmed
+                "name": name
             ]
         )
     }

@@ -6298,6 +6298,10 @@ final class AgentModeViewModel: ObservableObject {
         guard let targetWorkspaceID = workspaceManager?.activeWorkspace?.id else {
             throw AgentRunOracleReviewUnavailableReason.targetWorkspaceMismatch
         }
+        let initialSelectionRevision = workspaceManager?.selectionRevisionForMCP(
+            workspaceID: targetWorkspaceID,
+            tabID: targetTabID
+        ) ?? 0
 
         // Target conversation lineage is independent from packaging-source provenance. A
         // top-level child may delegate a non-Agent compose tab (or an explicitly targeted Agent
@@ -6318,6 +6322,7 @@ final class AgentModeViewModel: ObservableObject {
                 workspaceID: targetWorkspaceID,
                 agentSessionID: targetSessionID,
                 activationID: controlContext.activationID,
+                initialSelectionRevision: initialSelectionRevision,
                 expectedParentSessionID: expectedParentSessionID,
                 worktreeBindings: session.worktreeBindings,
                 validationFailure: validationFailure
@@ -6367,6 +6372,7 @@ final class AgentModeViewModel: ObservableObject {
             workspaceID: pending.target.workspaceID,
             agentSessionID: pending.target.agentSessionID,
             activationID: pending.target.activationID,
+            initialSelectionRevision: pending.target.initialSelectionRevision,
             expectedParentSessionID: pending.target.expectedParentSessionID,
             worktreeBindings: pending.target.worktreeBindings,
             validationFailure: validationFailure
@@ -6423,8 +6429,18 @@ final class AgentModeViewModel: ObservableObject {
         ) else {
             throw AgentRunOracleReviewUnavailableReason.targetBindingMismatch
         }
-        if let reason = delegated.unavailableReason {
-            throw reason
+        if let validationFailure = delegated.target.validationFailure {
+            throw validationFailure
+        }
+        let currentSelectionRevision = workspaceManager?.selectionRevisionForMCP(
+            workspaceID: workspaceID,
+            tabID: tabID
+        ) ?? 0
+        guard currentSelectionRevision == delegated.target.initialSelectionRevision else {
+            return nil
+        }
+        if case let .unavailable(source) = delegated.source {
+            throw source.reason
         }
         return delegated
     }
@@ -15801,23 +15817,51 @@ final class AgentModeViewModel: ObservableObject {
     func renameSession(tabID: UUID, to newName: String) async -> String? {
         guard !newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         let validatedName = AgentSession.validatedName(newName)
-        guard let promptManager else { return nil }
+        guard let promptManager,
+              promptManager.currentComposeTabs.contains(where: { $0.id == tabID })
+        else { return nil }
 
-        promptManager.renameComposeTab(tabID, to: validatedName)
-        await Task.yield()
+        let expectedSession = sessions[tabID]
+        let expectedSessionIdentity = expectedSession.map(ObjectIdentifier.init)
+        let expectedPersistentBinding = expectedSession?.persistentSessionBindingIdentity
+        let expectedBindingTransitionGeneration = expectedSession?.bindingTransitionGeneration
+        let expectedRunID = expectedSession?.runID
+        let expectedRunAttemptID = expectedSession?.activeRunAttemptID
+        let expectedSessionID = boundSessionID(for: tabID)
+        if let expectedSessionID,
+           let indexed = ownerValidatedSessionIndex[expectedSessionID],
+           indexed.tabID != tabID
+        {
+            return nil
+        }
 
-        guard let workspaceName = workspaceManager?.composeTabName(with: tabID),
-              workspaceName == validatedName,
-              let projectedName = promptManager.currentComposeTabs.first(where: { $0.id == tabID })?.name,
-              projectedName == workspaceName
+        guard let canonicalName = await promptManager.renameComposeTabAuthoritatively(
+            tabID,
+            to: validatedName
+        ),
+            !Task.isCancelled,
+            canonicalName == validatedName,
+            let workspaceName = workspaceManager?.composeTabName(with: tabID),
+            workspaceName == canonicalName,
+            let projectedName = promptManager.currentComposeTabs.first(where: { $0.id == tabID })?.name,
+            projectedName == workspaceName
         else {
             return nil
         }
-        let canonicalName = workspaceName
 
-        let sessionID = boundSessionID(for: tabID)
+        let currentSession = sessions[tabID]
+        guard currentSession.map(ObjectIdentifier.init) == expectedSessionIdentity,
+              currentSession?.persistentSessionBindingIdentity == expectedPersistentBinding,
+              currentSession?.bindingTransitionGeneration == expectedBindingTransitionGeneration,
+              currentSession?.runID == expectedRunID,
+              currentSession?.activeRunAttemptID == expectedRunAttemptID,
+              boundSessionID(for: tabID) == expectedSessionID
+        else { return nil }
+
+        let sessionID = expectedSessionID
         if let sessionID,
-           var entry = ownerValidatedSessionIndex[sessionID]
+           var entry = ownerValidatedSessionIndex[sessionID],
+           entry.tabID == tabID
         {
             entry.name = canonicalName
             applyLocalSessionIndexUpsert(entry)
@@ -15842,7 +15886,13 @@ final class AgentModeViewModel: ObservableObject {
                 source: "renameSession"
             )
         } else if let sessionID,
-                  let workspace = workspaceManager?.activeWorkspace ?? lastKnownWorkspaceSnapshot
+                  let workspaces = workspaceManager?.workspaces,
+                  workspaces.count(where: { workspace in
+                      workspace.composeTabs.contains(where: { $0.id == tabID })
+                  }) == 1,
+                  let workspace = workspaces.first(where: { workspace in
+                      workspace.composeTabs.contains(where: { $0.id == tabID })
+                  })
         {
             Task { [dataService] in
                 try? await dataService.renameAgentSession(

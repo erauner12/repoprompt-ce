@@ -56,6 +56,11 @@ struct WindowStateCompositionTestHooks {
         var recordActivationEvent: ((WindowStateCompositionActivationEvent) -> Void)?
         var waitAfterInitialActiveSessionRestore: (@MainActor () async -> Void)?
         var waitAfterRuntimePublicationReady: (@MainActor () async -> Void)?
+        var afterAuthoritativeWorkspaceProjection: (@MainActor (
+            WorkspaceManagerViewModel,
+            WorkspaceFilesViewModel,
+            WorkspaceSessionSnapshot
+        ) -> Void)?
     #endif
 }
 
@@ -240,11 +245,22 @@ enum WindowStateCompositionFactory {
                     await bootstrap.commandIngress.observations(after: sequence)
                 },
                 applySnapshot: { [weak workspaceManager] snapshot in
-                    workspaceManager?.applyAuthoritativeSessionSnapshot(snapshot)
-                    if let activeWorkspace = snapshot.workspaces.first(where: {
-                        $0.id == snapshot.activeWorkspaceID
-                    }) {
-                        promptManager.loadComposeTabsFromWorkspace(activeWorkspace)
+                    workspaceManager?.withAuthoritativeProjection {
+                        workspaceManager?.applyAuthoritativeSessionSnapshot(snapshot)
+                        if let activeWorkspace = snapshot.workspaces.first(where: {
+                            $0.id == snapshot.activeWorkspaceID
+                        }) {
+                            promptManager.loadComposeTabsFromWorkspace(activeWorkspace)
+                        }
+                        #if DEBUG
+                            if let workspaceManager {
+                                testHooks?.afterAuthoritativeWorkspaceProjection?(
+                                    workspaceManager,
+                                    workspaceFilesViewModel,
+                                    snapshot
+                                )
+                            }
+                        #endif
                     }
                     if let runtimeID = runtimeBootstrap?.runtimeID,
                        let adapterRegistry = appCoreContainer.runtimeAdapterRegistry

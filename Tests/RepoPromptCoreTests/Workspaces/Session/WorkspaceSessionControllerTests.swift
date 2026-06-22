@@ -204,6 +204,30 @@ final class WorkspaceSessionControllerTests: XCTestCase {
         XCTAssertEqual(tab.selection, selection)
         XCTAssertEqual(tab.promptText, "patch only")
         XCTAssertEqual(current.selectionRevision(workspaceID: workspace.id, tabID: tabID), 1)
+
+        let titleDate = Date(timeIntervalSince1970: 1_234)
+        let titleOnly = WorkspaceSessionCommandEnvelope(
+            admissionToken: activeSession.admission,
+            expectedGeneration: 3,
+            command: .composeTab(.patchTitle(
+                workspaceID: workspace.id,
+                tabID: tabID,
+                name: "Title only",
+                lastModified: titleDate
+            )),
+            source: WorkspaceSessionCommandSource(kind: "test")
+        )
+        guard case .committed = await activeSession.registration.handle.execute(titleOnly) else {
+            return XCTFail("title-only patch did not commit")
+        }
+        let currentTitleSnapshot = await activeSession.registration.handle.currentSnapshot()
+        let titleSnapshot = try XCTUnwrap(currentTitleSnapshot)
+        let titleTab = try XCTUnwrap(titleSnapshot.workspaces.first?.composeTabs.first)
+        XCTAssertEqual(titleTab.name, "Title only")
+        XCTAssertEqual(titleTab.lastModified, titleDate)
+        XCTAssertEqual(titleTab.selection, selection)
+        XCTAssertEqual(titleTab.promptText, "patch only")
+        XCTAssertEqual(titleSnapshot.selectionRevision(workspaceID: workspace.id, tabID: tabID), 1)
     }
 
     func testHostAllocatorIsCanonicalAcrossSessions() async throws {
