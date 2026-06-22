@@ -210,6 +210,7 @@ final class CoordinatorModeViewModel: ObservableObject {
                 selectionSource: option.selectionSource,
                 isSelected: false,
                 isLiveInCurrentWindow: option.isLiveInCurrentWindow,
+                runState: option.runState,
                 updatedAt: option.updatedAt
             )
         }

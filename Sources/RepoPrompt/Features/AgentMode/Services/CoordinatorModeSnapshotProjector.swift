@@ -660,6 +660,7 @@ struct CoordinatorModeSnapshotProjector {
                     selectionSource: .demoRuntime,
                     isSelected: seed.id == selection?.sessionID,
                     isLiveInCurrentWindow: row.map { !$0.isPersistedOnly } ?? false,
+                    runState: row?.runState,
                     updatedAt: row?.updatedAt ?? seed.updatedAt
                 )
             }

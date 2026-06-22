@@ -350,7 +350,7 @@ struct CoordinatorModeView: View {
         return VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
             coordinatorRailTitlebarLane(metrics: metrics)
 
-            coordinatorRailHeader(rail, metrics: metrics)
+            coordinatorThreadsPanel(rail, metrics: metrics)
             coordinatorConversation(rail, metrics: metrics)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(maxHeight: .infinity, alignment: .top)
@@ -359,67 +359,38 @@ struct CoordinatorModeView: View {
         .coordinatorSidebarPanel(edge: .trailing)
     }
 
-    private func coordinatorRailHeader(
+    private func coordinatorThreadsPanel(
         _ rail: CoordinatorModeCoordinatorRail,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        HStack(alignment: .top, spacing: metrics.controlSpacing) {
-            Image(systemName: "rectangle.3.group.bubble")
-                .font(.system(size: metrics.smallIconSize, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
-
-            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                Text(rail.title ?? "New Coordinator")
+        VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+            HStack(spacing: metrics.smallSpacing) {
+                Label("Coordinator Threads", systemImage: "rectangle.3.group.bubble")
                     .font(metrics.cardTitle)
-                    .lineLimit(2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
 
-                HStack(spacing: metrics.smallSpacing) {
-                    if let source = rail.selectionSource {
-                        Text(source.displayName)
-                            .font(metrics.micro)
-                            .foregroundStyle(.secondary)
-                    }
-                    statusChip(
-                        rail.isLiveInCurrentWindow ? "Live" : (rail.state == .chooseCoordinator ? "Ready" : "Persisted"),
-                        color: rail.isLiveInCurrentWindow ? .green : .secondary,
-                        metrics: metrics
-                    )
-                }
-            }
+                Spacer(minLength: 0)
 
-            Spacer(minLength: 0)
-
-            if rail.availableCoordinators.count > 1 {
-                Menu {
-                    ForEach(rail.availableCoordinators) { option in
-                        Button {
-                            viewModel.selectCoordinator(sessionID: option.sessionID)
-                        } label: {
-                            Label(option.title, systemImage: option.isSelected ? "checkmark" : "rectangle.3.group.bubble")
-                        }
-                    }
+                Button {
+                    viewModel.startNewCoordinatorRun()
                 } label: {
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: metrics.smallIconSize, weight: .medium))
                         .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
+                .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .hoverTooltip("Switch Coordinator chat")
+                .hoverTooltip("New Coordinator chat")
             }
 
-            Button {
-                viewModel.startNewCoordinatorRun()
-            } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: metrics.smallIconSize, weight: .medium))
+            VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+                coordinatorNewThreadRow(rail, metrics: metrics)
+
+                if !rail.availableCoordinators.isEmpty {
+                    coordinatorThreadRows(rail.availableCoordinators, metrics: metrics)
+                }
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .hoverTooltip("New Coordinator chat")
         }
         .padding(metrics.cardPadding)
         .coordinatorCardBackground(
@@ -427,6 +398,155 @@ struct CoordinatorModeView: View {
             fillOpacity: CoordinatorStyle.railCardFillOpacity,
             strokeOpacity: 0
         )
+    }
+
+    @ViewBuilder
+    private func coordinatorThreadRows(
+        _ options: [CoordinatorModeCoordinatorOption],
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let rows = VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            ForEach(options) { option in
+                coordinatorThreadRow(option, metrics: metrics)
+            }
+        }
+
+        if options.count > metrics.coordinatorThreadVisibleRowLimit {
+            ScrollView {
+                rows
+            }
+            .scrollIndicators(.visible)
+            .frame(height: coordinatorThreadListHeight(
+                count: options.count,
+                metrics: metrics
+            ))
+        } else {
+            rows
+        }
+    }
+
+    private func coordinatorNewThreadRow(
+        _ rail: CoordinatorModeCoordinatorRail,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        Button {
+            viewModel.startNewCoordinatorRun()
+        } label: {
+            HStack(alignment: .center, spacing: metrics.smallSpacing) {
+                Image(systemName: rail.state == .chooseCoordinator ? "plus.circle.fill" : "plus.bubble")
+                    .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                    .foregroundStyle(rail.state == .chooseCoordinator ? Color.accentColor : .secondary)
+                    .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
+
+                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                    Text("New Coordinator")
+                        .font(metrics.bodySemibold)
+                        .lineLimit(1)
+                    Text("Start a blank parent thread")
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: metrics.smallSpacing)
+
+                statusChip("Ready", color: .secondary, metrics: metrics)
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, metrics.pendingPadding)
+            .padding(.vertical, metrics.smallSpacing)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .coordinatorCardBackground(
+            cornerRadius: metrics.pendingCornerRadius,
+            isSelected: rail.state == .chooseCoordinator,
+            fillOpacity: 0.14,
+            strokeOpacity: 0.10
+        )
+        .hoverTooltip("Prepare a fresh Coordinator parent")
+        .accessibilityAction {
+            viewModel.startNewCoordinatorRun()
+        }
+    }
+
+    private func coordinatorThreadRow(
+        _ option: CoordinatorModeCoordinatorOption,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let status = coordinatorThreadStatus(for: option)
+
+        return Button {
+            viewModel.selectCoordinator(sessionID: option.sessionID)
+        } label: {
+            HStack(alignment: .center, spacing: metrics.smallSpacing) {
+                Image(systemName: option.isSelected ? "checkmark.circle.fill" : "bubble.left.and.bubble.right")
+                    .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                    .foregroundStyle(option.isSelected ? Color.accentColor : .secondary)
+                    .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
+
+                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                    Text(option.title)
+                        .font(metrics.bodySemibold)
+                        .foregroundStyle(.primary.opacity(0.9))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text(option.selectionSource.displayName)
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: metrics.smallSpacing)
+
+                HStack(spacing: metrics.miniPillIconSpacing) {
+                    Circle()
+                        .fill(status.color.opacity(0.9))
+                        .frame(width: metrics.composerStatusDotSize, height: metrics.composerStatusDotSize)
+                    Text(status.text)
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, metrics.miniPillHorizontalPadding)
+                .padding(.vertical, metrics.miniPillVerticalPadding)
+                .background(Capsule(style: .continuous).fill(status.color.opacity(0.10)))
+                .overlay(Capsule(style: .continuous).stroke(status.color.opacity(0.18), lineWidth: 0.5))
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, metrics.pendingPadding)
+            .padding(.vertical, metrics.smallSpacing)
+            .frame(minHeight: metrics.coordinatorThreadRowHeight)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .coordinatorCardBackground(
+            cornerRadius: metrics.pendingCornerRadius,
+            isSelected: option.isSelected,
+            fillOpacity: 0.12,
+            strokeOpacity: 0.10
+        )
+        .hoverTooltip("Switch to \(option.title)")
+        .accessibilityAction {
+            viewModel.selectCoordinator(sessionID: option.sessionID)
+        }
+    }
+
+    private func coordinatorThreadListHeight(count: Int, metrics: CoordinatorVisualMetrics) -> CGFloat {
+        let visibleRows = min(max(count, 1), metrics.coordinatorThreadVisibleRowLimit)
+        let rowHeights = CGFloat(visibleRows) * metrics.coordinatorThreadRowHeight
+        let spacings = CGFloat(max(visibleRows - 1, 0)) * metrics.smallSpacing
+        return rowHeights + spacings
+    }
+
+    private func coordinatorThreadStatus(for option: CoordinatorModeCoordinatorOption) -> (text: String, color: Color) {
+        if let runState = option.runState, runState.isActive {
+            return (runState.coordinatorThreadDisplayName, .blue)
+        }
+        if option.isLiveInCurrentWindow {
+            return ("Live", .green)
+        }
+        return ("Persisted", .secondary)
     }
 
     private enum SidebarTitlebarControlPlacement {
@@ -1965,6 +2085,14 @@ private struct CoordinatorVisualMetrics {
         fontPreset.scaledClamped(8, max: 12)
     }
 
+    var coordinatorThreadRowHeight: CGFloat {
+        fontPreset.scaledClamped(42, min: 42, max: 50)
+    }
+
+    var coordinatorThreadVisibleRowLimit: Int {
+        3
+    }
+
     var footerVerticalPadding: CGFloat {
         fontPreset.scaledClamped(8, max: 11)
     }
@@ -2266,6 +2394,21 @@ private extension CoordinatorModeCoordinatorRail.SelectionSource {
         case .orchestrateWorkflow: "Orchestrate workflow"
         case .mcpLineageRoot: "MCP lineage root"
         case .demoRuntime: "Demo runtime"
+        }
+    }
+}
+
+private extension AgentSessionRunState {
+    var coordinatorThreadDisplayName: String {
+        switch self {
+        case .idle: "Idle"
+        case .running: "Running"
+        case .waitingForUser: "Needs you"
+        case .waitingForQuestion: "Question"
+        case .waitingForApproval: "Approval"
+        case .completed: "Done"
+        case .cancelled: "Cancelled"
+        case .failed: "Failed"
         }
     }
 }

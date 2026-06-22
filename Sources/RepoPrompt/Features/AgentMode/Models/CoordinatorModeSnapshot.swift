@@ -199,6 +199,7 @@ struct CoordinatorModeCoordinatorOption: Identifiable, Equatable {
     let selectionSource: CoordinatorModeCoordinatorRail.SelectionSource
     let isSelected: Bool
     let isLiveInCurrentWindow: Bool
+    let runState: AgentSessionRunState?
     let updatedAt: Date
 }
 
