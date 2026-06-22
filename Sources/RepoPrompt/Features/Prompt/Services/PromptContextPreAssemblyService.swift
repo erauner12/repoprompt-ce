@@ -26,6 +26,7 @@ struct PromptContextPreAssemblyRequest {
     let entryResolutionProfile: PathLocateProfile
     let selectedGitDiffFolderPolicy: SelectedGitDiffFolderPolicy
     let selectedGitDiffLookupProfile: PathLocateProfile
+    let factualIngressPolicy: PromptFactualIngressPolicy
     let includeLocalDefinitionsInFileTree: Bool
     let selectedGitDiffArtifactPolicy: SelectedGitDiffArtifactPolicy
     let reviewGitContext: FrozenPromptGitReviewContext
@@ -51,6 +52,7 @@ struct PromptContextPreAssemblyRequest {
         entryResolutionProfile: PathLocateProfile = .uiAssisted,
         selectedGitDiffFolderPolicy: SelectedGitDiffFolderPolicy,
         selectedGitDiffLookupProfile: PathLocateProfile? = nil,
+        factualIngressPolicy: PromptFactualIngressPolicy = .awaitPending,
         includeLocalDefinitionsInFileTree: Bool = false,
         selectedGitDiffArtifactPolicy: SelectedGitDiffArtifactPolicy = .includeBeforeGitInclusion,
         reviewGitContext: FrozenPromptGitReviewContext,
@@ -83,6 +85,7 @@ struct PromptContextPreAssemblyRequest {
         self.entryResolutionProfile = entryResolutionProfile
         self.selectedGitDiffFolderPolicy = selectedGitDiffFolderPolicy
         self.selectedGitDiffLookupProfile = selectedGitDiffLookupProfile ?? entryResolutionProfile
+        self.factualIngressPolicy = factualIngressPolicy
         self.includeLocalDefinitionsInFileTree = includeLocalDefinitionsInFileTree
         self.selectedGitDiffArtifactPolicy = selectedGitDiffArtifactPolicy
         self.reviewGitContext = reviewGitContext
@@ -304,7 +307,8 @@ enum PromptContextPreAssemblyService {
             showCodeMapMarkers: request.showCodeMapMarkers,
             authorizedArtifactBatch: frozenArtifacts,
             selectedDiffFolderPolicy: request.selectedGitDiffFolderPolicy == .filesOnly ? .filesOnly : .expandFolders,
-            selectedDiffLookupProfile: request.selectedGitDiffLookupProfile
+            selectedDiffLookupProfile: request.selectedGitDiffLookupProfile,
+            ingressPolicy: request.factualIngressPolicy
         )
 
         let factualOutcome: PromptFactualCaptureOutcome

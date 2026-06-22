@@ -419,6 +419,7 @@ extension MCPServerViewModel {
             collections: collections,
             resolvedContext: resolvedPromptContext,
             lookupContext: lookupContext,
+            ingressPolicy: ingressPolicy,
             activeTabCompatibility: virtualContext == nil && codemapSnapshotBundle == nil
         )
         let artifactRootMetadata: [String: PathFormatter.RootMetadata] = Dictionary(

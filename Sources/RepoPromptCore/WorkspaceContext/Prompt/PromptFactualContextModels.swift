@@ -8,6 +8,11 @@ package enum PromptFactualCaptureFailure: Error, Equatable {
     case invalidFrozenInput
 }
 
+package enum PromptFactualIngressPolicy: Equatable {
+    case awaitPending
+    case alreadyAwaited
+}
+
 package enum PromptSelectedDiffFolderPolicy: Equatable {
     case filesOnly
     case expandFolders
@@ -38,6 +43,7 @@ package struct PromptFactualCaptureRequest: @unchecked Sendable {
     package let authorizedArtifactBatch: PromptAuthorizedArtifactBatch
     package let selectedDiffFolderPolicy: PromptSelectedDiffFolderPolicy
     package let selectedDiffLookupProfile: PathLocateProfile
+    package let ingressPolicy: PromptFactualIngressPolicy
     package let promptText: String
     package let selectedInstructionsText: String
     package let duplicateUserInstructionsAtTop: Bool
@@ -57,6 +63,7 @@ package struct PromptFactualCaptureRequest: @unchecked Sendable {
         authorizedArtifactBatch: PromptAuthorizedArtifactBatch,
         selectedDiffFolderPolicy: PromptSelectedDiffFolderPolicy,
         selectedDiffLookupProfile: PathLocateProfile,
+        ingressPolicy: PromptFactualIngressPolicy = .awaitPending,
         promptText: String = "",
         selectedInstructionsText: String = "",
         duplicateUserInstructionsAtTop: Bool = false
@@ -75,6 +82,7 @@ package struct PromptFactualCaptureRequest: @unchecked Sendable {
         self.authorizedArtifactBatch = authorizedArtifactBatch
         self.selectedDiffFolderPolicy = selectedDiffFolderPolicy
         self.selectedDiffLookupProfile = selectedDiffLookupProfile
+        self.ingressPolicy = ingressPolicy
         self.promptText = promptText
         self.selectedInstructionsText = selectedInstructionsText
         self.duplicateUserInstructionsAtTop = duplicateUserInstructionsAtTop

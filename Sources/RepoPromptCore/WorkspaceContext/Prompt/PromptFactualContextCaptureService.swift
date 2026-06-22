@@ -75,7 +75,9 @@ package enum PromptFactualContextCaptureService {
         guard validate(request) else { return .unavailable(.invalidFrozenInput) }
 
         let effectiveScope = request.projection?.rootScope ?? request.rootScope
-        _ = await store.awaitAppliedIngress(rootScope: effectiveScope)
+        if request.ingressPolicy == .awaitPending {
+            _ = await store.awaitAppliedIngress(rootScope: effectiveScope)
+        }
         if Task.isCancelled { return .cancelled }
         guard let checkpoint = await store.beginPromptFactualCapture(
             rootScope: effectiveScope,

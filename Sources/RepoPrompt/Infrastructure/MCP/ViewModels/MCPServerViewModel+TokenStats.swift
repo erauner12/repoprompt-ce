@@ -96,6 +96,7 @@ extension MCPServerViewModel {
         collections: SelectionReplyAssembler.SelectionCollections,
         resolvedContext: PromptContextResolved,
         lookupContext: WorkspaceLookupContext,
+        ingressPolicy: SelectionReplyIngressPolicy,
         activeTabCompatibility _: Bool
     ) async -> MCPPreparedTokenAccounting {
         var factualConfig = resolvedContext
@@ -122,6 +123,7 @@ extension MCPServerViewModel {
                 codeMapUsage: collections.codeMapUsage,
                 selectedGitDiffFolderPolicy: .filesOnly,
                 selectedGitDiffLookupProfile: .mcpSelection,
+                factualIngressPolicy: ingressPolicy == .awaitPending ? .awaitPending : .alreadyAwaited,
                 selectedGitDiffArtifactPolicy: .respectGitInclusion,
                 reviewGitContext: reviewGitContext,
                 selectedGitDiffProvider: { request in
