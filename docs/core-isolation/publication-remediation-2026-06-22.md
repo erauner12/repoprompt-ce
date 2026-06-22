@@ -1,7 +1,7 @@
 # Core-isolation publication remediation — 2026-06-22
 
-**Status:** Publication remediation complete on the staged, uncommitted
-integration merge. Final disposition: **GO**.
+**Status:** Publication remediation committed in integration merge `73302551`.
+Final disposition: **GO**.
 
 ## Fixed provenance
 
@@ -9,8 +9,7 @@ integration merge. Final disposition: **GO**.
 - Upstream correctness source: `3b3384ba1006ed4771ac38d1132b8a7db6a78efc`.
 - Integration mechanism: `git merge --no-commit --no-ff origin/main` with semantic
   conflict resolution against the extracted Core boundary.
-- Final integration commit: _not created; the orchestrator must keep the merge
-  uncommitted until every publication gate closes_.
+- Final integration merge: `73302551` (`core isolation: reconcile upstream publication blockers`).
 
 The app remains `RepoPrompt`, the compatibility proxy remains `repoprompt-mcp`,
 and standalone direct-stdio v1 remains `repoprompt-headless`. No remediation may
@@ -154,9 +153,9 @@ results from the actual debug and universal release binaries.
 ## Final disposition
 
 **GO.** All independent-audit blockers and the straightforward independent
-review findings are closed. The merge remains staged and uncommitted for the
-orchestrator. The external identities remain `RepoPrompt`, `repoprompt-mcp`,
-and `repoprompt-headless`; Phase 9 remains deferred.
+review findings are closed in integration merge `73302551`. The external
+identities remain `RepoPrompt`, `repoprompt-mcp`, and `repoprompt-headless`;
+Phase 9 remains deferred.
 
 ## Phase 9 boundary
 
