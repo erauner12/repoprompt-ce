@@ -3829,6 +3829,7 @@ final class AgentModeViewModel: ObservableObject {
         session.isCoordinatorRuntime = agentSession.isCoordinatorRuntime
         session.worktreeBindings = agentSession.worktreeBindings
         session.worktreeMergeOperations = agentSession.worktreeMergeOperations
+        session.coordinatorFollowThroughState = agentSession.coordinatorFollowThroughState
         session.nextSequenceIndex = payload.transcript.nextSequenceIndex
         session.lastActivityAt = agentSession.savedAt
         session.lastUserMessageAt = payload.lastUserMessageAt
@@ -10646,7 +10647,8 @@ final class AgentModeViewModel: ObservableObject {
             isMCPOriginated: session.isMCPOriginated,
             isCoordinatorRuntime: session.isCoordinatorRuntime,
             worktreeBindings: session.worktreeBindings,
-            worktreeMergeOperations: session.worktreeMergeOperations
+            worktreeMergeOperations: session.worktreeMergeOperations,
+            coordinatorFollowThroughState: session.coordinatorFollowThroughState
         )
         codexCoordinator.applyCodexPersistence(from: session, to: &agentSession)
         guard let saveToken = makeSaveCommitToken(for: session, workspaceID: workspace.id),

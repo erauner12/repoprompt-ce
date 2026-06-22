@@ -46,7 +46,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 5.8 Ensure sorting only reorders cards/rows within existing status groups and never changes group membership, run state, pending state, Coordinator relationship, or persisted session state.
 - [x] 5.9 Ensure v1 does not expose drag-to-reorder, drag-to-dispatch, or drag-to-change-status interactions.
 - [x] 5.10 Keep completed/cancelled rows with unacknowledged review material in Review until the user marks that review handled.
-- [x] 5.11 Add snapshot adapter tests for grouping, counts, stale-row count exclusion, review acknowledgement, and sort-mode behavior.
+- [x] 5.11 Add snapshot adapter tests for grouping, counts, stale-row count exclusion, review/continuation gate acknowledgement, and sort-mode behavior.
 - [x] 5.12 Add a persisted default-on human review gate with an advisory mode that lets review-bearing completed rows resolve to Done.
 
 ## 6. Pending interaction summaries
@@ -84,6 +84,11 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.8 Add a persisted manual/follow-through Coordinator runtime policy toggle that defaults to manual.
 - [x] 9.9 Inject follow-through guidance into Coordinator runtime prompts without changing submitted directive text or adding a structured directive envelope.
 - [x] 9.10 Add focused tests for follow-through persistence and prompt-gating behavior.
+- [x] 9.11 Persist lightweight Coordinator follow-through state with objective summary, observed child phases, pending/handled events, and last resume result.
+- [x] 9.12 Add a pure follow-through boundary classifier for safe resume versus hold decisions.
+- [x] 9.13 Add an AgentMode-owned follow-through supervisor that wakes the existing Coordinator runtime on child lifecycle/continuation-gate events without creating a new parent.
+- [x] 9.14 Document and test that `Mark reviewed` clears the review gate only and does not approve merge/apply/commit/push work.
+- [x] 9.15 Model generic continuation gates so future scoped approvals can wake Coordinator follow-through for exactly one approved next action without granting blanket permission.
 
 ## 10. Coordinator view UI shell
 

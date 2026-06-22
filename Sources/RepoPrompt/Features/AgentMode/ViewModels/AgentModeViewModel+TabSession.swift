@@ -162,6 +162,8 @@ extension AgentModeViewModel {
         var worktreeBindings: [AgentSessionWorktreeBinding] = []
         /// Persisted resumable worktree-merge operations for this Agent session.
         var worktreeMergeOperations: [AgentSessionWorktreeMergeOperation] = []
+        /// Persisted follow-through bookkeeping for layer-above Coordinator runtimes.
+        var coordinatorFollowThroughState: CoordinatorFollowThroughState?
         /// Permission profile for the current session. Set to `.mcpSafeDefaults`
         /// when MCP control is active, `.userConfigured` otherwise.
         var permissionProfile: AgentPermissionProfile = .userConfigured

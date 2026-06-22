@@ -249,9 +249,34 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 
 #### Scenario: Coordinator follow-through reaches a boundary
 - **WHEN** Coordinator follow-through is enabled
-- **AND** a delegated session requires user input, permission, approval, required human review acknowledgement, or is blocked or ambiguous
+- **AND** a delegated session requires user input, permission, scoped action approval, required human review acknowledgement, or is blocked or ambiguous
 - **THEN** the Coordinator runtime SHALL stop at that boundary and surface the required user decision/status
 - **AND** it SHALL NOT bypass or auto-acknowledge the user's review, approval, permission, or Needs-you gate.
+
+#### Scenario: App-generated follow-through event resumes Coordinator
+- **WHEN** Coordinator follow-through is enabled
+- **AND** the owning Coordinator runtime is idle
+- **AND** a supervised delegated child reaches a terminal state, an advisory review packet becomes available, or a continuation gate is cleared
+- **THEN** the Coordinator view MAY submit a structured internal resume directive to the existing owning Coordinator runtime
+- **AND** it SHALL NOT create a new Coordinator parent runtime
+- **AND** the resume directive SHALL describe the observed event as app-generated context for the original objective rather than a new user request.
+
+#### Scenario: Human review acknowledgement clears a review gate
+- **WHEN** a required review packet is acknowledged with `Mark reviewed`
+- **THEN** the Coordinator view SHALL treat that acknowledgement as clearing the human review gate only
+- **AND** if follow-through is enabled and the owning Coordinator runtime is idle, it MAY wake that existing Coordinator with a structured resume event
+- **AND** it SHALL NOT treat the acknowledgement as permission to apply, merge, approve, commit, push, or bypass any remaining permission or Needs-you gate.
+
+#### Scenario: Scoped action approval clears one action gate
+- **WHEN** a future user approval surface clears an action-approval gate for a named next action
+- **THEN** the Coordinator view SHALL represent the cleared gate as a typed continuation event with the exact approved action
+- **AND** if follow-through is enabled and the owning Coordinator runtime is idle, it MAY wake that existing Coordinator with a structured resume event
+- **AND** it SHALL NOT treat that approval as permission for any later apply, merge, approve, commit, push, PR, or destructive action beyond the named action.
+
+#### Scenario: Follow-through resume events are deduplicated
+- **WHEN** repeated lifecycle refreshes observe the same child terminal state, advisory review packet, or cleared continuation gate
+- **THEN** the Coordinator view SHALL use stable event identifiers to avoid submitting duplicate resume directives for the same event
+- **AND** if the Coordinator runtime is active, the event MAY remain pending until the runtime reaches a turn boundary.
 
 #### Scenario: Production-demo Coordinator bridge dispatches children
 - **WHEN** the production-demo Coordinator runtime delegates work

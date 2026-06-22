@@ -14,6 +14,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias DashboardVisibilityHandler = @MainActor (_ visible: Bool) -> Void
     typealias DirectiveSubmitter = @MainActor (_ text: String, _ coordinatorSessionID: UUID?, _ forceNewRuntime: Bool) async -> DirectiveSubmissionResult
     typealias ChildDirectiveSubmitter = @MainActor (_ text: String, _ row: CoordinatorModeRow) async -> DirectiveSubmissionResult
+    typealias HumanReviewAcknowledgementHandler = @MainActor (_ reviewID: String, _ snapshotBeforeAcknowledgement: CoordinatorModeSnapshot) async -> Void
     static let requiresHumanReviewAcknowledgementDefaultsKey = "CoordinatorMode.requiresHumanReviewAcknowledgement"
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
@@ -42,6 +43,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let dashboardVisibilityHandler: DashboardVisibilityHandler
     private let directiveSubmitter: DirectiveSubmitter
     private let childDirectiveSubmitter: ChildDirectiveSubmitter
+    private let humanReviewAcknowledgementHandler: HumanReviewAcknowledgementHandler
     private let projector: CoordinatorModeSnapshotProjector
     private let userDefaults: UserDefaults
     private var selectedCoordinatorIDByWorkspaceID: [UUID: UUID] = [:]
@@ -62,6 +64,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         childDirectiveSubmitter: @escaping ChildDirectiveSubmitter = { _, _ in
             .rejected(message: "Session replies are unavailable.")
         },
+        humanReviewAcknowledgementHandler: @escaping HumanReviewAcknowledgementHandler = { _, _ in },
         projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector(),
         userDefaults: UserDefaults = .standard
     ) {
@@ -70,6 +73,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.dashboardVisibilityHandler = dashboardVisibilityHandler
         self.directiveSubmitter = directiveSubmitter
         self.childDirectiveSubmitter = childDirectiveSubmitter
+        self.humanReviewAcknowledgementHandler = humanReviewAcknowledgementHandler
         self.projector = projector
         self.userDefaults = userDefaults
         requiresHumanReviewAcknowledgement = userDefaults.object(forKey: Self.requiresHumanReviewAcknowledgementDefaultsKey) as? Bool ?? true
@@ -140,8 +144,13 @@ final class CoordinatorModeViewModel: ObservableObject {
     }
 
     func markHumanReviewHandled(_ reviewID: String) {
+        let previousSnapshot = snapshot
         acknowledgedHumanReviewIDs.insert(reviewID)
         refresh()
+        guard allowsProactiveFollowThrough else { return }
+        Task { @MainActor [humanReviewAcknowledgementHandler] in
+            await humanReviewAcknowledgementHandler(reviewID, previousSnapshot)
+        }
     }
 
     func setRequiresHumanReviewAcknowledgement(_ requiresAcknowledgement: Bool) {
@@ -520,7 +529,12 @@ extension AgentModeViewModel {
     @MainActor
     @discardableResult
     func refreshCoordinatorModeForChildLifecycleIfVisible() -> Bool {
-        coordinatorModeViewModel.refreshIfVisible()
+        let refreshed = coordinatorModeViewModel.refreshIfVisible()
+        guard refreshed else { return false }
+        Task { @MainActor [weak self] in
+            await self?.evaluateCoordinatorFollowThrough(trigger: .lifecycle)
+        }
+        return true
     }
 
     @MainActor
@@ -566,6 +580,12 @@ extension AgentModeViewModel {
             case let .blocked(message):
                 return .rejected(message: message)
             }
+        } humanReviewAcknowledgementHandler: { [weak self] reviewID, snapshotBeforeAcknowledgement in
+            let gate = CoordinatorContinuationGate.reviewAcknowledgement(reviewID: reviewID)
+            await self?.evaluateCoordinatorFollowThrough(
+                trigger: .gateCleared(gate),
+                snapshot: snapshotBeforeAcknowledgement
+            )
         }
     }
 
@@ -581,6 +601,9 @@ extension AgentModeViewModel {
             guard let role = coordinatorModeRailRole(for: item.kind) else { return nil }
             let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard AgentDisplayableText.hasDisplayableBody(text) else { return nil }
+            if role == .user, isCoordinatorFollowThroughResumeDirective(text) {
+                return nil
+            }
             return CoordinatorModeRailTranscriptEntry(
                 id: item.id,
                 role: role,
@@ -629,9 +652,183 @@ extension AgentModeViewModel {
         else {
             return .blocked(message: "Coordinator composer is unavailable for this session state.")
         }
-        return await submitUserTurnCreatingSessionIfNeeded(text: text, target: target) {
+        let result = await submitUserTurnCreatingSessionIfNeeded(text: text, target: target) {
             nil
         }
+        if case .submitted = result,
+           !isCoordinatorFollowThroughResumeDirective(text)
+        {
+            rememberCoordinatorObjective(text, tabID: runtime.tabID)
+        }
+        return result
+    }
+
+    @MainActor
+    private func evaluateCoordinatorFollowThrough(
+        trigger: CoordinatorFollowThroughBoundaryClassifier.Trigger,
+        snapshot explicitSnapshot: CoordinatorModeSnapshot? = nil
+    ) async {
+        guard coordinatorModeViewModel.allowsProactiveFollowThrough else { return }
+        let snapshot = explicitSnapshot ?? coordinatorModeViewModel.snapshot
+        let rows = coordinatorModeRows(in: snapshot)
+        let coordinatorIDs = Set(
+            rows.compactMap { $0.parentCoordinator?.sessionID }
+                + snapshot.coordinatorRail.availableCoordinators.map(\.sessionID)
+        )
+        for coordinatorID in coordinatorIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            await evaluateCoordinatorFollowThrough(
+                coordinatorSessionID: coordinatorID,
+                rows: rows,
+                trigger: trigger
+            )
+        }
+    }
+
+    @MainActor
+    private func evaluateCoordinatorFollowThrough(
+        coordinatorSessionID: UUID,
+        rows: [CoordinatorModeRow],
+        trigger: CoordinatorFollowThroughBoundaryClassifier.Trigger
+    ) async {
+        guard let match = sessions.first(where: { _, session in
+            session.activeAgentSessionID == coordinatorSessionID && session.isCoordinatorRuntime
+        }) else { return }
+        let tabID = match.key
+        let session = match.value
+        var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        guard state.originalObjectiveSummary?.isEmpty == false else { return }
+
+        let ownedRows = rows.filter { $0.parentCoordinator?.sessionID == coordinatorSessionID }
+        defer {
+            var latest = session.coordinatorFollowThroughState ?? state
+            latest.updateObservedPhases(from: ownedRows)
+            session.coordinatorFollowThroughState = latest
+            scheduleSave(for: tabID)
+        }
+
+        if case .gateCleared = trigger {
+            let classifier = CoordinatorFollowThroughBoundaryClassifier()
+            let input = CoordinatorFollowThroughBoundaryClassifier.Input(
+                followThroughEnabled: coordinatorModeViewModel.allowsProactiveFollowThrough,
+                coordinatorSessionID: coordinatorSessionID,
+                coordinatorRunState: session.runState,
+                rows: rows,
+                state: state,
+                trigger: trigger
+            )
+            switch classifier.classify(input) {
+            case let .resume(event):
+                state.removePendingEvents { pending in
+                    pending.kind != .gateCleared
+                        && (
+                            (event.childSessionID != nil && pending.childSessionID == event.childSessionID)
+                                || (event.reviewID != nil && pending.reviewID == event.reviewID)
+                                || (event.gate?.subjectID != nil && pending.gate?.subjectID == event.gate?.subjectID)
+                        )
+                }
+                session.coordinatorFollowThroughState = state
+                await submitCoordinatorFollowThroughEvent(event, tabID: tabID, session: session)
+            case .hold(.coordinatorActive):
+                var idleInput = input
+                idleInput.coordinatorRunState = .idle
+                if case let .resume(event) = classifier.classify(idleInput) {
+                    state.removePendingEvents { pending in
+                        pending.kind != .gateCleared
+                            && (
+                                (event.childSessionID != nil && pending.childSessionID == event.childSessionID)
+                                    || (event.reviewID != nil && pending.reviewID == event.reviewID)
+                                    || (event.gate?.subjectID != nil && pending.gate?.subjectID == event.gate?.subjectID)
+                            )
+                    }
+                    state.enqueue(event)
+                    session.coordinatorFollowThroughState = state
+                    scheduleSave(for: tabID)
+                }
+            case .hold:
+                break
+            }
+            return
+        }
+
+        if !session.runState.isActive, let pending = state.pendingEvents.first {
+            await submitCoordinatorFollowThroughEvent(pending, tabID: tabID, session: session)
+            return
+        }
+
+        let classifier = CoordinatorFollowThroughBoundaryClassifier()
+        var input = CoordinatorFollowThroughBoundaryClassifier.Input(
+            followThroughEnabled: coordinatorModeViewModel.allowsProactiveFollowThrough,
+            coordinatorSessionID: coordinatorSessionID,
+            coordinatorRunState: session.runState,
+            rows: rows,
+            state: state,
+            trigger: trigger
+        )
+        let decision = classifier.classify(input)
+        switch decision {
+        case let .resume(event):
+            await submitCoordinatorFollowThroughEvent(event, tabID: tabID, session: session)
+        case .hold(.coordinatorActive):
+            input.coordinatorRunState = .idle
+            if case let .resume(event) = classifier.classify(input) {
+                state.enqueue(event)
+                session.coordinatorFollowThroughState = state
+            }
+        case .hold:
+            break
+        }
+    }
+
+    @MainActor
+    private func submitCoordinatorFollowThroughEvent(
+        _ event: CoordinatorFollowThroughEvent,
+        tabID: UUID,
+        session: TabSession
+    ) async {
+        guard !session.runState.isActive else {
+            var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+            state.enqueue(event)
+            session.coordinatorFollowThroughState = state
+            scheduleSave(for: tabID)
+            return
+        }
+        let result = await submitCoordinatorDirectiveToAgentMode(
+            event.resumeDirective,
+            coordinatorSessionID: event.coordinatorSessionID,
+            forceNewRuntime: false
+        )
+        var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        switch result {
+        case .submitted:
+            state.markSubmitted(event)
+        case .blocked:
+            state.enqueue(event)
+            state.markDeferred(event)
+        }
+        session.coordinatorFollowThroughState = state
+        scheduleSave(for: tabID)
+    }
+
+    @MainActor
+    private func rememberCoordinatorObjective(_ text: String, tabID: UUID) {
+        guard let session = sessions[tabID], session.isCoordinatorRuntime else { return }
+        var state = CoordinatorFollowThroughState()
+        state.rememberObjective(text)
+        if let coordinatorID = session.activeAgentSessionID {
+            let existingRows = coordinatorModeRows(in: coordinatorModeViewModel.snapshot)
+                .filter { $0.parentCoordinator?.sessionID == coordinatorID }
+            state.updateObservedPhases(from: existingRows)
+        }
+        session.coordinatorFollowThroughState = state
+        scheduleSave(for: tabID)
+    }
+
+    private func isCoordinatorFollowThroughResumeDirective(_ text: String) -> Bool {
+        text.contains("<coordinator_follow_through_resume")
+    }
+
+    private func coordinatorModeRows(in snapshot: CoordinatorModeSnapshot) -> [CoordinatorModeRow] {
+        snapshot.groups.flatMap(\.rows)
     }
 
     @MainActor

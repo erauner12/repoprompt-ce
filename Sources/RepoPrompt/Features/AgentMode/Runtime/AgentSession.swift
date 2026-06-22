@@ -202,6 +202,9 @@ struct AgentSession: Codable, Identifiable {
     /// Patch contents live in merge preview artifacts, not in the session JSON.
     var worktreeMergeOperations: [AgentSessionWorktreeMergeOperation]
 
+    /// Persisted follow-through bookkeeping for layer-above Coordinator runtimes.
+    var coordinatorFollowThroughState: CoordinatorFollowThroughState?
+
     /// Pending handoff payload (injected into the provider-facing text on the destination tab's
     /// first user send, then cleared). Persisted so it survives close/reopen.
     var pendingHandoffPayload: String?
@@ -245,7 +248,8 @@ struct AgentSession: Codable, Identifiable {
         isMCPOriginated: Bool = false,
         isCoordinatorRuntime: Bool = false,
         worktreeBindings: [AgentSessionWorktreeBinding] = [],
-        worktreeMergeOperations: [AgentSessionWorktreeMergeOperation] = []
+        worktreeMergeOperations: [AgentSessionWorktreeMergeOperation] = [],
+        coordinatorFollowThroughState: CoordinatorFollowThroughState? = nil
     ) {
         self.id = id
         self.serializationVersion = serializationVersion
@@ -283,6 +287,7 @@ struct AgentSession: Codable, Identifiable {
         self.isCoordinatorRuntime = isCoordinatorRuntime
         self.worktreeBindings = worktreeBindings
         self.worktreeMergeOperations = worktreeMergeOperations
+        self.coordinatorFollowThroughState = coordinatorFollowThroughState
     }
 
     enum CodingKeys: String, CodingKey {
@@ -322,6 +327,7 @@ struct AgentSession: Codable, Identifiable {
         case isCoordinatorRuntime
         case worktreeBindings
         case worktreeMergeOperations
+        case coordinatorFollowThroughState
     }
 
     init(from decoder: Decoder) throws {
@@ -364,6 +370,7 @@ struct AgentSession: Codable, Identifiable {
         isCoordinatorRuntime = try container.decodeIfPresent(Bool.self, forKey: .isCoordinatorRuntime) ?? false
         worktreeBindings = try container.decodeIfPresent([AgentSessionWorktreeBinding].self, forKey: .worktreeBindings) ?? []
         worktreeMergeOperations = try container.decodeIfPresent([AgentSessionWorktreeMergeOperation].self, forKey: .worktreeMergeOperations) ?? []
+        coordinatorFollowThroughState = try container.decodeIfPresent(CoordinatorFollowThroughState.self, forKey: .coordinatorFollowThroughState)
     }
 
     /// Coalesces whitespace and falls back to "Agent Session" when empty.

@@ -155,6 +155,57 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertTrue(restored.allowsProactiveFollowThrough)
     }
 
+    func testMarkReviewedWakesFollowThroughHandlerWhenEnabled() async {
+        let suiteName = "CoordinatorModeComposerViewModelTests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("Could not create isolated defaults suite")
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let expectation = expectation(description: "follow-through handler")
+        var capturedReviewID: String?
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { _, _ in self.input() },
+            dashboardVisibilityHandler: { _ in },
+            humanReviewAcknowledgementHandler: { reviewID, _ in
+                capturedReviewID = reviewID
+                expectation.fulfill()
+            },
+            userDefaults: defaults
+        )
+        viewModel.setAllowsProactiveFollowThrough(true)
+
+        viewModel.markHumanReviewHandled("merge-review")
+
+        await fulfillment(of: [expectation], timeout: 1.0)
+        XCTAssertEqual(capturedReviewID, "merge-review")
+    }
+
+    func testMarkReviewedDoesNotWakeFollowThroughHandlerWhenManual() async {
+        let suiteName = "CoordinatorModeComposerViewModelTests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("Could not create isolated defaults suite")
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let expectation = expectation(description: "follow-through handler not called")
+        expectation.isInverted = true
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { _, _ in self.input() },
+            dashboardVisibilityHandler: { _ in },
+            humanReviewAcknowledgementHandler: { _, _ in
+                expectation.fulfill()
+            },
+            userDefaults: defaults
+        )
+
+        viewModel.markHumanReviewHandled("merge-review")
+
+        await fulfillment(of: [expectation], timeout: 0.1)
+    }
+
     func testAcceptedDirectiveDoesNotDuplicateRuntimeBackedUserTranscriptEntry() async {
         let coordinatorID = uuid(1)
         let coordinatorTab = uuid(101)

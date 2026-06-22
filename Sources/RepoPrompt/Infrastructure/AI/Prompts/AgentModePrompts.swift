@@ -272,7 +272,9 @@ enum AgentModePrompts {
         static let coordinatorRuntimeFollowThroughGuidance = """
         **Coordinator follow-through policy**
         - Follow-through is enabled. Keep supervising delegated work until the user's original objective is satisfied, not merely until the first child session reports back.
+        - The app may send a structured `<coordinator_follow_through_resume …>` event after a delegated child changes state or a review gate is cleared. Treat that event as an app observation about the existing objective, not as a new user request.
         - Use existing Agent Mode control-plane paths such as `agent_run` `wait`, `poll`, and `steer` to continue delegated sessions when the safe next step is clear.
+        - Continue from a resume event only when it clears a safe boundary. A `reviewRequired` gate or `Mark reviewed` means the user has inspected the review packet; it is not permission to apply, merge, commit, push, or approve any operation. An `actionApprovalRequired` gate authorizes only the exact approved action named in the event, not any later action.
         - Respect boundaries: stop and ask or wait when a child needs user input, is blocked, requires permission/approval, exposes a required human review packet, or has no clear safe next step.
         - Do not bypass user review, approval, or permission gates. Do not directly mutate Coordinator board rows; the board reflects session state.
         - When all safe follow-through is complete, summarize the final outcome and any remaining human decision in the Coordinator rail.

@@ -1,0 +1,241 @@
+import Foundation
+
+struct CoordinatorFollowThroughState: Codable, Equatable {
+    var originalObjectiveSummary: String?
+    var observedChildPhases: [UUID: CoordinatorFollowThroughChildPhase]
+    var pendingEvents: [CoordinatorFollowThroughEvent]
+    var handledEventIDs: Set<String>
+    var lastResume: CoordinatorFollowThroughResumeRecord?
+
+    init(
+        originalObjectiveSummary: String? = nil,
+        observedChildPhases: [UUID: CoordinatorFollowThroughChildPhase] = [:],
+        pendingEvents: [CoordinatorFollowThroughEvent] = [],
+        handledEventIDs: Set<String> = [],
+        lastResume: CoordinatorFollowThroughResumeRecord? = nil
+    ) {
+        self.originalObjectiveSummary = originalObjectiveSummary
+        self.observedChildPhases = observedChildPhases
+        self.pendingEvents = pendingEvents
+        self.handledEventIDs = handledEventIDs
+        self.lastResume = lastResume
+    }
+
+    mutating func rememberObjective(_ text: String) {
+        originalObjectiveSummary = Self.summary(from: text)
+        observedChildPhases.removeAll()
+        pendingEvents.removeAll()
+        handledEventIDs.removeAll()
+        lastResume = nil
+    }
+
+    mutating func updateObservedPhases(from rows: [CoordinatorModeRow]) {
+        for row in rows {
+            guard row.parentCoordinator != nil else { continue }
+            observedChildPhases[row.sessionID] = CoordinatorFollowThroughChildPhase(statusGroup: row.statusGroup)
+        }
+    }
+
+    mutating func enqueue(_ event: CoordinatorFollowThroughEvent) {
+        guard !handledEventIDs.contains(event.id),
+              !pendingEvents.contains(where: { $0.id == event.id })
+        else { return }
+        pendingEvents.append(event)
+    }
+
+    mutating func removePendingEvents(where shouldRemove: (CoordinatorFollowThroughEvent) -> Bool) {
+        pendingEvents.removeAll(where: shouldRemove)
+    }
+
+    mutating func markSubmitted(_ event: CoordinatorFollowThroughEvent, at date: Date = Date()) {
+        pendingEvents.removeAll { $0.id == event.id }
+        handledEventIDs.insert(event.id)
+        lastResume = CoordinatorFollowThroughResumeRecord(
+            eventID: event.id,
+            resumedAt: date,
+            result: .submitted
+        )
+    }
+
+    mutating func markDeferred(_ event: CoordinatorFollowThroughEvent, at date: Date = Date()) {
+        lastResume = CoordinatorFollowThroughResumeRecord(
+            eventID: event.id,
+            resumedAt: date,
+            result: .deferred
+        )
+    }
+
+    private static func summary(from text: String) -> String {
+        let collapsed = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        guard collapsed.count > 240 else { return collapsed }
+        return "\(collapsed.prefix(237))..."
+    }
+}
+
+enum CoordinatorFollowThroughChildPhase: String, Codable, Equatable {
+    case delegated
+    case running
+    case needsUser
+    case review
+    case blocked
+    case done
+
+    init(statusGroup: CoordinatorModeStatusGroup) {
+        switch statusGroup {
+        case .needsYou:
+            self = .needsUser
+        case .working:
+            self = .running
+        case .blocked:
+            self = .blocked
+        case .review:
+            self = .review
+        case .done:
+            self = .done
+        }
+    }
+}
+
+struct CoordinatorFollowThroughResumeRecord: Codable, Equatable {
+    let eventID: String
+    let resumedAt: Date
+    let result: CoordinatorFollowThroughResumeResult
+}
+
+enum CoordinatorFollowThroughResumeResult: String, Codable, Equatable {
+    case submitted
+    case deferred
+    case rejected
+}
+
+struct CoordinatorFollowThroughEvent: Codable, Equatable, Identifiable {
+    enum Kind: String, Codable, Equatable {
+        case childTerminal
+        case gateCleared
+        case advisoryReview
+    }
+
+    let id: String
+    let kind: Kind
+    let coordinatorSessionID: UUID
+    let childSessionID: UUID?
+    let childTitle: String?
+    let reviewID: String?
+    let gate: CoordinatorContinuationGate?
+    let phase: CoordinatorFollowThroughChildPhase?
+    let detail: String
+
+    var resumeDirective: String {
+        var lines = [
+            "<coordinator_follow_through_resume event_id=\"\(id)\" kind=\"\(kind.rawValue)\">",
+            "The app observed a Coordinator follow-through event for your current parent thread.",
+            "",
+            "Event:",
+            "- \(detail)"
+        ]
+        if let childTitle {
+            lines.append("- Child session: \(childTitle)")
+        }
+        if let reviewID {
+            lines.append("- Review gate: \(reviewID)")
+        }
+        if let gate {
+            lines.append(contentsOf: gate.directiveLines)
+        }
+        lines.append(contentsOf: [
+            "",
+            "Continue the original objective only if this clears a safe boundary.",
+            "A review-required gate means the user inspected the review packet; it is not approval to apply, merge, commit, or push.",
+            "An action-approval gate permits only the explicitly approved action and does not approve any later action.",
+            "Respect any remaining permission, approval, blocked, or needs-user boundary. If the next safe step is unclear, ask one concise question and stop.",
+            "</coordinator_follow_through_resume>"
+        ])
+        return lines.joined(separator: "\n")
+    }
+}
+
+struct CoordinatorContinuationGate: Codable, Equatable, Identifiable {
+    enum GateType: String, Codable, Equatable {
+        case reviewRequired
+        case actionApprovalRequired
+        case needsInput
+        case permission
+        case blocked
+        case manualCheckpoint
+    }
+
+    enum ApprovedAction: String, Codable, Equatable {
+        case continuePlan
+        case commitChanges
+        case createPullRequest
+        case applyMergePreview
+        case mergePullRequest
+        case pushBranch
+    }
+
+    enum ClearedBy: String, Codable, Equatable {
+        case human
+        case app
+        case tool
+    }
+
+    let id: String
+    let type: GateType
+    let subjectID: String?
+    let subjectTitle: String?
+    let approvedAction: ApprovedAction?
+    let detail: String
+    let clearedBy: ClearedBy
+
+    static func reviewAcknowledgement(reviewID: String, subjectTitle: String? = nil) -> Self {
+        Self(
+            id: "review:\(reviewID)",
+            type: .reviewRequired,
+            subjectID: reviewID,
+            subjectTitle: subjectTitle,
+            approvedAction: nil,
+            detail: "Human marked the review packet as reviewed.",
+            clearedBy: .human
+        )
+    }
+
+    static func actionApproval(
+        gateID: String,
+        action: ApprovedAction,
+        subjectID: String? = nil,
+        subjectTitle: String? = nil
+    ) -> Self {
+        Self(
+            id: gateID,
+            type: .actionApprovalRequired,
+            subjectID: subjectID,
+            subjectTitle: subjectTitle,
+            approvedAction: action,
+            detail: "Human approved exactly one next action: \(action.rawValue).",
+            clearedBy: .human
+        )
+    }
+
+    var directiveLines: [String] {
+        var lines = [
+            "",
+            "Gate:",
+            "- Gate ID: \(id)",
+            "- Gate type: \(type.rawValue)",
+            "- Cleared by: \(clearedBy.rawValue)",
+            "- \(detail)"
+        ]
+        if let subjectID {
+            lines.append("- Subject ID: \(subjectID)")
+        }
+        if let subjectTitle {
+            lines.append("- Subject: \(subjectTitle)")
+        }
+        if let approvedAction {
+            lines.append("- Approved action: \(approvedAction.rawValue)")
+        }
+        return lines
+    }
+}

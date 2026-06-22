@@ -161,6 +161,7 @@ actor AgentSessionDataService {
         let parentSessionID: UUID?
         let worktreeBindings: [AgentSessionWorktreeBinding]?
         let worktreeMergeOperations: [AgentSessionWorktreeMergeOperation]?
+        let coordinatorFollowThroughState: CoordinatorFollowThroughState?
         let pendingHandoffPayload: String?
         let pendingHandoffCreatedAt: Date?
         let pendingHandoffSourceItemID: UUID?
@@ -1086,7 +1087,8 @@ actor AgentSessionDataService {
                 isMCPOriginated: header.isMCPOriginated ?? false,
                 isCoordinatorRuntime: header.isCoordinatorRuntime ?? false,
                 worktreeBindings: header.worktreeBindings ?? [],
-                worktreeMergeOperations: header.worktreeMergeOperations ?? []
+                worktreeMergeOperations: header.worktreeMergeOperations ?? [],
+                coordinatorFollowThroughState: header.coordinatorFollowThroughState
             )
         } catch {
             throw AgentSessionDataError.loadFailed(error)
