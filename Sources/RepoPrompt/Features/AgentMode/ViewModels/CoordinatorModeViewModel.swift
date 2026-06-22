@@ -14,12 +14,14 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias DashboardVisibilityHandler = @MainActor (_ visible: Bool) -> Void
     typealias DirectiveSubmitter = @MainActor (_ text: String, _ coordinatorSessionID: UUID?, _ forceNewRuntime: Bool) async -> DirectiveSubmissionResult
     typealias ChildDirectiveSubmitter = @MainActor (_ text: String, _ row: CoordinatorModeRow) async -> DirectiveSubmissionResult
+    static let requiresHumanReviewAcknowledgementDefaultsKey = "CoordinatorMode.requiresHumanReviewAcknowledgement"
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
     @Published private(set) var railTranscriptEntries: [CoordinatorModeRailTranscriptEntry] = []
     @Published private(set) var currentRailActivityText: String?
     @Published private(set) var composerNotice: String?
     @Published private(set) var isFreshCoordinatorRunPending = false
+    @Published private(set) var requiresHumanReviewAcknowledgement: Bool
     @Published var sortMode: CoordinatorModeSortMode = .lastUpdated {
         didSet {
             guard sortMode != oldValue else { return }
@@ -40,11 +42,13 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let directiveSubmitter: DirectiveSubmitter
     private let childDirectiveSubmitter: ChildDirectiveSubmitter
     private let projector: CoordinatorModeSnapshotProjector
+    private let userDefaults: UserDefaults
     private var selectedCoordinatorIDByWorkspaceID: [UUID: UUID] = [:]
     private var lastPublishedFingerprint: CoordinatorModeSnapshotFingerprint?
     private var displayedTranscriptCoordinatorSessionID: UUID?
     private var lastDurableRailStatusEntryKey: String?
     private var displayedDelegateActionTargetIDs: Set<UUID> = []
+    private var acknowledgedHumanReviewIDs: Set<String> = []
     private(set) var isVisible = false
 
     init(
@@ -57,7 +61,8 @@ final class CoordinatorModeViewModel: ObservableObject {
         childDirectiveSubmitter: @escaping ChildDirectiveSubmitter = { _, _ in
             .rejected(message: "Session replies are unavailable.")
         },
-        projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector()
+        projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector(),
+        userDefaults: UserDefaults = .standard
     ) {
         self.inputProvider = inputProvider
         self.transcriptProvider = transcriptProvider
@@ -65,6 +70,8 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.directiveSubmitter = directiveSubmitter
         self.childDirectiveSubmitter = childDirectiveSubmitter
         self.projector = projector
+        self.userDefaults = userDefaults
+        requiresHumanReviewAcknowledgement = userDefaults.object(forKey: Self.requiresHumanReviewAcknowledgementDefaultsKey) as? Bool ?? true
     }
 
     func setVisible(_ visible: Bool) {
@@ -80,6 +87,8 @@ final class CoordinatorModeViewModel: ObservableObject {
         var input = inputProvider(sortMode, nil)
         input.selectedCoordinatorID = input.workspaceID.flatMap { selectedCoordinatorIDByWorkspaceID[$0] }
         input.boardScope = boardScope
+        input.acknowledgedHumanReviewIDs = acknowledgedHumanReviewIDs
+        input.requiresHumanReviewAcknowledgement = requiresHumanReviewAcknowledgement
         let projected = projector.project(input)
         publishIfChanged(isFreshCoordinatorRunPending ? pendingFreshCoordinatorSnapshot(from: projected) : projected)
     }
@@ -126,6 +135,18 @@ final class CoordinatorModeViewModel: ObservableObject {
         displayedDelegateActionTargetIDs.removeAll()
         currentRailActivityText = nil
         composerNotice = nil
+    }
+
+    func markHumanReviewHandled(_ reviewID: String) {
+        acknowledgedHumanReviewIDs.insert(reviewID)
+        refresh()
+    }
+
+    func setRequiresHumanReviewAcknowledgement(_ requiresAcknowledgement: Bool) {
+        guard requiresHumanReviewAcknowledgement != requiresAcknowledgement else { return }
+        requiresHumanReviewAcknowledgement = requiresAcknowledgement
+        userDefaults.set(requiresAcknowledgement, forKey: Self.requiresHumanReviewAcknowledgementDefaultsKey)
+        refresh()
     }
 
     @discardableResult

@@ -36,8 +36,8 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 
 ## 5. Status grouping and sorting
 
-- [x] 5.1 Implement Coordinator view status groups: Needs you, Blocked, Working, Done, Idle.
-- [x] 5.2 Evaluate groups top-down: Needs you, Blocked, Working, Done, Idle.
+- [x] 5.1 Implement Coordinator view status groups: Needs you, Blocked, Working, Review, Done, Idle.
+- [x] 5.2 Evaluate groups top-down: Needs you, Blocked, Working, Review, Done, Idle.
 - [x] 5.3 Map Needs you from current-window live `.waitingForUser`, `.waitingForQuestion`, and `.waitingForApproval`; use MCP pending interactions only as prompt/detail enrichment.
 - [x] 5.4 Ensure persisted-only cards/rows never contribute to live `Needs you` or `Working` counts in v1 and render with stale/persisted-only treatment.
 - [x] 5.5 Map Blocked from `.failed` run state or conflicted worktree/merge attention.
@@ -45,7 +45,9 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 5.7 Implement read-only sort controls for `Last updated` (default), `Name`, and `Priority` across board cards and list rows.
 - [x] 5.8 Ensure sorting only reorders cards/rows within existing status groups and never changes group membership, run state, pending state, Coordinator relationship, or persisted session state.
 - [x] 5.9 Ensure v1 does not expose drag-to-reorder, drag-to-dispatch, or drag-to-change-status interactions.
-- [x] 5.10 Add snapshot adapter tests for grouping, counts, stale-row count exclusion, and sort-mode behavior.
+- [x] 5.10 Keep completed/cancelled rows with unacknowledged review material in Review until the user marks that review handled.
+- [x] 5.11 Add snapshot adapter tests for grouping, counts, stale-row count exclusion, review acknowledgement, and sort-mode behavior.
+- [x] 5.12 Add a persisted default-on human review gate with an advisory mode that lets review-bearing completed rows resolve to Done.
 
 ## 6. Pending interaction summaries
 

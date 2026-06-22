@@ -107,6 +107,30 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.railTranscriptEntries.map(\.text), ["first directive", "first answer"])
     }
 
+    func testHumanReviewGateDefaultsRequiredAndPersistsChanges() throws {
+        let suiteName = "CoordinatorModeComposerViewModelTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let initial = CoordinatorModeViewModel(
+            inputProvider: { _, _ in self.input() },
+            dashboardVisibilityHandler: { _ in },
+            userDefaults: defaults
+        )
+        XCTAssertTrue(initial.requiresHumanReviewAcknowledgement)
+
+        initial.setRequiresHumanReviewAcknowledgement(false)
+        XCTAssertFalse(initial.requiresHumanReviewAcknowledgement)
+
+        let restored = CoordinatorModeViewModel(
+            inputProvider: { _, _ in self.input() },
+            dashboardVisibilityHandler: { _ in },
+            userDefaults: defaults
+        )
+        XCTAssertFalse(restored.requiresHumanReviewAcknowledgement)
+    }
+
     func testAcceptedDirectiveDoesNotDuplicateRuntimeBackedUserTranscriptEntry() async {
         let coordinatorID = uuid(1)
         let coordinatorTab = uuid(101)

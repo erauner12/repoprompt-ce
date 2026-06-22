@@ -187,6 +187,7 @@ struct CoordinatorModeView: View {
 
             presentationPicker(metrics: metrics)
             scopePicker(metrics: metrics)
+            reviewGatePicker(metrics: metrics)
             sortPicker(metrics: metrics)
             filterSearchBox(metrics: metrics)
                 .frame(width: metrics.searchWidth)
@@ -267,6 +268,55 @@ struct CoordinatorModeView: View {
         .frame(width: metrics.scopeControlWidth, height: metrics.headerControlHeight)
         .coordinatorHeaderControlBackground()
         .accessibilityLabel("Board scope")
+    }
+
+    private func reviewGatePicker(metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.headerSegmentSpacing) {
+            reviewGateButton(
+                title: "Required",
+                isSelected: viewModel.requiresHumanReviewAcknowledgement,
+                metrics: metrics
+            ) {
+                viewModel.setRequiresHumanReviewAcknowledgement(true)
+            }
+
+            reviewGateButton(
+                title: "Advisory",
+                isSelected: !viewModel.requiresHumanReviewAcknowledgement,
+                metrics: metrics
+            ) {
+                viewModel.setRequiresHumanReviewAcknowledgement(false)
+            }
+        }
+        .padding(metrics.headerControlInset)
+        .frame(width: metrics.reviewGateControlWidth, height: metrics.headerControlHeight)
+        .coordinatorHeaderControlBackground()
+        .accessibilityLabel("Human review gate")
+    }
+
+    private func reviewGateButton(
+        title: String,
+        isSelected: Bool,
+        metrics: CoordinatorVisualMetrics,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(metrics.bodySemibold)
+                .lineLimit(1)
+                .minimumScaleFactor(0.84)
+                .frame(maxWidth: .infinity)
+                .frame(height: metrics.headerSegmentHeight)
+                .padding(.horizontal, metrics.headerSegmentHorizontalPadding)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+        .background(
+            Capsule(style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
+        )
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func sortPicker(metrics: CoordinatorVisualMetrics) -> some View {
@@ -1043,7 +1093,7 @@ struct CoordinatorModeView: View {
                 VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
                     let packet = reviewPacket(for: row)
                     if let packet {
-                        reviewPacketInspector(packet, metrics: metrics)
+                        reviewPacketInspector(packet, row: row, metrics: metrics)
                     }
 
                     inspectorGroup("Status", metrics: metrics) {
@@ -2118,7 +2168,7 @@ struct CoordinatorModeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func reviewPacketInspector(_ packet: CoordinatorReviewPacket, metrics: CoordinatorVisualMetrics) -> some View {
+    private func reviewPacketInspector(_ packet: CoordinatorReviewPacket, row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
         inspectorGroup("Review packet", metrics: metrics) {
             HStack(spacing: metrics.smallSpacing) {
                 Image(systemName: packet.systemImage)
@@ -2139,6 +2189,17 @@ struct CoordinatorModeView: View {
 
             if let operationID = packet.operationID {
                 keyValue("Operation", operationID, metrics: metrics)
+            }
+
+            if let reviewID = row.pendingHumanReviewID {
+                Button {
+                    viewModel.markHumanReviewHandled(reviewID)
+                } label: {
+                    Label("Mark reviewed", systemImage: "checkmark.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(packet.tint)
             }
         }
     }
@@ -2396,6 +2457,10 @@ private struct CoordinatorVisualMetrics {
 
     var sortControlWidth: CGFloat {
         fontPreset.scaledClamped(190, min: 190, max: 230)
+    }
+
+    var reviewGateControlWidth: CGFloat {
+        fontPreset.scaledClamped(188, min: 188, max: 228)
     }
 
     var headerControlHeight: CGFloat {
@@ -3077,6 +3142,7 @@ private extension AgentSessionRunState {
                     workstream: .init(label: "coordinator/readonly-shell", branch: "coordinator/readonly-shell", colorHex: nil),
                     workflow: CoordinatorModeWorkflowDisplaySummary(AgentWorkflow.orchestrate.definition),
                     mergeAttention: nil,
+                    pendingHumanReviewID: nil,
                     pendingInteraction: nil,
                     openAgentChatRoute: nil,
                     statusReport: nil,
@@ -3102,6 +3168,7 @@ private extension AgentSessionRunState {
                     workstream: nil,
                     workflow: nil,
                     mergeAttention: nil,
+                    pendingHumanReviewID: nil,
                     pendingInteraction: nil,
                     openAgentChatRoute: nil,
                     statusReport: nil,

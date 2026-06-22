@@ -127,6 +127,7 @@ struct CoordinatorModeRow: Identifiable, Equatable {
     let workstream: Workstream?
     let workflow: CoordinatorModeWorkflowDisplaySummary?
     let mergeAttention: MergeAttention?
+    let pendingHumanReviewID: String?
     let pendingInteraction: CoordinatorModePendingInteractionSummary?
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
     let statusReport: CoordinatorModeSessionStatusReport?

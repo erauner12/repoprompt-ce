@@ -311,7 +311,7 @@ The system SHALL group Coordinator view rows by testable, structured status rule
 
 #### Scenario: Group precedence is evaluated
 - **WHEN** a row has signals matching more than one group
-- **THEN** the Coordinator view SHALL evaluate groups in this order: `Needs you`, `Blocked`, `Working`, `Done`, `Idle`.
+- **THEN** the Coordinator view SHALL evaluate groups in this order: `Needs you`, `Blocked`, `Working`, `Review`, `Done`, `Idle`.
 
 #### Scenario: Session needs user attention
 - **WHEN** a session has current-window live run state `.waitingForUser`, `.waitingForQuestion`, or `.waitingForApproval`
@@ -343,8 +343,29 @@ The system SHALL group Coordinator view rows by testable, structured status rule
 - **WHEN** a session has current-window live run state `.running`
 - **THEN** the Coordinator view SHALL group that row under `Working`.
 
+#### Scenario: Completed session has unacknowledged review material
+- **WHEN** a session run state is `.completed` or `.cancelled`
+- **AND** structured review material such as a worktree merge preview remains available for human review
+- **AND** the persisted human review gate is set to require acknowledgement
+- **AND** that review material has not been acknowledged by the user
+- **THEN** the Coordinator view SHALL group that row under `Review`
+- **AND** the inspector SHALL expose an explicit acknowledgement affordance for the selected row.
+
+#### Scenario: Human review gate is advisory
+- **WHEN** the user changes the persisted human review gate from required to advisory
+- **AND** a completed or cancelled row has structured review material
+- **THEN** the Coordinator view SHALL keep that row eligible for `Done` when no higher-priority status signal applies
+- **AND** the row MAY still expose review packet context for inspection
+- **AND** the advisory setting SHALL persist across view model recreation.
+
+#### Scenario: User acknowledges review material
+- **WHEN** the user acknowledges a row's structured review material from the Coordinator view
+- **THEN** the Coordinator view SHALL stop treating that review material as pending human review
+- **AND** the row SHALL be eligible for `Done` when no higher-priority status signal applies.
+
 #### Scenario: Session is done
 - **WHEN** a session run state is `.completed` or `.cancelled`
+- **AND** no unacknowledged structured review material remains
 - **THEN** the Coordinator view SHALL group that row under `Done`.
 
 #### Scenario: Session is idle
