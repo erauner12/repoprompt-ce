@@ -23,6 +23,18 @@ package struct FileSearchPathSnapshot {
     let standardizedRelativePath: String
     let standardizedRootPath: String
     let clientDisplayPath: String
+
+    package init(
+        standardizedFullPath: String,
+        standardizedRelativePath: String,
+        standardizedRootPath: String,
+        clientDisplayPath: String
+    ) {
+        self.standardizedFullPath = standardizedFullPath
+        self.standardizedRelativePath = standardizedRelativePath
+        self.standardizedRootPath = standardizedRootPath
+        self.clientDisplayPath = clientDisplayPath
+    }
 }
 
 package struct FileSearchPathFilterResult: Equatable {

@@ -157,6 +157,7 @@ enum MCPRuntimeFileToolServices {
                 profile: .mcpRead,
                 rootScope: context.lookupContext.rootScope
             )) else {
+                try await requireRootScopeAvailable(context: context)
                 throw MCPRuntimeFileToolServiceError.pathNotFound(path)
             }
             if let file = lookup.file, seen.insert(file.standardizedFullPath).inserted {
@@ -164,6 +165,7 @@ enum MCPRuntimeFileToolServices {
                 continue
             }
             guard let folder = lookup.folder else {
+                try await requireRootScopeAvailable(context: context)
                 throw MCPRuntimeFileToolServiceError.pathNotFound(path)
             }
             let prefix = folder.standardizedRelativePath.isEmpty
@@ -258,9 +260,11 @@ enum MCPRuntimeFileToolServices {
             profile: .mcpRead,
             rootScope: context.lookupContext.rootScope
         )) else {
+            try await requireRootScopeAvailable(context: context)
             throw MCPRuntimeFileToolServiceError.pathNotFound(path)
         }
         guard let file = lookup.file else {
+            try await requireRootScopeAvailable(context: context)
             throw MCPRuntimeFileToolServiceError.pathIsNotFile(path)
         }
         guard let rootRecord = catalog.roots.first(where: { $0.id == file.rootID }) else {
@@ -406,111 +410,144 @@ enum MCPRuntimeFileToolServices {
     ) async throws -> [WorkspaceFileRecord] {
         guard let pathLimiters, !pathLimiters.isEmpty else { return files }
 
-        var matchedPaths = Set<String>()
+        var clauses: [SearchPathClause] = []
+        var clauseKeys = Set<String>()
+        var issues: [PathResolutionIssue] = []
+
+        func appendClause(_ clause: SearchPathClause) {
+            guard clauseKeys.insert(String(describing: clause)).inserted else { return }
+            clauses.append(clause)
+        }
+
         for rawLimiter in pathLimiters {
             try Task.checkCancellation()
-            let limiter = context.lookupContext.translateInputPath(rawLimiter)
-            if limiter.contains("*") || limiter.contains("?") {
-                let expression = try globExpression(limiter)
-                for file in files {
-                    try Task.checkCancellation()
-                    let rootRef = rootsByID[file.rootID].map {
-                        WorkspaceRootRef(id: $0.id, name: $0.name, fullPath: $0.standardizedFullPath)
+            let translated = context.lookupContext.translateInputPath(rawLimiter)
+            let trimmed = translated.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let expanded = (trimmed as NSString).expandingTildeInPath
+            let normalized = expanded.hasPrefix("/")
+                ? StandardizedPath.absolute(expanded)
+                : StandardizedPath.relative(expanded)
+            let hasWildcard = normalized.contains("*")
+                || normalized.contains("?")
+                || normalized.contains("[")
+
+            if hasWildcard {
+                if normalized.hasPrefix("/"),
+                   let root = rootRefs
+                   .filter({
+                       normalized == $0.standardizedFullPath
+                           || normalized.hasPrefix(
+                               $0.standardizedFullPath.hasSuffix("/")
+                                   ? $0.standardizedFullPath
+                                   : $0.standardizedFullPath + "/"
+                           )
+                   })
+                   .max(by: { $0.standardizedFullPath.count < $1.standardizedFullPath.count })
+                {
+                    let prefix = root.standardizedFullPath.hasSuffix("/")
+                        ? root.standardizedFullPath
+                        : root.standardizedFullPath + "/"
+                    let relativePattern = normalized == root.standardizedFullPath
+                        ? ""
+                        : StandardizedPath.relative(String(normalized.dropFirst(prefix.count)))
+                    appendClause(.glob(
+                        pattern: relativePattern,
+                        restrictedRootPath: root.standardizedFullPath
+                    ))
+                    continue
+                }
+
+                let parts = normalized.split(
+                    separator: "/",
+                    maxSplits: 1,
+                    omittingEmptySubsequences: true
+                )
+                if parts.count == 2 {
+                    let alias = String(parts[0])
+                    let matchingRoots = rootRefs.filter {
+                        $0.name.caseInsensitiveCompare(alias) == .orderedSame
                     }
-                    let displayPath = rootRef.map {
-                        ClientPathFormatter.displayPath(
-                            root: $0,
-                            relativePath: file.standardizedRelativePath,
-                            visibleRoots: rootRefs
-                        )
-                    } ?? file.standardizedRelativePath
-                    let candidates = [
-                        file.standardizedFullPath,
-                        file.standardizedRelativePath,
-                        displayPath
-                    ]
-                    if candidates.contains(where: { candidate in
-                        expression.firstMatch(
-                            in: candidate,
-                            range: NSRange(candidate.startIndex..., in: candidate)
-                        ) != nil
-                    }) {
-                        matchedPaths.insert(file.standardizedFullPath)
+                    if matchingRoots.count == 1, let root = matchingRoots.first {
+                        appendClause(.glob(
+                            pattern: StandardizedPath.relative(String(parts[1])),
+                            restrictedRootPath: root.standardizedFullPath
+                        ))
+                        continue
+                    }
+                    if matchingRoots.count > 1 {
+                        issues.append(.ambiguousAlias(alias: alias, matchingRoots: matchingRoots))
+                        continue
                     }
                 }
+
+                appendClause(.glob(pattern: normalized, restrictedRootPath: nil))
                 continue
             }
+
             if let issue = await context.query.exactPathResolutionIssue(
-                for: limiter,
+                for: normalized,
                 kind: .either,
                 rootScope: context.lookupContext.rootScope
             ) {
-                throw MCPError.invalidParams(PathResolutionIssueRenderer.message(for: issue))
-            }
-            if let lookup = await context.query.lookupPath(WorkspacePathLookupRequest(
-                userPath: limiter,
-                profile: .mcpRead,
-                rootScope: context.lookupContext.rootScope
-            )) {
-                if let file = lookup.file {
-                    matchedPaths.insert(file.standardizedFullPath)
-                    continue
-                }
-                if let folder = lookup.folder {
-                    let prefix = folder.standardizedRelativePath.isEmpty
-                        ? ""
-                        : folder.standardizedRelativePath + "/"
-                    for file in files where file.rootID == folder.rootID
-                        && (prefix.isEmpty || file.standardizedRelativePath.hasPrefix(prefix))
-                    {
-                        matchedPaths.insert(file.standardizedFullPath)
-                    }
-                    continue
-                }
+                issues.append(issue)
+                continue
             }
 
-            let standardizedLimiter = (limiter as NSString).standardizingPath
-            let lowerLimiter = standardizedLimiter.lowercased()
-            var matchedFallback = false
-            for file in files {
-                let rootRef = rootsByID[file.rootID].map {
-                    WorkspaceRootRef(id: $0.id, name: $0.name, fullPath: $0.standardizedFullPath)
-                }
-                let displayPath = rootRef.map {
-                    ClientPathFormatter.displayPath(
-                        root: $0,
-                        relativePath: file.standardizedRelativePath,
-                        visibleRoots: rootRefs
-                    )
-                } ?? file.standardizedRelativePath
-                let candidates = [
-                    file.standardizedFullPath,
-                    file.standardizedRelativePath,
-                    displayPath
-                ].map { $0.lowercased() }
-                if candidates.contains(where: {
-                    $0 == lowerLimiter || $0.hasPrefix(lowerLimiter + "/")
-                }) {
-                    matchedFallback = true
-                    matchedPaths.insert(file.standardizedFullPath)
-                }
+            guard let lookup = await context.query.lookupPath(WorkspacePathLookupRequest(
+                userPath: normalized,
+                profile: .mcpSearchScope,
+                rootScope: context.lookupContext.rootScope
+            )) else {
+                try await requireRootScopeAvailable(context: context)
+                appendClause(.legacyPrefix(candidateLower: normalized.lowercased()))
+                continue
             }
-            guard matchedFallback else {
-                throw MCPRuntimeFileToolServiceError.pathNotFound(rawLimiter)
+
+            let restrictedRootPath = rootsByID[lookup.location.rootID]?.standardizedFullPath
+            if let file = lookup.file {
+                appendClause(.exactFile(
+                    absPath: file.standardizedFullPath,
+                    relPath: file.standardizedRelativePath,
+                    restrictedRootPath: restrictedRootPath
+                ))
+            } else if let folder = lookup.folder {
+                appendClause(.exactFolder(
+                    absLower: folder.standardizedFullPath.lowercased(),
+                    relLower: folder.standardizedRelativePath.lowercased(),
+                    restrictedRootPath: restrictedRootPath
+                ))
+            } else {
+                try await requireRootScopeAvailable(context: context)
             }
         }
 
-        return files.filter { matchedPaths.contains($0.standardizedFullPath) }
-    }
+        if clauses.isEmpty, let issue = issues.first {
+            throw MCPError.invalidParams(PathResolutionIssueRenderer.message(for: issue))
+        }
 
-    private static func globExpression(_ pattern: String) throws -> NSRegularExpression {
-        let placeholder = "__MCP_DOUBLE_STAR__"
-        var escaped = NSRegularExpression.escapedPattern(for: pattern)
-        escaped = escaped.replacingOccurrences(of: "\\*\\*", with: placeholder)
-        escaped = escaped.replacingOccurrences(of: "\\*", with: "[^/]*")
-        escaped = escaped.replacingOccurrences(of: "\\?", with: "[^/]")
-        escaped = escaped.replacingOccurrences(of: placeholder, with: ".*")
-        return try NSRegularExpression(pattern: "^" + escaped + "$", options: [.caseInsensitive])
+        let snapshots = files.map { file in
+            let rootRef = rootsByID[file.rootID].map {
+                WorkspaceRootRef(id: $0.id, name: $0.name, fullPath: $0.standardizedFullPath)
+            }
+            let displayPath = rootRef.map {
+                ClientPathFormatter.displayPath(
+                    root: $0,
+                    relativePath: file.standardizedRelativePath,
+                    visibleRoots: rootRefs
+                )
+            } ?? file.standardizedRelativePath
+            return RepoPromptCore.FileSearchPathSnapshot(
+                standardizedFullPath: file.standardizedFullPath,
+                standardizedRelativePath: file.standardizedRelativePath,
+                standardizedRootPath: rootRef?.standardizedFullPath ?? "",
+                clientDisplayPath: displayPath
+            )
+        }
+        let spec = SearchPathFilterSpec(caseInsensitive: true, clauses: clauses)
+        let matchedPaths = Set(RepoPromptCore.filterPaths(snapshots: snapshots, spec: spec))
+        try Task.checkCancellation()
+        return files.filter { matchedPaths.contains($0.standardizedFullPath) }
     }
 
     static func fileTree(
