@@ -417,7 +417,9 @@ final class ToolCatalogSnapshotTests: XCTestCase {
             previousEnabledState: Bool
         ) async throws {
             await window.mcpServer.stopServer()
-            ServiceRegistry.unregister(catalogService)
+            XCTAssertFalse(ServiceRegistry.services.contains { service in
+                (service as AnyObject) === (catalogService as AnyObject)
+            })
             await window.mcpServer.shutdownListener()
 
             let manager = ServerNetworkManager.shared

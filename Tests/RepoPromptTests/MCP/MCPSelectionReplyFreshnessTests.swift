@@ -820,6 +820,7 @@ final class MCPSelectionReplyFreshnessTests: XCTestCase {
             let runID = UUID()
             let (window, workspaceID) = await makeWindow(
                 root: workspaceRoot,
+                additionalRepoRoots: [secondaryLogical],
                 tabID: tabID,
                 selection: StoredSelection(selectedPaths: [logicalFile.path])
             )
@@ -1334,6 +1335,7 @@ final class MCPSelectionReplyFreshnessTests: XCTestCase {
 
     private func makeWindow(
         root: URL,
+        additionalRepoRoots: [URL] = [],
         tabID: UUID,
         selection: StoredSelection
     ) async -> (window: WindowState, workspaceID: UUID) {
@@ -1345,7 +1347,7 @@ final class MCPSelectionReplyFreshnessTests: XCTestCase {
 
         let workspace = WorkspaceModel(
             name: "Selection Reply \(UUID().uuidString.prefix(8))",
-            repoPaths: [root.path],
+            repoPaths: [root.path] + additionalRepoRoots.map(\.path),
             ephemeralFlag: true,
             composeTabs: [ComposeTabState(id: tabID, name: "Agent", selection: selection)],
             activeComposeTabID: tabID

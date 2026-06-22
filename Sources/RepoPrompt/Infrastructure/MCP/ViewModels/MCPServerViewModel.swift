@@ -2528,6 +2528,7 @@ final class MCPServerViewModel: ObservableObject {
     /// Disables tools for this window.
     func stopServer() async {
         windowToolsEnabled = false
+        await updateToolRegistration()
     }
 
     /// Convenience UI toggle.
