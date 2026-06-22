@@ -610,7 +610,8 @@ final class MCPSelectionToolProvider: MCPWindowToolProviding {
             let verification = await dependencies.persistResolvedTabContextSnapshot(
                 resolvedContext,
                 metadata,
-                true
+                true,
+                baseContext.selection
             )
             canonicalSelection = try Self.requireCanonicalSelection(
                 verification,
@@ -656,6 +657,7 @@ final class MCPSelectionToolProvider: MCPWindowToolProviding {
             throw MCPError.internalError(selectionPersistenceMismatchMessage(
                 expected: verification?.expectedSelection ?? requested,
                 canonical: verification?.canonicalSelection,
+                outcome: verification?.outcome,
                 tabID: tabID,
                 operation: operation,
                 recovery: recovery
@@ -667,12 +669,14 @@ final class MCPSelectionToolProvider: MCPWindowToolProviding {
     private static func selectionPersistenceMismatchMessage(
         expected: StoredSelection,
         canonical: StoredSelection?,
+        outcome: MCPServerViewModel.MCPSelectionCoordinatorPersistenceResult?,
         tabID: UUID,
         operation: String,
         recovery: String
     ) -> String {
         let canonicalSummary = canonical.map(selectionSummary) ?? "unavailable"
-        return "Selection persistence handoff failed for \(operation) on tab \(tabID.uuidString): canonical selection did not match the requested mutation (expected \(selectionSummary(expected)); canonical \(canonicalSummary)). \(recovery)"
+        let outcomeSummary = outcome?.diagnosticDescription ?? "unavailable"
+        return "Selection persistence handoff failed for \(operation) on tab \(tabID.uuidString): coordinator outcome \(outcomeSummary); canonical selection did not match the requested mutation (expected \(selectionSummary(expected)); canonical \(canonicalSummary)). \(recovery)"
     }
 
     private static func selectionSummary(_ selection: StoredSelection) -> String {

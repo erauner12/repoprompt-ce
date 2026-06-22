@@ -237,7 +237,8 @@ struct MCPWindowToolDependencies {
     typealias PersistResolvedTabContextSnapshot = @MainActor @Sendable (
         _ resolvedContext: MCPServerViewModel.ResolvedTabContextSnapshot,
         _ metadata: MCPServerViewModel.RequestMetadata,
-        _ mutated: Bool
+        _ mutated: Bool,
+        _ expectedCurrentSelection: StoredSelection?
     ) async -> MCPServerViewModel.MCPSelectionPersistenceVerification?
     typealias MakeSelectionHintError = @MainActor @Sendable (_ paths: [String], _ operation: String, _ lookupContext: WorkspaceLookupContext) async -> String
     typealias PerformFileAction = @MainActor @Sendable (_ action: String, _ path: String, _ content: String?, _ newPath: String?, _ ifExists: String?) async throws -> String?

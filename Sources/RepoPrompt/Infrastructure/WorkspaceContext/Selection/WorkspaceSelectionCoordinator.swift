@@ -44,6 +44,7 @@ private struct WorkspaceSelectionMirrorTarget: Equatable {
 protocol WorkspaceSelectionHost: AnyObject {
     var activeWorkspace: WorkspaceModel? { get }
     var selectedWorkspaceSessionID: WorkspaceSessionID? { get }
+    var selectedWorkspaceSessionActivationID: UUID? { get }
     var selectionMirrorContextRevision: UInt64 { get }
     var liveUISelectionRevision: UInt64 { get }
     func composeTab(with id: UUID) -> ComposeTabState?
@@ -72,6 +73,10 @@ protocol WorkspaceSelectionHost: AnyObject {
 
 extension WorkspaceSelectionHost {
     var selectedWorkspaceSessionID: WorkspaceSessionID? {
+        nil
+    }
+
+    var selectedWorkspaceSessionActivationID: UUID? {
         nil
     }
 
@@ -131,10 +136,17 @@ extension WorkspaceManagerViewModel: WorkspaceSelectionHost {
     }
 }
 
+enum WorkspaceSelectionMutationStaleReason: Equatable {
+    case baseSelectionChanged
+    case generation(expected: UInt64, actual: UInt64)
+    case selectionRevision(expected: UInt64, actual: UInt64)
+    case readinessGeneration(expected: UInt64, actual: UInt64)
+}
+
 enum WorkspaceSelectionMutationDisposition: Equatable {
     case committed
     case unchanged
-    case stale
+    case stale(WorkspaceSelectionMutationStaleReason)
     case notReady
     case rejected
     case failed
@@ -380,6 +392,7 @@ final class WorkspaceSelectionCoordinator {
         source: Source = .runtimeMutation,
         mirrorToUIIfActive: Bool = true,
         expectedCurrentSelection: StoredSelection? = nil,
+        retryGenerationStaleOnce: Bool = false,
         peerSourceRevision: UInt64? = nil,
         peerMutationFence: MCPSelectionPeerMutationFence? = nil
     ) async -> WorkspaceSelectionMutationOutcome {
@@ -398,7 +411,7 @@ final class WorkspaceSelectionCoordinator {
            currentSelection != expectedCurrentSelection
         {
             return mutationOutcome(
-                .stale,
+                .stale(.baseSelectionChanged),
                 previous: expectedCurrentSelection,
                 selection: currentSelection,
                 revision: workspaceManager.committedSelectionRevision(for: identity),
@@ -462,26 +475,65 @@ final class WorkspaceSelectionCoordinator {
         }
 
         let requiredPeerMutationFence = source == .mcpPeerContext ? peerMutationFence : nil
-        let outcome = await commitCanonicalSelection(
+        let originalRevision = workspaceManager.committedSelectionRevision(for: identity)
+        var outcome = await commitCanonicalSelection(
             selection,
             for: identity,
-            expectedRevision: workspaceManager.committedSelectionRevision(for: identity),
+            expectedRevision: originalRevision,
             previousSelection: currentSelection,
             attempts: 1,
             peerMutationFence: requiredPeerMutationFence,
             workspaceManager: workspaceManager
         )
+        if retryGenerationStaleOnce,
+           source == .mcpTabContext,
+           case .stale(.generation) = outcome.disposition,
+           outcome.selection == currentSelection,
+           outcome.revision == originalRevision,
+           mutationFenceFailure(
+               mutationFence,
+               for: identity,
+               workspaceManager: workspaceManager
+           ) == nil,
+           workspaceManager.composeTab(for: identity)?.selection == currentSelection,
+           workspaceManager.committedSelectionRevision(for: identity) == originalRevision
+        {
+            outcome = await commitCanonicalSelection(
+                selection,
+                for: identity,
+                expectedRevision: originalRevision,
+                previousSelection: currentSelection,
+                attempts: 2,
+                workspaceManager: workspaceManager
+            )
+        }
         guard outcome.committed else { return outcome }
-        guard mutationFenceFailure(
+        if let failure = mutationFenceFailure(
             mutationFence,
             for: identity,
             workspaceManager: workspaceManager
-        ) == nil else { return outcome }
+        ) {
+            return mutationOutcome(
+                failure,
+                previous: currentSelection,
+                selection: workspaceManager.composeTab(for: identity)?.selection ?? outcome.selection,
+                revision: workspaceManager.committedSelectionRevision(for: identity),
+                attempts: outcome.attempts
+            )
+        }
         guard canCommitPeerMutation(
             peerMutationFence,
             source: source,
             workspaceManager: workspaceManager
-        ) else { return outcome }
+        ) else {
+            return mutationOutcome(
+                .activationChanged,
+                previous: currentSelection,
+                selection: workspaceManager.composeTab(for: identity)?.selection ?? outcome.selection,
+                revision: workspaceManager.committedSelectionRevision(for: identity),
+                attempts: outcome.attempts
+            )
+        }
         await finalizeSelectionMutation(
             previous: currentSelection,
             selection: outcome.selection,
@@ -905,6 +957,7 @@ final class WorkspaceSelectionCoordinator {
     private struct SelectionMutationFence {
         let hostID: ObjectIdentifier
         let sessionID: WorkspaceSessionID?
+        let activationID: UUID?
         let activeContextRevision: UInt64?
     }
 
@@ -915,6 +968,7 @@ final class WorkspaceSelectionCoordinator {
         SelectionMutationFence(
             hostID: ObjectIdentifier(workspaceManager),
             sessionID: workspaceManager.selectedWorkspaceSessionID,
+            activationID: workspaceManager.selectedWorkspaceSessionActivationID,
             activeContextRevision: identity == activeSelectionIdentity()
                 ? workspaceManager.selectionMirrorContextRevision
                 : nil
@@ -926,8 +980,11 @@ final class WorkspaceSelectionCoordinator {
         for identity: WorkspaceSelectionIdentity,
         workspaceManager: any WorkspaceSelectionHost
     ) -> WorkspaceSelectionMutationDisposition? {
-        guard ObjectIdentifier(workspaceManager) == fence.hostID,
-              workspaceManager.selectedWorkspaceSessionID == fence.sessionID
+        guard let currentWorkspaceManager = self.workspaceManager,
+              ObjectIdentifier(currentWorkspaceManager) == fence.hostID,
+              ObjectIdentifier(workspaceManager) == fence.hostID,
+              workspaceManager.selectedWorkspaceSessionID == fence.sessionID,
+              workspaceManager.selectedWorkspaceSessionActivationID == fence.activationID
         else { return .activationChanged }
         guard workspaceManager.composeTab(for: identity) != nil else { return .identityChanged }
         if let activeContextRevision = fence.activeContextRevision {
@@ -1005,7 +1062,7 @@ final class WorkspaceSelectionCoordinator {
                 revision: receipt.selectionRevision ?? expectedRevision,
                 attempts: attempts
             )
-        case let .stale(snapshot, _):
+        case let .stale(snapshot, conflict):
             guard let latest = snapshot.selection(
                 workspaceID: identity.workspaceID,
                 tabID: identity.tabID
@@ -1018,8 +1075,16 @@ final class WorkspaceSelectionCoordinator {
                     attempts: attempts
                 )
             }
+            let staleReason: WorkspaceSelectionMutationStaleReason = switch conflict.kind {
+            case let .generation(expected, actual):
+                .generation(expected: expected, actual: actual)
+            case let .selectionRevision(_, expected, actual):
+                .selectionRevision(expected: expected, actual: actual)
+            case let .readinessGeneration(expected, actual):
+                .readinessGeneration(expected: expected, actual: actual)
+            }
             return mutationOutcome(
-                .stale,
+                .stale(staleReason),
                 previous: previousSelection,
                 selection: latest,
                 revision: snapshot.selectionRevision(

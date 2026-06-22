@@ -412,6 +412,10 @@ class WorkspaceManagerViewModel: ObservableObject {
         workspaceSessionClient?.sessionID
     }
 
+    var selectedWorkspaceSessionActivationID: UUID? {
+        workspaceSessionClient?.admissionToken?.activationID
+    }
+
     var selectedWorkspaceSessionAvailability: WorkspaceSessionAvailability? {
         workspaceSessionClient?.snapshot?.availability
     }

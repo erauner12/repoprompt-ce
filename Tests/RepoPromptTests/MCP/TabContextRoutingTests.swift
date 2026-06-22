@@ -1223,6 +1223,42 @@ final class TabContextRoutingTests: XCTestCase {
     }
 
     @MainActor
+    func testMCPSelectionPersistencePropagatesNoncommittedCoordinatorDisposition() async {
+        let tabID = UUID()
+        let initial = StoredSelection(selectedPaths: ["/tmp/initial.swift"])
+        let requested = StoredSelection(selectedPaths: ["/tmp/requested.swift"])
+        let scenarios: [(String, WorkspaceSessionCommandResult, WorkspaceSelectionMutationDisposition)] = [
+            ("not ready", .notReady(.hydrating), .notReady),
+            ("rejected", .rejected(.expiredActivation), .rejected),
+            ("failed", .failed(WorkspaceSessionFailure("injected failure")), .failed)
+        ]
+
+        for (name, commandResult, expectedDisposition) in scenarios {
+            let manager = FakeMCPSelectionManager(
+                tabs: [ComposeTabState(id: tabID, name: "Agent", selection: initial)],
+                activeTabID: tabID
+            )
+            manager.forcedCommandResults = [commandResult]
+            let coordinator = WorkspaceSelectionCoordinator(
+                workspaceManager: manager,
+                store: WorkspaceFileContextStore()
+            )
+
+            let result = await MCPServerViewModel.persistMCPSelectionThroughCoordinator(
+                requested,
+                for: tabID,
+                workspaceID: manager.activeWorkspace?.id,
+                selectionCoordinator: coordinator,
+                mirrorToUIIfActive: false,
+                expectedCurrentSelection: initial
+            )
+
+            XCTAssertEqual(result, .notCommitted(expectedDisposition), name)
+            XCTAssertEqual(manager.composeTab(with: tabID)?.selection, initial, name)
+        }
+    }
+
+    @MainActor
     func testMCPSelectionPersistenceUnchangedActiveSelectionReconcilesStaleUI() async {
         let activeTabID = UUID()
         let canonical = StoredSelection(selectedPaths: ["/tmp/canonical.swift"], codemapAutoEnabled: false)
@@ -1315,6 +1351,29 @@ final class TabContextRoutingTests: XCTestCase {
             XCTAssertTrue(message.contains("Selection persistence handoff failed"), message)
             XCTAssertTrue(message.contains(tabID.uuidString), message)
             XCTAssertTrue(message.contains("Retry manage_selection for the same context_id"), message)
+        }
+    }
+
+    @MainActor
+    func testSelectionMutationRejectsNoncommittedOutcomeEvenWhenCanonicalMatches() {
+        let tabID = UUID()
+        let requestedSelection = StoredSelection(selectedPaths: ["/tmp/requested.swift"])
+        let verification = MCPServerViewModel.MCPSelectionPersistenceVerification(
+            outcome: .notCommitted(.notReady),
+            expectedSelection: requestedSelection,
+            canonicalSelection: requestedSelection
+        )
+
+        XCTAssertThrowsError(try MCPSelectionToolProvider.requireCanonicalSelection(
+            verification,
+            requested: requestedSelection,
+            tabID: tabID,
+            operation: "manage_selection",
+            recovery: "Retry manage_selection."
+        )) { error in
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("not committed"), message)
+            XCTAssertTrue(message.contains("notReady"), message)
         }
     }
 
@@ -1613,7 +1672,7 @@ final class TabContextRoutingTests: XCTestCase {
     }
 
     @MainActor
-    func testManageSelectionSetPersistsAcrossConnectionRebindAndWorkspaceSerialization() async throws {
+    func testManageSelectionSetPersistsInitiallyEmptyRestoredAgentTabAcrossRebindAndSerialization() async throws {
         let fixture = try await makeSelectedSessionFixture()
         let window = fixture.composition
         defer { Task { await window.workspaceSessionShutdown() } }
@@ -1631,6 +1690,7 @@ final class TabContextRoutingTests: XCTestCase {
 
         let activeTabID = UUID()
         let tabID = UUID()
+        let agentSessionID = UUID()
         let workspace = WorkspaceModel(
             name: "Selection Tool Persistence \(UUID().uuidString.prefix(8))",
             repoPaths: [root.path],
@@ -1638,11 +1698,22 @@ final class TabContextRoutingTests: XCTestCase {
             ephemeralFlag: false,
             composeTabs: [
                 ComposeTabState(id: activeTabID, name: "Active"),
-                ComposeTabState(id: tabID, name: "Agent")
+                ComposeTabState(
+                    id: tabID,
+                    name: "Restored Agent",
+                    activeAgentSessionID: agentSessionID
+                )
             ],
             activeComposeTabID: activeTabID
         )
         try await installAuthoritativeWorkspaces([workspace], activeWorkspaceID: workspace.id, in: window)
+        let restoredAgentTab = try XCTUnwrap(window.workspaceManager.composeTab(with: tabID))
+        XCTAssertEqual(restoredAgentTab.activeAgentSessionID, agentSessionID)
+        XCTAssertEqual(restoredAgentTab.selection, StoredSelection())
+        window.mcpServer.registerAgentWorktreeBindingsProvider { sessionID, requestedTabID in
+            guard sessionID == agentSessionID, requestedTabID == tabID else { return .unavailable }
+            return .hydrated([])
+        }
         let tools = await window.mcpServer.windowMCPTools
         let manageSelection = try XCTUnwrap(
             tools.first { $0.name == MCPWindowToolName.manageSelection }
@@ -1667,6 +1738,10 @@ final class TabContextRoutingTests: XCTestCase {
             ])
         }
         XCTAssertEqual(try selectedPaths(from: setValue), [selectedFile.path])
+        XCTAssertEqual(
+            try XCTUnwrap(window.workspaceManager.composeTab(with: tabID)).selection.selectedPaths,
+            [selectedFile.path]
+        )
 
         await window.mcpServer.commitAndClearTabContext(connectionID: firstConnectionID)
         let secondConnectionID = UUID()
@@ -2904,6 +2979,7 @@ private final class FakeMCPSelectionManager: WorkspaceSelectionHost {
     private let ignoreStoredOnlyUpdates: Bool
     private(set) var mirrorAttempts: [StoredSelection] = []
     var mirroredSelection: StoredSelection?
+    var forcedCommandResults: [WorkspaceSessionCommandResult] = []
 
     init(tabs: [ComposeTabState], activeTabID: UUID, ignoreStoredOnlyUpdates: Bool = false) {
         self.ignoreStoredOnlyUpdates = ignoreStoredOnlyUpdates
@@ -2937,6 +3013,9 @@ private final class FakeMCPSelectionManager: WorkspaceSelectionHost {
         source _: String
     ) async -> WorkspaceSessionCommandResult? {
         guard expectedRevision == canonicalSelectionRevision else { return nil }
+        if !forcedCommandResults.isEmpty {
+            return forcedCommandResults.removeFirst()
+        }
         if !ignoreStoredOnlyUpdates {
             guard var workspace = activeWorkspace,
                   workspace.id == identity.workspaceID,

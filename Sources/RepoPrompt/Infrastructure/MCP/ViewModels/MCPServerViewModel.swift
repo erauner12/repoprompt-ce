@@ -1414,9 +1414,14 @@ final class MCPServerViewModel: ObservableObject {
             }
             return await computeSelectionSlicesVirtual(base: base, entries: entries, mode: mode, lookupRootScope: lookupRootScope)
         },
-        persistResolvedTabContextSnapshot: { [weak self] resolvedContext, metadata, mutated in
+        persistResolvedTabContextSnapshot: { [weak self] resolvedContext, metadata, mutated, expectedCurrentSelection in
             guard let self else { return nil }
-            return await persistResolvedTabContextSnapshot(resolvedContext, metadata: metadata, mutated: mutated)
+            return await persistResolvedTabContextSnapshot(
+                resolvedContext,
+                metadata: metadata,
+                mutated: mutated,
+                expectedCurrentSelection: expectedCurrentSelection
+            )
         },
         makeSelectionHintError: { [weak self] paths, operation, lookupContext in
             guard let self else { return "Window deallocated while resolving selection inputs." }
