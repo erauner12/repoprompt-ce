@@ -773,6 +773,10 @@ struct CoordinatorModeView: View {
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, metrics.emptyColumnPadding)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        clearSelectedRow()
+                    }
             } else {
                 ForEach(section.rows) { row in
                     sessionCard(row, metrics: metrics)
@@ -780,6 +784,10 @@ struct CoordinatorModeView: View {
             }
 
             Spacer(minLength: 0)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    clearSelectedRow()
+                }
         }
         .padding(metrics.columnPadding)
         .frame(minHeight: minHeight, alignment: .top)
@@ -818,6 +826,7 @@ struct CoordinatorModeView: View {
             isSelected: row.id == selectedRowID,
             isHovered: row.id == hoveredRowID
         )
+        .selectedCoordinatorObjectIndicator(isSelected: row.id == selectedRowID, cornerRadius: metrics.cardCornerRadius)
         .overlay(alignment: .leading) {
             selectedParentEmphasis(row, metrics: metrics)
         }
@@ -935,6 +944,7 @@ struct CoordinatorModeView: View {
             fillOpacity: CoordinatorStyle.listRowFillOpacity,
             strokeOpacity: 0.08
         )
+        .selectedCoordinatorObjectIndicator(isSelected: row.id == selectedRowID, cornerRadius: metrics.cardCornerRadius)
         .overlay(alignment: .leading) {
             selectedParentEmphasis(row, metrics: metrics)
         }
@@ -1703,6 +1713,11 @@ struct CoordinatorModeView: View {
         childDirectiveNotice = nil
         isSubmittingChildDirective = false
         isChildComposerExpanded = false
+    }
+
+    private func clearSelectedRow() {
+        selectedRowID = nil
+        isInspectorVisible = false
     }
 
     private func inspectorObjectSubtitle(for row: CoordinatorModeRow) -> String {
@@ -2490,6 +2505,14 @@ private extension View {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .stroke(resolvedStroke, lineWidth: 1)
         )
+    }
+
+    func selectedCoordinatorObjectIndicator(isSelected: Bool, cornerRadius: CGFloat) -> some View {
+        overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Color.accentColor.opacity(isSelected ? 0.72 : 0), lineWidth: 1.6)
+        )
+        .shadow(color: Color.accentColor.opacity(isSelected ? 0.28 : 0), radius: isSelected ? 8 : 0)
     }
 }
 
