@@ -2,43 +2,181 @@ import Foundation
 import MCP
 import RepoPromptCore
 
+enum MCPRuntimeFileToolServiceError: LocalizedError, Equatable {
+    case workspaceReadinessUnavailable
+    case worktreeScopeUnavailable(missingPhysicalRootPaths: [String])
+    case pathNotFound(String)
+    case pathIsNotFile(String)
+    case contentUnavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .workspaceReadinessUnavailable:
+            "The admitted workspace runtime is not ready for file queries. Retry after workspace activation completes."
+        case let .worktreeScopeUnavailable(missingPhysicalRootPaths):
+            "The admitted worktree scope is unavailable: \(missingPhysicalRootPaths.joined(separator: ", "))."
+        case let .pathNotFound(path):
+            "No file or folder was found for '\(path)' in the admitted workspace runtime."
+        case let .pathIsNotFile(path):
+            "'\(path)' is not a file in the admitted workspace runtime."
+        case let .contentUnavailable(path):
+            "Content for '\(path)' became unavailable in the admitted workspace runtime."
+        }
+    }
+
+    var retryableSearchError: StoreBackedWorkspaceSearchError? {
+        switch self {
+        case .workspaceReadinessUnavailable:
+            .workspaceReadinessUnavailable
+        case let .worktreeScopeUnavailable(missingPhysicalRootPaths):
+            .worktreeScopeUnavailable(missingPhysicalRootPaths: missingPhysicalRootPaths)
+        case .pathNotFound, .pathIsNotFile, .contentUnavailable:
+            nil
+        }
+    }
+}
+
+struct MCPRuntimeReadFileResult {
+    let reply: ToolResultDTOs.ReadFileReply
+    let resolvedPhysicalPath: String
+}
+
+struct MCPRuntimeFileSearchRequest {
+    let pattern: String
+    let mode: SearchMode
+    let isRegex: Bool
+    let maxResults: Int
+    let pathLimiters: [String]?
+    let includeExtensions: [String]
+    let excludePatterns: [String]
+    let contextLines: Int
+    let wholeWord: Bool
+    let countOnly: Bool
+    let fuzzySpaceMatching: Bool
+}
+
+struct MCPRuntimeFileSearchResult {
+    let results: SearchResults
+    let rootRefs: [WorkspaceRootRef]
+}
+
 enum MCPRuntimeFileToolServices {
+    static func executeRuntimeOrLegacy<Result>(
+        runtimeRequest: MCPRuntimeRequestContext?,
+        toolName: String,
+        runtimeOperation: (MCPRuntimeFileToolContext) async throws -> Result,
+        legacyOperation: () async throws -> Result
+    ) async throws -> Result {
+        try await executeRuntimeOrLegacy(
+            runtimeContext: runtimeRequest?.fileToolContext,
+            runtimeWasAdmitted: runtimeRequest != nil,
+            toolName: toolName,
+            runtimeOperation: runtimeOperation,
+            legacyOperation: legacyOperation
+        )
+    }
+
+    static func executeRuntimeOrLegacy<Result>(
+        runtimeContext: MCPRuntimeFileToolContext?,
+        runtimeWasAdmitted: Bool,
+        toolName: String,
+        runtimeOperation: (MCPRuntimeFileToolContext) async throws -> Result,
+        legacyOperation: () async throws -> Result
+    ) async throws -> Result {
+        guard runtimeWasAdmitted else {
+            return try await legacyOperation()
+        }
+        guard let runtimeContext else {
+            throw MCPError.internalError("The admitted runtime file context is unavailable for \(toolName).")
+        }
+        return try await runtimeOperation(runtimeContext)
+    }
+
+    private static func unavailableError(
+        _ availability: WorkspaceLookupRootScopeAvailability
+    ) -> MCPRuntimeFileToolServiceError {
+        switch availability {
+        case .available:
+            .workspaceReadinessUnavailable
+        case let .sessionWorktreeUnavailable(missingPhysicalRootPaths):
+            missingPhysicalRootPaths.isEmpty
+                ? .workspaceReadinessUnavailable
+                : .worktreeScopeUnavailable(missingPhysicalRootPaths: missingPhysicalRootPaths)
+        }
+    }
+
+    private static func requireRootScopeAvailable(
+        context: MCPRuntimeFileToolContext
+    ) async throws {
+        let availability = await context.query.rootScopeAvailability(context.lookupContext.rootScope)
+        guard availability == .available else {
+            throw unavailableError(availability)
+        }
+    }
+
+    private static func availableCatalog(
+        requirement: WorkspaceSearchCatalogAccessRequirement = .recordsOnly,
+        context: MCPRuntimeFileToolContext
+    ) async throws -> WorkspaceSearchCatalogSnapshot {
+        try await requireRootScopeAvailable(context: context)
+        await context.query.awaitAppliedIngress(rootScope: context.lookupContext.rootScope)
+        try Task.checkCancellation()
+        let access = await context.query.searchCatalogAccess(
+            rootScope: context.lookupContext.rootScope,
+            requirement: requirement
+        )
+        let snapshot: WorkspaceSearchCatalogSnapshot
+        switch access {
+        case let .available(available):
+            snapshot = available
+        case let .unavailable(availability):
+            throw unavailableError(availability)
+        }
+        try await requireRootScopeAvailable(context: context)
+        return snapshot
+    }
+
     static func resolveCodeStructureFiles(
         paths: [String],
         context: MCPRuntimeFileToolContext
     ) async throws -> [WorkspaceFileRecord] {
-        var catalogFiles: [WorkspaceFileRecord] = []
-        if case let .available(snapshot) = await context.query.searchCatalogAccess(
-            rootScope: context.lookupContext.rootScope,
-            requirement: .recordsOnly
-        ) {
-            catalogFiles = snapshot.files
-        }
-
+        let catalog = try await availableCatalog(context: context)
         var result: [WorkspaceFileRecord] = []
         var seen = Set<String>()
         for path in paths {
             try Task.checkCancellation()
+            if let issue = await context.query.exactPathResolutionIssue(
+                for: path,
+                kind: .either,
+                rootScope: context.lookupContext.rootScope
+            ) {
+                throw MCPError.invalidParams(PathResolutionIssueRenderer.message(for: issue))
+            }
             guard let lookup = await context.query.lookupPath(WorkspacePathLookupRequest(
                 userPath: path,
                 profile: .mcpRead,
                 rootScope: context.lookupContext.rootScope
-            )) else { continue }
+            )) else {
+                throw MCPRuntimeFileToolServiceError.pathNotFound(path)
+            }
             if let file = lookup.file, seen.insert(file.standardizedFullPath).inserted {
                 result.append(file)
                 continue
             }
-            guard let folder = lookup.folder else { continue }
+            guard let folder = lookup.folder else {
+                throw MCPRuntimeFileToolServiceError.pathNotFound(path)
+            }
             let prefix = folder.standardizedRelativePath.isEmpty
                 ? ""
                 : folder.standardizedRelativePath + "/"
-            for file in catalogFiles where file.rootID == folder.rootID
+            for file in catalog.files where file.rootID == folder.rootID
                 && (prefix.isEmpty || file.standardizedRelativePath.hasPrefix(prefix))
                 && seen.insert(file.standardizedFullPath).inserted
             {
                 result.append(file)
             }
         }
+        try await requireRootScopeAvailable(context: context)
         return result
     }
 
@@ -48,9 +186,11 @@ enum MCPRuntimeFileToolServices {
         includeUnmappedPaths: Bool,
         context: MCPRuntimeFileToolContext
     ) async throws -> ToolResultDTOs.SelectedCodeStructureDTO {
+        try await requireRootScopeAvailable(context: context)
         let roots = await context.query.rootRefs(scope: context.lookupContext.rootScope)
         let rootIDs = Set(roots.map(\.id))
         let codemaps = await context.query.codemapSnapshotBundle(rootScope: context.lookupContext.rootScope)
+        try await requireRootScopeAvailable(context: context)
         var entries: [(key: String, display: String, api: FileAPI?)] = []
         var seen = Set<String>()
         for file in files where rootIDs.contains(file.rootID) && seen.insert(file.standardizedFullPath).inserted {
@@ -98,6 +238,281 @@ enum MCPRuntimeFileToolServices {
         )
     }
 
+    static func readFile(
+        path: String,
+        startLine1Based: Int?,
+        lineCount: Int?,
+        context: MCPRuntimeFileToolContext
+    ) async throws -> MCPRuntimeReadFileResult {
+        let catalog = try await availableCatalog(context: context)
+        let resolvedPath = context.lookupContext.translateInputPath(path)
+        if let issue = await context.query.exactPathResolutionIssue(
+            for: resolvedPath,
+            kind: .file,
+            rootScope: context.lookupContext.rootScope
+        ) {
+            throw MCPError.invalidParams(PathResolutionIssueRenderer.message(for: issue))
+        }
+        guard let lookup = await context.query.lookupPath(WorkspacePathLookupRequest(
+            userPath: resolvedPath,
+            profile: .mcpRead,
+            rootScope: context.lookupContext.rootScope
+        )) else {
+            throw MCPRuntimeFileToolServiceError.pathNotFound(path)
+        }
+        guard let file = lookup.file else {
+            throw MCPRuntimeFileToolServiceError.pathIsNotFile(path)
+        }
+        guard let rootRecord = catalog.roots.first(where: { $0.id == file.rootID }) else {
+            throw MCPRuntimeFileToolServiceError.workspaceReadinessUnavailable
+        }
+        let rootRefs = catalog.roots.map {
+            WorkspaceRootRef(id: $0.id, name: $0.name, fullPath: $0.standardizedFullPath)
+        }
+        let root = WorkspaceRootRef(
+            id: rootRecord.id,
+            name: rootRecord.name,
+            fullPath: rootRecord.standardizedFullPath
+        )
+        let contentSnapshot = try await context.query.searchContentSnapshot(
+            for: file,
+            freshnessPolicy: .validateDiskMetadata
+        )
+        guard contentSnapshot.isFresh, let content = contentSnapshot.content else {
+            throw MCPRuntimeFileToolServiceError.contentUnavailable(path)
+        }
+        try Task.checkCancellation()
+
+        let displayPath = context.lookupContext.bindingProjection?.projectedLogicalDisplayPath(
+            forPhysicalPath: file.standardizedFullPath,
+            display: context.filePathDisplay
+        ) ?? {
+            switch context.filePathDisplay {
+            case .full:
+                file.standardizedFullPath
+            case .relative:
+                ClientPathFormatter.displayPath(
+                    root: root,
+                    relativePath: file.standardizedRelativePath,
+                    visibleRoots: rootRefs
+                )
+            }
+        }()
+        let preparedContent = await WorkspaceInteractiveReadProcessor.prepareOffActor(content)
+        let prepared = try await MCPReadFileToolProjection.makeBaseReply(
+            preparedContent: preparedContent,
+            startLine1Based: startLine1Based,
+            lineCount: lineCount,
+            displayPath: displayPath
+        )
+        let reply = try await MCPReadFileToolProjection.projectReply(
+            prepared.reply,
+            displayPath: displayPath,
+            worktreeScope: ToolResultDTOs.WorktreeScopeDTO.sessionBound(
+                from: context.lookupContext.bindingProjection
+            )
+        )
+        try await requireRootScopeAvailable(context: context)
+        return MCPRuntimeReadFileResult(
+            reply: reply,
+            resolvedPhysicalPath: file.standardizedFullPath
+        )
+    }
+
+    static func fileSearch(
+        request: MCPRuntimeFileSearchRequest,
+        context: MCPRuntimeFileToolContext
+    ) async throws -> MCPRuntimeFileSearchResult {
+        let catalog = try await availableCatalog(context: context)
+        let rootRefs = catalog.roots.map {
+            WorkspaceRootRef(id: $0.id, name: $0.name, fullPath: $0.standardizedFullPath)
+        }
+        let rootsByID = Dictionary(uniqueKeysWithValues: catalog.roots.map { ($0.id, $0) })
+        let scopedFiles = try await searchFiles(
+            from: catalog.files,
+            rootsByID: rootsByID,
+            rootRefs: rootRefs,
+            pathLimiters: request.pathLimiters,
+            context: context
+        )
+        let descriptors = scopedFiles.compactMap { file -> SearchFileDescriptor? in
+            guard let root = rootsByID[file.rootID] else { return nil }
+            return SearchFileDescriptor(
+                id: file.id,
+                name: file.name,
+                relativePath: file.relativePath,
+                standardizedRelativePath: file.standardizedRelativePath,
+                fullPath: file.fullPath,
+                standardizedFullPath: file.standardizedFullPath,
+                standardizedRootFolderPath: root.standardizedFullPath,
+                fileExtension: {
+                    let ext = (file.name as NSString).pathExtension
+                    return ext.isEmpty ? nil : ext
+                }(),
+                contentSnapshot: { freshnessPolicy in
+                    try await context.query.searchContentSnapshot(
+                        for: file,
+                        freshnessPolicy: freshnessPolicy
+                    )
+                }
+            )
+        }
+        let aliasByRootPath = Dictionary(uniqueKeysWithValues: catalog.roots.map { root in
+            let ref = WorkspaceRootRef(id: root.id, name: root.name, fullPath: root.standardizedFullPath)
+            return (
+                root.standardizedFullPath,
+                ClientPathFormatter.nonAbsoluteRootAlias(root: ref, visibleRoots: rootRefs)
+            )
+        })
+
+        let actor = FileSearchActor()
+        var wasAutoCorrected: Bool?
+        var results = try await actor.searchUnified(
+            pattern: request.pattern,
+            isRegex: request.isRegex,
+            wasAutoCorrected: &wasAutoCorrected,
+            options: SearchOptions(
+                mode: request.mode,
+                caseInsensitive: true,
+                wholeWord: request.wholeWord,
+                includeExtensions: request.includeExtensions,
+                excludePatterns: request.excludePatterns,
+                contextLines: request.contextLines,
+                maxResults: request.maxResults,
+                countOnly: request.countOnly,
+                fuzzySpaceMatching: request.fuzzySpaceMatching,
+                allowLiteralUnescapeFallback: true,
+                contentFreshnessPolicy: .validateDiskMetadata
+            ),
+            in: descriptors,
+            aliasByRootPath: aliasByRootPath
+        )
+        results.scopedFileCount = scopedFiles.count
+        if wasAutoCorrected == true {
+            results.warningMessage = request.isRegex
+                ? "The content-search pattern was auto-corrected before running. Results may reflect a repaired or escaped version of the requested regex rather than the exact pattern you entered."
+                : "The content-search pattern was auto-corrected before running. Results may reflect a de-escaped literal interpretation of the text you entered."
+        }
+        try await requireRootScopeAvailable(context: context)
+        return MCPRuntimeFileSearchResult(results: results, rootRefs: rootRefs)
+    }
+
+    private static func searchFiles(
+        from files: [WorkspaceFileRecord],
+        rootsByID: [UUID: WorkspaceRootRecord],
+        rootRefs: [WorkspaceRootRef],
+        pathLimiters: [String]?,
+        context: MCPRuntimeFileToolContext
+    ) async throws -> [WorkspaceFileRecord] {
+        guard let pathLimiters, !pathLimiters.isEmpty else { return files }
+
+        var matchedPaths = Set<String>()
+        for rawLimiter in pathLimiters {
+            try Task.checkCancellation()
+            let limiter = context.lookupContext.translateInputPath(rawLimiter)
+            if limiter.contains("*") || limiter.contains("?") {
+                let expression = try globExpression(limiter)
+                for file in files {
+                    try Task.checkCancellation()
+                    let rootRef = rootsByID[file.rootID].map {
+                        WorkspaceRootRef(id: $0.id, name: $0.name, fullPath: $0.standardizedFullPath)
+                    }
+                    let displayPath = rootRef.map {
+                        ClientPathFormatter.displayPath(
+                            root: $0,
+                            relativePath: file.standardizedRelativePath,
+                            visibleRoots: rootRefs
+                        )
+                    } ?? file.standardizedRelativePath
+                    let candidates = [
+                        file.standardizedFullPath,
+                        file.standardizedRelativePath,
+                        displayPath
+                    ]
+                    if candidates.contains(where: { candidate in
+                        expression.firstMatch(
+                            in: candidate,
+                            range: NSRange(candidate.startIndex..., in: candidate)
+                        ) != nil
+                    }) {
+                        matchedPaths.insert(file.standardizedFullPath)
+                    }
+                }
+                continue
+            }
+            if let issue = await context.query.exactPathResolutionIssue(
+                for: limiter,
+                kind: .either,
+                rootScope: context.lookupContext.rootScope
+            ) {
+                throw MCPError.invalidParams(PathResolutionIssueRenderer.message(for: issue))
+            }
+            if let lookup = await context.query.lookupPath(WorkspacePathLookupRequest(
+                userPath: limiter,
+                profile: .mcpRead,
+                rootScope: context.lookupContext.rootScope
+            )) {
+                if let file = lookup.file {
+                    matchedPaths.insert(file.standardizedFullPath)
+                    continue
+                }
+                if let folder = lookup.folder {
+                    let prefix = folder.standardizedRelativePath.isEmpty
+                        ? ""
+                        : folder.standardizedRelativePath + "/"
+                    for file in files where file.rootID == folder.rootID
+                        && (prefix.isEmpty || file.standardizedRelativePath.hasPrefix(prefix))
+                    {
+                        matchedPaths.insert(file.standardizedFullPath)
+                    }
+                    continue
+                }
+            }
+
+            let standardizedLimiter = (limiter as NSString).standardizingPath
+            let lowerLimiter = standardizedLimiter.lowercased()
+            var matchedFallback = false
+            for file in files {
+                let rootRef = rootsByID[file.rootID].map {
+                    WorkspaceRootRef(id: $0.id, name: $0.name, fullPath: $0.standardizedFullPath)
+                }
+                let displayPath = rootRef.map {
+                    ClientPathFormatter.displayPath(
+                        root: $0,
+                        relativePath: file.standardizedRelativePath,
+                        visibleRoots: rootRefs
+                    )
+                } ?? file.standardizedRelativePath
+                let candidates = [
+                    file.standardizedFullPath,
+                    file.standardizedRelativePath,
+                    displayPath
+                ].map { $0.lowercased() }
+                if candidates.contains(where: {
+                    $0 == lowerLimiter || $0.hasPrefix(lowerLimiter + "/")
+                }) {
+                    matchedFallback = true
+                    matchedPaths.insert(file.standardizedFullPath)
+                }
+            }
+            guard matchedFallback else {
+                throw MCPRuntimeFileToolServiceError.pathNotFound(rawLimiter)
+            }
+        }
+
+        return files.filter { matchedPaths.contains($0.standardizedFullPath) }
+    }
+
+    private static func globExpression(_ pattern: String) throws -> NSRegularExpression {
+        let placeholder = "__MCP_DOUBLE_STAR__"
+        var escaped = NSRegularExpression.escapedPattern(for: pattern)
+        escaped = escaped.replacingOccurrences(of: "\\*\\*", with: placeholder)
+        escaped = escaped.replacingOccurrences(of: "\\*", with: "[^/]*")
+        escaped = escaped.replacingOccurrences(of: "\\?", with: "[^/]")
+        escaped = escaped.replacingOccurrences(of: placeholder, with: ".*")
+        return try NSRegularExpression(pattern: "^" + escaped + "$", options: [.caseInsensitive])
+    }
+
     static func fileTree(
         type: String,
         mode: String,
@@ -105,13 +520,13 @@ enum MCPRuntimeFileToolServices {
         startPath: String?,
         context: MCPRuntimeFileToolContext
     ) async throws -> ToolResultDTOs.FileTreeDTO {
+        _ = try await availableCatalog(context: context)
         let snapshotMode: WorkspaceFileTreeSnapshotMode = switch mode.lowercased() {
         case "full": .full
         case "folders": .folders
         case "auto": .auto
         default: throw MCPError.invalidParams("invalid mode: \(mode)")
         }
-        await context.query.awaitAppliedIngress(rootScope: context.lookupContext.rootScope)
         let snapshot = await context.query.makeFileTreeSelectionSnapshot(
             selection: StoredSelection(),
             request: WorkspaceFileTreeSnapshotRequest(
@@ -126,6 +541,7 @@ enum MCPRuntimeFileToolServices {
             ),
             profile: .mcpRead
         )
+        try await requireRootScopeAvailable(context: context)
         let logical = context.lookupContext.bindingProjection?.logicalizeFileTreeSnapshot(snapshot) ?? snapshot
         let worktreeScope = ToolResultDTOs.WorktreeScopeDTO.sessionBound(from: context.lookupContext.bindingProjection)
         if type == "roots" {

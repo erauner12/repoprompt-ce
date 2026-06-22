@@ -120,6 +120,12 @@ enum WorkspaceSessionStoreLifecycleFactory {
             readExactCatalogFile: { file, root in
                 await store.readExactCatalogFile(file, expectedRoot: root)
             },
+            searchContentSnapshot: { file, freshnessPolicy in
+                try await store.searchContentSnapshot(
+                    for: file,
+                    freshnessPolicy: freshnessPolicy
+                )
+            },
             rootRefs: { scope in await store.rootRefs(scope: scope) },
             resolveSelectedGitDiffPaths: { selection, scope, folderPolicy, profile, allowFallback, excluded in
                 await WorkspaceGitDiffSelectionResolver.resolveSelectedGitDiffPaths(

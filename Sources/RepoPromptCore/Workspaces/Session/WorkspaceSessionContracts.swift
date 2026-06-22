@@ -111,6 +111,10 @@ package struct WorkspaceSessionQueryCapability: @unchecked Sendable {
         WorkspaceFileRecord,
         WorkspaceRootRef
     ) async -> String?
+    private let searchContentSnapshotClosure: @Sendable (
+        WorkspaceFileRecord,
+        FileContentFreshnessPolicy
+    ) async throws -> FileSearchContentSnapshot
     private let rootRefsClosure: @Sendable (WorkspaceLookupRootScope) async -> [WorkspaceRootRef]
     private let resolveSelectedGitDiffPathsClosure: @Sendable (
         StoredSelection,
@@ -163,6 +167,12 @@ package struct WorkspaceSessionQueryCapability: @unchecked Sendable {
             WorkspaceFileRecord,
             WorkspaceRootRef
         ) async -> String? = { _, _ in nil },
+        searchContentSnapshot: @escaping @Sendable (
+            WorkspaceFileRecord,
+            FileContentFreshnessPolicy
+        ) async throws -> FileSearchContentSnapshot = { _, _ in
+            throw WorkspaceSessionFailure("workspace content query is unavailable")
+        },
         rootRefs: @escaping @Sendable (WorkspaceLookupRootScope) async -> [WorkspaceRootRef] = { _ in [] },
         resolveSelectedGitDiffPaths: @escaping @Sendable (
             StoredSelection,
@@ -202,6 +212,7 @@ package struct WorkspaceSessionQueryCapability: @unchecked Sendable {
         resolveContextBuilderSelectionCandidateClosure = resolveContextBuilderSelectionCandidate
         exactCatalogFileClosure = exactCatalogFile
         readExactCatalogFileClosure = readExactCatalogFile
+        searchContentSnapshotClosure = searchContentSnapshot
         rootRefsClosure = rootRefs
         resolveSelectedGitDiffPathsClosure = resolveSelectedGitDiffPaths
         awaitAppliedIngressClosure = awaitAppliedIngress
@@ -268,6 +279,13 @@ package struct WorkspaceSessionQueryCapability: @unchecked Sendable {
         expectedRoot: WorkspaceRootRef
     ) async -> String? {
         await readExactCatalogFileClosure(file, expectedRoot)
+    }
+
+    package func searchContentSnapshot(
+        for file: WorkspaceFileRecord,
+        freshnessPolicy: FileContentFreshnessPolicy
+    ) async throws -> FileSearchContentSnapshot {
+        try await searchContentSnapshotClosure(file, freshnessPolicy)
     }
 
     package func rootRefs(scope: WorkspaceLookupRootScope) async -> [WorkspaceRootRef] {
@@ -392,6 +410,10 @@ package actor WorkspaceSessionLifecycleOwner {
             },
             readExactCatalogFile: { [weak self] file, root in
                 await self?.queryReadExactCatalogFile(file, expectedRoot: root)
+            },
+            searchContentSnapshot: { [weak self] file, freshnessPolicy in
+                guard let self else { throw WorkspaceSessionFailure("workspace lifecycle is unavailable") }
+                return try await querySearchContentSnapshot(for: file, freshnessPolicy: freshnessPolicy)
             },
             rootRefs: { [weak self] scope in
                 await self?.queryRootRefs(scope: scope) ?? []
@@ -548,6 +570,17 @@ package actor WorkspaceSessionLifecycleOwner {
     ) async -> String? {
         guard !isClosed else { return nil }
         return await underlyingQuery.readExactCatalogFile(file, expectedRoot: expectedRoot)
+    }
+
+    private func querySearchContentSnapshot(
+        for file: WorkspaceFileRecord,
+        freshnessPolicy: FileContentFreshnessPolicy
+    ) async throws -> FileSearchContentSnapshot {
+        guard !isClosed else { throw WorkspaceSessionFailure("workspace lifecycle is closed") }
+        return try await underlyingQuery.searchContentSnapshot(
+            for: file,
+            freshnessPolicy: freshnessPolicy
+        )
     }
 
     private func queryRootRefs(scope: WorkspaceLookupRootScope) async -> [WorkspaceRootRef] {
