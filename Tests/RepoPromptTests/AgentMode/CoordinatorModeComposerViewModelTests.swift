@@ -131,6 +131,30 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertFalse(restored.requiresHumanReviewAcknowledgement)
     }
 
+    func testProactiveFollowThroughDefaultsManualAndPersistsChanges() throws {
+        let suiteName = "CoordinatorModeComposerViewModelTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let initial = CoordinatorModeViewModel(
+            inputProvider: { _, _ in self.input() },
+            dashboardVisibilityHandler: { _ in },
+            userDefaults: defaults
+        )
+        XCTAssertFalse(initial.allowsProactiveFollowThrough)
+
+        initial.setAllowsProactiveFollowThrough(true)
+        XCTAssertTrue(initial.allowsProactiveFollowThrough)
+
+        let restored = CoordinatorModeViewModel(
+            inputProvider: { _, _ in self.input() },
+            dashboardVisibilityHandler: { _ in },
+            userDefaults: defaults
+        )
+        XCTAssertTrue(restored.allowsProactiveFollowThrough)
+    }
+
     func testAcceptedDirectiveDoesNotDuplicateRuntimeBackedUserTranscriptEntry() async {
         let coordinatorID = uuid(1)
         let coordinatorTab = uuid(101)

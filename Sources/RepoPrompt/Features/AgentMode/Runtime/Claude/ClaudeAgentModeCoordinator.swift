@@ -1336,7 +1336,9 @@ final class ClaudeAgentModeCoordinator {
             agentKind: session.selectedAgent,
             taskLabelKind: session.mcpControlContext?.taskLabelKind,
             codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled(),
-            coordinatorRuntimeDemo: session.isCoordinatorRuntimeDemo
+            coordinatorRuntimeDemo: session.isCoordinatorRuntimeDemo,
+            coordinatorRuntimeFollowThrough: session.isCoordinatorRuntimeDemo &&
+                CoordinatorModeFollowThroughPreference.isEnabled()
         )
     }
 

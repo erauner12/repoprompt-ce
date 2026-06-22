@@ -267,6 +267,17 @@ enum AgentModePrompts {
         - After delegated work reaches a useful result, report the concise outcome in your own Coordinator response so the rail contains both the orchestration cue and the answer.
         """
 
+        /// Optional demo policy that lets the Coordinator keep supervising
+        /// delegated work without adding hidden user turns.
+        static let coordinatorRuntimeFollowThroughGuidance = """
+        **Coordinator follow-through policy**
+        - Follow-through is enabled. Keep supervising delegated work until the user's original objective is satisfied, not merely until the first child session reports back.
+        - Use existing Agent Mode control-plane paths such as `agent_run` `wait`, `poll`, and `steer` to continue delegated sessions when the safe next step is clear.
+        - Respect boundaries: stop and ask or wait when a child needs user input, is blocked, requires permission/approval, exposes a required human review packet, or has no clear safe next step.
+        - Do not bypass user review, approval, or permission gates. Do not directly mutate Coordinator board rows; the board reflects session state.
+        - When all safe follow-through is complete, summarize the final outcome and any remaining human decision in the Coordinator rail.
+        """
+
         /// Proactive-use guidance for callers that see `agent_run`
         /// (top-level agent-mode session / external MCP client).
         /// Renders as a standalone block after the Agent Delegation

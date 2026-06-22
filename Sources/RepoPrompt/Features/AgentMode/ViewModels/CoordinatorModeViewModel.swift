@@ -22,6 +22,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     @Published private(set) var composerNotice: String?
     @Published private(set) var isFreshCoordinatorRunPending = false
     @Published private(set) var requiresHumanReviewAcknowledgement: Bool
+    @Published private(set) var allowsProactiveFollowThrough: Bool
     @Published var sortMode: CoordinatorModeSortMode = .lastUpdated {
         didSet {
             guard sortMode != oldValue else { return }
@@ -72,6 +73,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.projector = projector
         self.userDefaults = userDefaults
         requiresHumanReviewAcknowledgement = userDefaults.object(forKey: Self.requiresHumanReviewAcknowledgementDefaultsKey) as? Bool ?? true
+        allowsProactiveFollowThrough = CoordinatorModeFollowThroughPreference.isEnabled(defaults: userDefaults)
     }
 
     func setVisible(_ visible: Bool) {
@@ -147,6 +149,12 @@ final class CoordinatorModeViewModel: ObservableObject {
         requiresHumanReviewAcknowledgement = requiresAcknowledgement
         userDefaults.set(requiresAcknowledgement, forKey: Self.requiresHumanReviewAcknowledgementDefaultsKey)
         refresh()
+    }
+
+    func setAllowsProactiveFollowThrough(_ allowsFollowThrough: Bool) {
+        guard allowsProactiveFollowThrough != allowsFollowThrough else { return }
+        allowsProactiveFollowThrough = allowsFollowThrough
+        CoordinatorModeFollowThroughPreference.setEnabled(allowsFollowThrough, defaults: userDefaults)
     }
 
     @discardableResult

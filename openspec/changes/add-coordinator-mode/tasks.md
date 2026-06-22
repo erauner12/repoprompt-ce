@@ -81,6 +81,9 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.5 Echo accepted user directives into the Coordinator rail transcript when appropriate, while surfacing Coordinator responses and child-session effects through normal coarse snapshot refresh.
 - [x] 9.6 Add tests for composer enablement, unreachable Coordinator fallback, ordinary-message dispatch, and no direct board/session mutation.
 - [x] 9.7 Suppress `Open in Agent Mode` / `Open agent chat` for the Coordinator backing actor in the production-demo rail while preserving Agent Mode deep links for supervised delegate rows and pending summaries.
+- [x] 9.8 Add a persisted manual/follow-through Coordinator runtime policy toggle that defaults to manual.
+- [x] 9.9 Inject follow-through guidance into Coordinator runtime prompts without changing submitted directive text or adding a structured directive envelope.
+- [x] 9.10 Add focused tests for follow-through persistence and prompt-gating behavior.
 
 ## 10. Coordinator view UI shell
 

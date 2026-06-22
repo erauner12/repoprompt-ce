@@ -146,12 +146,15 @@ struct CoordinatorModeView: View {
         showInspectorToggle: Bool = false
     ) -> some View {
         VStack(spacing: 0) {
-            boardControls(
-                forceList: forceList,
-                metrics: metrics,
-                showRailToggle: showRailToggle,
-                showInspectorToggle: showInspectorToggle
-            )
+            ScrollView(.horizontal, showsIndicators: false) {
+                boardControls(
+                    forceList: forceList,
+                    metrics: metrics,
+                    showRailToggle: showRailToggle,
+                    showInspectorToggle: showInspectorToggle
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
             .padding(.horizontal, metrics.outerPadding)
             .padding(.vertical, metrics.headerPadding)
             .background(.regularMaterial)
@@ -188,6 +191,7 @@ struct CoordinatorModeView: View {
             presentationPicker(metrics: metrics)
             scopePicker(metrics: metrics)
             reviewGatePicker(metrics: metrics)
+            followThroughPicker(metrics: metrics)
             sortPicker(metrics: metrics)
             filterSearchBox(metrics: metrics)
                 .frame(width: metrics.searchWidth)
@@ -317,6 +321,30 @@ struct CoordinatorModeView: View {
         )
         .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func followThroughPicker(metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.headerSegmentSpacing) {
+            reviewGateButton(
+                title: "Manual",
+                isSelected: !viewModel.allowsProactiveFollowThrough,
+                metrics: metrics
+            ) {
+                viewModel.setAllowsProactiveFollowThrough(false)
+            }
+
+            reviewGateButton(
+                title: "Follow",
+                isSelected: viewModel.allowsProactiveFollowThrough,
+                metrics: metrics
+            ) {
+                viewModel.setAllowsProactiveFollowThrough(true)
+            }
+        }
+        .padding(metrics.headerControlInset)
+        .frame(width: metrics.followThroughControlWidth, height: metrics.headerControlHeight)
+        .coordinatorHeaderControlBackground()
+        .accessibilityLabel("Coordinator follow-through")
     }
 
     private func sortPicker(metrics: CoordinatorVisualMetrics) -> some View {
@@ -2461,6 +2489,10 @@ private struct CoordinatorVisualMetrics {
 
     var reviewGateControlWidth: CGFloat {
         fontPreset.scaledClamped(188, min: 188, max: 228)
+    }
+
+    var followThroughControlWidth: CGFloat {
+        fontPreset.scaledClamped(178, min: 178, max: 214)
     }
 
     var headerControlHeight: CGFloat {

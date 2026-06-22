@@ -236,6 +236,23 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **THEN** the Coordinator view SHALL deliver that text as an ordinary user message to the Coordinator session through the existing Agent Mode message path
 - **AND** it SHALL NOT wrap the directive in a new structured command envelope in v1.
 
+#### Scenario: Coordinator follow-through policy is manual by default
+- **WHEN** the Coordinator view is created for a workspace
+- **THEN** the follow-through policy SHALL default to manual unless the user has previously changed the persisted setting
+- **AND** the default manual policy SHALL leave the Coordinator runtime to report current results/status and wait for the user's next directive at ordinary turn boundaries.
+
+#### Scenario: User enables Coordinator follow-through
+- **WHEN** the user enables the persisted Coordinator follow-through policy
+- **THEN** the Coordinator runtime MAY proactively continue supervising delegated work through existing Agent Mode control-plane/message paths until the user's original objective is satisfied
+- **AND** it MAY wait, poll, or steer delegated Agent sessions when the safe next step is clear
+- **AND** it SHALL NOT change the user-submitted directive text, create a new structured Coordinator command envelope, directly mutate board/list rows, or bypass normal Agent Mode session state.
+
+#### Scenario: Coordinator follow-through reaches a boundary
+- **WHEN** Coordinator follow-through is enabled
+- **AND** a delegated session requires user input, permission, approval, required human review acknowledgement, or is blocked or ambiguous
+- **THEN** the Coordinator runtime SHALL stop at that boundary and surface the required user decision/status
+- **AND** it SHALL NOT bypass or auto-acknowledge the user's review, approval, permission, or Needs-you gate.
+
 #### Scenario: Production-demo Coordinator bridge dispatches children
 - **WHEN** the production-demo Coordinator runtime delegates work
 - **THEN** delegation SHALL use the existing Agent Mode MCP control-plane primitive, such as `agent_run.start`, to create normal tab-scoped Agent sessions

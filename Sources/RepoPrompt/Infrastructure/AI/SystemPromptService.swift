@@ -681,7 +681,8 @@ class SystemPromptService {
         agentKind: AgentProviderKind? = nil,
         taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
         codeMapsDisabled: Bool = false,
-        coordinatorRuntimeDemo: Bool = false
+        coordinatorRuntimeDemo: Bool = false,
+        coordinatorRuntimeFollowThrough: Bool = false
     ) -> String {
         // Role-specific prompts: dedicated lean prompts instead of conditional blocks
         switch taskLabelKind {
@@ -856,6 +857,10 @@ class SystemPromptService {
 
         \(AgentModePrompts.Fragments.coordinatorRuntimeDemoGuidance.trimmingCharacters(in: .whitespacesAndNewlines))
         """ : ""
+        let coordinatorRuntimeFollowThroughGuidance = coordinatorRuntimeDemo && coordinatorRuntimeFollowThrough ? """
+
+        \(AgentModePrompts.Fragments.coordinatorRuntimeFollowThroughGuidance.trimmingCharacters(in: .whitespacesAndNewlines))
+        """ : ""
 
         let prompt = """
         **Conversation Style**
@@ -886,6 +891,7 @@ class SystemPromptService {
 
         \(agentDelegationSection)
         \(coordinatorRuntimeDemoGuidance)
+        \(coordinatorRuntimeFollowThroughGuidance)
 
         *User Interaction:*
         - `ask_user` - Ask the user a question when you need clarification\(setStatusInList)\(codexToolPriorityGuidance)\(progressUpdatesGuidance)

@@ -3872,7 +3872,9 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
             agentKind: .codexExec,
             taskLabelKind: session.mcpControlContext?.taskLabelKind,
             codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled(),
-            coordinatorRuntimeDemo: session.isCoordinatorRuntimeDemo
+            coordinatorRuntimeDemo: session.isCoordinatorRuntimeDemo,
+            coordinatorRuntimeFollowThrough: session.isCoordinatorRuntimeDemo &&
+                CoordinatorModeFollowThroughPreference.isEnabled(defaults: preferenceDefaults)
         )
         let resumeCandidate: CodexNativeSessionController.SessionRef? = {
             guard session.codexNeedsReconnect else { return nil }
