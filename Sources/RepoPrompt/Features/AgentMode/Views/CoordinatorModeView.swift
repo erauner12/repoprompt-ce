@@ -1011,7 +1011,8 @@ struct CoordinatorModeView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
-                    if let packet = reviewPacket(for: row) {
+                    let packet = reviewPacket(for: row)
+                    if let packet {
                         reviewPacketInspector(packet, metrics: metrics)
                     }
 
@@ -1050,7 +1051,7 @@ struct CoordinatorModeView: View {
                         }
                     }
 
-                    if let merge = row.mergeAttention {
+                    if let merge = row.mergeAttention, packet == nil {
                         inspectorGroup("Merge attention", metrics: metrics) {
                             keyValue("Status", merge.status.rawValue, metrics: metrics)
                             keyValue("Conflicts", "\(merge.conflictFileCount)", metrics: metrics)
@@ -1881,10 +1882,10 @@ struct CoordinatorModeView: View {
 
         if let merge = row.mergeAttention, hasBlockedPreview {
             return CoordinatorReviewPacket(
-                title: "Merge preview blocked",
+                title: "Review packet blocked",
                 detail: statusLine ?? blockedLine ?? "Preview artifacts are available, but the preview reported a blocker.",
-                nextAction: "Open Agent to inspect the blocker and decide whether to continue.",
-                badge: "Blocked preview",
+                nextAction: "Open the agent thread to inspect the blocker and decide whether to continue.",
+                badge: "Blocked",
                 systemImage: "exclamationmark.triangle",
                 tint: .orange,
                 operationID: operationID ?? merge.id
@@ -1900,10 +1901,10 @@ struct CoordinatorModeView: View {
         if hasMergePreview {
             let isBlocked = hasBlockedPreview
             return CoordinatorReviewPacket(
-                title: isBlocked ? "Merge preview blocked" : "Merge preview ready",
-                detail: statusLine ?? blockedLine ?? "Preview artifacts are available for inspection.",
-                nextAction: isBlocked ? "Open Agent to inspect the blocker and decide whether to continue." : "Open Agent to inspect the preview before applying.",
-                badge: isBlocked ? "Blocked preview" : "Preview",
+                title: isBlocked ? "Review packet blocked" : "Review packet ready",
+                detail: statusLine ?? blockedLine ?? "Source-vs-target preview artifacts are available for inspection.",
+                nextAction: isBlocked ? "Open the agent thread to inspect the blocker and decide whether to continue." : "Open the agent thread to review the source-vs-target packet before applying.",
+                badge: isBlocked ? "Blocked" : "Review",
                 systemImage: isBlocked ? "exclamationmark.triangle" : "arrow.triangle.merge",
                 tint: isBlocked ? .orange : .purple,
                 operationID: operationID
@@ -1914,7 +1915,7 @@ struct CoordinatorModeView: View {
             return CoordinatorReviewPacket(
                 title: "Diff ready",
                 detail: "The agent reported a diff summary for review.",
-                nextAction: "Open Agent to inspect the patch, validation, and notes.",
+                nextAction: "Open the agent thread to inspect the patch, validation, and notes.",
                 badge: "Diff",
                 systemImage: "doc.text.magnifyingglass",
                 tint: .purple,
@@ -1926,7 +1927,7 @@ struct CoordinatorModeView: View {
             return CoordinatorReviewPacket(
                 title: "Validation captured",
                 detail: "The agent reported validation output for review.",
-                nextAction: "Open Agent to inspect the validation details and any remaining notes.",
+                nextAction: "Open the agent thread to inspect validation details and remaining notes.",
                 badge: "Checks",
                 systemImage: "checkmark.seal",
                 tint: .green,
@@ -1937,7 +1938,7 @@ struct CoordinatorModeView: View {
         return CoordinatorReviewPacket(
             title: "Ready for review",
             detail: "This session finished with review output.",
-            nextAction: "Open Agent to inspect the latest result.",
+            nextAction: "Open the agent thread to inspect the latest result.",
             badge: "Review",
             systemImage: "eye",
             tint: .purple,
@@ -1949,9 +1950,9 @@ struct CoordinatorModeView: View {
         switch merge.status {
         case .awaitingApproval:
             CoordinatorReviewPacket(
-                title: "Merge approval ready",
-                detail: "A merge review is waiting for user approval.",
-                nextAction: "Open Agent to approve, cancel, or inspect the merge.",
+                title: "Review packet ready",
+                detail: "A source-vs-target merge review is waiting for user approval.",
+                nextAction: "Open the agent thread to approve, cancel, or inspect the review packet.",
                 badge: "Approval",
                 systemImage: "arrow.triangle.merge",
                 tint: .purple,
@@ -1959,9 +1960,9 @@ struct CoordinatorModeView: View {
             )
         case .conflicted:
             CoordinatorReviewPacket(
-                title: "Merge conflicts",
+                title: "Review packet conflicted",
                 detail: "\(merge.conflictFileCount) conflict file(s) need attention.",
-                nextAction: "Open Agent to inspect and resolve conflicts.",
+                nextAction: "Open the agent thread to inspect and resolve conflicts.",
                 badge: "Conflicts",
                 systemImage: "exclamationmark.triangle",
                 tint: .red,
@@ -1969,9 +1970,9 @@ struct CoordinatorModeView: View {
             )
         case .awaitingCommit:
             CoordinatorReviewPacket(
-                title: "Merge staged",
+                title: "Review packet staged",
                 detail: "The merge is applied and waiting for a commit.",
-                nextAction: "Open Agent to verify and continue.",
+                nextAction: "Open the agent thread to verify and continue.",
                 badge: "Commit",
                 systemImage: "checkmark.seal",
                 tint: .orange,
@@ -1979,19 +1980,19 @@ struct CoordinatorModeView: View {
             )
         case .previewed:
             CoordinatorReviewPacket(
-                title: "Merge preview ready",
-                detail: "Preview artifacts are available for inspection.",
-                nextAction: "Open Agent to inspect the preview before applying.",
-                badge: "Preview",
+                title: "Review packet ready",
+                detail: "Source-vs-target preview artifacts are available for inspection.",
+                nextAction: "Open the agent thread to inspect the review packet before applying.",
+                badge: "Review",
                 systemImage: "arrow.triangle.merge",
                 tint: .purple,
                 operationID: merge.id
             )
         case .applying:
             CoordinatorReviewPacket(
-                title: "Merge applying",
+                title: "Review packet applying",
                 detail: "The merge operation is currently applying.",
-                nextAction: "Open Agent to monitor merge progress.",
+                nextAction: "Open the agent thread to monitor merge progress.",
                 badge: "Applying",
                 systemImage: "arrow.triangle.merge",
                 tint: .blue,
@@ -1999,9 +2000,9 @@ struct CoordinatorModeView: View {
             )
         case .stale, .completed, .failed, .cancelled, .aborted:
             CoordinatorReviewPacket(
-                title: "Merge \(merge.status.rawValue)",
-                detail: "The merge operation reached a terminal state.",
-                nextAction: "Open Agent to inspect the final merge result.",
+                title: "Review packet \(merge.status.rawValue)",
+                detail: "The source-vs-target review operation reached a terminal state.",
+                nextAction: "Open the agent thread to inspect the final result.",
                 badge: merge.status.rawValue,
                 systemImage: "arrow.triangle.merge",
                 tint: .secondary,
@@ -2049,17 +2050,12 @@ struct CoordinatorModeView: View {
                 .foregroundStyle(packet.tint.opacity(0.92))
                 .frame(width: metrics.titlebarIconSize, height: metrics.titlebarIconSize)
 
-            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                Text(packet.title)
-                    .font(metrics.microMedium)
-                    .foregroundStyle(.primary.opacity(0.9))
-                    .lineLimit(1)
-                Text(packet.detail)
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            .layoutPriority(1)
+            Text(packet.title)
+                .font(metrics.microMedium)
+                .foregroundStyle(.primary.opacity(0.86))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
 
             Text(packet.badge)
                 .font(metrics.chip)
@@ -2069,17 +2065,8 @@ struct CoordinatorModeView: View {
                 .padding(.vertical, metrics.miniPillVerticalPadding)
                 .background(Capsule(style: .continuous).fill(packet.tint.opacity(0.12)))
         }
-        .padding(.horizontal, metrics.miniPillHorizontalPadding)
-        .padding(.vertical, metrics.miniPillVerticalPadding + 2)
+        .padding(.top, metrics.tightSpacing)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .fill(packet.tint.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .stroke(packet.tint.opacity(0.18), lineWidth: 0.75)
-        )
     }
 
     private func reviewPacketInspector(_ packet: CoordinatorReviewPacket, metrics: CoordinatorVisualMetrics) -> some View {
@@ -2099,7 +2086,7 @@ struct CoordinatorModeView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            keyValue("Next", packet.nextAction, metrics: metrics)
+            keyValue("Action", packet.nextAction, metrics: metrics)
 
             if let operationID = packet.operationID {
                 keyValue("Operation", operationID, metrics: metrics)

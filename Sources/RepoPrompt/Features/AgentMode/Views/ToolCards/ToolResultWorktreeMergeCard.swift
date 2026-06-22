@@ -6,9 +6,9 @@ import SwiftUI
 //
 // Routed by `ToolCardRouter.resultView(for:)` whenever an Agent transcript
 // shows a `manage_worktree` merge-op result. Decodes the structured
-// `ManageWorktreeReplyDTO.merge` payload from `item.toolResultJSON` and surfaces the
-// merge operation header, source/target endpoints, preflight summary, conflict
-// or stale reason, and graph visualization in the expanded content area.
+// `ManageWorktreeReplyDTO.merge` payload from `item.toolResultJSON` and surfaces
+// the source-vs-target review packet: endpoints, preflight summary, conflict or
+// stale reason, graph visualization, artifacts, and patch excerpt.
 
 struct WorktreeMergeCardPresentation {
     let title: String
@@ -25,7 +25,7 @@ enum WorktreeMergeCardPresentationBuilder {
     ) -> WorktreeMergeCardPresentation {
         if toolIsError == true {
             return WorktreeMergeCardPresentation(
-                title: "Merge Worktree",
+                title: "Review Packet",
                 subtitle: "failed",
                 detailText: nil,
                 status: .failure
@@ -33,7 +33,7 @@ enum WorktreeMergeCardPresentationBuilder {
         }
         guard let dto else {
             return WorktreeMergeCardPresentation(
-                title: "Merge Worktree",
+                title: "Review Packet",
                 subtitle: "manage_worktree",
                 detailText: nil,
                 status: .neutral
@@ -56,8 +56,8 @@ enum WorktreeMergeCardPresentationBuilder {
         case "status": "Status"
         default: nil
         }
-        guard let suffix else { return "Merge Worktree" }
-        return "Merge Worktree • \(suffix)"
+        guard let suffix else { return "Review Packet" }
+        return "Review Packet • \(suffix)"
     }
 
     private static func subtitle(dto: ToolResultDTOs.ManageWorktreeReplyDTO.MergeDTO) -> String {
@@ -204,13 +204,7 @@ private struct WorktreeMergePreviewPacketView: View {
 
             diffExcerptBlock
         }
-        .padding(12)
-        .background(Color.purple.opacity(0.06))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.purple.opacity(0.30), lineWidth: 1)
-        )
+        .padding(.vertical, 4)
         .task(id: artifacts?.allPatchPath) {
             await loadDiffExcerptIfNeeded()
         }
@@ -221,7 +215,7 @@ private struct WorktreeMergePreviewPacketView: View {
             Image(systemName: "arrow.triangle.merge")
                 .foregroundColor(.purple)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Merge Preview")
+                Text("Review Packet")
                     .font(.headline)
                 if let operationID = merge.operationID, !operationID.isEmpty {
                     Text("Operation \(operationID)")
@@ -270,10 +264,8 @@ private struct WorktreeMergePreviewPacketView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 2)
         .padding(.vertical, 4)
-        .background(Capsule().fill(tint.opacity(0.10)))
-        .overlay(Capsule().strokeBorder(tint.opacity(0.45), lineWidth: 0.75))
         .hoverTooltip(endpoint.path, .top)
     }
 
