@@ -1,9 +1,22 @@
 import Foundation
+import MCP
 import RepoPromptCore
+
+@MainActor
+private final class WorkspaceRuntimePublicationFence {
+    private(set) var isClosing = false
+
+    func beginClosing() {
+        isClosing = true
+    }
+}
 
 @MainActor
 struct WindowStateComposition {
     let workspaceSessionID: WorkspaceSessionID
+    let workspaceRuntimeID: WorkspaceRuntimeID?
+    let runtimeAdapter: MCPWindowRuntimeAdapter?
+    let workspaceRuntimeBeginClose: @MainActor () -> Void
     let workspaceSessionCommandClient: WorkspaceSessionCommandClient?
     let workspaceSessionQuery: WorkspaceSessionQueryCapability?
     let workspaceSessionObservationBridge: WorkspaceSessionObservationBridge?
@@ -111,6 +124,7 @@ enum WindowStateCompositionFactory {
                 return WorkspaceSessionRuntimeBundle(
                     sessionID: sessionID,
                     commandIngress: backend,
+                    runtimeQuery: workspaceSessionLifecycleOwner!.makeQueryCapability(),
                     hydrate: { await backend.hydrate() },
                     activateAfterApplyingFirstSnapshot: { sequence in
                         await backend.activate(appliedSnapshotSequence: sequence)
@@ -121,6 +135,9 @@ enum WindowStateCompositionFactory {
             }
         ) : nil
         let workspaceSessionID = runtimeBootstrap?.sessionID ?? WorkspaceSessionID()
+        let workspaceRuntimeID = runtimeBootstrap?.runtimeID
+        let mcpCatalogRuntimeID = workspaceRuntimeID
+            ?? WorkspaceRuntimeID(rawValue: workspaceSessionID.rawValue)
         let workspaceSessionCommandClient = runtimeBootstrap.map {
             WorkspaceSessionCommandClient(sessionID: $0.sessionID, ingress: $0.commandIngress)
         }
@@ -174,6 +191,15 @@ enum WindowStateCompositionFactory {
                 },
                 applySnapshot: { [weak workspaceManager] snapshot in
                     workspaceManager?.applyAuthoritativeSessionSnapshot(snapshot)
+                    if let runtimeID = runtimeBootstrap?.runtimeID,
+                       let adapterRegistry = appCoreContainer.runtimeAdapterRegistry
+                    {
+                        _ = adapterRegistry.updateSnapshot(
+                            runtimeID: runtimeID,
+                            sessionID: snapshot.sessionID,
+                            authoritativeSnapshot: snapshot
+                        )
+                    }
                     guard let workspaceManager else { return }
                     let roots = await workspaceSessionQuery?.roots() ?? []
                     await workspaceFilesViewModel.applySessionRootProjection(
@@ -217,8 +243,13 @@ enum WindowStateCompositionFactory {
             workspaceManager: workspaceManager,
             selectionCoordinator: selectionCoordinator,
             windowID: windowID,
-            workspaceSearch: { [store = workspaceFileContextStore, workspaceManager] pattern, mode, isRegex, caseInsensitive, maxPaths, maxMatches, paths, includeExtensions, excludePatterns, contextLines, wholeWord, countOnly, fuzzySpaceMatching, rootScope in
-                try await StoreBackedWorkspaceSearch.search(
+            runtimeID: mcpCatalogRuntimeID,
+            runtimePublicationInitiallyReady: workspaceRuntimeID == nil,
+            workspaceSearch: { [store = workspaceFileContextStore, weak workspaceManager] pattern, mode, isRegex, caseInsensitive, maxPaths, maxMatches, paths, includeExtensions, excludePatterns, contextLines, wholeWord, countOnly, fuzzySpaceMatching, rootScope in
+                guard let workspaceManager else {
+                    throw MCPError.internalError("The original window UI is no longer available for file_search; the request was not retargeted.")
+                }
+                return try await StoreBackedWorkspaceSearch.search(
                     pattern: pattern,
                     mode: mode,
                     isRegex: isRegex,
@@ -245,6 +276,10 @@ enum WindowStateCompositionFactory {
             },
             applyEditsApprovalStore: applyEditsApprovalStore
         )
+        let runtimeAdapter = workspaceRuntimeID.map { _ in
+            MCPWindowRuntimeAdapter(windowState: nil, serverViewModel: mcpServer)
+        }
+        let runtimePublicationFence = WorkspaceRuntimePublicationFence()
         let closeCoordinator = WindowCloseCoordinator()
 
         // 12) Context Builder agent (needs mcpServer reference)
@@ -295,6 +330,54 @@ enum WindowStateCompositionFactory {
             )
         )
 
+        let publishActivatedRuntime: @MainActor @Sendable (
+            WorkspaceSessionRuntimeBundle,
+            WorkspaceSessionAdmissionToken,
+            WorkspaceSessionSnapshot
+        ) async -> Bool = { runtime, initialAdmission, fallbackSnapshot in
+            guard !runtimePublicationFence.isClosing else { return false }
+            guard let runtimeID = runtime.runtimeID else { return true }
+            guard let lifecycle = runtime.runtimeLifecycle,
+                  let adapterRegistry = appCoreContainer.runtimeAdapterRegistry,
+                  let runtimeAdapter
+            else { return false }
+            switch await lifecycle.activate(initialAdmission: initialAdmission) {
+            case .activated, .alreadyActive:
+                break
+            case .runtimeNotFound, .sessionMismatch, .activationMismatch, .invalidState:
+                return false
+            }
+            guard !runtimePublicationFence.isClosing else {
+                _ = await lifecycle.beginDraining()
+                return false
+            }
+            let routingSnapshot = await runtime.commandIngress.currentSnapshot() ?? fallbackSnapshot
+            guard !runtimePublicationFence.isClosing else {
+                _ = await lifecycle.beginDraining()
+                return false
+            }
+            let ticket: MCPRuntimeAdapterTicket
+            switch adapterRegistry.stage(
+                windowID: windowID,
+                runtimeID: runtimeID,
+                sessionID: runtime.sessionID,
+                authoritativeSnapshot: routingSnapshot,
+                adapter: runtimeAdapter
+            ) {
+            case let .staged(stagedTicket):
+                ticket = stagedTicket
+            case .duplicateRuntimeID, .windowOccupied, .predecessorNotDraining, .sessionMismatch:
+                return false
+            }
+            switch adapterRegistry.activate(ticket: ticket) {
+            case let .activated(activeTicket), let .alreadyActive(activeTicket):
+                await mcpServer.markRuntimePublicationReady(ticket: activeTicket)
+                return true
+            case .notFound, .staleTicket, .adapterUnavailable, .invalidState:
+                return false
+            }
+        }
+
         let workspaceSessionActivationTask: Task<Void, Never>? = if let runtimeBootstrap,
                                                                     let workspaceSessionObservationBridge,
                                                                     let workspaceSessionCommandClient
@@ -315,7 +398,9 @@ enum WindowStateCompositionFactory {
                             appCoreContainer.releaseRuntime(windowID: windowID)
                             return
                         }
-                        guard case .admitted = await workspaceSessionCommandClient.acquireAdmission() else {
+                        guard case let .admitted(initialAdmission) = await workspaceSessionCommandClient.acquireAdmission(),
+                              await publishActivatedRuntime(runtime, initialAdmission, firstSnapshot)
+                        else {
                             workspaceSessionObservationBridge.stop()
                             await runtime.shutdown()
                             appCoreContainer.releaseRuntime(windowID: windowID)
@@ -330,7 +415,9 @@ enum WindowStateCompositionFactory {
                         }
                         await workspaceSessionObservationBridge.applyFirstAuthoritativeSnapshot(snapshot)
                         workspaceSessionObservationBridge.startObserving()
-                        guard case .admitted = await workspaceSessionCommandClient.acquireAdmission() else {
+                        guard case let .admitted(initialAdmission) = await workspaceSessionCommandClient.acquireAdmission(),
+                              await publishActivatedRuntime(runtime, initialAdmission, snapshot)
+                        else {
                             workspaceSessionObservationBridge.stop()
                             await runtime.shutdown()
                             appCoreContainer.releaseRuntime(windowID: windowID)
@@ -364,6 +451,15 @@ enum WindowStateCompositionFactory {
         #if DEBUG
             return WindowStateComposition(
                 workspaceSessionID: workspaceSessionID,
+                workspaceRuntimeID: workspaceRuntimeID,
+                runtimeAdapter: runtimeAdapter,
+                workspaceRuntimeBeginClose: {
+                    runtimePublicationFence.beginClosing()
+                    mcpServer.beginRuntimeClose()
+                    if let workspaceRuntimeID {
+                        _ = appCoreContainer.runtimeAdapterRegistry?.beginClosing(runtimeID: workspaceRuntimeID)
+                    }
+                },
                 workspaceSessionCommandClient: workspaceSessionCommandClient,
                 workspaceSessionQuery: workspaceSessionQuery,
                 workspaceSessionObservationBridge: workspaceSessionObservationBridge,
@@ -371,7 +467,13 @@ enum WindowStateCompositionFactory {
                 workspaceSessionShutdown: {
                     if let runtimeBootstrap, let runtime = try? await runtimeBootstrap.runtimeTask.value {
                         await runtime.shutdown()
-                        await MainActor.run { appCoreContainer.releaseRuntime(windowID: windowID) }
+                        await MainActor.run {
+                            if let workspaceRuntimeID {
+                                _ = appCoreContainer.runtimeAdapterRegistry?.markRemoved(runtimeID: workspaceRuntimeID)
+                                _ = appCoreContainer.runtimeAdapterRegistry?.purgeRemoved(runtimeID: workspaceRuntimeID)
+                            }
+                            appCoreContainer.releaseRuntime(windowID: windowID)
+                        }
                     }
                 },
                 workspaceFileContextStore: workspaceFileContextStore,
@@ -395,6 +497,15 @@ enum WindowStateCompositionFactory {
         #else
             return WindowStateComposition(
                 workspaceSessionID: workspaceSessionID,
+                workspaceRuntimeID: workspaceRuntimeID,
+                runtimeAdapter: runtimeAdapter,
+                workspaceRuntimeBeginClose: {
+                    runtimePublicationFence.beginClosing()
+                    mcpServer.beginRuntimeClose()
+                    if let workspaceRuntimeID {
+                        _ = appCoreContainer.runtimeAdapterRegistry?.beginClosing(runtimeID: workspaceRuntimeID)
+                    }
+                },
                 workspaceSessionCommandClient: workspaceSessionCommandClient,
                 workspaceSessionQuery: workspaceSessionQuery,
                 workspaceSessionObservationBridge: workspaceSessionObservationBridge,
@@ -402,7 +513,13 @@ enum WindowStateCompositionFactory {
                 workspaceSessionShutdown: {
                     if let runtimeBootstrap, let runtime = try? await runtimeBootstrap.runtimeTask.value {
                         await runtime.shutdown()
-                        await MainActor.run { appCoreContainer.releaseRuntime(windowID: windowID) }
+                        await MainActor.run {
+                            if let workspaceRuntimeID {
+                                _ = appCoreContainer.runtimeAdapterRegistry?.markRemoved(runtimeID: workspaceRuntimeID)
+                                _ = appCoreContainer.runtimeAdapterRegistry?.purgeRemoved(runtimeID: workspaceRuntimeID)
+                            }
+                            appCoreContainer.releaseRuntime(windowID: windowID)
+                        }
                     }
                 },
                 workspaceFileContextStore: workspaceFileContextStore,

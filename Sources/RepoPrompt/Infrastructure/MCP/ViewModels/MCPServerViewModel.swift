@@ -12,6 +12,7 @@ import JSONSchema
 import Logging
 import MCP
 import Ontology
+import RepoPromptCore
 import RepoPromptShared
 
 enum ReadFileAutoSelectionCoverageCertificateMissReason: String, CaseIterable, Hashable {
@@ -368,6 +369,7 @@ final class MCPServerViewModel: ObservableObject {
 
     // ---------------------------------------------------------------------
     let windowID: Int
+    let runtimeID: WorkspaceRuntimeID
     private(set) var service: MCPService
     private let logger = Logger(label: "com.repoprompt.mcp")
 
@@ -984,6 +986,8 @@ final class MCPServerViewModel: ObservableObject {
         }
     }
 
+    private var runtimePublicationReady: Bool
+
     /// Controls whether the approval overlay is visible
     @Published var isApprovalOverlayVisible: Bool = false
 
@@ -996,7 +1000,14 @@ final class MCPServerViewModel: ObservableObject {
             guard let self else {
                 throw MCPError.internalError("Window deallocated during \(name)")
             }
-            return try await implementation(MCPWindowToolContext(toolName: name, windowID: windowID), args)
+            return try await implementation(
+                MCPWindowToolContext(
+                    toolName: name,
+                    windowID: windowID,
+                    runtimeRequest: ServerNetworkManager.currentRuntimeRequestContext
+                ),
+                args
+            )
         }
     }
 
@@ -1159,9 +1170,10 @@ final class MCPServerViewModel: ObservableObject {
             )
         },
         windowID: windowID,
-        promptVM: promptVM,
-        workspaceManager: workspaceManager,
-        selectionCoordinator: selectionCoordinator,
+        promptVM: { [weak promptVM] in promptVM },
+        workspaceManager: { [weak workspaceManager] in workspaceManager },
+        selectionCoordinator: { [weak selectionCoordinator] in selectionCoordinator },
+        workspaceFileContextStore: promptVM.workspaceFileContextStore,
         applyEditsApprovalStore: applyEditsApprovalStore,
         captureRequestMetadata: { [weak self] in
             guard let self else { return MCPServerViewModel.RequestMetadata(connectionID: nil, clientName: nil, windowID: nil) }
@@ -1503,6 +1515,7 @@ final class MCPServerViewModel: ObservableObject {
     @MainActor
     private lazy var windowToolCatalogService = MCPWindowToolCatalogService(
         windowID: windowID,
+        runtimeID: runtimeID,
         providers: [
             MCPSelectionToolProvider(runtime: windowToolRuntime, dependencies: windowToolDependencies),
             MCPFileToolProvider(runtime: windowToolRuntime, dependencies: windowToolDependencies),
@@ -1669,6 +1682,7 @@ final class MCPServerViewModel: ObservableObject {
         let runID: UUID?
         let connectionID: UUID?
         let toolName: String
+        let lifetimeClass: MCPToolLifetimeClass
         let lifecycleCorrelation: EditFlowPerf.LifecycleCorrelation?
         let startedAt: Date
         let cancel: () -> Void
@@ -1812,6 +1826,7 @@ final class MCPServerViewModel: ObservableObject {
         runID: UUID?,
         connectionID: UUID?,
         toolName: String,
+        lifetimeClass: MCPToolLifetimeClass = .uiRequired,
         lifecycleCorrelation: EditFlowPerf.LifecycleCorrelation? = nil,
         cancel: @escaping () -> Void
     ) {
@@ -1820,6 +1835,7 @@ final class MCPServerViewModel: ObservableObject {
             runID: runID,
             connectionID: connectionID,
             toolName: toolName,
+            lifetimeClass: lifetimeClass,
             lifecycleCorrelation: lifecycleCorrelation,
             startedAt: Date(),
             cancel: cancel
@@ -2326,6 +2342,8 @@ final class MCPServerViewModel: ObservableObject {
         workspaceManager: WorkspaceManagerViewModel,
         selectionCoordinator: WorkspaceSelectionCoordinator? = nil,
         windowID: Int,
+        runtimeID: WorkspaceRuntimeID = WorkspaceRuntimeID(),
+        runtimePublicationInitiallyReady: Bool = true,
         workspaceSearch: @escaping WorkspaceSearchHandler,
         ensureGitDataRootLoaded: @escaping (
             WorkspaceModel,
@@ -2335,6 +2353,8 @@ final class MCPServerViewModel: ObservableObject {
     ) {
         self.service = service
         self.windowID = windowID
+        self.runtimeID = runtimeID
+        runtimePublicationReady = runtimePublicationInitiallyReady
         self.promptVM = promptVM
         self.oracleVM = oracleVM
         self.workspaceManager = workspaceManager
@@ -2558,7 +2578,7 @@ final class MCPServerViewModel: ObservableObject {
             #endif
         }
 
-        if windowToolsEnabled {
+        if windowToolsEnabled, runtimePublicationReady {
             ServiceRegistry.register(windowToolCatalogService) // idempotent
             do {
                 try await service.join(windowID: windowID)
@@ -2570,6 +2590,23 @@ final class MCPServerViewModel: ObservableObject {
             ServiceRegistry.unregister(windowToolCatalogService)
             await service.leave(windowID: windowID)
             await service.refreshState()
+        }
+    }
+
+    @MainActor
+    func markRuntimePublicationReady(ticket: MCPRuntimeAdapterTicket) async {
+        guard ticket.windowID == windowID, ticket.runtimeID == runtimeID else { return }
+        windowToolCatalogService.publish(mappingGeneration: ticket.mappingGeneration)
+        runtimePublicationReady = true
+        await updateToolRegistration(invalidateCatalogBeforeUpdate: false)
+    }
+
+    @MainActor
+    func beginRuntimeClose() {
+        runtimePublicationReady = false
+        ServiceRegistry.unregister(windowToolCatalogService)
+        for execution in activeToolExecutionsByID.values where execution.lifetimeClass == .uiRequired {
+            execution.cancel()
         }
     }
 
@@ -2903,10 +2940,15 @@ final class MCPServerViewModel: ObservableObject {
         let capturedConnectionID = metadata.connectionID
         let serverViewModelIdentity = ObjectIdentifier(self)
         let dispatchAuthorization = ServerNetworkManager.currentToolDispatchAuthorization
-        if let dispatchAuthorization {
+        let runtimeLifetimeClass = ServerNetworkManager.currentRuntimeRequestContext?.lifetimeClass
+            ?? .uiRequired
+        let requiresLiveUIIdentity = ServerNetworkManager.currentRuntimeRequestContext?
+            .lifetimeClass != .runtimeCapable
+        if requiresLiveUIIdentity, let dispatchAuthorization {
             guard await ServerNetworkManager.shared.validateToolDispatchAuthorization(
                 dispatchAuthorization,
                 expectedWindowID: windowID,
+                expectedRuntimeID: runtimeID,
                 expectedServerViewModelIdentity: serverViewModelIdentity
             ) else {
                 throw ServerNetworkManager.ToolDispatchAdmissionError.windowTerminal
@@ -2943,10 +2985,11 @@ final class MCPServerViewModel: ObservableObject {
         let task = Task {
             await startGate.wait()
             try Task.checkCancellation()
-            if let dispatchAuthorization {
+            if requiresLiveUIIdentity, let dispatchAuthorization {
                 guard await ServerNetworkManager.shared.validateToolDispatchAuthorization(
                     dispatchAuthorization,
                     expectedWindowID: windowID,
+                    expectedRuntimeID: runtimeID,
                     expectedServerViewModelIdentity: serverViewModelIdentity
                 ) else {
                     throw ServerNetworkManager.ToolDispatchAdmissionError.windowTerminal
@@ -3001,15 +3044,18 @@ final class MCPServerViewModel: ObservableObject {
                 runID: indexedRunID,
                 connectionID: capturedConnectionID,
                 toolName: name,
+                lifetimeClass: runtimeLifetimeClass,
                 lifecycleCorrelation: lifecycleCorrelation,
                 cancel: { task.cancel() }
             )
         }
 
-        if let dispatchAuthorization,
+        if requiresLiveUIIdentity,
+           let dispatchAuthorization,
            await !(ServerNetworkManager.shared.validateToolDispatchAuthorization(
                dispatchAuthorization,
                expectedWindowID: windowID,
+               expectedRuntimeID: runtimeID,
                expectedServerViewModelIdentity: serverViewModelIdentity
            ))
         {

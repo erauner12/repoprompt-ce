@@ -286,10 +286,15 @@ final class WorkspaceAuthorityCutoverTests: XCTestCase {
                 throw TestFailure.unexpectedLegacyConstruction
             }
         )
+        XCTAssertEqual(container.selectedRoutingBackend, .lifecycleRegistry)
+        XCTAssertNotNil(bootstrap.runtimeID)
 
         let preRuntimeAdmission = await bootstrap.commandIngress.admit()
         XCTAssertEqual(preRuntimeAdmission, .notReady(.hydrating))
         let runtime = try await bootstrap.runtimeTask.value
+        XCTAssertEqual(runtime.runtimeID, bootstrap.runtimeID)
+        let createdRuntimeSnapshot = await runtime.runtimeLifecycle?.snapshot()
+        XCTAssertEqual(createdRuntimeSnapshot?.state, .created)
         XCTAssertTrue(runtime.factualProvider is CorePromptFactualContextProvider)
         let hydration = await runtime.hydrate()
         guard case let .awaitingFirstSnapshotApplication(first) = hydration else {
@@ -301,6 +306,8 @@ final class WorkspaceAuthorityCutoverTests: XCTestCase {
         guard case .activated = await runtime.activateAfterApplyingFirstSnapshot(first.snapshotSequence) else {
             return XCTFail("expected activation")
         }
+        let activeRuntimeSnapshot = await runtime.runtimeLifecycle?.snapshot()
+        XCTAssertEqual(activeRuntimeSnapshot?.state, .active)
         guard case let .admitted(token) = await runtime.commandIngress.admit() else {
             return XCTFail("expected admission")
         }
@@ -308,7 +315,45 @@ final class WorkspaceAuthorityCutoverTests: XCTestCase {
         let legacyConstructionCount = await legacyConstructions.value()
         XCTAssertEqual(legacyConstructionCount, 0)
         await runtime.shutdown()
+        let removedRuntimeSnapshot = await runtime.runtimeLifecycle?.snapshot()
+        XCTAssertEqual(removedRuntimeSnapshot?.state, .removed)
         container.releaseRuntime(windowID: 501)
+    }
+
+    func testLegacyWindowBoundRoutingConstructsNoLifecycleRegistry() async throws {
+        let defaults = isolatedDefaults()
+        let container = RepoPromptAppCoreContainer(
+            userDefaults: defaults,
+            debugRoutingOverride: .legacyWindowBound
+        )
+        let workspace = WorkspaceModel(name: "Legacy routing", repoPaths: [])
+        let lifecycleOwner = WorkspaceSessionStoreLifecycleFactory.make(
+            store: WorkspaceFileContextStore(enableCatalogShardShadowValidation: false)
+        )
+        let bootstrap = container.beginRuntime(
+            windowID: 503,
+            coreDependencies: {
+                RepoPromptCoreSessionDependencies(
+                    load: { WorkspaceSessionHydrationInput(workspaces: [workspace], activeWorkspaceID: workspace.id) },
+                    lifecycleOwner: lifecycleOwner
+                )
+            },
+            legacyFactory: { _ in throw TestFailure.unexpectedLegacyConstruction }
+        )
+
+        XCTAssertEqual(container.selectedRoutingBackend, .legacyWindowBound)
+        XCTAssertNil(bootstrap.runtimeID)
+        let runtime = try await bootstrap.runtimeTask.value
+        XCTAssertNil(runtime.runtimeID)
+        XCTAssertNil(runtime.runtimeLifecycle)
+        guard case let .awaitingFirstSnapshotApplication(first) = await runtime.hydrate() else {
+            return XCTFail("expected first authoritative snapshot")
+        }
+        guard case .activated = await runtime.activateAfterApplyingFirstSnapshot(first.snapshotSequence) else {
+            return XCTFail("expected direct session activation")
+        }
+        await runtime.shutdown()
+        container.releaseRuntime(windowID: 503)
     }
 
     func testLegacyNextLaunchRollbackReadsCurrentWorkspaceBytesWithoutCoreConstruction() async throws {
@@ -346,6 +391,7 @@ final class WorkspaceAuthorityCutoverTests: XCTestCase {
                 return WorkspaceSessionRuntimeBundle(
                     sessionID: sessionID,
                     commandIngress: backend,
+                    runtimeQuery: lifecycleOwner.makeQueryCapability(),
                     hydrate: { await backend.hydrate() },
                     activateAfterApplyingFirstSnapshot: { sequence in
                         await backend.activate(appliedSnapshotSequence: sequence)
@@ -362,9 +408,13 @@ final class WorkspaceAuthorityCutoverTests: XCTestCase {
             return XCTFail("expected rollback snapshot")
         }
         XCTAssertEqual(first.workspaces, [workspace])
+        let runtimeQueryRoots = await runtime.runtimeQuery.roots().map(\.standardizedFullPath)
+        XCTAssertEqual(runtimeQueryRoots, [root.path])
         guard case .activated = await runtime.activateAfterApplyingFirstSnapshot(first.snapshotSequence) else {
             return XCTFail("expected rollback activation")
         }
+        let activeRuntimeSnapshot = await runtime.runtimeLifecycle?.snapshot()
+        XCTAssertEqual(activeRuntimeSnapshot?.state, .active)
         guard case .admitted = await runtime.commandIngress.admit() else {
             return XCTFail("expected rollback admission")
         }

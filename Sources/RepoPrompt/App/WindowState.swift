@@ -112,6 +112,9 @@ class WindowState: ObservableObject {
     private(set) static var windowCounter = 0
     let windowID: Int
     let workspaceSessionID: WorkspaceSessionID
+    let workspaceRuntimeID: WorkspaceRuntimeID?
+    private let runtimeAdapter: MCPWindowRuntimeAdapter?
+    private let workspaceRuntimeBeginClose: @MainActor () -> Void
     let workspaceSessionCommandClient: WorkspaceSessionCommandClient?
     let workspaceSessionQuery: WorkspaceSessionQueryCapability?
     let workspaceSessionObservationBridge: WorkspaceSessionObservationBridge?
@@ -284,6 +287,7 @@ class WindowState: ObservableObject {
     func beginClose() {
         guard !isClosing else { return }
         isClosing = true
+        workspaceRuntimeBeginClose()
 
         let manager = windowStatesManager ?? WindowStatesManager.shared
         if !manager.isTerminating {
@@ -371,6 +375,9 @@ class WindowState: ObservableObject {
 
         workspaceFileContextStore = composition.workspaceFileContextStore
         workspaceSessionID = composition.workspaceSessionID
+        workspaceRuntimeID = composition.workspaceRuntimeID
+        runtimeAdapter = composition.runtimeAdapter
+        workspaceRuntimeBeginClose = composition.workspaceRuntimeBeginClose
         workspaceSessionCommandClient = composition.workspaceSessionCommandClient
         workspaceSessionQuery = composition.workspaceSessionQuery
         workspaceSessionObservationBridge = composition.workspaceSessionObservationBridge
@@ -394,6 +401,7 @@ class WindowState: ObservableObject {
         aiQueriesService = composition.aiQueriesService
         chatDataService = composition.chatDataService
         workspaceManager = composition.workspaceManager
+        runtimeAdapter?.attach(windowState: self)
 
         // Set up additional actions
         setupSendPromptAction()

@@ -1047,6 +1047,7 @@ import XCTest
                             windowID: window.windowID,
                             windowStateIdentity: ObjectIdentifier(window),
                             serverViewModelIdentity: ObjectIdentifier(window.mcpServer),
+                            runtimeAdapterTicket: nil,
                             provenance: .hiddenWindowArgument
                         )
                     ))
@@ -1560,6 +1561,7 @@ import XCTest
                                     windowID: window.windowID,
                                     windowStateIdentity: ObjectIdentifier(window),
                                     serverViewModelIdentity: ObjectIdentifier(window.mcpServer),
+                                    runtimeAdapterTicket: nil,
                                     provenance: .hiddenWindowArgument
                                 )
                             ))

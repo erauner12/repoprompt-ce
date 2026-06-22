@@ -506,6 +506,84 @@ def validate_sources(root: Path) -> list[str]:
         if "currentAdmittedContextBinding" not in mcp_connection_text:
             errors.append("MCP dispatch must propagate the exact admitted context binding")
 
+    # Phase 7: Core runtime lifecycle identity is window-neutral and request admission is
+    # distinct from the weak MainActor compatibility adapter mapping.
+    runtime_contracts_path = root / "Sources/RepoPromptCore/Workspaces/Runtime/WorkspaceRuntimeContracts.swift"
+    runtime_registry_path = root / "Sources/RepoPromptCore/Workspaces/Runtime/WorkspaceRuntimeLifecycleRegistry.swift"
+    adapter_registry_path = root / "Sources/RepoPrompt/Infrastructure/MCP/Runtime/MCPAppRuntimeAdapterRegistry.swift"
+    runtime_coordinator_path = root / "Sources/RepoPrompt/Infrastructure/MCP/Runtime/MCPRuntimeRequestCoordinator.swift"
+    tool_dependencies_path = root / "Sources/RepoPrompt/Infrastructure/MCP/WindowTools/MCPWindowToolDependencies.swift"
+    if runtime_contracts_path.is_file() or runtime_registry_path.is_file():
+        if not runtime_contracts_path.is_file() or not runtime_registry_path.is_file():
+            errors.append("Phase 7 Core runtime contracts and lifecycle registry must land atomically")
+        for file in (runtime_contracts_path, runtime_registry_path):
+            if not file.is_file():
+                continue
+            text = file.read_text(encoding="utf-8")
+            for forbidden in ("windowID", "WindowState", "MCP", "AppKit", "SwiftUI"):
+                if forbidden in text:
+                    errors.append(f"{file.relative_to(root)} must remain window/UI neutral; found {forbidden}")
+        contracts_text = runtime_contracts_path.read_text(encoding="utf-8")
+        admitted_match = re.search(
+            r"package struct WorkspaceAdmittedRuntimeSession\b(.*?)(?=\npackage (?:struct|enum|actor)|\Z)",
+            contracts_text,
+            re.DOTALL,
+        )
+        if admitted_match:
+            admitted_text = admitted_match.group(1)
+            for forbidden in ("func admit(", "func shutdown("):
+                if forbidden in admitted_text:
+                    errors.append(f"WorkspaceAdmittedRuntimeSession must not expose {forbidden}")
+
+    if adapter_registry_path.is_file():
+        adapter_text = adapter_registry_path.read_text(encoding="utf-8")
+        for required in ("weak var adapter", "weak var windowState", "weak var serverViewModel"):
+            if required not in adapter_text:
+                errors.append(f"Phase 7 adapter registry must retain UI weakly; missing {required}")
+        if "struct MCPRuntimeRoutingSnapshot" not in adapter_text:
+            errors.append("Phase 7 routing must publish immutable runtime snapshots")
+
+    if runtime_coordinator_path.is_file():
+        coordinator_text = runtime_coordinator_path.read_text(encoding="utf-8")
+        for forbidden in ("WindowState", "MCPServerViewModel", "PromptViewModel", "WorkspaceManagerViewModel"):
+            if forbidden in coordinator_text:
+                errors.append(f"Phase 7 retained runtime request context contains UI dependency {forbidden}")
+
+    if tool_dependencies_path.is_file():
+        dependency_text = tool_dependencies_path.read_text(encoding="utf-8")
+        for forbidden in (
+            r"\blet\s+promptVM\s*:\s*PromptViewModel\??(?!Provider)",
+            r"\blet\s+workspaceManager\s*:\s*WorkspaceManagerViewModel\??(?!Provider)",
+            r"\blet\s+selectionCoordinator\s*:\s*WorkspaceSelectionCoordinator\??(?!Provider)",
+        ):
+            if re.search(forbidden, dependency_text, re.MULTILINE):
+                errors.append(f"Phase 7 retained tool catalog must not strongly retain UI dependency {forbidden}")
+        for required in ("PromptViewModelProvider", "WorkspaceManagerProvider", "SelectionCoordinatorProvider"):
+            if required not in dependency_text:
+                errors.append(f"Phase 7 retained tool catalog must resolve UI dependencies weakly; missing {required}")
+
+    if mcp_connection_path.is_file() and runtime_coordinator_path.is_file():
+        mcp_connection_text = mcp_connection_path.read_text(encoding="utf-8")
+        if "!lifecycleRoutingSelected || Self.usesCompatibilityWindowRoutingFallback" not in mcp_connection_text:
+            errors.append("Phase 7 lifecycle routing must not fall back to live WindowState admission in production")
+        if "capturedRoutingPublicationSequence" not in mcp_connection_text:
+            errors.append("Phase 7 queued routing must retain an immutable publication-sequence fence")
+
+    if container_path.is_file():
+        routing_selection_key = "coreIsolation.runtimeRoutingBackend"
+        for file in sorted((root / "Sources").rglob("*.swift")):
+            if file == container_path:
+                continue
+            if routing_selection_key in file.read_text(encoding="utf-8"):
+                errors.append(f"{file.relative_to(root)} must not select the Phase 7 routing backend")
+
+    proxy_root = root / "Sources/RepoPromptMCP"
+    if proxy_root.is_dir():
+        for file in sorted(proxy_root.rglob("*.swift")):
+            text = file.read_text(encoding="utf-8")
+            if "WorkspaceRuntimeLifecycleRegistry" in text or "MCPAppRuntimeAdapterRegistry" in text:
+                errors.append(f"{file.relative_to(root)} must preserve app-proxy identity without app runtime routing")
+
     # Phase 6: Core owns deterministic facts only. Git authority and provider closures remain
     # app policy, and presentation results cannot carry physical filesystem identities.
     core_prompt_root = root / "Sources/RepoPromptCore/WorkspaceContext/Prompt"
@@ -597,7 +675,8 @@ def validate_sources(root: Path) -> list[str]:
     if headless_root.is_dir():
         forbidden_headless = (
             "WorkspaceSessionController(", "RepoPromptCoreSession(", "RepoPromptCoreHost(",
-            "CorePromptFactualContextProvider(", "LegacyPromptFactualContextProvider("
+            "CorePromptFactualContextProvider(", "LegacyPromptFactualContextProvider(",
+            "WorkspaceRuntimeLifecycleRegistry(", "MCPAppRuntimeAdapterRegistry("
         )
         for file in sorted(headless_root.rglob("*.swift")):
             text = file.read_text(encoding="utf-8")

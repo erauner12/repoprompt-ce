@@ -1,8 +1,8 @@
 # Core Isolation Execution Packet
 
 **Created:** 2026-06-21
-**Current phase:** Phase 6 — factual prompt projection/accounting complete; see [phase-6.md](phases/phase-6.md)
-**Disposition:** **GO through Phase 6**
+**Current phase:** Phase 7 — runtime lifecycle identity and weak UI adapters; see [phase-7.md](phases/phase-7.md)
+**Disposition:** **GO through Phase 7**
 **Production behavior change:** one selected workspace authority with next-launch legacy rollback
 **Activated isolated tests:** `RepoPromptCoreTests`, `RepoPromptCoreMacOSTests`, and `RepoPromptPOSIXSupportTests`
 
@@ -45,6 +45,7 @@ contract. No later phase may depend on fetching those two objects.
 
 - [ADR-001 — Target graph and CE C-symbol namespace](decisions/ADR-001-target-graph-and-c-symbol-namespace.md)
 - [ADR-002 — Headless version and transport identity](decisions/ADR-002-headless-version-and-transport-identity.md)
+- [ADR-003 — Runtime and weak UI compatibility identity](decisions/ADR-003-runtime-and-ui-identity.md)
 - [Behavior, hazards, tests, and performance](contracts/behavior-and-performance.md)
 - [Persistence schema and compatibility](contracts/persistence-schema.md)
 - [Standalone headless v1 contract](contracts/headless-v1.md)
@@ -56,6 +57,7 @@ contract. No later phase may depend on fetching those two objects.
 - [Phase 4 evidence, lifecycle continuation, and final GO disposition](phases/phase-4.md)
 - [Phase 5 authority-cutover execution record](phases/phase-5.md)
 - [Phase 6 factual prompt execution record](phases/phase-6.md)
+- [Phase 7 runtime lifecycle execution record](phases/phase-7.md)
 - [Deferred Phase 9+ work](deferred-work.md)
 
 ## Mutation policy
@@ -107,4 +109,12 @@ admitted immutable factual capture, logical projection, tree/codemap/content
 rendering, and accounting generation. The app retains Git authorization and
 capture, provider selection, fallback, envelopes, and presentation. Exact lists,
 all full deterministic/package lanes, the manually curated Oracle review, and the
-approved packaged live capture/stop proof are green. Phase 7+ remains unstarted.
+approved packaged live capture/stop proof are green.
+
+Phase 7 began from clean checkpoint `397a9b70` and is now **GO**. Core owns
+runtime lifecycle/admission and strong admitted handles; the app retains only
+weak compatibility adapters and immutable routing snapshots. Exact runtime and
+mapping identity, exhaustive lifetime classification, drain-based teardown,
+all deterministic/package/style/ledger lanes, the bounded curated Oracle review,
+performance samples, packaged app-proxy smoke, and exact stopped-process proof
+are green. Standalone headless routing and Phase 8/9 work remain unstarted.

@@ -333,3 +333,38 @@ three Phase 6 files and returned 10,199 total tokens: 10,072 selected-file token
 plus 127 logical-tree tokens. It explicitly reported fresh accounting from the
 `construction_selected_factual_provider`. Earlier Phase 0 samples remain the
 fixed baseline.
+
+## Phase 7 append — runtime lifecycle, routing, and drain behavior (2026-06-21)
+
+Phase 7 preserves external `window_id`, logical resolver priority and errors, and
+the `repoprompt-mcp` app-proxy identity while separating strong Core runtime
+lifetime from weak MainActor compatibility adapters. Core is the sole owner of
+the created/active/draining/removed state machine, exact epoch/admission counts,
+strong session handle, restricted admitted handle, and exactly-once shutdown.
+Admission rechecks state after session-actor suspension. Duplicate, foreign, or
+cancelled release paths cannot decrement another admission.
+
+Routing is resolved from one immutable snapshot carrying exact runtime ID,
+mapping generation, and publication sequence. The request admits that runtime
+before committing sticky/live mappings. A request queued behind the limiter is
+fenced against a later publication and cannot retarget. Runtime-capable work may
+finish while draining; UI-required work needs the captured weak adapter ticket;
+mixed work preserves an already committed runtime result but cannot substitute a
+replacement UI adapter. Unknown tool or operation variants fail closed.
+
+Three comparable DEBUG SwiftPM samples of
+`RepoPromptTests.MCPRuntimeLifecycleTests` each passed 2/2 tests in 0.002 s:
+
+| Ticket | XCTest seconds | Result |
+| --- | ---: | --- |
+| `71a6ec09-90d1-4de8-867e-12b424611d00` | 0.002 | passed |
+| `368fe409-e8ad-4129-b909-c56eb7c7259d` | 0.002 | passed |
+| `43bfacc5-822e-4ef7-a987-33b4035c65a9` | 0.002 | passed |
+
+Median and range are both 0.002 s. This report-only series has no arbitrary
+threshold. Signed packaged launch/smoke ticket
+`a71a5cc8-9355-4c32-97b3-64381a109046` and final non-disruptive proxy smoke
+`d8aed424-56a8-4b1d-98ee-2e5f5ad00947` passed. Coordinated stop
+`bff9ef43-1b52-4a08-989a-35a7ff6a6f12`, status
+`24de62db-d5b3-470f-8608-335cd9bd16d4`, and exact executable inspection found
+zero matching debug-app processes.

@@ -160,11 +160,14 @@ final class TabContextRoutingTests: XCTestCase {
         let contextID = UUID()
         let workspaceID = UUID()
         let sessionID = WorkspaceSessionID()
+        let runtimeID = WorkspaceRuntimeID()
         let resolver = makeResolver(matchesByContextID: [
             contextID: [match(
                 windowID: 7,
                 tabID: contextID,
                 workspaceID: workspaceID,
+                runtimeID: runtimeID,
+                mappingGeneration: 17,
                 sessionID: sessionID,
                 sessionAvailability: .awaitingActivation
             )]
@@ -179,6 +182,8 @@ final class TabContextRoutingTests: XCTestCase {
         )
 
         XCTAssertEqual(resolved?.sessionID, sessionID)
+        XCTAssertEqual(resolved?.runtimeID, runtimeID)
+        XCTAssertEqual(resolved?.mappingGeneration, 17)
         XCTAssertEqual(resolved?.sessionAvailability, .awaitingActivation)
     }
 
@@ -1752,7 +1757,8 @@ final class TabContextRoutingTests: XCTestCase {
             connectionID: connectionID,
             connectionIdentity: ObjectIdentifier(connection),
             lifecycleGeneration: 1,
-            windowIdentity: identity
+            windowIdentity: identity,
+            runtimeAdapterTicket: nil
         )
         let explicit = MCPToolArgsNormalizer.normalize(
             params: ["op": .string("start"), "_windowID": .int(7)],
@@ -1814,6 +1820,7 @@ final class TabContextRoutingTests: XCTestCase {
                 windowID: window.windowID,
                 windowStateIdentity: ObjectIdentifier(window),
                 serverViewModelIdentity: ObjectIdentifier(window.mcpServer),
+                runtimeAdapterTicket: nil,
                 provenance: .hiddenWindowArgument
             )
 
@@ -1928,6 +1935,7 @@ final class TabContextRoutingTests: XCTestCase {
                     windowID: window.windowID,
                     windowStateIdentity: ObjectIdentifier(window),
                     serverViewModelIdentity: ObjectIdentifier(window.mcpServer),
+                    runtimeAdapterTicket: nil,
                     provenance: .hiddenWindowArgument
                 )
             )
@@ -2014,6 +2022,7 @@ final class TabContextRoutingTests: XCTestCase {
                 windowID: window.windowID,
                 windowStateIdentity: ObjectIdentifier(window),
                 serverViewModelIdentity: ObjectIdentifier(window.mcpServer),
+                runtimeAdapterTicket: nil,
                 provenance: .hiddenWindowArgument
             )
             let runScopedMetadata = MCPServerViewModel.RequestMetadata(
@@ -2166,6 +2175,7 @@ final class TabContextRoutingTests: XCTestCase {
                     windowID: windowID ?? window.windowID,
                     windowStateIdentity: windowStateIdentity ?? ObjectIdentifier(window),
                     serverViewModelIdentity: serverViewModelIdentity ?? ObjectIdentifier(window.mcpServer),
+                    runtimeAdapterTicket: nil,
                     provenance: .hiddenWindowArgument
                 )
             }
@@ -2320,6 +2330,7 @@ final class TabContextRoutingTests: XCTestCase {
                     windowID: window.windowID,
                     windowStateIdentity: ObjectIdentifier(window),
                     serverViewModelIdentity: ObjectIdentifier(window.mcpServer),
+                    runtimeAdapterTicket: nil,
                     provenance: .hiddenWindowArgument
                 )
             ))
@@ -2628,11 +2639,17 @@ final class TabContextRoutingTests: XCTestCase {
         workspaceID: UUID,
         workspaceName: String = "Workspace",
         roots: [String] = ["/tmp/project"],
+        runtimeID: WorkspaceRuntimeID = WorkspaceRuntimeID(
+            rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000007")!
+        ),
+        mappingGeneration: UInt64 = 1,
         sessionID: WorkspaceSessionID = WorkspaceSessionID(),
         sessionAvailability: WorkspaceSessionAvailability = .active
     ) -> MCPContextBindingMatch {
         MCPContextBindingMatch(
             windowID: windowID,
+            runtimeID: runtimeID,
+            mappingGeneration: mappingGeneration,
             tabID: tabID,
             workspaceID: workspaceID,
             workspaceName: workspaceName,

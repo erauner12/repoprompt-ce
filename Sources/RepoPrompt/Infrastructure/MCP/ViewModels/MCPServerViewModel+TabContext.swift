@@ -2629,13 +2629,19 @@ extension MCPServerViewModel {
 
         let hasValidatedExplicitWindowRoute: Bool
         if let explicitWindowRoutingHint {
+            let exactAdapterRouteMatches: Bool = if let ticket = explicitWindowRoutingHint.runtimeAdapterTicket {
+                ticket.runtimeID == targetWindow.workspaceRuntimeID
+                    && RepoPromptAppCoreContainer.shared.runtimeAdapterRegistry?.adapter(for: ticket) != nil
+            } else {
+                explicitWindowRoutingHint.windowStateIdentity == ObjectIdentifier(targetWindow)
+                    && explicitWindowRoutingHint.serverViewModelIdentity == ObjectIdentifier(targetWindow.mcpServer)
+            }
             guard explicitWindowRoutingHint.connectionID == metadata.connectionID,
                   explicitWindowRoutingHint.toolName == "agent_run",
                   explicitWindowRoutingHint.provenance == .hiddenWindowArgument,
                   explicitWindowRoutingHint.windowID == metadata.windowID,
                   explicitWindowRoutingHint.windowID == targetWindow.windowID,
-                  explicitWindowRoutingHint.windowStateIdentity == ObjectIdentifier(targetWindow),
-                  explicitWindowRoutingHint.serverViewModelIdentity == ObjectIdentifier(targetWindow.mcpServer)
+                  exactAdapterRouteMatches
             else {
                 throw MCPError.invalidParams(
                     "agent_run.start received an explicit window route that does not match its authorized connection, tool, effective window, or target window."

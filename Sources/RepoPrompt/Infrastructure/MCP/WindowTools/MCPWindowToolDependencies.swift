@@ -34,6 +34,9 @@ struct MCPWindowToolDependencies {
         _ fuzzySpaceMatching: Bool,
         _ rootScope: WorkspaceLookupRootScope
     ) async throws -> SearchResults
+    typealias PromptViewModelProvider = @MainActor @Sendable () -> PromptViewModel?
+    typealias WorkspaceManagerProvider = @MainActor @Sendable () -> WorkspaceManagerViewModel?
+    typealias SelectionCoordinatorProvider = @MainActor @Sendable () -> WorkspaceSelectionCoordinator?
     typealias RequireTargetWindow = @MainActor @Sendable () throws -> WindowState
     typealias RequireCurrentTabContext = @MainActor @Sendable (_ toolName: String) async throws -> MCPServerViewModel.TabScopedContext
     typealias RequireAgentModeConnection = @Sendable (_ toolName: String) async throws -> UUID
@@ -300,9 +303,10 @@ struct MCPWindowToolDependencies {
     let runMCPPlanOrQuestion: RunMCPPlanOrQuestion
 
     let windowID: Int
-    let promptVM: PromptViewModel
-    let workspaceManager: WorkspaceManagerViewModel?
-    let selectionCoordinator: WorkspaceSelectionCoordinator?
+    let promptVM: PromptViewModelProvider
+    let workspaceManager: WorkspaceManagerProvider
+    let selectionCoordinator: SelectionCoordinatorProvider
+    let workspaceFileContextStore: WorkspaceFileContextStore
     let applyEditsApprovalStore: ApplyEditsApprovalStore
     let captureRequestMetadata: CaptureRequestMetadata
     let resolveImplicitContextBuilderGitTarget: ResolveImplicitContextBuilderGitTarget

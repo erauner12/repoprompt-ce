@@ -64,4 +64,15 @@ package struct RepoPromptCoreSessionHandle: WorkspaceSessionCommandIngress {
     package func shutdown() async {
         await shutdownClosure()
     }
+
+    package func runtimeSessionHandle() -> WorkspaceRuntimeSessionHandle {
+        WorkspaceRuntimeSessionHandle(
+            sessionID: sessionID,
+            query: query,
+            currentSnapshot: snapshotClosure,
+            admit: admitClosure,
+            execute: executeClosure,
+            shutdown: shutdownClosure
+        )
+    }
 }

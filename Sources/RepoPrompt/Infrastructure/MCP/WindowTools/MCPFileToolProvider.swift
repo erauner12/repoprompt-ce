@@ -124,7 +124,10 @@ final class MCPFileToolProvider: MCPWindowToolProviding {
             )
         ) { [self] _, args in
             try Task.checkCancellation()
-            if await dependencies.promptVM.codeMapsGloballyDisabled {
+            guard let promptVM = await dependencies.promptVM() else {
+                throw MCPError.internalError("The original window UI is no longer available for get_code_structure; the request was not retargeted.")
+            }
+            if await promptVM.codeMapsGloballyDisabled {
                 throw MCPError.invalidParams(MCPServerViewModel.codeMapsGloballyDisabledMCPMessage)
             }
             let scope = (args["scope"]?.stringValue ?? "paths").lowercased()
@@ -133,7 +136,7 @@ final class MCPFileToolProvider: MCPWindowToolProviding {
             try Task.checkCancellation()
             let lookupContext = await dependencies.resolveFileToolLookupContext(metadata)
             try Task.checkCancellation()
-            _ = await dependencies.promptVM.workspaceFileContextStore.awaitAppliedIngress(rootScope: lookupContext.rootScope)
+            _ = await dependencies.workspaceFileContextStore.awaitAppliedIngress(rootScope: lookupContext.rootScope)
             try Task.checkCancellation()
 
             switch scope {
@@ -171,7 +174,7 @@ final class MCPFileToolProvider: MCPWindowToolProviding {
                 let resolvedPaths = lookupContext.translateInputPaths(paths)
                 for path in resolvedPaths {
                     try Task.checkCancellation()
-                    if let issue = await dependencies.promptVM.workspaceFileContextStore.exactPathResolutionIssue(for: path, kind: .either, rootScope: lookupRootScope) {
+                    if let issue = await dependencies.workspaceFileContextStore.exactPathResolutionIssue(for: path, kind: .either, rootScope: lookupRootScope) {
                         throw MCPError.invalidParams(PathResolutionIssueRenderer.message(for: issue))
                     }
                 }
@@ -227,15 +230,18 @@ final class MCPFileToolProvider: MCPWindowToolProviding {
                 required: []
             )
         ) { [self] _, args in
+            guard let promptVM = await dependencies.promptVM() else {
+                throw MCPError.internalError("The original window UI is no longer available for get_file_tree; the request was not retargeted.")
+            }
             let type = args["type"]?.stringValue ?? "files"
             switch type {
             case "roots":
-                let filePathDisplay = await MainActor.run { dependencies.promptVM.filePathDisplayOption }
+                let filePathDisplay = await MainActor.run { promptVM.filePathDisplayOption }
                 let metadata = await dependencies.captureRequestMetadata()
                 let lookupContext = await dependencies.resolveFileToolLookupContext(metadata)
-                _ = await dependencies.promptVM.workspaceFileContextStore.awaitAppliedIngress(rootScope: lookupContext.rootScope)
+                _ = await dependencies.workspaceFileContextStore.awaitAppliedIngress(rootScope: lookupContext.rootScope)
                 let worktreeScope = ToolResultDTOs.WorktreeScopeDTO.sessionBound(from: lookupContext.bindingProjection)
-                let snapshot = await dependencies.promptVM.workspaceFileContextStore.makeFileTreeSelectionSnapshot(
+                let snapshot = await dependencies.workspaceFileContextStore.makeFileTreeSelectionSnapshot(
                     selection: StoredSelection(),
                     request: WorkspaceFileTreeSnapshotRequest(mode: .full, filePathDisplay: filePathDisplay, onlyIncludeRootsWithSelectedFiles: false, includeLegend: false, showCodeMapMarkers: false, rootScope: lookupContext.rootScope),
                     profile: .mcpRead
@@ -259,7 +265,7 @@ final class MCPFileToolProvider: MCPWindowToolProviding {
                 }
                 let metadata = await dependencies.captureRequestMetadata()
                 let lookupContext = await dependencies.resolveFileToolLookupContext(metadata)
-                _ = await dependencies.promptVM.workspaceFileContextStore.awaitAppliedIngress(rootScope: lookupContext.rootScope)
+                _ = await dependencies.workspaceFileContextStore.awaitAppliedIngress(rootScope: lookupContext.rootScope)
                 if mode.lowercased() == "selected" {
                     guard await dependencies.drainReadFileAutoSelection(metadata, .canonicalSelection) == .completed else {
                         throw CancellationError()
@@ -618,7 +624,7 @@ final class MCPFileToolProvider: MCPWindowToolProviding {
             EditFlowPerf.Stage.Search.dtoRootRefSnapshotLookup,
             dtoBuildDimensions()
         ) {
-            await dependencies.promptVM.workspaceFileContextStore.displayRootRefsSnapshot()
+            await dependencies.workspaceFileContextStore.displayRootRefsSnapshot()
         }
         try Task.checkCancellation()
         let visibleRootRefs = displayRootRefsSnapshot.visibleRoots

@@ -4,6 +4,8 @@ import RepoPromptCore
 
 struct MCPContextBindingMatch {
     let windowID: Int
+    let runtimeID: WorkspaceRuntimeID
+    let mappingGeneration: UInt64
     let tabID: UUID
     let workspaceID: UUID
     let workspaceName: String
@@ -23,6 +25,8 @@ struct MCPLogicalContextResolution {
 struct MCPLogicalContextBindingResolution {
     let logicalContext: MCPLogicalContextResolution
     let windowID: Int
+    let runtimeID: WorkspaceRuntimeID
+    let mappingGeneration: UInt64
     let sessionID: WorkspaceSessionID
     let sessionAvailability: WorkspaceSessionAvailability
 }
@@ -164,6 +168,8 @@ struct MCPBindingResolver {
         return MCPLogicalContextBindingResolution(
             logicalContext: logicalContext,
             windowID: windowID,
+            runtimeID: selectedMatch.runtimeID,
+            mappingGeneration: selectedMatch.mappingGeneration,
             sessionID: selectedMatch.sessionID,
             sessionAvailability: selectedMatch.sessionAvailability
         )

@@ -123,6 +123,9 @@ final class MCPSelectionToolProvider: MCPWindowToolProviding {
 
     private func executeManageSelectionAttempt(args: [String: Value]) async throws -> ToolResultDTOs.SelectionReply {
         try Task.checkCancellation()
+        guard let promptVM = await dependencies.promptVM() else {
+            throw MCPError.internalError("The original window UI is no longer available for manage_selection; the request was not retargeted.")
+        }
         let op = (args["op"]?.stringValue ?? "get").lowercased()
         let rawPaths = args["paths"]?.arrayValue?.compactMap(\.stringValue) ?? []
         let parsedInputs = dependencies.parseManageSelectionInputs(rawPaths, args["slices"])
@@ -130,7 +133,7 @@ final class MCPSelectionToolProvider: MCPWindowToolProviding {
         let sliceInputs = parsedInputs.sliceInputs
         let sliceParseErrors = parsedInputs.sliceErrors
         let mode = args["mode"]?.stringValue?.lowercased() ?? "full"
-        if await dependencies.promptVM.codeMapsGloballyDisabled, mode == "codemap_only" || op == "demote" {
+        if await promptVM.codeMapsGloballyDisabled, mode == "codemap_only" || op == "demote" {
             throw MCPError.invalidParams(MCPServerViewModel.codeMapsGloballyDisabledMCPMessage)
         }
         try Task.checkCancellation()
@@ -155,7 +158,7 @@ final class MCPSelectionToolProvider: MCPWindowToolProviding {
         let lookupRootScope = lookupContext.rootScope
         if op != "get" {
             await MCPToolExecutionHandlerPhaseContext.report(.manageSelectionIngressWait)
-            _ = await dependencies.promptVM.workspaceFileContextStore.awaitAppliedIngress(rootScope: lookupRootScope)
+            _ = await dependencies.workspaceFileContextStore.awaitAppliedIngress(rootScope: lookupRootScope)
             await MCPToolExecutionHandlerPhaseContext.report(.manageSelectionIngressWait, transition: .completed)
         }
         try Task.checkCancellation()

@@ -298,6 +298,55 @@ class CoreIsolationGuardrailTests(unittest.TestCase):
             self.assertTrue(any("coherent admitted context binding" in error for error in errors))
             self.assertTrue(any("propagate the exact admitted" in error for error in errors))
 
+    def test_phase_seven_core_window_identity_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_minimal_sources(root)
+            contracts = root / "Sources/RepoPromptCore/Workspaces/Runtime/WorkspaceRuntimeContracts.swift"
+            contracts.parent.mkdir(parents=True)
+            contracts.write_text("struct RuntimeToken { let windowID: Int }\n")
+            registry = contracts.parent / "WorkspaceRuntimeLifecycleRegistry.swift"
+            registry.write_text("actor WorkspaceRuntimeLifecycleRegistry {}\n")
+            self.assertTrue(any("window/UI neutral" in error for error in validate_sources(root)))
+
+    def test_phase_seven_strong_adapter_retention_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_minimal_sources(root)
+            adapter = root / "Sources/RepoPrompt/Infrastructure/MCP/Runtime/MCPAppRuntimeAdapterRegistry.swift"
+            adapter.parent.mkdir(parents=True)
+            adapter.write_text("final class Entry { var adapter: Any; var windowState: Any; var serverViewModel: Any }\n")
+            self.assertTrue(any("retain UI weakly" in error for error in validate_sources(root)))
+
+    def test_phase_seven_strong_tool_dependency_retention_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_minimal_sources(root)
+            dependencies = root / "Sources/RepoPrompt/Infrastructure/MCP/WindowTools/MCPWindowToolDependencies.swift"
+            dependencies.parent.mkdir(parents=True)
+            dependencies.write_text("struct Dependencies { let promptVM: PromptViewModel }\n")
+            errors = validate_sources(root)
+            self.assertTrue(any("must not strongly retain UI dependency" in error for error in errors))
+
+    def test_phase_seven_routing_selection_outside_container_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_minimal_sources(root)
+            container = root / "Sources/RepoPrompt/App/CoreAdapters/RepoPromptAppCoreContainer.swift"
+            container.parent.mkdir(parents=True)
+            container.write_text("// container\n")
+            leaked = root / "Sources/RepoPrompt/LeakedRuntimeRouting.swift"
+            leaked.write_text('let key = "coreIsolation.runtimeRoutingBackend"\n')
+            self.assertTrue(any("must not select the Phase 7 routing backend" in error for error in validate_sources(root)))
+
+    def test_phase_seven_headless_runtime_registry_construction_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_minimal_sources(root)
+            leaked = root / TARGET_PATHS["RepoPromptHeadless"] / "RuntimeLeak.swift"
+            leaked.write_text("let registry = WorkspaceRuntimeLifecycleRegistry()\n")
+            self.assertTrue(any("must not instantiate Phase 5 app session authority" in error for error in validate_sources(root)))
+
     def _write_minimal_sources(self, root: Path) -> None:
         for relative in TARGET_PATHS.values():
             directory = root / relative
