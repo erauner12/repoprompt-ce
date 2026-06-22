@@ -50,6 +50,7 @@ struct CoordinatorModeView: View {
     @State private var isCoordinatorRailVisible = true
     @State private var isInspectorVisible = true
     @State private var isSortMenuOpen = false
+    @State private var isCoordinatorThreadPickerOpen = false
     @FocusState private var isCoordinatorComposerFocused: Bool
     @FocusState private var isChildComposerFocused: Bool
     @ObservedObject private var fontScale = FontScaleManager.shared
@@ -365,7 +366,7 @@ struct CoordinatorModeView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
             HStack(spacing: metrics.smallSpacing) {
-                Label("Coordinator Threads", systemImage: "rectangle.3.group.bubble")
+                Label("Active Coordinator", systemImage: "rectangle.3.group.bubble")
                     .font(metrics.cardTitle)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -384,13 +385,7 @@ struct CoordinatorModeView: View {
                 .hoverTooltip("New Coordinator chat")
             }
 
-            VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-                coordinatorNewThreadRow(rail, metrics: metrics)
-
-                if !rail.availableCoordinators.isEmpty {
-                    coordinatorThreadRows(rail.availableCoordinators, metrics: metrics)
-                }
-            }
+            coordinatorActiveThreadRow(rail, metrics: metrics)
         }
         .padding(metrics.cardPadding)
         .coordinatorCardBackground(
@@ -398,6 +393,92 @@ struct CoordinatorModeView: View {
             fillOpacity: CoordinatorStyle.railCardFillOpacity,
             strokeOpacity: 0
         )
+    }
+
+    private func coordinatorActiveThreadRow(
+        _ rail: CoordinatorModeCoordinatorRail,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let activeOption = rail.availableCoordinators.first(where: \.isSelected)
+        let status = coordinatorThreadStatus(for: activeOption, rail: rail)
+
+        return Button {
+            isCoordinatorThreadPickerOpen.toggle()
+        } label: {
+            HStack(alignment: .center, spacing: metrics.smallSpacing) {
+                Image(systemName: rail.state == .chooseCoordinator ? "plus.bubble" : "bubble.left.and.bubble.right")
+                    .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                    .foregroundStyle(rail.state == .chooseCoordinator ? .secondary : Color.accentColor)
+                    .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
+
+                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                    Text(activeOption?.title ?? rail.title ?? "New Coordinator")
+                        .font(metrics.bodySemibold)
+                        .foregroundStyle(.primary.opacity(0.9))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text(activeOption?.selectionSource.displayName ?? "Start a blank parent thread")
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: metrics.smallSpacing)
+
+                HStack(spacing: metrics.smallSpacing) {
+                    coordinatorThreadStatusPill(status, metrics: metrics)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: metrics.microIconSize, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, metrics.pendingPadding)
+            .padding(.vertical, metrics.smallSpacing)
+            .frame(minHeight: metrics.coordinatorThreadRowHeight)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .coordinatorCardBackground(
+            cornerRadius: metrics.pendingCornerRadius,
+            isSelected: rail.state == .chooseCoordinator || activeOption != nil,
+            fillOpacity: 0.12,
+            strokeOpacity: 0.10
+        )
+        .hoverTooltip("Switch Coordinator chat")
+        .popover(isPresented: $isCoordinatorThreadPickerOpen, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+            coordinatorThreadPicker(rail, metrics: metrics)
+        }
+    }
+
+    private func coordinatorThreadPicker(
+        _ rail: CoordinatorModeCoordinatorRail,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+            HStack(spacing: metrics.smallSpacing) {
+                Label("Coordinator Threads", systemImage: "rectangle.3.group.bubble")
+                    .font(metrics.cardTitle)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+
+            coordinatorNewThreadRow(rail, metrics: metrics)
+
+            if rail.availableCoordinators.isEmpty {
+                Text("No Coordinator threads yet.")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, metrics.pendingPadding)
+                    .padding(.vertical, metrics.smallSpacing)
+            } else {
+                Divider()
+                coordinatorThreadRows(rail.availableCoordinators, metrics: metrics)
+            }
+        }
+        .padding(metrics.cardPadding)
+        .frame(width: metrics.coordinatorThreadPopoverWidth)
     }
 
     @ViewBuilder
@@ -431,6 +512,7 @@ struct CoordinatorModeView: View {
     ) -> some View {
         Button {
             viewModel.startNewCoordinatorRun()
+            closeCoordinatorThreadPicker()
         } label: {
             HStack(alignment: .center, spacing: metrics.smallSpacing) {
                 Image(systemName: rail.state == .chooseCoordinator ? "plus.circle.fill" : "plus.bubble")
@@ -478,6 +560,7 @@ struct CoordinatorModeView: View {
 
         return Button {
             viewModel.selectCoordinator(sessionID: option.sessionID)
+            closeCoordinatorThreadPicker()
         } label: {
             HStack(alignment: .center, spacing: metrics.smallSpacing) {
                 Image(systemName: option.isSelected ? "checkmark.circle.fill" : "bubble.left.and.bubble.right")
@@ -499,19 +582,7 @@ struct CoordinatorModeView: View {
 
                 Spacer(minLength: metrics.smallSpacing)
 
-                HStack(spacing: metrics.miniPillIconSpacing) {
-                    Circle()
-                        .fill(status.color.opacity(0.9))
-                        .frame(width: metrics.composerStatusDotSize, height: metrics.composerStatusDotSize)
-                    Text(status.text)
-                        .font(metrics.microMedium)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, metrics.miniPillHorizontalPadding)
-                .padding(.vertical, metrics.miniPillVerticalPadding)
-                .background(Capsule(style: .continuous).fill(status.color.opacity(0.10)))
-                .overlay(Capsule(style: .continuous).stroke(status.color.opacity(0.18), lineWidth: 0.5))
+                coordinatorThreadStatusPill(status, metrics: metrics)
             }
             .contentShape(Rectangle())
             .padding(.horizontal, metrics.pendingPadding)
@@ -532,11 +603,52 @@ struct CoordinatorModeView: View {
         }
     }
 
+    private func coordinatorThreadStatusPill(
+        _ status: (text: String, color: Color),
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(spacing: metrics.miniPillIconSpacing) {
+            Circle()
+                .fill(status.color.opacity(0.9))
+                .frame(width: metrics.composerStatusDotSize, height: metrics.composerStatusDotSize)
+            Text(status.text)
+                .font(metrics.microMedium)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, metrics.miniPillHorizontalPadding)
+        .padding(.vertical, metrics.miniPillVerticalPadding)
+        .background(Capsule(style: .continuous).fill(status.color.opacity(0.10)))
+        .overlay(Capsule(style: .continuous).stroke(status.color.opacity(0.18), lineWidth: 0.5))
+    }
+
+    private func closeCoordinatorThreadPicker() {
+        DispatchQueue.main.async {
+            isCoordinatorThreadPickerOpen = false
+        }
+    }
+
     private func coordinatorThreadListHeight(count: Int, metrics: CoordinatorVisualMetrics) -> CGFloat {
         let visibleRows = min(max(count, 1), metrics.coordinatorThreadVisibleRowLimit)
         let rowHeights = CGFloat(visibleRows) * metrics.coordinatorThreadRowHeight
         let spacings = CGFloat(max(visibleRows - 1, 0)) * metrics.smallSpacing
         return rowHeights + spacings
+    }
+
+    private func coordinatorThreadStatus(
+        for option: CoordinatorModeCoordinatorOption?,
+        rail: CoordinatorModeCoordinatorRail
+    ) -> (text: String, color: Color) {
+        if let option {
+            return coordinatorThreadStatus(for: option)
+        }
+        if rail.state == .chooseCoordinator {
+            return ("Ready", .secondary)
+        }
+        if rail.isLiveInCurrentWindow {
+            return ("Live", .green)
+        }
+        return ("Persisted", .secondary)
     }
 
     private func coordinatorThreadStatus(for option: CoordinatorModeCoordinatorOption) -> (text: String, color: Color) {
@@ -2091,6 +2203,10 @@ private struct CoordinatorVisualMetrics {
 
     var coordinatorThreadVisibleRowLimit: Int {
         3
+    }
+
+    var coordinatorThreadPopoverWidth: CGFloat {
+        fontPreset.scaledClamped(320, min: 320, max: 380)
     }
 
     var footerVerticalPadding: CGFloat {
