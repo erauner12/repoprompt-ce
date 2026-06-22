@@ -284,6 +284,23 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **AND** the demo Coordinator runtime root SHALL be modeled as a marked Coordinator backing runtime rather than as a separate non-tab runtime
 - **AND** delegated child sessions SHALL retain their normal tab-coupled selection, worktree, transcript, permission, and routing state.
 
+#### Scenario: Read-only Coordinator delegation may omit a worktree
+- **WHEN** the production-demo Coordinator runtime delegates read-only investigation, summarization, or status work
+- **THEN** the delegated child MAY be started without an explicit worktree sandbox
+- **AND** the delegated child SHALL still retain normal tab-coupled transcript, permission, and routing state.
+
+#### Scenario: Mutable Coordinator delegation requires an explicit child worktree
+- **WHEN** the production-demo Coordinator runtime delegates work that may edit files, run validation that writes outputs, prepare a review packet, generate a merge preview, commit, or prepare a PR
+- **THEN** the delegated child start SHALL include an explicit isolated execution sandbox such as `worktree_create:true` or a specific `worktree_id`
+- **AND** inherited worktree binding alone SHALL NOT satisfy this requirement
+- **AND** the worktree identity SHALL be available before the child session is created so follow-through, review, and merge state can be attributed to a stable child execution context.
+
+#### Scenario: Mutable Coordinator delegation without a worktree is rejected
+- **WHEN** a Coordinator-owned `agent_run.start` attempts mutable delegated work without an explicit child worktree sandbox
+- **THEN** the app SHALL reject the start before creating a delegated child session
+- **AND** the rejection SHALL tell the Coordinator how to retry with `worktree_create:true` or an existing `worktree_id`
+- **AND** ordinary non-Coordinator Agent Mode starts SHALL preserve their existing worktree behavior.
+
 #### Scenario: Coordinator actor bridge remains distinct from the target role
 - **WHEN** v1 uses the production-demo Coordinator bridge
 - **THEN** the Coordinator actor itself SHALL NOT be specified as requiring `workflow_name="orchestrate"`

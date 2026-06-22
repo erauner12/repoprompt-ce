@@ -50,7 +50,7 @@
 - [ ] 5.5 Block direct tab focus, tab-scoped file read/search, file-selection mutation, worktree mutation, approval/decline, cancel, stop, and unbounded full-log/full-transcript read unless a later spec grants Coordinator access.
 - [ ] 5.6 Hide blocked whole tools from Coordinator tool-list advertisement.
 - [ ] 5.7 Enforce blocked whole tools at execution time for Coordinator connections, because hidden tools remain callable by name.
-- [ ] 5.8 Enforce op/arg-level boundaries inside `agent_run` / `agent_manage` dispatch for Coordinator connections, including `respond`, `cancel`, `stop_session`, `cleanup_sessions`, and worktree creation/binding args on `agent_run.start`.
+- [ ] 5.8 Enforce op/arg-level boundaries inside `agent_run` / `agent_manage` dispatch for Coordinator connections, including `respond`, `cancel`, `stop_session`, `cleanup_sessions`, direct worktree mutation, and child worktree args that violate the mutable-delegation worktree policy.
 - [ ] 5.9 Exclude Coordinator-marked runtimes from being targeted by other callers' incidental cleanup/stop/destructive session-management flows unless explicit authorization semantics are accepted, while preserving at least one intentional user reset/teardown/recreate path.
 - [ ] 5.10 Ensure requests requiring direct workspace investigation or mutation are routed to delegated Agent Mode sessions rather than handled by Coordinator tools directly.
 - [ ] 5.11 Add focused permission tests for allowed lifecycle tools, delegated-run handle tracking, rejected op/arg-level actions, execution-blocked whole tools, blocked tab/workspace mutation tools, and cleanup/stop target exclusion.

@@ -10404,6 +10404,16 @@ final class AgentModeViewModel: ObservableObject {
         }
     }
 
+    func mcpIsCoordinatorRuntime(sessionID: UUID?) -> Bool {
+        guard let sessionID else { return false }
+        if ownerValidatedSessionIndex[sessionID]?.isCoordinatorRuntime == true {
+            return true
+        }
+        return sessions.values.contains { session in
+            session.activeAgentSessionID == sessionID && session.isCoordinatorRuntime
+        }
+    }
+
     private func saveSession(for tabID: UUID) async {
         #if DEBUG
             let diagnosticsStartMS = AgentModePerfDiagnostics.timestampMSIfEnabled()

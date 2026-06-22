@@ -228,7 +228,7 @@ The first Coordinator role implementation SHALL use a delegate-only tool contrac
 - **WHEN** tools are advertised or installed for the Coordinator runtime
 - **THEN** the system SHALL advertise only the accepted lifecycle/control-plane toolset and hide ordinary tab-scoped file, selection, worktree, and focus tools from tool-list output
 - **AND** execution policy SHALL reject Coordinator attempts to invoke blocked whole tools even if those tools are called by name
-- **AND** op-level or argument-level guards SHALL reject disallowed operations on otherwise-allowed tools, including Coordinator use of `agent_run.respond`, `agent_run.cancel`, `agent_manage.stop_session`, `agent_manage.cleanup_sessions`, and worktree creation/binding arguments on `agent_run.start` unless a later accepted spec grants access.
+- **AND** op-level or argument-level guards SHALL reject disallowed operations on otherwise-allowed tools, including Coordinator use of `agent_run.respond`, `agent_run.cancel`, `agent_manage.stop_session`, `agent_manage.cleanup_sessions`, direct worktree mutation, and `agent_run.start` worktree arguments that do not provision an explicit delegated-child execution sandbox allowed or required by mutable-delegation policy.
 
 #### Scenario: Workspace investigation or mutation is requested
 - **WHEN** user intent requires direct codebase investigation, file reads/searches, file edits, selection changes, tab focus, or worktree mutation

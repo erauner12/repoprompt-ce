@@ -313,6 +313,16 @@ struct AgentRunMCPToolService {
         if sourceTabID != nil, spawnParentSessionID == nil {
             throw MCPError.invalidParams("agent_run.start was routed from an Agent Mode run, but RepoPrompt could not resolve its parent Agent session. Refusing to create an unparented run; reconnect the agent MCP client or retry after the source session is active.")
         }
+        let isCoordinatorParent = await agentModeVM.mcpIsCoordinatorRuntime(sessionID: spawnParentSessionID)
+        let coordinatorWorktreeDecision = AgentRunCoordinatorWorktreePolicy.decision(
+            isCoordinatorParent: isCoordinatorParent,
+            message: message,
+            workflow: workflow,
+            hasExplicitWorktree: worktreeStartRequest.hasExplicitWorktreeArgs
+        )
+        if case let .requireExplicitWorktree(reason) = coordinatorWorktreeDecision {
+            throw MCPError.invalidParams(reason)
+        }
 
         // Compute the default task label before target creation. Omitted `model_id`
         // for agent_run.start resolves through the global Pair role default.
