@@ -15734,20 +15734,32 @@ final class AgentModeViewModel: ObservableObject {
 
     /// Rename the visible agent session for a tab.
     ///
-    /// Agent-mode sidebar rows are session-first, but the user-facing title is also
-    /// mirrored through the compose tab so window/tab UI and persisted workspace
-    /// state stay in sync.
-    func renameSession(tabID: UUID, to newName: String) {
+    /// The compose-tab/workspace title is authoritative. Session-index, live-session,
+    /// provider-thread, and sidebar state are derived projections updated only after
+    /// that canonical title is visible.
+    @discardableResult
+    func renameSession(tabID: UUID, to newName: String) async -> String? {
+        guard !newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         let validatedName = AgentSession.validatedName(newName)
-        guard !validatedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let promptManager else { return nil }
 
-        promptManager?.renameComposeTab(tabID, to: validatedName)
+        promptManager.renameComposeTab(tabID, to: validatedName)
+        await Task.yield()
+
+        guard let workspaceName = workspaceManager?.composeTabName(with: tabID),
+              workspaceName == validatedName,
+              let projectedName = promptManager.currentComposeTabs.first(where: { $0.id == tabID })?.name,
+              projectedName == workspaceName
+        else {
+            return nil
+        }
+        let canonicalName = workspaceName
 
         let sessionID = boundSessionID(for: tabID)
         if let sessionID,
            var entry = ownerValidatedSessionIndex[sessionID]
         {
-            entry.name = validatedName
+            entry.name = canonicalName
             applyLocalSessionIndexUpsert(entry)
         }
 
@@ -15765,7 +15777,7 @@ final class AgentModeViewModel: ObservableObject {
             handleObservedMCPStateChange(for: session)
             codexCoordinator.scheduleCodexThreadNameSyncIfPossible(
                 for: session,
-                name: validatedName,
+                name: canonicalName,
                 explicitThreadID: session.codexConversationID,
                 source: "renameSession"
             )
@@ -15775,11 +15787,18 @@ final class AgentModeViewModel: ObservableObject {
             Task { [dataService] in
                 try? await dataService.renameAgentSession(
                     id: sessionID,
-                    to: validatedName,
+                    to: canonicalName,
                     for: workspace
                 )
             }
         }
+
+        syncSidebarUIState(
+            refresh: true,
+            reason: .sessionName,
+            sidebarTabs: promptManager.currentComposeTabs
+        )
+        return canonicalName
     }
 
     private func cleanupACPStateForDeletedSession(_ session: TabSession) async {
