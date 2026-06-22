@@ -214,26 +214,54 @@ final class ToolCatalogSnapshotTests: XCTestCase {
             ))
 
             try await MCPSharedServerTestLease.shared.withLease { _ in
-                let window = Self.makeWindowWithoutAutoStart()
-                let catalogService = window.mcpServer.windowMCPToolCatalogService
+                let firstWindow = Self.makeWindowWithoutAutoStart()
+                let secondWindow = Self.makeWindowWithoutAutoStart()
+                let windows = [firstWindow, secondWindow]
+                let catalogServices = windows.map(\.mcpServer.windowMCPToolCatalogService)
 
-                try await Self.withIsolatedBootstrapSocketNamespace(window: window, catalogService: catalogService) { socketURL in
+                try await Self.withIsolatedBootstrapSocketNamespace(
+                    windows: Array(zip(windows, catalogServices))
+                ) { socketURL in
                     let storedAutoStart = GlobalSettingsStore.shared.mcpAutoStart()
-                    await window.mcpServer.ensureServerReadyForAgentBootstrap()
+                    await firstWindow.mcpServer.ensureServerReadyForAgentBootstrap()
+                    await secondWindow.mcpServer.ensureServerReadyForAgentBootstrap()
                     XCTAssertEqual(GlobalSettingsStore.shared.mcpAutoStart(), storedAutoStart)
-                    XCTAssertTrue(ServiceRegistry.services.contains { service in
-                        (service as AnyObject) === (catalogService as AnyObject)
-                    })
-                    XCTAssertFalse(ServiceRegistry.services.contains { service in
-                        (service as AnyObject) === (window.mcpServer as AnyObject)
-                    })
+                    for (window, catalogService) in zip(windows, catalogServices) {
+                        XCTAssertTrue(ServiceRegistry.services.contains { service in
+                            (service as AnyObject) === (catalogService as AnyObject)
+                        })
+                        XCTAssertFalse(ServiceRegistry.services.contains { service in
+                            (service as AnyObject) === (window.mcpServer as AnyObject)
+                        })
+                    }
 
                     let attributes = try FileManager.default.attributesOfItem(atPath: socketURL.path)
                     XCTAssertEqual(attributes[.type] as? FileAttributeType, .typeSocket)
 
+                    let manager = ServerNetworkManager.shared
                     await Self.assertBootstrapSocketOverrideError(.managerNotFullyStopped) {
-                        try await ServerNetworkManager.shared.debugRestoreBootstrapSocketURLOverride(expected: socketURL)
+                        try await manager.debugRestoreBootstrapSocketURLOverride(expected: socketURL)
                     }
+
+                    await firstWindow.tearDown()
+                    XCTAssertFalse(ServiceRegistry.services.contains { service in
+                        (service as AnyObject) === (catalogServices[0] as AnyObject)
+                    })
+                    XCTAssertTrue(ServiceRegistry.services.contains { service in
+                        (service as AnyObject) === (catalogServices[1] as AnyObject)
+                    })
+                    let runningAfterFirstTeardown = await manager.isRunning()
+                    XCTAssertTrue(runningAfterFirstTeardown)
+                    XCTAssertTrue(FileManager.default.fileExists(atPath: socketURL.path))
+
+                    await secondWindow.tearDown()
+                    XCTAssertFalse(ServiceRegistry.services.contains { service in
+                        (service as AnyObject) === (catalogServices[1] as AnyObject)
+                    })
+                    let runningAfterLastTeardown = await manager.isRunning()
+                    XCTAssertFalse(runningAfterLastTeardown)
+                    XCTAssertFalse(FileManager.default.fileExists(atPath: socketURL.path))
+                    try await manager.debugRestoreBootstrapSocketURLOverride(expected: socketURL)
                 }
             }
         #else
@@ -360,8 +388,7 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         }
 
         private static func withIsolatedBootstrapSocketNamespace(
-            window: WindowState,
-            catalogService: MCPWindowToolCatalogService,
+            windows: [(WindowState, MCPWindowToolCatalogService)],
             operation: (URL) async throws -> Void
         ) async throws {
             let fixture = try BootstrapSocketNamespaceFixture.make()
@@ -391,8 +418,7 @@ final class ToolCatalogSnapshotTests: XCTestCase {
             } catch {
                 do {
                     try await cleanupIsolatedBootstrapSocketNamespace(
-                        window: window,
-                        catalogService: catalogService,
+                        windows: windows,
                         fixture: fixture,
                         previousEnabledState: previousEnabledState
                     )
@@ -403,32 +429,34 @@ final class ToolCatalogSnapshotTests: XCTestCase {
             }
 
             try await cleanupIsolatedBootstrapSocketNamespace(
-                window: window,
-                catalogService: catalogService,
+                windows: windows,
                 fixture: fixture,
                 previousEnabledState: previousEnabledState
             )
         }
 
         private static func cleanupIsolatedBootstrapSocketNamespace(
-            window: WindowState,
-            catalogService: MCPWindowToolCatalogService,
+            windows: [(WindowState, MCPWindowToolCatalogService)],
             fixture: BootstrapSocketNamespaceFixture,
             previousEnabledState: Bool
         ) async throws {
-            await window.mcpServer.stopServer()
-            XCTAssertFalse(ServiceRegistry.services.contains { service in
-                (service as AnyObject) === (catalogService as AnyObject)
-            })
-            await window.mcpServer.shutdownListener()
+            for (window, catalogService) in windows {
+                await window.tearDown()
+                XCTAssertFalse(ServiceRegistry.services.contains { service in
+                    (service as AnyObject) === (catalogService as AnyObject)
+                })
+            }
 
             let manager = ServerNetworkManager.shared
             let runningAfterShutdown = await manager.isRunning()
             XCTAssertFalse(runningAfterShutdown)
             let productionSocketURL = MCPFilesystemConstants.bootstrapSocketURL().standardizedFileURL
             let resolvedSocketURL = await manager.debugResolvedBootstrapSocketURL()
-            XCTAssertEqual(resolvedSocketURL, fixture.socketURL.standardizedFileURL)
-            try await manager.debugRestoreBootstrapSocketURLOverride(expected: fixture.socketURL)
+            if resolvedSocketURL == fixture.socketURL.standardizedFileURL {
+                try await manager.debugRestoreBootstrapSocketURLOverride(expected: fixture.socketURL)
+            } else {
+                XCTAssertEqual(resolvedSocketURL, productionSocketURL)
+            }
             let restoredSocketURL = await manager.debugResolvedBootstrapSocketURL()
             XCTAssertEqual(restoredSocketURL, productionSocketURL)
             await manager.setEnabled(previousEnabledState)
