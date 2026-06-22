@@ -16,7 +16,12 @@ final class MCPSelectionReplyFreshnessTests: XCTestCase {
         let tabID = UUID()
         let staleSelection = StoredSelection(selectedPaths: [staleFile.path])
         let freshSelection = StoredSelection(selectedPaths: [freshFile.path])
-        let (window, workspaceID) = await makeWindow(root: root, tabID: tabID, selection: staleSelection)
+        let (window, workspaceID) = await makeWindow(
+            root: root,
+            tabID: tabID,
+            selection: staleSelection,
+            stopAutomaticTokenRecounts: true
+        )
         defer { WindowStatesManager.shared.unregisterWindowState(window) }
         let loadedRoot = try await WorkspaceRootLoadTestSupport.loadRootMatchingCurrentFileSystemSettings(
             in: window,
@@ -61,7 +66,12 @@ final class MCPSelectionReplyFreshnessTests: XCTestCase {
         let tabID = UUID()
         let staleSelection = StoredSelection(selectedPaths: [staleFile.path])
         let freshSelection = StoredSelection(selectedPaths: [freshFile.path])
-        let (window, workspaceID) = await makeWindow(root: root, tabID: tabID, selection: staleSelection)
+        let (window, workspaceID) = await makeWindow(
+            root: root,
+            tabID: tabID,
+            selection: staleSelection,
+            stopAutomaticTokenRecounts: true
+        )
         defer { WindowStatesManager.shared.unregisterWindowState(window) }
         let loadedRoot = try await WorkspaceRootLoadTestSupport.loadRootMatchingCurrentFileSystemSettings(
             in: window,
@@ -1201,11 +1211,19 @@ final class MCPSelectionReplyFreshnessTests: XCTestCase {
     private func makeWindow(
         root: URL,
         tabID: UUID,
-        selection: StoredSelection
+        selection: StoredSelection,
+        stopAutomaticTokenRecounts: Bool = false
     ) async -> (window: WindowState, workspaceID: UUID) {
         let previousAutoStart = GlobalSettingsStore.shared.mcpAutoStart()
         GlobalSettingsStore.shared.setMCPAutoStart(false, commit: false)
         let window = WindowState()
+        if stopAutomaticTokenRecounts {
+            await window.promptManager.stopTokenCountUpdateTimer()
+        }
+        addTeardownBlock { @MainActor in
+            await window.promptManager.stopTokenCountUpdateTimer()
+            await window.tearDown()
+        }
         window.promptManager.attachPromptFactualContextProvider(
             MCPSelectionTestPromptFactualContextProvider(store: window.promptManager.workspaceFileContextStore)
         )
@@ -1226,6 +1244,7 @@ final class MCPSelectionReplyFreshnessTests: XCTestCase {
             reason: "mcpSelectionReplyFreshnessTests"
         )
         window.promptManager.loadComposeTabsFromWorkspace(workspace, syncPromptText: true)
+        await window.workspaceManager.awaitInitialized()
         return (window, workspace.id)
     }
 
