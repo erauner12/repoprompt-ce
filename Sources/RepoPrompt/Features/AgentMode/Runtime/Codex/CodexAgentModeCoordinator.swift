@@ -5324,7 +5324,9 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
                 session: session,
                 at: eventTimestamp
             )
-            if AgentToolTrackingSupport.isExplicitRepoPromptTool(toolName) {
+            if AgentToolTrackingSupport.isExplicitRepoPromptTool(toolName),
+               !AgentToolTrackingSupport.shouldRenderExplicitRepoPromptProviderEvent(toolName)
+            {
                 AgentModeViewModel.logCodexDebug("[AgentModeVM][CodexUI] skip native explicit RepoPrompt toolCall tool=\(toolName)")
                 return
             }
@@ -5358,7 +5360,9 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
             guard session.runState.isActive else { return }
             clearCodexPendingAuthRetryTurn(session)
             sealAssistantBoundary(session)
-            if AgentToolTrackingSupport.isExplicitRepoPromptTool(toolName) {
+            if AgentToolTrackingSupport.isExplicitRepoPromptTool(toolName),
+               !AgentToolTrackingSupport.shouldRenderExplicitRepoPromptProviderEvent(toolName)
+            {
                 AgentModeViewModel.logCodexDebug("[AgentModeVM][CodexUI] skip native explicit RepoPrompt toolResult tool=\(toolName)")
                 return
             }
