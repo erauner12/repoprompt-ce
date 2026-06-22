@@ -27,6 +27,13 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
     }
 
+    @Published var boardScope: CoordinatorModeBoardScope = .coordinatorFleet {
+        didSet {
+            guard boardScope != oldValue else { return }
+            refresh()
+        }
+    }
+
     private let inputProvider: InputProvider
     private let transcriptProvider: TranscriptProvider
     private let dashboardVisibilityHandler: DashboardVisibilityHandler
@@ -72,6 +79,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     func refresh() {
         var input = inputProvider(sortMode, nil)
         input.selectedCoordinatorID = input.workspaceID.flatMap { selectedCoordinatorIDByWorkspaceID[$0] }
+        input.boardScope = boardScope
         let projected = projector.project(input)
         publishIfChanged(isFreshCoordinatorRunPending ? pendingFreshCoordinatorSnapshot(from: projected) : projected)
     }
@@ -229,6 +237,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         return CoordinatorModeSnapshot(
             workspaceID: projected.workspaceID,
             sortMode: projected.sortMode,
+            boardScope: projected.boardScope,
             counts: projected.counts,
             groups: projected.groups,
             coordinatorRail: rail,

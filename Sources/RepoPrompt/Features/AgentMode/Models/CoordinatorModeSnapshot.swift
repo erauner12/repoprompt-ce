@@ -4,6 +4,7 @@ struct CoordinatorModeSnapshot: Equatable {
     static let empty = CoordinatorModeSnapshot(
         workspaceID: nil,
         sortMode: .lastUpdated,
+        boardScope: .coordinatorFleet,
         counts: .empty,
         groups: CoordinatorModeStatusGroup.allCases.map { CoordinatorModeStatusSection(group: $0, rows: []) },
         coordinatorRail: .empty,
@@ -14,6 +15,7 @@ struct CoordinatorModeSnapshot: Equatable {
 
     let workspaceID: UUID?
     let sortMode: CoordinatorModeSortMode
+    let boardScope: CoordinatorModeBoardScope
     let counts: CoordinatorModeCounts
     let groups: [CoordinatorModeStatusSection]
     let coordinatorRail: CoordinatorModeCoordinatorRail
@@ -34,6 +36,11 @@ enum CoordinatorModeSortMode: String, CaseIterable, Equatable {
     case lastUpdated
     case name
     case priority
+}
+
+enum CoordinatorModeBoardScope: String, CaseIterable, Equatable {
+    case coordinatorFleet
+    case allAgents
 }
 
 struct CoordinatorModeCounts: Equatable {
@@ -123,6 +130,12 @@ struct CoordinatorModeRow: Identifiable, Equatable {
     let pendingInteraction: CoordinatorModePendingInteractionSummary?
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
     let statusReport: CoordinatorModeSessionStatusReport?
+    let origin: CoordinatorModeRowOrigin
+}
+
+enum CoordinatorModeRowOrigin: String, Equatable {
+    case coordinatorFleet
+    case directAgent
 }
 
 struct CoordinatorModeWorkflowDisplaySummary: Equatable {

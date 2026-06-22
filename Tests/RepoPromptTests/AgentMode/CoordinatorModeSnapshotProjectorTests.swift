@@ -90,6 +90,50 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(allRows(in: switchedSnapshot).first { $0.sessionID == secondChildID }?.parentCoordinator?.isSelected, true)
     }
 
+    func testAllAgentsScopeIncludesDirectSessionsWithoutCoordinatorRuntimeRows() {
+        let coordinatorID = uuid(1)
+        let delegatedID = uuid(2)
+        let directID = uuid(3)
+        let directChildID = uuid(4)
+        let internalID = uuid(5)
+        let persistedOnlyID = uuid(6)
+        let sessions = [
+            live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(100), state: .idle),
+            live(id: delegatedID, tab: uuid(102), title: "Delegated", updatedAt: date(90), state: .completed, parent: coordinatorID),
+            live(id: directID, tab: uuid(103), title: "Direct agent", updatedAt: date(80), state: .running),
+            live(id: directChildID, tab: uuid(104), title: "Direct child", updatedAt: date(70), state: .waitingForUser, parent: directID),
+            live(id: internalID, tab: uuid(105), title: "Coordinator proof", updatedAt: date(60), state: .completed, parent: coordinatorID, internalSession: true)
+        ]
+
+        let focused = projector.project(input(
+            live: sessions,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        XCTAssertEqual(Set(allRows(in: focused).map(\.sessionID)), [delegatedID])
+        XCTAssertEqual(allRows(in: focused).first?.origin, .coordinatorFleet)
+
+        let allAgents = projector.project(input(
+            persisted: [
+                persisted(id: persistedOnlyID, tab: uuid(106), title: "Historical direct", updatedAt: date(110), state: .completed)
+            ],
+            live: sessions,
+            boardScope: .allAgents,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        XCTAssertEqual(allAgents.boardScope, .allAgents)
+        XCTAssertEqual(Set(allRows(in: allAgents).map(\.sessionID)), [delegatedID, directID, directChildID])
+        XCTAssertFalse(allRows(in: allAgents).contains { $0.sessionID == coordinatorID })
+        XCTAssertFalse(allRows(in: allAgents).contains { $0.sessionID == internalID })
+        XCTAssertFalse(allRows(in: allAgents).contains { $0.sessionID == persistedOnlyID })
+        XCTAssertEqual(allRows(in: allAgents).first { $0.sessionID == delegatedID }?.origin, .coordinatorFleet)
+        XCTAssertEqual(allRows(in: allAgents).first { $0.sessionID == delegatedID }?.parentCoordinator?.sessionID, coordinatorID)
+        XCTAssertEqual(allRows(in: allAgents).first { $0.sessionID == directID }?.origin, .directAgent)
+        XCTAssertNil(allRows(in: allAgents).first { $0.sessionID == directID }?.parentCoordinator)
+        XCTAssertEqual(allRows(in: allAgents).first { $0.sessionID == directID }?.childSessionIDs, [directChildID])
+        XCTAssertEqual(allRows(in: allAgents).first { $0.sessionID == directChildID }?.origin, .directAgent)
+    }
+
     func testBoardIncludesRunningDelegatedSnapshotBeforePersistence() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
@@ -673,6 +717,7 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         detection: [CoordinatorModeSnapshotProjector.CoordinatorDetectionSession] = [],
         selectedCoordinatorID: UUID? = nil,
         sort: CoordinatorModeSortMode = .lastUpdated,
+        boardScope: CoordinatorModeBoardScope = .coordinatorFleet,
         resolvableTabs: Set<UUID>? = nil,
         demoCoordinatorIDs: Set<UUID> = [],
         coordinatorInternalIDs: Set<UUID> = []
@@ -688,6 +733,7 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             coordinatorDetectionSessions: detection,
             selectedCoordinatorID: selectedCoordinatorID,
             sortMode: sort,
+            boardScope: boardScope,
             resolvableTabIDs: tabs,
             demoCoordinatorSessionIDs: demoCoordinatorIDs,
             coordinatorInternalSessionIDs: coordinatorInternalIDs

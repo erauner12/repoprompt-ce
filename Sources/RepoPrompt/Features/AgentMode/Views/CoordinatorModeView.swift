@@ -186,6 +186,7 @@ struct CoordinatorModeView: View {
             }
 
             presentationPicker(metrics: metrics)
+            scopePicker(metrics: metrics)
             sortPicker(metrics: metrics)
             filterSearchBox(metrics: metrics)
                 .frame(width: metrics.searchWidth)
@@ -237,6 +238,35 @@ struct CoordinatorModeView: View {
         .frame(width: metrics.controlWidth, height: metrics.headerControlHeight)
         .coordinatorHeaderControlBackground()
         .accessibilityLabel("Presentation")
+    }
+
+    private func scopePicker(metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.headerSegmentSpacing) {
+            ForEach(CoordinatorModeBoardScope.allCases, id: \.self) { scope in
+                Button {
+                    viewModel.boardScope = scope
+                } label: {
+                    Text(scope.displayName)
+                        .font(metrics.bodySemibold)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.88)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: metrics.headerSegmentHeight)
+                        .padding(.horizontal, metrics.headerSegmentHorizontalPadding)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(viewModel.boardScope == scope ? Color.accentColor : Color.secondary)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(viewModel.boardScope == scope ? Color.accentColor.opacity(0.16) : Color.clear)
+                )
+                .accessibilityLabel(scope.accessibilityLabel)
+            }
+        }
+        .padding(metrics.headerControlInset)
+        .frame(width: metrics.scopeControlWidth, height: metrics.headerControlHeight)
+        .coordinatorHeaderControlBackground()
+        .accessibilityLabel("Board scope")
     }
 
     private func sortPicker(metrics: CoordinatorVisualMetrics) -> some View {
@@ -1033,6 +1063,7 @@ struct CoordinatorModeView: View {
                     }
 
                     inspectorGroup("Session", metrics: metrics) {
+                        keyValue("Origin", row.origin.displayName, metrics: metrics)
                         keyValue("Provider", row.providerName ?? "Unknown", metrics: metrics)
                         keyValue("Model", row.modelName ?? "Unknown", metrics: metrics)
                         keyValue("Children", "\(row.childSessionIDs.count)", metrics: metrics)
@@ -1766,13 +1797,14 @@ struct CoordinatorModeView: View {
     }
 
     private func emptyState(snapshot: CoordinatorModeSnapshot, metrics: CoordinatorVisualMetrics) -> some View {
-        VStack(spacing: metrics.columnSpacing) {
+        let isAllAgents = snapshot.boardScope == .allAgents
+        return VStack(spacing: metrics.columnSpacing) {
             Image(systemName: snapshot.workspaceID == nil ? "folder.badge.questionmark" : "rectangle.3.group.bubble")
                 .font(.system(size: metrics.emptyStateIconSize))
                 .foregroundStyle(.secondary)
-            Text(snapshot.workspaceID == nil ? "Open a workspace" : "No delegated sessions yet")
+            Text(snapshot.workspaceID == nil ? "Open a workspace" : (isAllAgents ? "No active agent sessions yet" : "No delegated sessions yet"))
                 .font(metrics.headerTitle)
-            Text("The board shows delegated sessions from the Coordinator fleet.")
+            Text(isAllAgents ? "The board shows active Agent Mode sessions plus Coordinator fleet work." : "The board shows delegated sessions from the Coordinator fleet.")
                 .font(metrics.sectionTitle)
                 .foregroundStyle(.secondary)
         }
@@ -1787,6 +1819,8 @@ struct CoordinatorModeView: View {
             }
             if let parentCoordinator = row.parentCoordinator {
                 parentCoordinatorBadge(parentCoordinator, metrics: metrics)
+            } else if row.origin == .directAgent {
+                directAgentBadge(metrics: metrics)
             }
             if let identity = cardIdentityText(for: row) {
                 Text(identity)
@@ -1829,6 +1863,21 @@ struct CoordinatorModeView: View {
         .padding(.vertical, metrics.miniPillVerticalPadding)
         .background(Capsule().fill(Color.secondary.opacity(parentCoordinator.isSelected ? 0.14 : 0.08)))
         .overlay(Capsule().stroke(Color.secondary.opacity(parentCoordinator.isSelected ? 0.24 : 0.16), lineWidth: 0.5))
+    }
+
+    private func directAgentBadge(metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.miniPillIconSpacing) {
+            Image(systemName: "person.crop.circle")
+                .font(.system(size: metrics.microIconSize, weight: .semibold))
+            Text("Direct")
+                .font(metrics.microMedium)
+                .lineLimit(1)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, metrics.miniPillHorizontalPadding)
+        .padding(.vertical, metrics.miniPillVerticalPadding)
+        .background(Capsule().fill(Color.secondary.opacity(0.08)))
+        .overlay(Capsule().stroke(Color.secondary.opacity(0.16), lineWidth: 0.5))
     }
 
     @ViewBuilder
@@ -2341,6 +2390,10 @@ private struct CoordinatorVisualMetrics {
         fontPreset.scaledClamped(160, min: 160, max: 190)
     }
 
+    var scopeControlWidth: CGFloat {
+        fontPreset.scaledClamped(210, min: 210, max: 250)
+    }
+
     var sortControlWidth: CGFloat {
         fontPreset.scaledClamped(190, min: 190, max: 230)
     }
@@ -2771,6 +2824,31 @@ private extension CoordinatorModeSortMode {
     }
 }
 
+private extension CoordinatorModeBoardScope {
+    var displayName: String {
+        switch self {
+        case .coordinatorFleet: "Coordinator"
+        case .allAgents: "All Agents"
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .coordinatorFleet: "Show Coordinator fleet sessions"
+        case .allAgents: "Show all active Agent sessions"
+        }
+    }
+}
+
+private extension CoordinatorModeRowOrigin {
+    var displayName: String {
+        switch self {
+        case .coordinatorFleet: "Coordinator fleet"
+        case .directAgent: "Direct Agent Mode"
+        }
+    }
+}
+
 private extension CoordinatorModeCoordinatorRail.SelectionSource {
     var displayName: String {
         switch self {
@@ -3001,7 +3079,8 @@ private extension AgentSessionRunState {
                     mergeAttention: nil,
                     pendingInteraction: nil,
                     openAgentChatRoute: nil,
-                    statusReport: nil
+                    statusReport: nil,
+                    origin: .coordinatorFleet
                 ),
                 CoordinatorModeRow(
                     id: blockedID,
@@ -3025,7 +3104,8 @@ private extension AgentSessionRunState {
                     mergeAttention: nil,
                     pendingInteraction: nil,
                     openAgentChatRoute: nil,
-                    statusReport: nil
+                    statusReport: nil,
+                    origin: .coordinatorFleet
                 )
             ]
             let groups = CoordinatorModeStatusGroup.allCases.map { group in
@@ -3034,6 +3114,7 @@ private extension AgentSessionRunState {
             return CoordinatorModeSnapshot(
                 workspaceID: UUID(),
                 sortMode: .lastUpdated,
+                boardScope: .coordinatorFleet,
                 counts: CoordinatorModeCounts(
                     totalRows: rows.count,
                     needsYou: 1,

@@ -112,6 +112,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.28 Add a demo use-case taxonomy with gesture sequence, prompt text, expected result, and required checkpoint for single delegation, one-parent fan-out, sequential multi-parent work, simultaneous multi-parent work, and switch-back supervision.
 - [x] 10.29 Confirm or add a visible parent-selection affordance so users can return to an earlier Coordinator runtime after `New Coordinator` creates another parent.
 - [x] 10.30 Verify workflow-bearing demo prompts by proving `agent_run workflow_name` reaches delegated starts and returns workflow display metadata.
+- [x] 10.31 Add a board/list projection scope control so the default Coordinator fleet remains focused while an all-agents scope can show direct active Agent Mode sessions with distinct origin labeling.
 
 ## 11. Validation
 

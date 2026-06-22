@@ -11,6 +11,7 @@ struct CoordinatorModeSnapshotProjector {
         var coordinatorDetectionSessions: [CoordinatorDetectionSession]
         var selectedCoordinatorID: UUID?
         var sortMode: CoordinatorModeSortMode
+        var boardScope: CoordinatorModeBoardScope
         var resolvableTabIDs: Set<UUID>
         var demoCoordinatorSessionIDs: Set<UUID>
         var coordinatorInternalSessionIDs: Set<UUID>
@@ -25,6 +26,7 @@ struct CoordinatorModeSnapshotProjector {
             coordinatorDetectionSessions: [CoordinatorDetectionSession] = [],
             selectedCoordinatorID: UUID? = nil,
             sortMode: CoordinatorModeSortMode = .lastUpdated,
+            boardScope: CoordinatorModeBoardScope = .coordinatorFleet,
             resolvableTabIDs: Set<UUID> = [],
             demoCoordinatorSessionIDs: Set<UUID> = [],
             coordinatorInternalSessionIDs: Set<UUID> = []
@@ -38,6 +40,7 @@ struct CoordinatorModeSnapshotProjector {
             self.coordinatorDetectionSessions = coordinatorDetectionSessions
             self.selectedCoordinatorID = selectedCoordinatorID
             self.sortMode = sortMode
+            self.boardScope = boardScope
             self.resolvableTabIDs = resolvableTabIDs
             self.demoCoordinatorSessionIDs = demoCoordinatorSessionIDs
             self.coordinatorInternalSessionIDs = coordinatorInternalSessionIDs
@@ -186,10 +189,15 @@ struct CoordinatorModeSnapshotProjector {
             demoCoordinatorSessionIDs: input.demoCoordinatorSessionIDs,
             selectedCoordinatorID: coordinator?.sessionID
         )
-        let boardSeeds = delegatedFleetSeeds(
+        let coordinatorFleetSeeds = delegatedFleetSeeds(
             from: rowSeeds,
             ownerIDs: boardOwnerIDs,
             demoCoordinatorSessionIDs: input.demoCoordinatorSessionIDs
+        )
+        let boardSeeds = projectedBoardSeeds(
+            from: rowSeeds,
+            coordinatorFleetSeeds: coordinatorFleetSeeds,
+            input: input
         )
         let boardSeedIDs = Set(boardSeeds.map(\.id))
         let boardChildrenByParent = eligibleChildrenByParent(from: boardSeeds, visibleIDs: boardSeedIDs)
@@ -209,6 +217,7 @@ struct CoordinatorModeSnapshotProjector {
                     coordinatorTitlesByID: coordinatorTitlesByID,
                     selectedCoordinatorID: coordinator?.sessionID
                 ),
+                origin: rowOrigin(for: seed, ownerIDs: boardOwnerIDs),
                 input: input,
                 routeBuilder: routeBuilder
             )
@@ -219,6 +228,7 @@ struct CoordinatorModeSnapshotProjector {
                 childSessionIDs: Array(renderedChildrenByParent[seed.id, default: []]).sorted { $0.uuidString < $1.uuidString },
                 isCoordinator: seed.id == coordinator?.sessionID,
                 parentCoordinator: nil,
+                origin: rowOrigin(for: seed, ownerIDs: boardOwnerIDs),
                 input: input,
                 routeBuilder: routeBuilder
             )
@@ -245,6 +255,7 @@ struct CoordinatorModeSnapshotProjector {
         return CoordinatorModeSnapshot(
             workspaceID: input.workspaceID,
             sortMode: input.sortMode,
+            boardScope: input.boardScope,
             counts: counts(for: boardRows),
             groups: groups,
             coordinatorRail: coordinatorRail,
@@ -381,6 +392,7 @@ struct CoordinatorModeSnapshotProjector {
         childSessionIDs: [UUID],
         isCoordinator: Bool,
         parentCoordinator: CoordinatorModeRow.ParentCoordinator?,
+        origin: CoordinatorModeRowOrigin,
         input: Input,
         routeBuilder: RouteBuilder
     ) -> CoordinatorModeRow {
@@ -412,7 +424,8 @@ struct CoordinatorModeSnapshotProjector {
             mergeAttention: mergeAttention(from: seed.activeWorktreeMergeSummaries),
             pendingInteraction: pendingInteraction,
             openAgentChatRoute: route,
-            statusReport: sessionStatusReport(snapshot: mcpSnapshot)
+            statusReport: sessionStatusReport(snapshot: mcpSnapshot),
+            origin: origin
         )
     }
 
@@ -513,6 +526,30 @@ struct CoordinatorModeSnapshotProjector {
                 && !demoCoordinatorSessionIDs.contains(seed.id)
                 && !seed.isCoordinatorInternal
         }
+    }
+
+    private func projectedBoardSeeds(
+        from seeds: [RowSeed],
+        coordinatorFleetSeeds: [RowSeed],
+        input: Input
+    ) -> [RowSeed] {
+        switch input.boardScope {
+        case .coordinatorFleet:
+            coordinatorFleetSeeds
+        case .allAgents:
+            seeds.filter { seed in
+                !seed.isPersistedOnly
+                    && !input.demoCoordinatorSessionIDs.contains(seed.id)
+                    && !seed.isCoordinatorInternal
+            }
+        }
+    }
+
+    private func rowOrigin(
+        for seed: RowSeed,
+        ownerIDs: [UUID: UUID]
+    ) -> CoordinatorModeRowOrigin {
+        ownerIDs[seed.id] == nil ? .directAgent : .coordinatorFleet
     }
 
     private func fleetOwnerIDs(

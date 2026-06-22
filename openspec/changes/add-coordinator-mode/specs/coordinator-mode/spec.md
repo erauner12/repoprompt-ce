@@ -143,6 +143,14 @@ The production-demo Coordinator mode SHALL separate the selected Coordinator con
 - **AND** delegated descendants MAY include read-only probe descendants that are not immediate children of a Coordinator root
 - **AND** they SHALL preserve existing status grouping, sorting, stale-row, workflow-label, and Agent Mode deep-link behavior.
 
+#### Scenario: User switches board projection to all active Agent work
+- **WHEN** the user changes the Coordinator board/list projection from the Coordinator fleet scope to an all-agents scope
+- **THEN** the board and list SHALL include currently live Agent Mode sessions from the active workspace even when those sessions were started directly in Agent Mode rather than by a Coordinator runtime
+- **AND** historical persisted-only rows SHALL NOT be included solely because they are still known to Agent Mode
+- **AND** they SHALL continue to exclude Coordinator backing runtimes and explicitly marked Coordinator-internal housekeeping sessions
+- **AND** rows that were not launched by the Coordinator fleet SHALL be visually identified as direct Agent Mode work
+- **AND** this scope change SHALL NOT mutate Agent Mode session ownership, archive state, Coordinator fleet membership, or the selected Coordinator rail conversation.
+
 #### Scenario: Delegate belongs to a parent Coordinator runtime
 - **WHEN** a delegated row is projected from an aggregate fleet that contains multiple Coordinator runtime roots
 - **THEN** the row projection SHALL retain sourced immediate parent metadata and resolved owner Coordinator metadata sufficient for future grouping, filtering, action-chip attribution, inspector context, and selected-parent emphasis
