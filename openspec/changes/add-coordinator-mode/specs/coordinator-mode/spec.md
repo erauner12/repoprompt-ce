@@ -268,6 +268,11 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **AND** it SHALL NOT create a new Coordinator parent runtime
 - **AND** the resume directive SHALL describe the observed event as app-generated context for the original objective rather than a new user request.
 
+#### Scenario: Follow-through classifies projected workstreams
+- **WHEN** the Coordinator view has projected a workstream summary for a supervised row
+- **THEN** follow-through resume/hold decisions SHALL prefer the projected owner Coordinator, phase, review packet ID, and next action over parallel ad hoc inference from row titles, assistant prose, or lower-level fallback status
+- **AND** lower-level row fields MAY be used only when the structured workstream summary is unavailable.
+
 #### Scenario: Human review acknowledgement clears a review gate
 - **WHEN** a required review packet is acknowledged with `Mark reviewed`
 - **THEN** the Coordinator view SHALL treat that acknowledgement as clearing the human review gate only
@@ -371,6 +376,12 @@ The system SHALL project Coordinator mode session rows/cards from structured ses
 - **WHEN** no structured workstream source exists
 - **THEN** the Coordinator view SHALL omit workstream chips
 - **AND** it SHALL NOT parse session titles to invent workstream labels.
+
+#### Scenario: Workstream summary is projected
+- **WHEN** a Coordinator view row represents delegated or direct Agent work
+- **THEN** the Coordinator view SHALL project a read-only workstream summary from structured session/live-state data
+- **AND** the summary SHALL include the session objective/title, current phase, child session ID, owner Coordinator root when available, worktree binding when available, workflow label when available, review packet ID when available, and a derived next action when the row is actionable
+- **AND** the summary SHALL NOT mutate runtime state, approve actions, apply/merge/commit changes, or parse assistant prose as authoritative state.
 
 ### Requirement: Status grouping and sorting
 The system SHALL group Coordinator view rows by testable, structured status rules.

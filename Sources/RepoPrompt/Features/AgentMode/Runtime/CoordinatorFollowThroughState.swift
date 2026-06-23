@@ -32,7 +32,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
     mutating func updateObservedPhases(from rows: [CoordinatorModeRow]) {
         for row in rows {
             guard row.parentCoordinator != nil else { continue }
-            observedChildPhases[row.sessionID] = CoordinatorFollowThroughChildPhase(statusGroup: row.statusGroup)
+            observedChildPhases[row.sessionID] = CoordinatorFollowThroughChildPhase(row: row)
         }
     }
 
@@ -94,6 +94,31 @@ enum CoordinatorFollowThroughChildPhase: String, Codable, Equatable {
             self = .review
         case .done:
             self = .done
+        }
+    }
+
+    init(workstreamPhase: CoordinatorModeRow.WorkstreamSummary.Phase) {
+        switch workstreamPhase {
+        case .delegated:
+            self = .delegated
+        case .running:
+            self = .running
+        case .needsUser:
+            self = .needsUser
+        case .review:
+            self = .review
+        case .blocked:
+            self = .blocked
+        case .done:
+            self = .done
+        }
+    }
+
+    init(row: CoordinatorModeRow) {
+        if let workstreamPhase = row.workstreamSummary?.phase {
+            self.init(workstreamPhase: workstreamPhase)
+        } else {
+            self.init(statusGroup: row.statusGroup)
         }
     }
 }

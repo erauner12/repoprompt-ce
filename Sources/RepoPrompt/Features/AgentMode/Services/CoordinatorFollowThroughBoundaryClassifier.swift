@@ -40,11 +40,11 @@ struct CoordinatorFollowThroughBoundaryClassifier {
             return .hold(.coordinatorActive)
         }
 
-        let ownedRows = input.rows.filter { $0.parentCoordinator?.sessionID == coordinatorSessionID }
-        if let needsUser = ownedRows.first(where: { $0.statusGroup == .needsYou }) {
+        let ownedRows = input.rows.filter { isOwnedByCoordinator($0, coordinatorSessionID: coordinatorSessionID) }
+        if let needsUser = ownedRows.first(where: { phase(for: $0) == .needsUser }) {
             return .hold(.childNeedsUser(needsUser.sessionID))
         }
-        if let blocked = ownedRows.first(where: { $0.statusGroup == .blocked }) {
+        if let blocked = ownedRows.first(where: { phase(for: $0) == .blocked }) {
             return .hold(.childBlocked(blocked.sessionID))
         }
 
@@ -70,22 +70,23 @@ struct CoordinatorFollowThroughBoundaryClassifier {
         rows: [CoordinatorModeRow],
         state: CoordinatorFollowThroughState
     ) -> Decision {
-        if let requiredReview = rows.first(where: { $0.statusGroup == .review && $0.pendingHumanReviewID != nil }) {
+        if let requiredReview = rows.first(where: requiresHumanReviewAcknowledgement) {
             return .hold(.requiredReviewUncleared(requiredReview.sessionID))
         }
 
         if let advisory = rows.first(where: { row in
-            row.statusGroup == .done
-                && row.mergeAttention != nil
+            phase(for: row) == .done
+                && reviewID(for: row) != nil
                 && state.observedChildPhases[row.sessionID] == .review
         }) {
+            let reviewID = reviewID(for: advisory)
             let event = CoordinatorFollowThroughEvent(
-                id: "review:\(advisory.mergeAttention?.id ?? advisory.sessionID.uuidString):advisory",
+                id: "review:\(reviewID ?? advisory.sessionID.uuidString):advisory",
                 kind: .advisoryReview,
                 coordinatorSessionID: coordinatorSessionID,
                 childSessionID: advisory.sessionID,
                 childTitle: advisory.title,
-                reviewID: advisory.mergeAttention?.id,
+                reviewID: reviewID,
                 gate: nil,
                 phase: .done,
                 detail: "Advisory review packet is available without a hard human-review gate."
@@ -94,10 +95,10 @@ struct CoordinatorFollowThroughBoundaryClassifier {
         }
 
         if let completed = rows.first(where: { row in
-            row.statusGroup == .done
+            phase(for: row) == .done
                 && (state.observedChildPhases[row.sessionID].map { $0 != .done } ?? true)
         }) {
-            let phase = CoordinatorFollowThroughChildPhase(statusGroup: completed.statusGroup)
+            let phase = phase(for: completed)
             let event = CoordinatorFollowThroughEvent(
                 id: "child:\(completed.sessionID.uuidString):terminal:\(completed.runState.rawValue)",
                 kind: .childTerminal,
@@ -122,7 +123,7 @@ struct CoordinatorFollowThroughBoundaryClassifier {
         state: CoordinatorFollowThroughState
     ) -> Decision {
         let row = rows.first {
-            $0.pendingHumanReviewID == gate.subjectID || $0.mergeAttention?.id == gate.subjectID
+            $0.pendingHumanReviewID == gate.subjectID || reviewID(for: $0) == gate.subjectID
         }
         let event = CoordinatorFollowThroughEvent(
             id: "gate:\(gate.id):cleared",
@@ -132,7 +133,7 @@ struct CoordinatorFollowThroughBoundaryClassifier {
             childTitle: row?.title,
             reviewID: gate.type == .reviewRequired ? gate.subjectID : nil,
             gate: gate,
-            phase: row.map { CoordinatorFollowThroughChildPhase(statusGroup: $0.statusGroup) },
+            phase: row.map(phase(for:)),
             detail: "Continuation gate was cleared."
         )
         return deduped(event, state: state)
@@ -146,5 +147,27 @@ struct CoordinatorFollowThroughBoundaryClassifier {
             return .hold(.duplicateEvent(event.id))
         }
         return .resume(event)
+    }
+
+    private func isOwnedByCoordinator(_ row: CoordinatorModeRow, coordinatorSessionID: UUID) -> Bool {
+        row.workstreamSummary?.coordinatorSessionID == coordinatorSessionID
+            || row.parentCoordinator?.sessionID == coordinatorSessionID
+    }
+
+    private func phase(for row: CoordinatorModeRow) -> CoordinatorFollowThroughChildPhase {
+        CoordinatorFollowThroughChildPhase(row: row)
+    }
+
+    private func reviewID(for row: CoordinatorModeRow) -> String? {
+        row.workstreamSummary?.reviewPacketID ?? row.mergeAttention?.id
+    }
+
+    private func requiresHumanReviewAcknowledgement(_ row: CoordinatorModeRow) -> Bool {
+        guard phase(for: row) == .review else { return false }
+        if row.pendingHumanReviewID != nil {
+            return true
+        }
+        return row.workstreamSummary?.nextAction?.kind == .markReviewHandled
+            && row.workstreamSummary?.reviewPacketID != nil
     }
 }

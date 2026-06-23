@@ -91,6 +91,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.15 Model generic continuation gates so future scoped approvals can wake Coordinator follow-through for exactly one approved next action without granting blanket permission.
 - [x] 9.16 Add a direct external MCP Coordinator chat control surface for fast live validation that reuses the Coordinator composer path and is hidden from in-agent role catalogs.
 - [x] 9.17 Enforce Coordinator mutable-delegation worktree policy so read-only child runs may omit worktrees, but edits, tests, review packets, merge previews, commit/PR prep, and inherited-binding-only mutable starts require an explicit child worktree.
+- [x] 9.18 Feed projected workstream summaries into follow-through classification so resume/hold decisions use the same phase, review packet, owner Coordinator, and next action shown on the board.
 
 ## 10. Coordinator view UI shell
 
@@ -125,6 +126,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.29 Confirm or add a visible parent-selection affordance so users can return to an earlier Coordinator runtime after `New Coordinator` creates another parent.
 - [x] 10.30 Verify workflow-bearing demo prompts by proving `agent_run workflow_name` reaches delegated starts and returns workflow display metadata.
 - [x] 10.31 Add a board/list projection scope control so the default Coordinator fleet remains focused while an all-agents scope can show direct active Agent Mode sessions with distinct origin labeling.
+- [x] 10.32 Project structured workstream summaries for board/list rows with objective, phase, child session, owner Coordinator, worktree, workflow, review packet, and derived next action.
 
 ## 11. Validation
 

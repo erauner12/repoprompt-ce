@@ -95,6 +95,40 @@ struct CoordinatorModeRow: Identifiable, Equatable {
         let colorHex: String?
     }
 
+    struct WorkstreamSummary: Equatable {
+        enum Phase: String, Equatable {
+            case delegated
+            case running
+            case needsUser
+            case review
+            case blocked
+            case done
+        }
+
+        enum NextActionKind: String, Equatable {
+            case waitForChild
+            case respondToChild
+            case inspectReviewPacket
+            case markReviewHandled
+            case inspectBlocker
+        }
+
+        struct NextAction: Equatable {
+            let kind: NextActionKind
+            let title: String
+            let detail: String?
+        }
+
+        let objective: String
+        let phase: Phase
+        let childSessionID: UUID
+        let coordinatorSessionID: UUID?
+        let worktree: Workstream?
+        let workflow: CoordinatorModeWorkflowDisplaySummary?
+        let reviewPacketID: String?
+        let nextAction: NextAction?
+    }
+
     struct MergeAttention: Equatable {
         let id: String
         let status: AgentSessionWorktreeMergeOperation.Status
@@ -125,6 +159,7 @@ struct CoordinatorModeRow: Identifiable, Equatable {
     let updatedAt: Date
     let priority: Int?
     let workstream: Workstream?
+    let workstreamSummary: WorkstreamSummary?
     let workflow: CoordinatorModeWorkflowDisplaySummary?
     let mergeAttention: MergeAttention?
     let pendingHumanReviewID: String?

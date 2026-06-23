@@ -927,6 +927,10 @@ struct CoordinatorModeView: View {
                 reviewPacketStrip(packet, metrics: metrics)
             }
 
+            if let nextAction = row.workstreamSummary?.nextAction {
+                workstreamNextActionHint(nextAction, metrics: metrics)
+            }
+
             if row.isPersistedOnly {
                 statusChip("Persisted only", color: .secondary, metrics: metrics)
             }
@@ -1124,6 +1128,10 @@ struct CoordinatorModeView: View {
                         reviewPacketInspector(packet, row: row, metrics: metrics)
                     }
 
+                    if let workstream = row.workstreamSummary {
+                        workstreamInspector(workstream, row: row, metrics: metrics)
+                    }
+
                     inspectorGroup("Status", metrics: metrics) {
                         keyValue("Group", row.statusGroup.displayName, metrics: metrics)
                         keyValue("Run state", row.runState.displayName, metrics: metrics)
@@ -1151,12 +1159,6 @@ struct CoordinatorModeView: View {
                         }
                         if let workflow = row.workflow {
                             keyValue("Workflow", workflow.displayName, metrics: metrics)
-                        }
-                        if let workstream = row.workstream {
-                            keyValue("Workstream", workstream.label, metrics: metrics)
-                            if let branch = workstream.branch {
-                                keyValue("Branch", branch, metrics: metrics)
-                            }
                         }
                     }
 
@@ -2232,6 +2234,69 @@ struct CoordinatorModeView: View {
         }
     }
 
+    private func workstreamNextActionHint(
+        _ action: CoordinatorModeRow.WorkstreamSummary.NextAction,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(spacing: metrics.smallSpacing) {
+            Image(systemName: action.kind.systemImage)
+                .font(.system(size: metrics.microIconSize, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: metrics.titlebarIconSize, height: metrics.titlebarIconSize)
+
+            Text(action.title)
+                .font(metrics.microMedium)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.top, metrics.tightSpacing)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func workstreamInspector(
+        _ summary: CoordinatorModeRow.WorkstreamSummary,
+        row: CoordinatorModeRow,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        inspectorGroup("Workstream", metrics: metrics) {
+            HStack(spacing: metrics.smallSpacing) {
+                Image(systemName: summary.phase.systemImage)
+                    .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                    .foregroundStyle(summary.phase.tint)
+                Text(summary.phase.displayName)
+                    .font(metrics.bodySemibold)
+                Spacer(minLength: metrics.controlSpacing)
+                if let action = summary.nextAction {
+                    statusChip(action.title, color: summary.phase.tint, metrics: metrics)
+                }
+            }
+
+            keyValue("Objective", summary.objective, metrics: metrics)
+            if let parentCoordinator = row.parentCoordinator {
+                keyValue("Coordinator", parentCoordinator.title, metrics: metrics)
+            }
+            if let workflow = summary.workflow {
+                keyValue("Workflow", workflow.displayName, metrics: metrics)
+            }
+            if let worktree = summary.worktree {
+                keyValue("Worktree", worktree.label, metrics: metrics)
+                if let branch = worktree.branch {
+                    keyValue("Branch", branch, metrics: metrics)
+                }
+            }
+            if let reviewPacketID = summary.reviewPacketID {
+                keyValue("Review", reviewPacketID, metrics: metrics)
+            }
+            if let action = summary.nextAction, let detail = action.detail {
+                Text(detail)
+                    .font(metrics.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     private func openAgentChatButton(route: AgentSessionDeepLinkRoute?, title: String, metrics: CoordinatorVisualMetrics) -> some View {
         Group {
             if let route {
@@ -2338,6 +2403,8 @@ struct CoordinatorModeView: View {
                         || row.providerName?.localizedCaseInsensitiveContains(query) == true
                         || row.modelName?.localizedCaseInsensitiveContains(query) == true
                         || row.workstream?.label.localizedCaseInsensitiveContains(query) == true
+                        || row.workstreamSummary?.objective.localizedCaseInsensitiveContains(query) == true
+                        || row.workstreamSummary?.nextAction?.title.localizedCaseInsensitiveContains(query) == true
                 }
             )
         }
@@ -2946,6 +3013,52 @@ private extension CoordinatorModeRowOrigin {
     }
 }
 
+private extension CoordinatorModeRow.WorkstreamSummary.Phase {
+    var displayName: String {
+        switch self {
+        case .delegated: "Delegated"
+        case .running: "Running"
+        case .needsUser: "Needs you"
+        case .review: "Review"
+        case .blocked: "Blocked"
+        case .done: "Done"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .delegated: "arrow.up.forward.circle.fill"
+        case .running: "circle.dotted"
+        case .needsUser: "person.crop.circle.badge.exclamationmark"
+        case .review: "arrow.triangle.merge"
+        case .blocked: "exclamationmark.triangle.fill"
+        case .done: "checkmark.circle.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .delegated, .running: .blue
+        case .needsUser: .orange
+        case .review: .purple
+        case .blocked: .red
+        case .done: .green
+        }
+    }
+}
+
+private extension CoordinatorModeRow.WorkstreamSummary.NextActionKind {
+    var systemImage: String {
+        switch self {
+        case .waitForChild: "hourglass"
+        case .respondToChild: "arrowshape.turn.up.left.fill"
+        case .inspectReviewPacket: "doc.text.magnifyingglass"
+        case .markReviewHandled: "checkmark.circle"
+        case .inspectBlocker: "exclamationmark.triangle"
+        }
+    }
+}
+
 private extension CoordinatorModeCoordinatorRail.SelectionSource {
     var displayName: String {
         switch self {
@@ -3172,6 +3285,7 @@ private extension AgentSessionRunState {
                     updatedAt: now.addingTimeInterval(-120),
                     priority: 2,
                     workstream: .init(label: "coordinator/readonly-shell", branch: "coordinator/readonly-shell", colorHex: nil),
+                    workstreamSummary: nil,
                     workflow: CoordinatorModeWorkflowDisplaySummary(AgentWorkflow.orchestrate.definition),
                     mergeAttention: nil,
                     pendingHumanReviewID: nil,
@@ -3198,6 +3312,7 @@ private extension AgentSessionRunState {
                     updatedAt: now.addingTimeInterval(-3600),
                     priority: nil,
                     workstream: nil,
+                    workstreamSummary: nil,
                     workflow: nil,
                     mergeAttention: nil,
                     pendingHumanReviewID: nil,

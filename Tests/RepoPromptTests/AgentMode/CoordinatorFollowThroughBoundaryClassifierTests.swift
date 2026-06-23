@@ -102,6 +102,102 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
         XCTAssertNil(event.gate?.approvedAction)
     }
 
+    func testWorkstreamReviewPhaseHoldsEvenWhenRawStatusIsDone() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let row = childRow(
+            coordinatorID: coordinatorID,
+            childID: childID,
+            statusGroup: .done,
+            runState: .completed,
+            mergeAttention: mergeAttention(id: "merge-review"),
+            workstreamSummary: workstreamSummary(
+                coordinatorID: coordinatorID,
+                childID: childID,
+                phase: .review,
+                reviewPacketID: "merge-review",
+                nextAction: .init(
+                    kind: .markReviewHandled,
+                    title: "Mark reviewed",
+                    detail: "Human review is required."
+                )
+            )
+        )
+
+        let lifecycleDecision = classifier.classify(input(
+            coordinatorID: coordinatorID,
+            rows: [row]
+        ))
+
+        XCTAssertEqual(lifecycleDecision, .hold(.requiredReviewUncleared(childID)))
+
+        let acknowledgementDecision = classifier.classify(input(
+            coordinatorID: coordinatorID,
+            rows: [row],
+            trigger: .gateCleared(.reviewAcknowledgement(reviewID: "merge-review"))
+        ))
+
+        guard case let .resume(event) = acknowledgementDecision else {
+            return XCTFail("Expected resume, got \(acknowledgementDecision)")
+        }
+        XCTAssertEqual(event.kind, .gateCleared)
+        XCTAssertEqual(event.reviewID, "merge-review")
+        XCTAssertEqual(event.childSessionID, childID)
+        XCTAssertEqual(event.phase, .review)
+    }
+
+    func testWorkstreamDonePhaseResumesEvenWhenRawStatusIsWorking() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let row = childRow(
+            coordinatorID: coordinatorID,
+            childID: childID,
+            statusGroup: .working,
+            runState: .completed,
+            workstreamSummary: workstreamSummary(
+                coordinatorID: coordinatorID,
+                childID: childID,
+                phase: .done
+            )
+        )
+        var state = baseState()
+        state.observedChildPhases[childID] = .running
+
+        let decision = classifier.classify(input(
+            coordinatorID: coordinatorID,
+            rows: [row],
+            state: state
+        ))
+
+        guard case let .resume(event) = decision else {
+            return XCTFail("Expected resume, got \(decision)")
+        }
+        XCTAssertEqual(event.kind, .childTerminal)
+        XCTAssertEqual(event.childSessionID, childID)
+        XCTAssertEqual(event.phase, .done)
+    }
+
+    func testObservedPhasesPreferWorkstreamSummary() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let row = childRow(
+            coordinatorID: coordinatorID,
+            childID: childID,
+            statusGroup: .done,
+            runState: .completed,
+            workstreamSummary: workstreamSummary(
+                coordinatorID: coordinatorID,
+                childID: childID,
+                phase: .review
+            )
+        )
+        var state = baseState()
+
+        state.updateObservedPhases(from: [row])
+
+        XCTAssertEqual(state.observedChildPhases[childID], .review)
+    }
+
     func testGateClearedResumesEvenWithPendingChildTerminalEvent() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
@@ -272,6 +368,7 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
             updatedAt: date(10),
             priority: nil,
             workstream: nil,
+            workstreamSummary: nil,
             workflow: nil,
             mergeAttention: nil,
             pendingHumanReviewID: nil,
@@ -314,7 +411,8 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
         statusGroup: CoordinatorModeStatusGroup,
         runState: AgentSessionRunState,
         mergeAttention: CoordinatorModeRow.MergeAttention? = nil,
-        pendingHumanReviewID: String? = nil
+        pendingHumanReviewID: String? = nil,
+        workstreamSummary: CoordinatorModeRow.WorkstreamSummary? = nil
     ) -> CoordinatorModeRow {
         CoordinatorModeRow(
             id: childID,
@@ -334,6 +432,7 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
             updatedAt: date(10),
             priority: nil,
             workstream: nil,
+            workstreamSummary: workstreamSummary,
             workflow: nil,
             mergeAttention: mergeAttention,
             pendingHumanReviewID: pendingHumanReviewID,
@@ -341,6 +440,25 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
             openAgentChatRoute: nil,
             statusReport: nil,
             origin: .coordinatorFleet
+        )
+    }
+
+    private func workstreamSummary(
+        coordinatorID: UUID,
+        childID: UUID,
+        phase: CoordinatorModeRow.WorkstreamSummary.Phase,
+        reviewPacketID: String? = nil,
+        nextAction: CoordinatorModeRow.WorkstreamSummary.NextAction? = nil
+    ) -> CoordinatorModeRow.WorkstreamSummary {
+        CoordinatorModeRow.WorkstreamSummary(
+            objective: "Child",
+            phase: phase,
+            childSessionID: childID,
+            coordinatorSessionID: coordinatorID,
+            worktree: nil,
+            workflow: nil,
+            reviewPacketID: reviewPacketID,
+            nextAction: nextAction
         )
     }
 

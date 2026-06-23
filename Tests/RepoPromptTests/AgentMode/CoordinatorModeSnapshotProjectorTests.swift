@@ -134,6 +134,70 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(allRows(in: allAgents).first { $0.sessionID == directChildID }?.origin, .directAgent)
     }
 
+    func testDelegatedRowProjectsStructuredWorkstreamSummary() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let snapshot = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Docs sweep", updatedAt: date(100), state: .idle),
+                live(
+                    id: childID,
+                    tab: uuid(102),
+                    title: "Investigate README tests",
+                    updatedAt: date(90),
+                    state: .running,
+                    parent: coordinatorID,
+                    workflow: .investigate,
+                    bindings: [
+                        binding(visualLabel: "Docs worktree", branch: "docs/readme-tests")
+                    ]
+                )
+            ],
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        let row = allRows(in: snapshot).first { $0.sessionID == childID }
+        let summary = row?.workstreamSummary
+        XCTAssertEqual(summary?.objective, "Investigate README tests")
+        XCTAssertEqual(summary?.phase, .running)
+        XCTAssertEqual(summary?.childSessionID, childID)
+        XCTAssertEqual(summary?.coordinatorSessionID, coordinatorID)
+        XCTAssertEqual(summary?.worktree?.label, "Docs worktree")
+        XCTAssertEqual(summary?.worktree?.branch, "docs/readme-tests")
+        XCTAssertEqual(summary?.workflow?.id, AgentWorkflow.investigate.definition.id)
+        XCTAssertNil(summary?.reviewPacketID)
+        XCTAssertEqual(summary?.nextAction?.kind, .waitForChild)
+    }
+
+    func testReviewRowProjectsPacketAndHumanGateNextAction() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let merge = mergeSummary(id: "merge-review-1", status: .previewed, conflicts: 0, updatedAt: date(95))
+        let snapshot = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Review packet demo", updatedAt: date(100), state: .idle),
+                live(
+                    id: childID,
+                    tab: uuid(102),
+                    title: "Prepare review packet",
+                    updatedAt: date(90),
+                    state: .completed,
+                    parent: coordinatorID,
+                    workflow: .review,
+                    merges: [merge]
+                )
+            ],
+            demoCoordinatorIDs: [coordinatorID],
+            requiresHumanReviewAcknowledgement: true
+        ))
+
+        let summary = allRows(in: snapshot).first { $0.sessionID == childID }?.workstreamSummary
+        XCTAssertEqual(summary?.phase, .review)
+        XCTAssertEqual(summary?.reviewPacketID, "merge-review-1")
+        XCTAssertEqual(summary?.nextAction?.kind, .markReviewHandled)
+        XCTAssertEqual(summary?.nextAction?.title, "Review packet")
+    }
+
     func testBoardIncludesRunningDelegatedSnapshotBeforePersistence() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)

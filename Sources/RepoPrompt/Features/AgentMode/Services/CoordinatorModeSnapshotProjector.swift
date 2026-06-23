@@ -414,6 +414,23 @@ struct CoordinatorModeSnapshotProjector {
                 acknowledgedReviewIDs: input.acknowledgedHumanReviewIDs
             )
             : nil
+        let statusGroup = statusGroup(
+            for: seed,
+            acknowledgedReviewIDs: input.acknowledgedHumanReviewIDs,
+            requiresHumanReviewAcknowledgement: input.requiresHumanReviewAcknowledgement
+        )
+        let workstream = workstream(from: seed.worktreeBindingSummaries.first)
+        let mergeAttention = mergeAttention(from: seed.activeWorktreeMergeSummaries)
+        let workstreamSummary = workstreamSummary(
+            for: seed,
+            isCoordinator: isCoordinator,
+            statusGroup: statusGroup,
+            parentCoordinator: parentCoordinator,
+            workstream: workstream,
+            mergeAttention: mergeAttention,
+            pendingHumanReviewID: pendingHumanReviewID,
+            pendingInteraction: pendingInteraction
+        )
         return CoordinatorModeRow(
             id: seed.id,
             sessionID: seed.id,
@@ -422,11 +439,7 @@ struct CoordinatorModeSnapshotProjector {
             providerName: seed.agentKind,
             modelName: seed.agentModel,
             runState: seed.runState,
-            statusGroup: statusGroup(
-                for: seed,
-                acknowledgedReviewIDs: input.acknowledgedHumanReviewIDs,
-                requiresHumanReviewAcknowledgement: input.requiresHumanReviewAcknowledgement
-            ),
+            statusGroup: statusGroup,
             parentSessionID: seed.parentSessionID,
             parentCoordinator: parentCoordinator,
             childSessionIDs: childSessionIDs,
@@ -435,15 +448,102 @@ struct CoordinatorModeSnapshotProjector {
             isCoordinator: isCoordinator,
             updatedAt: seed.updatedAt,
             priority: seed.priority,
-            workstream: workstream(from: seed.worktreeBindingSummaries.first),
+            workstream: workstream,
+            workstreamSummary: workstreamSummary,
             workflow: seed.workflow,
-            mergeAttention: mergeAttention(from: seed.activeWorktreeMergeSummaries),
+            mergeAttention: mergeAttention,
             pendingHumanReviewID: pendingHumanReviewID,
             pendingInteraction: pendingInteraction,
             openAgentChatRoute: route,
             statusReport: sessionStatusReport(snapshot: mcpSnapshot),
             origin: origin
         )
+    }
+
+    private func workstreamSummary(
+        for seed: RowSeed,
+        isCoordinator: Bool,
+        statusGroup: CoordinatorModeStatusGroup,
+        parentCoordinator: CoordinatorModeRow.ParentCoordinator?,
+        workstream: CoordinatorModeRow.Workstream?,
+        mergeAttention: CoordinatorModeRow.MergeAttention?,
+        pendingHumanReviewID: String?,
+        pendingInteraction: CoordinatorModePendingInteractionSummary?
+    ) -> CoordinatorModeRow.WorkstreamSummary? {
+        guard !isCoordinator else { return nil }
+        let phase = CoordinatorModeRow.WorkstreamSummary.Phase(statusGroup: statusGroup, runState: seed.runState)
+        return CoordinatorModeRow.WorkstreamSummary(
+            objective: seed.title,
+            phase: phase,
+            childSessionID: seed.id,
+            coordinatorSessionID: parentCoordinator?.sessionID,
+            worktree: workstream,
+            workflow: seed.workflow,
+            reviewPacketID: pendingHumanReviewID ?? mergeAttention?.id,
+            nextAction: nextAction(
+                statusGroup: statusGroup,
+                mergeAttention: mergeAttention,
+                pendingHumanReviewID: pendingHumanReviewID,
+                pendingInteraction: pendingInteraction
+            )
+        )
+    }
+
+    private func nextAction(
+        statusGroup: CoordinatorModeStatusGroup,
+        mergeAttention: CoordinatorModeRow.MergeAttention?,
+        pendingHumanReviewID: String?,
+        pendingInteraction: CoordinatorModePendingInteractionSummary?
+    ) -> CoordinatorModeRow.WorkstreamSummary.NextAction? {
+        if pendingInteraction != nil {
+            return CoordinatorModeRow.WorkstreamSummary.NextAction(
+                kind: .respondToChild,
+                title: "Respond to pending interaction",
+                detail: "The child session is waiting for user input."
+            )
+        }
+        switch statusGroup {
+        case .needsYou:
+            return CoordinatorModeRow.WorkstreamSummary.NextAction(
+                kind: .respondToChild,
+                title: "Respond to child",
+                detail: "The child session needs input before it can continue."
+            )
+        case .working:
+            return CoordinatorModeRow.WorkstreamSummary.NextAction(
+                kind: .waitForChild,
+                title: "Wait for child",
+                detail: "The child session is still running."
+            )
+        case .blocked:
+            return CoordinatorModeRow.WorkstreamSummary.NextAction(
+                kind: .inspectBlocker,
+                title: "Inspect blocker",
+                detail: "The child session or merge state needs attention."
+            )
+        case .review:
+            if pendingHumanReviewID != nil {
+                return CoordinatorModeRow.WorkstreamSummary.NextAction(
+                    kind: .markReviewHandled,
+                    title: "Review packet",
+                    detail: "Inspect the packet, then mark it reviewed to clear the gate."
+                )
+            }
+            if mergeAttention != nil {
+                return CoordinatorModeRow.WorkstreamSummary.NextAction(
+                    kind: .inspectReviewPacket,
+                    title: "Inspect review packet",
+                    detail: "Preview artifacts are available for review."
+                )
+            }
+            return CoordinatorModeRow.WorkstreamSummary.NextAction(
+                kind: .inspectReviewPacket,
+                title: "Inspect review output",
+                detail: nil
+            )
+        case .done:
+            return nil
+        }
     }
 
     private func runState(from snapshot: AgentRunMCPSnapshot) -> AgentSessionRunState {
@@ -970,5 +1070,22 @@ extension CoordinatorModeWorkflowDisplaySummary {
             iconName: workflow.iconName,
             accentColorHex: workflow.accentColorHex
         )
+    }
+}
+
+private extension CoordinatorModeRow.WorkstreamSummary.Phase {
+    init(statusGroup: CoordinatorModeStatusGroup, runState: AgentSessionRunState) {
+        switch statusGroup {
+        case .needsYou:
+            self = .needsUser
+        case .working:
+            self = runState == .idle ? .delegated : .running
+        case .blocked:
+            self = .blocked
+        case .review:
+            self = .review
+        case .done:
+            self = .done
+        }
     }
 }
