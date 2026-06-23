@@ -90,6 +90,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.14 Document and test that `Mark reviewed` clears the review gate only and does not approve merge/apply/commit/push work.
 - [x] 9.15 Model generic continuation gates so future scoped approvals can wake Coordinator follow-through for exactly one approved next action without granting blanket permission.
 - [x] 9.16 Add a direct external MCP Coordinator chat control surface for fast live validation that reuses the Coordinator composer path and is hidden from in-agent role catalogs.
+- [x] 9.17 Enforce Coordinator mutable-delegation worktree policy so read-only child runs may omit worktrees, but edits, tests, review packets, merge previews, commit/PR prep, and inherited-binding-only mutable starts require an explicit child worktree.
 
 ## 10. Coordinator view UI shell
 
@@ -132,3 +133,4 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 11.3 Run `openspec validate add-coordinator-mode`.
 - [x] 11.4 Re-run focused Coordinator projector/composer tests, coordinated Swift build/style checks, and OpenSpec validation after the workflow/internal-action refinement.
 - [x] 11.5 Re-run focused Coordinator projector/composer tests, coordinated Swift build/style checks, and OpenSpec validation after the multi-runtime fleet-scope refinement.
+- [x] 11.6 Run focused Coordinator mutable-delegation worktree policy tests.

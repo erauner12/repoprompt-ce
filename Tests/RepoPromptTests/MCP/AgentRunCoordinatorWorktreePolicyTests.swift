@@ -37,15 +37,39 @@ final class AgentRunCoordinatorWorktreePolicyTests: XCTestCase {
         )
     }
 
+    func testCoordinatorInvestigationAndFixRequiresExplicitWorktree() {
+        XCTAssertRequiresWorktree(
+            decision(message: "Investigate why the README is unclear and fix it.")
+        )
+    }
+
     func testCoordinatorMutableStartRequiresExplicitWorktree() {
         XCTAssertRequiresWorktree(
             decision(message: "Create a root file named review-packet-smoke.md with one sentence.")
         )
     }
 
+    func testCoordinatorMutableStartDoesNotTreatInheritedWorktreeAsExplicit() {
+        XCTAssertRequiresWorktree(
+            decision(message: "Create a tiny doc file using the inherited parent worktree binding.")
+        )
+    }
+
     func testCoordinatorReviewPacketRequiresExplicitWorktree() {
         XCTAssertRequiresWorktree(
             decision(message: "Prepare a review packet and merge preview for the documentation change.")
+        )
+    }
+
+    func testCoordinatorTestRunRequiresExplicitWorktree() {
+        XCTAssertRequiresWorktree(
+            decision(message: "Run the focused tests for the documentation change and report back.")
+        )
+    }
+
+    func testCoordinatorPullRequestPreparationRequiresExplicitWorktree() {
+        XCTAssertRequiresWorktree(
+            decision(message: "Prepare a PR for the README wording change.")
         )
     }
 

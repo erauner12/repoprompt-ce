@@ -39,7 +39,7 @@ enum AgentRunCoordinatorWorktreePolicy {
         let mutation = !tokens.isDisjoint(with: mutationTokens)
         guard mutation else { return false }
 
-        if containsAnyPhrase(normalized, in: readOnlyPhrases) {
+        if containsAnyPhrase(normalized, in: readOnlySafetyPhrases) {
             return false
         }
         return true
@@ -100,32 +100,43 @@ enum AgentRunCoordinatorWorktreePolicy {
         "open pull request",
         "prepare a pr",
         "prepare pull request",
+        "prepare commit",
         "commit the change",
         "commit changes",
         "apply the change",
         "apply changes",
+        "create file",
+        "create a file",
+        "run tests",
+        "run the tests",
+        "run dev-test",
+        "make test",
         "make dev-test",
+        "make dev-build",
+        "swift build",
         "swift test",
+        "build the project",
         "run focused test",
         "run the focused test",
+        "run preflight",
         "run validation",
         "validate the change"
     ]
 
-    private static let readOnlyPhrases: [String] = [
+    private static let readOnlySafetyPhrases: [String] = [
+        "do not change",
         "do not edit",
+        "don't change",
+        "don't edit",
+        "must not change",
+        "must not edit",
         "no edits",
+        "without changing",
         "without editing",
         "read only",
         "read-only",
         "inspect only",
-        "only inspect",
-        "summarize",
-        "answer in",
-        "tell me",
-        "report back",
-        "look into",
-        "investigate"
+        "only inspect"
     ]
 
     private static let negationPhrases: [String] = [
