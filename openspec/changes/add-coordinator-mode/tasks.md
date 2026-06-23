@@ -128,6 +128,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.30 Verify workflow-bearing demo prompts by proving `agent_run workflow_name` reaches delegated starts and returns workflow display metadata.
 - [x] 10.31 Add a board/list projection scope control so the default Coordinator fleet remains focused while an all-agents scope can show direct active Agent Mode sessions with distinct origin labeling.
 - [x] 10.32 Project structured workstream summaries for board/list rows with objective, phase, child session, owner Coordinator, worktree, workflow, review packet, and derived next action.
+- [x] 10.33 Promote structured workstream projection to a first-class `CoordinatorWorkstream` read model with stable child-session identity without introducing DAG/source-of-truth state.
 
 ## 11. Validation
 

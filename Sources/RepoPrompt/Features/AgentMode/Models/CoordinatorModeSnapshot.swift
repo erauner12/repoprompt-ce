@@ -88,46 +88,53 @@ struct CoordinatorModeStatusSection: Equatable {
     let rows: [CoordinatorModeRow]
 }
 
+struct CoordinatorWorkstreamBinding: Equatable {
+    let label: String
+    let branch: String?
+    let colorHex: String?
+}
+
+struct CoordinatorWorkstream: Identifiable, Equatable {
+    enum Phase: String, Equatable {
+        case delegated
+        case running
+        case needsUser
+        case review
+        case blocked
+        case done
+    }
+
+    enum NextActionKind: String, Equatable {
+        case waitForChild
+        case respondToChild
+        case inspectReviewPacket
+        case markReviewHandled
+        case inspectBlocker
+    }
+
+    struct NextAction: Equatable {
+        let kind: NextActionKind
+        let title: String
+        let detail: String?
+    }
+
+    var id: UUID {
+        childSessionID
+    }
+
+    let objective: String
+    let phase: Phase
+    let childSessionID: UUID
+    let coordinatorSessionID: UUID?
+    let worktree: CoordinatorWorkstreamBinding?
+    let workflow: CoordinatorModeWorkflowDisplaySummary?
+    let reviewPacketID: String?
+    let nextAction: NextAction?
+}
+
 struct CoordinatorModeRow: Identifiable, Equatable {
-    struct Workstream: Equatable {
-        let label: String
-        let branch: String?
-        let colorHex: String?
-    }
-
-    struct WorkstreamSummary: Equatable {
-        enum Phase: String, Equatable {
-            case delegated
-            case running
-            case needsUser
-            case review
-            case blocked
-            case done
-        }
-
-        enum NextActionKind: String, Equatable {
-            case waitForChild
-            case respondToChild
-            case inspectReviewPacket
-            case markReviewHandled
-            case inspectBlocker
-        }
-
-        struct NextAction: Equatable {
-            let kind: NextActionKind
-            let title: String
-            let detail: String?
-        }
-
-        let objective: String
-        let phase: Phase
-        let childSessionID: UUID
-        let coordinatorSessionID: UUID?
-        let worktree: Workstream?
-        let workflow: CoordinatorModeWorkflowDisplaySummary?
-        let reviewPacketID: String?
-        let nextAction: NextAction?
-    }
+    typealias Workstream = CoordinatorWorkstreamBinding
+    typealias WorkstreamSummary = CoordinatorWorkstream
 
     struct MergeAttention: Equatable {
         let id: String

@@ -158,6 +158,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
 
         let row = allRows(in: snapshot).first { $0.sessionID == childID }
         let summary = row?.workstreamSummary
+        let workstream: CoordinatorWorkstream? = summary
+        XCTAssertEqual(workstream?.id, childID)
         XCTAssertEqual(summary?.objective, "Investigate README tests")
         XCTAssertEqual(summary?.phase, .running)
         XCTAssertEqual(summary?.childSessionID, childID)

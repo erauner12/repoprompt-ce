@@ -385,8 +385,10 @@ The system SHALL project Coordinator mode session rows/cards from structured ses
 
 #### Scenario: Workstream summary is projected
 - **WHEN** a Coordinator view row represents delegated or direct Agent work
-- **THEN** the Coordinator view SHALL project a read-only workstream summary from structured session/live-state data
+- **THEN** the Coordinator view SHALL project a read-only `CoordinatorWorkstream` summary from structured session/live-state data
 - **AND** the summary SHALL include the session objective/title, current phase, child session ID, owner Coordinator root when available, worktree binding when available, workflow label when available, review packet ID when available, and a derived next action when the row is actionable
+- **AND** the summary ID SHALL be stable for the child session it describes
+- **AND** the summary SHALL remain a flat read model that can later receive dependency edges without requiring a DAG in v1
 - **AND** the summary SHALL NOT mutate runtime state, approve actions, apply/merge/commit changes, or parse assistant prose as authoritative state.
 
 ### Requirement: Status grouping and sorting
