@@ -27,7 +27,7 @@ final class MCPToolExecutionContractTests: XCTestCase {
                 MCPGlobalToolName.orderedToolNames + MCPWindowToolGroup.orderedToolNames,
                 caseLabel
             )
-            XCTAssertEqual(MCPToolExecutionContractCatalog.orderedAdvertisedToolNames.count, 26, caseLabel)
+            XCTAssertEqual(MCPToolExecutionContractCatalog.orderedAdvertisedToolNames.count, 27, caseLabel)
             XCTAssertEqual(
                 Set(MCPToolExecutionContractCatalog.orderedAdvertisedToolNames).count,
                 MCPToolExecutionContractCatalog.orderedAdvertisedToolNames.count,
@@ -57,6 +57,7 @@ final class MCPToolExecutionContractTests: XCTestCase {
                 MCPWindowToolName.workspaceContext,
                 MCPWindowToolName.prompt,
                 MCPWindowToolName.agentManage,
+                MCPWindowToolName.coordinatorChat,
                 MCPWindowToolName.shareThoughts,
                 MCPWindowToolName.setStatus
             ], caseLabel)

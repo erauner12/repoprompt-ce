@@ -565,6 +565,13 @@ final class MCPServerViewModel: ObservableObject {
         )
     }
 
+    private var coordinatorChatToolService: CoordinatorChatMCPToolService {
+        CoordinatorChatMCPToolService(
+            toolName: MCPWindowToolName.coordinatorChat,
+            requireTargetWindow: { [self] in try requireTargetWindow() }
+        )
+    }
+
     @Published private(set) var isRunning = false // overall status
     @Published private(set) var pendingClientID: String? // approval state
     @Published private(set) var diagnostics: MCPDiagnostics = .init(
@@ -786,6 +793,10 @@ final class MCPServerViewModel: ObservableObject {
         executeAgentManage: { [weak self] args in
             guard let self else { throw MCPError.internalError("Window deallocated while executing agent_manage") }
             return try await agentManageToolService.execute(args: args)
+        },
+        executeCoordinatorChat: { [weak self] args in
+            guard let self else { throw MCPError.internalError("Window deallocated while executing coordinator_chat") }
+            return try await coordinatorChatToolService.execute(args: args)
         },
         requireTargetWindow: { [weak self] in
             guard let self else { throw MCPError.internalError("Window deallocated while resolving target window") }

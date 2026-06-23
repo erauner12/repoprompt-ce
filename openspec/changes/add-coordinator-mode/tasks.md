@@ -89,6 +89,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.13 Add an AgentMode-owned follow-through supervisor that wakes the existing Coordinator runtime on child lifecycle/continuation-gate events without creating a new parent.
 - [x] 9.14 Document and test that `Mark reviewed` clears the review gate only and does not approve merge/apply/commit/push work.
 - [x] 9.15 Model generic continuation gates so future scoped approvals can wake Coordinator follow-through for exactly one approved next action without granting blanket permission.
+- [x] 9.16 Add a direct external MCP Coordinator chat control surface for fast live validation that reuses the Coordinator composer path and is hidden from in-agent role catalogs.
 
 ## 10. Coordinator view UI shell
 

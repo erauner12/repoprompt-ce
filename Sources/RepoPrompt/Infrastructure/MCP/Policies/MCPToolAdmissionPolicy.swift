@@ -65,6 +65,7 @@ enum MCPToolAdmissionPolicy {
         MCPWindowToolName.agentExplore: .control,
         MCPWindowToolName.agentRun: .control,
         MCPWindowToolName.agentManage: .control,
+        MCPWindowToolName.coordinatorChat: .control,
         MCPWindowToolName.shareThoughts: .control,
         MCPWindowToolName.setStatus: .control,
         MCPWindowToolName.waitForNextInstruction: .control

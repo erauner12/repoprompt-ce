@@ -20,7 +20,8 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
         [
             agentExploreTool(),
             agentRunTool(),
-            agentManageTool()
+            agentManageTool(),
+            coordinatorChatTool()
         ]
     }
 
@@ -220,6 +221,45 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             )
         ) { [dependencies] _, args in
             try await dependencies.executeAgentManage(args)
+        }
+    }
+
+    private func coordinatorChatTool() -> Tool {
+        runtime.tool(
+            name: MCPWindowToolName.coordinatorChat,
+            freshnessPolicy: .providerManaged,
+            description: """
+            External test/control surface for Coordinator Mode. This mirrors the visible Coordinator UI: list parent threads, select a parent thread, start a fresh parent thread, or submit a directive to the selected parent.
+
+            **Operations**: list | select | new | submit
+
+            - `list`: Return current Coordinator parent selection, available parents, and board counts.
+            - `select`: Select an existing Coordinator parent by `coordinator_session_id`.
+            - `new`: Mirror New Coordinator. The rail switches to a blank parent context; the next submit creates the parent runtime.
+            - `submit`: Send a directive to the selected parent, to `coordinator_session_id`, or to a fresh parent when `new_parent=true`.
+
+            This tool is intended for direct app automation and live smoke testing, not for in-agent recursion.
+            """,
+            annotations: .repoPromptLocalEphemeralState,
+            inputSchema: .object(
+                description: """
+                Provide `op` plus operation-specific fields.
+
+                **list**: no additional fields
+                **select**: coordinator_session_id (required)
+                **new**: no additional fields
+                **submit**: message (required), coordinator_session_id? or new_parent?
+                """,
+                properties: [
+                    "op": .string(description: "Operation.", enum: ["list", "select", "new", "submit"]),
+                    "coordinator_session_id": .string(description: "[select, submit] Existing Coordinator parent session UUID."),
+                    "message": .string(description: "[submit] Directive text to send to the selected or requested Coordinator parent."),
+                    "new_parent": .boolean(description: "[submit] Start from a blank Coordinator parent before sending this directive. Default false.")
+                ],
+                required: ["op"]
+            )
+        ) { [dependencies] _, args in
+            try await dependencies.executeCoordinatorChat(args)
         }
     }
 }

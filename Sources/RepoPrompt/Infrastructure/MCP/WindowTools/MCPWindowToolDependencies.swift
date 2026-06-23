@@ -231,6 +231,7 @@ struct MCPWindowToolDependencies {
     let executeAgentExplore: ExecuteTool
     let executeAgentRun: ExecuteTool
     let executeAgentManage: ExecuteTool
+    let executeCoordinatorChat: ExecuteTool
 
     let requireTargetWindow: RequireTargetWindow
     let requireCurrentTabContext: RequireCurrentTabContext

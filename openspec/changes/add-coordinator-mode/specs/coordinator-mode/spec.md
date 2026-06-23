@@ -236,6 +236,13 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **THEN** the Coordinator view SHALL deliver that text as an ordinary user message to the Coordinator session through the existing Agent Mode message path
 - **AND** it SHALL NOT wrap the directive in a new structured command envelope in v1.
 
+#### Scenario: External test client submits a Coordinator directive
+- **WHEN** a direct external MCP client uses the Coordinator chat control surface to list, select, create, or submit to Coordinator parents in the current window
+- **THEN** the app SHALL route accepted submissions through the same Coordinator view submission path as the visible Coordinator composer
+- **AND** the app SHALL target the existing selected or explicitly addressed Coordinator parent unless the request explicitly asks for a fresh parent
+- **AND** it SHALL return structured Coordinator, composer, and board state suitable for live smoke validation
+- **AND** the control surface SHALL NOT be advertised to in-agent role tool catalogs or used as a recursive Coordinator self-control tool.
+
 #### Scenario: Coordinator follow-through policy is manual by default
 - **WHEN** the Coordinator view is created for a workspace
 - **THEN** the follow-through policy SHALL default to manual unless the user has previously changed the persisted setting
