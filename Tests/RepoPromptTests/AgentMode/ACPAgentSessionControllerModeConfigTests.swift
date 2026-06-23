@@ -13,34 +13,38 @@ final class ACPAgentSessionControllerModeConfigTests: XCTestCase {
         super.tearDown()
     }
 
+    @MainActor
     func testLiveSwitchCompatibilityCanIgnoreOnlyWorkspacePath() async throws {
         let fixture = try makeFixture(shape: "modern")
-        let switchedRequest = ACPRunRequest(
-            agentKind: .openCode,
-            modelString: nil,
-            workspacePath: "/tmp/live-switch-new-workspace",
-            resumeSessionID: nil,
-            attachments: [],
-            taskLabelKind: nil
+        let session = AgentModeViewModel.TabSession(tabID: UUID())
+        session.runState = .running
+        let ownership = session.beginRunAttempt(source: "test.liveWorktreeSwitch")
+        session.acpController = fixture.controller
+        session.retainAttachedRuntimeForLiveWorktreeSwitch(
+            session.attachedProviderRuntimeIdentity,
+            for: ownership
         )
+        func request(_ agentKind: AgentProviderKind) -> ACPRunRequest {
+            ACPRunRequest(
+                agentKind: agentKind,
+                modelString: nil,
+                workspacePath: "/tmp/live-switch-new-workspace",
+                resumeSessionID: nil,
+                attachments: [],
+                taskLabelKind: nil
+            )
+        }
+        let switchedRequest = request(.openCode)
         let exactWorkspaceCompatibility = await fixture.controller.isCompatibleWith(request: switchedRequest)
         let retainedWorkspaceCompatibility = await fixture.controller.isCompatibleWith(
             request: switchedRequest,
-            ignoringWorkspacePath: true
+            ignoringWorkspacePath: session.retainsACPControllerForLiveWorktreeSwitch(fixture.controller)
         )
         XCTAssertFalse(exactWorkspaceCompatibility)
         XCTAssertTrue(retainedWorkspaceCompatibility)
 
-        let wrongProviderRequest = ACPRunRequest(
-            agentKind: .cursor,
-            modelString: nil,
-            workspacePath: "/tmp/live-switch-new-workspace",
-            resumeSessionID: nil,
-            attachments: [],
-            taskLabelKind: nil
-        )
         let wrongProviderCompatibility = await fixture.controller.isCompatibleWith(
-            request: wrongProviderRequest,
+            request: request(.cursor),
             ignoringWorkspacePath: true
         )
         XCTAssertFalse(wrongProviderCompatibility)

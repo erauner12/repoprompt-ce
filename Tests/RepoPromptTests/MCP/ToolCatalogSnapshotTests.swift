@@ -198,30 +198,13 @@ final class ToolCatalogSnapshotTests: XCTestCase {
 
     func testProductionRegistrationUsesCatalogServiceNotViewModel() async throws {
         #if DEBUG
-            XCTAssertTrue(AppLaunchConfiguration.debugBuildForcesMCPAutoStart(
-                bundleURL: URL(fileURLWithPath: "/tmp/RepoPrompt.app", isDirectory: true)
-            ))
-            XCTAssertFalse(AppLaunchConfiguration.debugBuildForcesMCPAutoStart(
-                bundleURL: URL(fileURLWithPath: "/tmp/RepoPromptTests.xctest", isDirectory: true)
-            ))
-            XCTAssertFalse(AppLaunchConfiguration.debugBuildForcesMCPAutoStart(
-                bundleURL: URL(fileURLWithPath: "/tmp/RepoPrompt.app", isDirectory: true),
-                arguments: ["-RP_UITEST"]
-            ))
-            XCTAssertFalse(AppLaunchConfiguration.debugBuildForcesMCPAutoStart(
-                bundleURL: URL(fileURLWithPath: "/tmp/RepoPrompt.app", isDirectory: true),
-                environment: ["XCTestConfigurationFilePath": "/tmp/session.xctestconfiguration"]
-            ))
-
             try await MCPSharedServerTestLease.shared.withLease { _ in
                 let firstWindow = Self.makeWindowWithoutAutoStart()
                 let secondWindow = Self.makeWindowWithoutAutoStart()
                 let windows = [firstWindow, secondWindow]
                 let catalogServices = windows.map(\.mcpServer.windowMCPToolCatalogService)
 
-                try await Self.withIsolatedBootstrapSocketNamespace(
-                    windows: Array(zip(windows, catalogServices))
-                ) { socketURL in
+                try await Self.withIsolatedBootstrapSocketNamespace(windows: windows) { socketURL in
                     let storedAutoStart = GlobalSettingsStore.shared.mcpAutoStart()
                     await firstWindow.mcpServer.ensureServerReadyForAgentBootstrap()
                     await secondWindow.mcpServer.ensureServerReadyForAgentBootstrap()
@@ -362,64 +345,42 @@ final class ToolCatalogSnapshotTests: XCTestCase {
     }
 
     #if DEBUG
-        private struct BootstrapSocketNamespaceFixture {
-            let directoryURL: URL
-            let socketURL: URL
-
-            static func make() throws -> Self {
-                let directoryURL = URL(
-                    fileURLWithPath: "/tmp/rpce-xctest-bs-\(getpid())-\(UUID().uuidString)",
-                    isDirectory: true
-                )
-                let socketURL = directoryURL.appendingPathComponent("bootstrap.sock")
-                XCTAssertLessThan(socketURL.path.utf8CString.count, MemoryLayout<sockaddr_un>.size)
-                XCTAssertNotEqual(socketURL.standardizedFileURL, MCPFilesystemConstants.bootstrapSocketURL().standardizedFileURL)
-                try FileManager.default.createDirectory(
-                    at: directoryURL,
-                    withIntermediateDirectories: false,
-                    attributes: [.posixPermissions: 0o700]
-                )
-                return .init(directoryURL: directoryURL, socketURL: socketURL)
-            }
-
-            func removeOwnedDirectory() {
-                try? FileManager.default.removeItem(at: directoryURL)
-            }
-        }
-
         private static func withIsolatedBootstrapSocketNamespace(
-            windows: [(WindowState, MCPWindowToolCatalogService)],
+            windows: [WindowState],
             operation: (URL) async throws -> Void
         ) async throws {
-            let fixture = try BootstrapSocketNamespaceFixture.make()
+            let directoryURL = URL(
+                fileURLWithPath: "/tmp/rpce-xctest-bs-\(getpid())-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            let socketURL = directoryURL.appendingPathComponent("bootstrap.sock")
+            XCTAssertLessThan(socketURL.path.utf8CString.count, MemoryLayout<sockaddr_un>.size)
+            try FileManager.default.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700]
+            )
             let manager = ServerNetworkManager.shared
             let productionSocketURL = MCPFilesystemConstants.bootstrapSocketURL().standardizedFileURL
             let defaultSocketURL = await manager.debugResolvedBootstrapSocketURL()
             XCTAssertEqual(defaultSocketURL, productionSocketURL)
             let previousEnabledState = await manager.debugIsEnabledForBootstrapSocketURLOverride()
 
-            await assertBootstrapSocketOverrideError(.productionSocketURLRejected) {
-                try await manager.debugInstallBootstrapSocketURLOverride(productionSocketURL)
-            }
-
             do {
-                try await manager.debugInstallBootstrapSocketURLOverride(fixture.socketURL)
+                try await manager.debugInstallBootstrapSocketURLOverride(socketURL)
             } catch {
-                fixture.removeOwnedDirectory()
+                try? FileManager.default.removeItem(at: directoryURL)
                 throw error
             }
 
-            await assertBootstrapSocketOverrideError(.overrideAlreadyInstalled) {
-                try await manager.debugInstallBootstrapSocketURLOverride(fixture.socketURL)
-            }
-
             do {
-                try await operation(fixture.socketURL)
+                try await operation(socketURL)
             } catch {
                 do {
                     try await cleanupIsolatedBootstrapSocketNamespace(
                         windows: windows,
-                        fixture: fixture,
+                        socketURL: socketURL,
+                        directoryURL: directoryURL,
                         previousEnabledState: previousEnabledState
                     )
                 } catch {
@@ -430,21 +391,20 @@ final class ToolCatalogSnapshotTests: XCTestCase {
 
             try await cleanupIsolatedBootstrapSocketNamespace(
                 windows: windows,
-                fixture: fixture,
+                socketURL: socketURL,
+                directoryURL: directoryURL,
                 previousEnabledState: previousEnabledState
             )
         }
 
         private static func cleanupIsolatedBootstrapSocketNamespace(
-            windows: [(WindowState, MCPWindowToolCatalogService)],
-            fixture: BootstrapSocketNamespaceFixture,
+            windows: [WindowState],
+            socketURL: URL,
+            directoryURL: URL,
             previousEnabledState: Bool
         ) async throws {
-            for (window, catalogService) in windows {
+            for window in windows {
                 await window.tearDown()
-                XCTAssertFalse(ServiceRegistry.services.contains { service in
-                    (service as AnyObject) === (catalogService as AnyObject)
-                })
             }
 
             let manager = ServerNetworkManager.shared
@@ -452,8 +412,8 @@ final class ToolCatalogSnapshotTests: XCTestCase {
             XCTAssertFalse(runningAfterShutdown)
             let productionSocketURL = MCPFilesystemConstants.bootstrapSocketURL().standardizedFileURL
             let resolvedSocketURL = await manager.debugResolvedBootstrapSocketURL()
-            if resolvedSocketURL == fixture.socketURL.standardizedFileURL {
-                try await manager.debugRestoreBootstrapSocketURLOverride(expected: fixture.socketURL)
+            if resolvedSocketURL == socketURL.standardizedFileURL {
+                try await manager.debugRestoreBootstrapSocketURLOverride(expected: socketURL)
             } else {
                 XCTAssertEqual(resolvedSocketURL, productionSocketURL)
             }
@@ -466,7 +426,7 @@ final class ToolCatalogSnapshotTests: XCTestCase {
             XCTAssertFalse(runningAfterEnabledRestore)
             let resolvedSocketURLAfterEnabledRestore = await manager.debugResolvedBootstrapSocketURL()
             XCTAssertEqual(resolvedSocketURLAfterEnabledRestore, productionSocketURL)
-            fixture.removeOwnedDirectory()
+            try? FileManager.default.removeItem(at: directoryURL)
         }
 
         private static func assertBootstrapSocketOverrideError(

@@ -1691,7 +1691,6 @@ extension MCPServerViewModel {
     func publishLiveWorktreeBindingSwitch(
         sessionID: UUID,
         tabID: UUID,
-        previousBindings _: [AgentSessionWorktreeBinding],
         currentBindings: [AgentSessionWorktreeBinding]
     ) {
         nextReadFileAutoSelectionBindingGeneration &+= 1

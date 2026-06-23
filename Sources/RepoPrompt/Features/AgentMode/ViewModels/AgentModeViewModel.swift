@@ -5530,20 +5530,35 @@ final class AgentModeViewModel: ObservableObject {
         } else {
             false
         }
-        let retainedRuntimeIdentity: LiveWorktreeSwitchRuntimeRetention? = if isLiveMCPWorktreeSwitch,
-                                                                              primaryDestinationChanged
+        let expectedRuntimeIdentity: AttachedProviderRuntimeIdentity? = if isLiveMCPWorktreeSwitch,
+                                                                           primaryDestinationChanged
         {
             session.attachedProviderRuntimeIdentity
         } else {
             nil
         }
+        let retentionOwnership: AgentRunOwnership? = if isLiveMCPWorktreeSwitch,
+                                                        primaryDestinationChanged,
+                                                        changedDuringActiveRun
+        {
+            session.activeRunOwnership
+        } else {
+            nil
+        }
         if isLiveMCPWorktreeSwitch,
            primaryDestinationChanged,
-           retainedRuntimeIdentity?.hasAttachedRuntime != true
+           expectedRuntimeIdentity?.hasAttachedRuntime != true
         {
             throw MCPError.invalidParams(
                 "A live worktree switch requires an attached Agent provider runtime. Use bind or select when the provider is not running."
             )
+        }
+        if isLiveMCPWorktreeSwitch,
+           primaryDestinationChanged,
+           changedDuringActiveRun,
+           retentionOwnership == nil
+        {
+            throw ExecutionLocationTransitionError.stale
         }
 
         if changedDuringActiveRun, primaryDestinationChanged {
@@ -5591,15 +5606,18 @@ final class AgentModeViewModel: ObservableObject {
             guard sessions[session.tabID] === session,
                   session.activeAgentSessionID == sessionID,
                   session.worktreeBindings == previousBindings,
-                  session.runState.isActive == changedDuringActiveRun
+                  session.runState.isActive == changedDuringActiveRun,
+                  !isLiveMCPWorktreeSwitch
+                  || !changedDuringActiveRun
+                  || session.activeRunOwnership == retentionOwnership
             else {
                 throw ExecutionLocationTransitionError.stale
             }
 
             if primaryDestinationChanged {
                 if isLiveMCPWorktreeSwitch {
-                    guard let retainedRuntimeIdentity,
-                          session.attachedProviderRuntimeIdentity == retainedRuntimeIdentity
+                    guard let expectedRuntimeIdentity,
+                          session.attachedProviderRuntimeIdentity == expectedRuntimeIdentity
                     else {
                         throw ExecutionLocationTransitionError.stale
                     }
@@ -5651,11 +5669,13 @@ final class AgentModeViewModel: ObservableObject {
             }
             if isLiveMCPWorktreeSwitch,
                primaryDestinationChanged,
-               let retainedRuntimeIdentity,
+               let expectedRuntimeIdentity,
                sessions[session.tabID] !== session
                || session.activeAgentSessionID != sessionID
                || session.worktreeBindings != previousBindings
-               || session.attachedProviderRuntimeIdentity != retainedRuntimeIdentity
+               || session.runState.isActive != changedDuringActiveRun
+               || changedDuringActiveRun && session.activeRunOwnership != retentionOwnership
+               || session.attachedProviderRuntimeIdentity != expectedRuntimeIdentity
             {
                 if let materializer {
                     do {
@@ -5675,13 +5695,17 @@ final class AgentModeViewModel: ObservableObject {
             _ = commitWorktreeBindings(desiredBindings, to: session)
             if isLiveMCPWorktreeSwitch,
                primaryDestinationChanged,
-               let retainedRuntimeIdentity
+               let expectedRuntimeIdentity
             {
-                session.retainAttachedRuntimeForLiveWorktreeSwitch(retainedRuntimeIdentity)
+                if let retentionOwnership {
+                    session.retainAttachedRuntimeForLiveWorktreeSwitch(
+                        expectedRuntimeIdentity,
+                        for: retentionOwnership
+                    )
+                }
                 mcpServer?.publishLiveWorktreeBindingSwitch(
                     sessionID: sessionID,
                     tabID: session.tabID,
-                    previousBindings: previousBindings,
                     currentBindings: session.worktreeBindings
                 )
             }

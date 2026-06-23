@@ -2,7 +2,7 @@ import Combine
 import Foundation
 
 extension AgentModeViewModel {
-    struct LiveWorktreeSwitchRuntimeRetention: Equatable {
+    struct AttachedProviderRuntimeIdentity: Equatable {
         var providerIdentity: ObjectIdentifier?
         var codexControllerGeneration: UUID?
         var claudeControllerIdentity: ObjectIdentifier?
@@ -14,6 +14,11 @@ extension AgentModeViewModel {
                 || claudeControllerIdentity != nil
                 || acpControllerIdentity != nil
         }
+    }
+
+    struct LiveWorktreeSwitchRuntimeRetention: Equatable {
+        let ownership: AgentRunOwnership
+        var runtimeIdentity: AttachedProviderRuntimeIdentity
     }
 
     // MARK: - Tab Session
@@ -433,7 +438,7 @@ extension AgentModeViewModel {
         var provider: HeadlessAgentProvider? {
             didSet {
                 guard oldValue.map(ObjectIdentifier.init) != provider.map(ObjectIdentifier.init) else { return }
-                liveWorktreeSwitchRuntimeRetention?.providerIdentity = nil
+                liveWorktreeSwitchRuntimeRetention?.runtimeIdentity.providerIdentity = nil
             }
         }
 
@@ -491,7 +496,7 @@ extension AgentModeViewModel {
                 let newIdentity = codexController.map { ObjectIdentifier($0) }
                 guard oldIdentity != newIdentity else { return }
                 codexControllerGeneration = UUID()
-                liveWorktreeSwitchRuntimeRetention?.codexControllerGeneration = nil
+                liveWorktreeSwitchRuntimeRetention?.runtimeIdentity.codexControllerGeneration = nil
                 codexAuthoritativeActiveTurn = nil
                 codexAnonymousActiveTurn = nil
                 codexRoutingObservedTurnID = nil
@@ -518,21 +523,21 @@ extension AgentModeViewModel {
         var claudeController: (any NativeAgentRuntimeControlling)? {
             didSet {
                 guard oldValue.map(ObjectIdentifier.init) != claudeController.map(ObjectIdentifier.init) else { return }
-                liveWorktreeSwitchRuntimeRetention?.claudeControllerIdentity = nil
+                liveWorktreeSwitchRuntimeRetention?.runtimeIdentity.claudeControllerIdentity = nil
             }
         }
 
         var acpController: ACPAgentSessionController? {
             didSet {
                 guard oldValue.map(ObjectIdentifier.init) != acpController.map(ObjectIdentifier.init) else { return }
-                liveWorktreeSwitchRuntimeRetention?.acpControllerIdentity = nil
+                liveWorktreeSwitchRuntimeRetention?.runtimeIdentity.acpControllerIdentity = nil
             }
         }
 
         private(set) var liveWorktreeSwitchRuntimeRetention: LiveWorktreeSwitchRuntimeRetention?
 
-        var attachedProviderRuntimeIdentity: LiveWorktreeSwitchRuntimeRetention {
-            LiveWorktreeSwitchRuntimeRetention(
+        var attachedProviderRuntimeIdentity: AttachedProviderRuntimeIdentity {
+            AttachedProviderRuntimeIdentity(
                 providerIdentity: provider.map(ObjectIdentifier.init),
                 codexControllerGeneration: codexController == nil ? nil : codexControllerGeneration,
                 claudeControllerIdentity: claudeController.map(ObjectIdentifier.init),
@@ -545,9 +550,20 @@ extension AgentModeViewModel {
         }
 
         func retainAttachedRuntimeForLiveWorktreeSwitch(
-            _ identity: LiveWorktreeSwitchRuntimeRetention
+            _ identity: AttachedProviderRuntimeIdentity,
+            for ownership: AgentRunOwnership
         ) {
-            liveWorktreeSwitchRuntimeRetention = identity.hasAttachedRuntime ? identity : nil
+            guard identity.hasAttachedRuntime,
+                  runState.isActive,
+                  activeRunOwnership == ownership
+            else {
+                liveWorktreeSwitchRuntimeRetention = nil
+                return
+            }
+            liveWorktreeSwitchRuntimeRetention = LiveWorktreeSwitchRuntimeRetention(
+                ownership: ownership,
+                runtimeIdentity: identity
+            )
         }
 
         func retainsCodexControllerForLiveWorktreeSwitch(
@@ -556,7 +572,8 @@ extension AgentModeViewModel {
             guard let activeController = codexController,
                   ObjectIdentifier(activeController) == ObjectIdentifier(controller)
             else { return false }
-            return liveWorktreeSwitchRuntimeRetention?.codexControllerGeneration == codexControllerGeneration
+            guard let retention = currentLiveWorktreeSwitchRuntimeRetention else { return false }
+            return retention.runtimeIdentity.codexControllerGeneration == codexControllerGeneration
         }
 
         func retainsClaudeControllerForLiveWorktreeSwitch(
@@ -565,15 +582,26 @@ extension AgentModeViewModel {
             guard let activeController = claudeController,
                   ObjectIdentifier(activeController) == ObjectIdentifier(controller)
             else { return false }
-            return liveWorktreeSwitchRuntimeRetention?.claudeControllerIdentity == ObjectIdentifier(controller)
+            return currentLiveWorktreeSwitchRuntimeRetention?.runtimeIdentity.claudeControllerIdentity
+                == ObjectIdentifier(controller)
         }
 
         func retainsACPControllerForLiveWorktreeSwitch(_ controller: ACPAgentSessionController) -> Bool {
             guard acpController === controller else { return false }
-            return liveWorktreeSwitchRuntimeRetention?.acpControllerIdentity == ObjectIdentifier(controller)
+            return currentLiveWorktreeSwitchRuntimeRetention?.runtimeIdentity.acpControllerIdentity
+                == ObjectIdentifier(controller)
         }
 
-        func clearLiveWorktreeSwitchRuntimeRetention() {
+        private var currentLiveWorktreeSwitchRuntimeRetention: LiveWorktreeSwitchRuntimeRetention? {
+            guard runState.isActive,
+                  let retention = liveWorktreeSwitchRuntimeRetention,
+                  retention.ownership == activeRunOwnership
+            else { return nil }
+            return retention
+        }
+
+        func expireLiveWorktreeSwitchRuntimeRetention(for ownership: AgentRunOwnership) {
+            guard liveWorktreeSwitchRuntimeRetention?.ownership == ownership else { return }
             liveWorktreeSwitchRuntimeRetention = nil
         }
 
@@ -778,6 +806,9 @@ extension AgentModeViewModel {
                 attemptID: attemptID,
                 turnEpoch: turnEpoch
             )
+            if liveWorktreeSwitchRuntimeRetention?.ownership != ownership {
+                liveWorktreeSwitchRuntimeRetention = nil
+            }
             #if DEBUG
                 AgentModePerfDiagnostics.increment("run.lifecycle.attempt.started")
                 AgentModePerfDiagnostics.increment("run.lifecycle.attempt.started.source.\(source)")
@@ -846,6 +877,7 @@ extension AgentModeViewModel {
         @discardableResult
         func endRunAttempt(ifCurrent ownership: AgentRunOwnership, source: String) -> Bool {
             guard runLifecycleTracker.end(ifCurrent: ownership) else { return false }
+            expireLiveWorktreeSwitchRuntimeRetention(for: ownership)
             recordRunAttemptEnded(ownership, source: source)
             return true
         }
@@ -853,9 +885,7 @@ extension AgentModeViewModel {
         @discardableResult
         func endCurrentRunAttempt(source: String) -> Bool {
             guard let ownership = activeRunOwnership else { return false }
-            guard runLifecycleTracker.end(ifCurrent: ownership) else { return false }
-            recordRunAttemptEnded(ownership, source: source)
-            return true
+            return endRunAttempt(ifCurrent: ownership, source: source)
         }
 
         @discardableResult

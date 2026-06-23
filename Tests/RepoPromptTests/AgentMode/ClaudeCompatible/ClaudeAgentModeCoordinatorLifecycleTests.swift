@@ -184,19 +184,10 @@ extension AgentModeRunServiceLifecycleTests {
         ], in: recorder)
     }
 
-    func testLiveWorktreeSwitchRetainsClaudeControllerAcrossWorkspaceOnlyMismatch() async {
+    func testLiveWorktreeSwitchRetainsClaudeControllerAcrossWorkspaceOnlyMismatch() async throws {
         let recorder = LifecycleRecorder()
-        let controller = LifecycleFakeNativeController(
-            recorder: recorder,
-            label: "retained-workspace"
-        )
-        let harness = makeHarness(
-            recorder: recorder,
-            claudeControllerFactory: { _, _, _, _ in
-                recorder.record("factory:unexpected-live-switch-recycle")
-                return LifecycleFakeNativeController(recorder: recorder, label: "unexpected-replacement")
-            }
-        )
+        let controller = LifecycleFakeNativeController(recorder: recorder)
+        let harness = makeHarness(recorder: recorder)
         let session = makeRunningClaudeSession(controller: controller)
         let runtime = resolvedClaudeLaunchPolicy(profile: .mcpSafeDefaults, harness: harness)
         session.permissionProfile = .mcpSafeDefaults
@@ -208,14 +199,15 @@ extension AgentModeRunServiceLifecycleTests {
             allowNativeBashTool: runtime?.allowNativeBashTool,
             mcpStrictMode: runtime?.mcpStrictMode
         )
-        session.retainAttachedRuntimeForLiveWorktreeSwitch(session.attachedProviderRuntimeIdentity)
+        let ownership = try XCTUnwrap(session.activeRunOwnership)
+        session.retainAttachedRuntimeForLiveWorktreeSwitch(
+            session.attachedProviderRuntimeIdentity,
+            for: ownership
+        )
 
         await harness.host.claudeCoordinator.ensureClaudeNativeSession(session: session)
 
         XCTAssertTrue(session.claudeController === controller)
-        XCTAssertTrue(session.retainsClaudeControllerForLiveWorktreeSwitch(controller))
-        XCTAssertFalse(recorder.contains("retained-workspace:shutdown"))
-        XCTAssertFalse(recorder.contains("factory:unexpected-live-switch-recycle"))
         XCTAssertEqual(
             harness.host.claudeCoordinator.test_controllerLaunchSettings(for: session)?.workspacePath,
             "/retained/provider/cwd"

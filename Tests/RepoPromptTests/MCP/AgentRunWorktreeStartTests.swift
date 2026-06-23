@@ -1670,6 +1670,7 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
         session.selectedAgent = .codexExec
         session.runState = .running
         session.runID = runID
+        let ownership = session.beginRunAttempt(source: "test.liveWorktreeSwitch")
         session.providerSessionID = "provider-session-old-cwd"
         session.codexConversationID = "codex-conversation-old-cwd"
         session.codexRolloutPath = "/tmp/codex-rollout-old-cwd"
@@ -1678,7 +1679,6 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
         session.codexControllerGoalSupportEnabled = CodexGoalSupport.isEnabled
         session.pendingInstructions = ["queued instruction"]
         session.worktreeBindings = [oldBinding]
-        let controllerGeneration = session.codexControllerGeneration
 
         _ = try await viewModel.transitionWorktreeBindings(
             [newBinding],
@@ -1694,8 +1694,8 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
         XCTAssertEqual(session.codexRolloutPath, "/tmp/codex-rollout-old-cwd")
         XCTAssertEqual(session.pendingInstructions, ["queued instruction"])
         XCTAssertTrue(session.codexController === controller)
-        XCTAssertEqual(session.codexControllerGeneration, controllerGeneration)
         XCTAssertTrue(session.retainsCodexControllerForLiveWorktreeSwitch(controller))
+        XCTAssertEqual(session.liveWorktreeSwitchRuntimeRetention?.ownership, ownership)
         XCTAssertEqual(session.codexControllerWorkspacePath, oldWorktree.path)
         XCTAssertEqual(try viewModel.effectiveWorkspacePath(for: session), newWorktree.path)
 
@@ -1716,6 +1716,38 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
         session.runState = .idle
         session.runID = nil
         await controller.shutdown()
+
+        let idleSession = viewModel.session(for: UUID())
+        let idleSessionID = UUID()
+        let idleController = LiveSwitchWorktreeStartFakeCodexController()
+        idleSession.testInstallPersistentSessionBinding(sessionID: idleSessionID)
+        idleSession.hasLoadedPersistedState = true
+        idleSession.hasSentFirstMessage = true
+        idleSession.selectedAgent = .codexExec
+        idleSession.runState = .idle
+        idleSession.codexController = idleController
+        idleSession.codexControllerWorkspacePath = oldWorktree.path
+        idleSession.codexControllerGoalSupportEnabled = CodexGoalSupport.isEnabled
+        idleSession.worktreeBindings = [oldBinding]
+
+        _ = try await viewModel.transitionWorktreeBindings(
+            [],
+            forSessionID: idleSessionID,
+            intent: .liveMCPWorktreeSwitch
+        )
+
+        XCTAssertNil(idleSession.liveWorktreeSwitchRuntimeRetention)
+        await viewModel.codexCoordinator.ensureCodexNativeSession(session: idleSession)
+        XCTAssertFalse(idleSession.codexController === idleController)
+        XCTAssertEqual(idleController.shutdownCount, 1)
+        XCTAssertEqual(idleSession.codexControllerWorkspacePath, root.path)
+
+        idleSession.codexEventTask?.cancel()
+        idleSession.codexEventTask = nil
+        if let controller = idleSession.codexController {
+            await controller.shutdown()
+        }
+        idleSession.codexController = nil
     }
 
     func testExternalPrimaryRebindRejectsDuringActiveRunWithoutDroppingOldIdentity() async throws {
