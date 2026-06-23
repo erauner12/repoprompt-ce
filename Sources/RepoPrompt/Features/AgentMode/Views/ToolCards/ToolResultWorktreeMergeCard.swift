@@ -7,7 +7,7 @@ import SwiftUI
 // Routed by `ToolCardRouter.resultView(for:)` whenever an Agent transcript
 // shows a `manage_worktree` merge-op result. Decodes the structured
 // `ManageWorktreeReplyDTO.merge` payload from `item.toolResultJSON` and surfaces
-// the source-vs-target review packet: endpoints, preflight summary, conflict or
+// the source-vs-target merge preview: endpoints, preflight summary, conflict or
 // stale reason, graph visualization, artifacts, and patch excerpt.
 
 struct WorktreeMergeCardPresentation {
@@ -25,7 +25,7 @@ enum WorktreeMergeCardPresentationBuilder {
     ) -> WorktreeMergeCardPresentation {
         if toolIsError == true {
             return WorktreeMergeCardPresentation(
-                title: "Review Packet",
+                title: "Merge Preview",
                 subtitle: "failed",
                 detailText: nil,
                 status: .failure
@@ -33,7 +33,7 @@ enum WorktreeMergeCardPresentationBuilder {
         }
         guard let dto else {
             return WorktreeMergeCardPresentation(
-                title: "Review Packet",
+                title: "Merge Preview",
                 subtitle: "manage_worktree",
                 detailText: nil,
                 status: .neutral
@@ -56,8 +56,8 @@ enum WorktreeMergeCardPresentationBuilder {
         case "status": "Status"
         default: nil
         }
-        guard let suffix else { return "Review Packet" }
-        return "Review Packet • \(suffix)"
+        guard let suffix else { return "Merge Preview" }
+        return "Merge Preview • \(suffix)"
     }
 
     private static func subtitle(dto: ToolResultDTOs.ManageWorktreeReplyDTO.MergeDTO) -> String {
@@ -145,7 +145,7 @@ struct ToolResultWorktreeMergeCard: View {
             isExpanded: $isExpanded
         ) {
             if let merge = reply?.merge {
-                WorktreeMergePreviewPacketView(merge: merge)
+                WorktreeMergePreviewDetailsView(merge: merge)
             } else {
                 ToolMarkdownExpandedContent(item: item)
             }
@@ -164,7 +164,7 @@ struct ToolResultWorktreeMergeCard: View {
     }
 }
 
-private struct WorktreeMergePreviewPacketView: View {
+private struct WorktreeMergePreviewDetailsView: View {
     let merge: ToolResultDTOs.ManageWorktreeReplyDTO.MergeDTO
 
     @State private var diffExcerpt: String?
@@ -215,7 +215,7 @@ private struct WorktreeMergePreviewPacketView: View {
             Image(systemName: "arrow.triangle.merge")
                 .foregroundColor(.purple)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Review Packet")
+                Text("Merge Preview")
                     .font(.headline)
                 if let operationID = merge.operationID, !operationID.isEmpty {
                     Text("Operation \(operationID)")

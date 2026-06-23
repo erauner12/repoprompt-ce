@@ -22,7 +22,7 @@ final class AgentRunCoordinatorWorktreePolicyTests: XCTestCase {
     func testCoordinatorReadOnlySafetyConstraintsDoNotForceWorktree() {
         XCTAssertEqual(
             decision(
-                message: "Read README.md and answer in one sentence what this project is. It must not edit files, run tests, create a review packet, merge, commit, push, or create a PR."
+                message: "Read README.md and answer in one sentence what this project is. It must not edit files, run tests, merge, commit, push, or create a PR."
             ),
             .allow
         )
@@ -55,9 +55,9 @@ final class AgentRunCoordinatorWorktreePolicyTests: XCTestCase {
         )
     }
 
-    func testCoordinatorReviewPacketRequiresExplicitWorktree() {
+    func testCoordinatorMergePreviewRequiresExplicitWorktree() {
         XCTAssertRequiresWorktree(
-            decision(message: "Prepare a review packet and merge preview for the documentation change.")
+            decision(message: "Prepare a merge preview for the documentation change.")
         )
     }
 

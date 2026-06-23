@@ -66,43 +66,7 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
         XCTAssertEqual(event.childSessionID, childID)
     }
 
-    func testRequiredReviewHoldsUntilAcknowledged() {
-        let coordinatorID = uuid(1)
-        let childID = uuid(2)
-        let row = childRow(
-            coordinatorID: coordinatorID,
-            childID: childID,
-            statusGroup: .review,
-            runState: .completed,
-            mergeAttention: mergeAttention(id: "merge-review"),
-            pendingHumanReviewID: "merge-review"
-        )
-
-        let lifecycleDecision = classifier.classify(input(
-            coordinatorID: coordinatorID,
-            rows: [row]
-        ))
-
-        XCTAssertEqual(lifecycleDecision, .hold(.requiredReviewUncleared(childID)))
-
-        let acknowledgementDecision = classifier.classify(input(
-            coordinatorID: coordinatorID,
-            rows: [row],
-            trigger: .gateCleared(.reviewAcknowledgement(reviewID: "merge-review"))
-        ))
-
-        guard case let .resume(event) = acknowledgementDecision else {
-            return XCTFail("Expected resume, got \(acknowledgementDecision)")
-        }
-        XCTAssertEqual(event.kind, .gateCleared)
-        XCTAssertEqual(event.id, "gate:review:merge-review:cleared")
-        XCTAssertEqual(event.reviewID, "merge-review")
-        XCTAssertEqual(event.childSessionID, childID)
-        XCTAssertEqual(event.gate?.type, .reviewRequired)
-        XCTAssertNil(event.gate?.approvedAction)
-    }
-
-    func testWorkstreamReviewPhaseHoldsEvenWhenRawStatusIsDone() {
+    func testWorkstreamReviewPhaseResumesEvenWhenRawStatusIsDone() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
         let row = childRow(
@@ -115,33 +79,26 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
                 coordinatorID: coordinatorID,
                 childID: childID,
                 phase: .review,
-                reviewPacketID: "merge-review",
                 nextAction: .init(
-                    kind: .markReviewHandled,
-                    title: "Mark reviewed",
-                    detail: "Human review is required."
+                    kind: .inspectOutput,
+                    title: "Inspect merge preview",
+                    detail: "Preview artifacts are available for inspection."
                 )
             )
         )
+        var state = baseState()
+        state.observedChildPhases[childID] = .running
 
-        let lifecycleDecision = classifier.classify(input(
-            coordinatorID: coordinatorID,
-            rows: [row]
-        ))
-
-        XCTAssertEqual(lifecycleDecision, .hold(.requiredReviewUncleared(childID)))
-
-        let acknowledgementDecision = classifier.classify(input(
+        let decision = classifier.classify(input(
             coordinatorID: coordinatorID,
             rows: [row],
-            trigger: .gateCleared(.reviewAcknowledgement(reviewID: "merge-review"))
+            state: state
         ))
 
-        guard case let .resume(event) = acknowledgementDecision else {
-            return XCTFail("Expected resume, got \(acknowledgementDecision)")
+        guard case let .resume(event) = decision else {
+            return XCTFail("Expected resume, got \(decision)")
         }
-        XCTAssertEqual(event.kind, .gateCleared)
-        XCTAssertEqual(event.reviewID, "merge-review")
+        XCTAssertEqual(event.kind, .childTerminal)
         XCTAssertEqual(event.childSessionID, childID)
         XCTAssertEqual(event.phase, .review)
     }
@@ -206,8 +163,7 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
             childID: childID,
             statusGroup: .review,
             runState: .completed,
-            mergeAttention: mergeAttention(id: "merge-review"),
-            pendingHumanReviewID: "merge-review"
+            mergeAttention: mergeAttention(id: "merge-review")
         )
         var state = baseState()
         state.enqueue(CoordinatorFollowThroughEvent(
@@ -216,7 +172,6 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
             coordinatorSessionID: coordinatorID,
             childSessionID: childID,
             childTitle: "Child",
-            reviewID: nil,
             gate: nil,
             phase: .done,
             detail: "Delegated child reached terminal state completed."
@@ -226,14 +181,19 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
             coordinatorID: coordinatorID,
             rows: [row],
             state: state,
-            trigger: .gateCleared(.reviewAcknowledgement(reviewID: "merge-review"))
+            trigger: .gateCleared(.actionApproval(
+                gateID: "approval:continue:merge-review",
+                action: .continuePlan,
+                subjectID: "merge-review",
+                subjectTitle: "Merge preview"
+            ))
         ))
 
         guard case let .resume(event) = decision else {
             return XCTFail("Expected gate-cleared resume, got \(decision)")
         }
         XCTAssertEqual(event.kind, .gateCleared)
-        XCTAssertEqual(event.id, "gate:review:merge-review:cleared")
+        XCTAssertEqual(event.id, "gate:approval:continue:merge-review:cleared")
     }
 
     func testActionApprovalGateResumesOnlyScopedAction() {
@@ -242,7 +202,7 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
             gateID: "approval:create-pr:merge-review",
             action: .createPullRequest,
             subjectID: "merge-review",
-            subjectTitle: "Review packet"
+            subjectTitle: "Merge preview"
         )
 
         let decision = classifier.classify(input(
@@ -268,7 +228,7 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
             gateID: "approval:continue:merge-review",
             action: .continuePlan,
             subjectID: "merge-review",
-            subjectTitle: "Review packet",
+            subjectTitle: "Merge preview",
             ownerCoordinatorSessionID: ownerID
         )
 
@@ -280,7 +240,7 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
         XCTAssertEqual(decision, .hold(.noResumableEvent))
     }
 
-    func testActionApprovalHoldsUntilRequiredReviewIsAcknowledged() {
+    func testReviewableOutputResumes() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
         let row = childRow(
@@ -288,37 +248,10 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
             childID: childID,
             statusGroup: .review,
             runState: .completed,
-            mergeAttention: mergeAttention(id: "merge-review"),
-            pendingHumanReviewID: "merge-review"
-        )
-        let gate = CoordinatorContinuationGate.actionApproval(
-            gateID: "approval:continue:merge-review",
-            action: .continuePlan,
-            subjectID: "merge-review",
-            subjectTitle: "Review packet"
-        )
-
-        let decision = classifier.classify(input(
-            coordinatorID: coordinatorID,
-            rows: [row],
-            trigger: .gateCleared(gate)
-        ))
-
-        XCTAssertEqual(decision, .hold(.requiredReviewUncleared(childID)))
-    }
-
-    func testAdvisoryReviewResumes() {
-        let coordinatorID = uuid(1)
-        let childID = uuid(2)
-        let row = childRow(
-            coordinatorID: coordinatorID,
-            childID: childID,
-            statusGroup: .done,
-            runState: .completed,
             mergeAttention: mergeAttention(id: "merge-advisory")
         )
         var state = baseState()
-        state.observedChildPhases[childID] = .review
+        state.observedChildPhases[childID] = .running
 
         let decision = classifier.classify(input(
             coordinatorID: coordinatorID,
@@ -329,9 +262,9 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
         guard case let .resume(event) = decision else {
             return XCTFail("Expected resume, got \(decision)")
         }
-        XCTAssertEqual(event.kind, .advisoryReview)
-        XCTAssertEqual(event.id, "review:merge-advisory:advisory")
-        XCTAssertEqual(event.reviewID, "merge-advisory")
+        XCTAssertEqual(event.kind, .childTerminal)
+        XCTAssertEqual(event.id, "child:\(childID.uuidString):review:merge-advisory")
+        XCTAssertEqual(event.phase, .review)
     }
 
     func testNeedsUserAndBlockedHold() {
@@ -417,7 +350,6 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
             workstreamSummary: nil,
             workflow: nil,
             mergeAttention: nil,
-            pendingHumanReviewID: nil,
             pendingInteraction: nil,
             openAgentChatRoute: nil,
             statusReport: nil,
@@ -457,7 +389,6 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
         statusGroup: CoordinatorModeStatusGroup,
         runState: AgentSessionRunState,
         mergeAttention: CoordinatorModeRow.MergeAttention? = nil,
-        pendingHumanReviewID: String? = nil,
         workstreamSummary: CoordinatorModeRow.WorkstreamSummary? = nil
     ) -> CoordinatorModeRow {
         CoordinatorModeRow(
@@ -481,7 +412,6 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
             workstreamSummary: workstreamSummary,
             workflow: nil,
             mergeAttention: mergeAttention,
-            pendingHumanReviewID: pendingHumanReviewID,
             pendingInteraction: nil,
             openAgentChatRoute: nil,
             statusReport: nil,
@@ -493,7 +423,6 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
         coordinatorID: UUID,
         childID: UUID,
         phase: CoordinatorModeRow.WorkstreamSummary.Phase,
-        reviewPacketID: String? = nil,
         nextAction: CoordinatorModeRow.WorkstreamSummary.NextAction? = nil
     ) -> CoordinatorModeRow.WorkstreamSummary {
         CoordinatorModeRow.WorkstreamSummary(
@@ -503,7 +432,6 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
             coordinatorSessionID: coordinatorID,
             worktree: nil,
             workflow: nil,
-            reviewPacketID: reviewPacketID,
             nextAction: nextAction
         )
     }

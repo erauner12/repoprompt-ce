@@ -211,7 +211,7 @@ Before threading the Coordinator privilege marker, the run-lease / connection-po
 | `read_file`, `file_search`, `workspace_context`, `manage_selection` | Not allowed for Coordinator v1. | Delegated agents perform project reading/search/selection in their scoped context. |
 | `apply_edits`, `file_actions` | Not allowed for Coordinator v1. | Delegated implementation agents make file changes when assigned that work. |
 | `manage_worktree` mutation | Deferred/gated for Coordinator v1. | Delegated agents may use task-scoped worktree context when permitted by existing policies. |
-| `agent_run.start` worktree creation/binding args | Allowed only to provision the delegated child's execution sandbox; required for mutable delegated work such as edits, tests/builds that write outputs, review packets, merge previews, commits, or PR preparation. | Delegated agents receive the resulting task-scoped worktree context and perform the actual workspace work there. |
+| `agent_run.start` worktree creation/binding args | Allowed only to provision the delegated child's execution sandbox; required for mutable delegated work such as edits, tests/builds that write outputs, merge previews, commits, or PR preparation. | Delegated agents receive the resulting task-scoped worktree context and perform the actual workspace work there. |
 
 When the user's intent requires direct codebase investigation or mutation, the Coordinator should spawn or steer an appropriately scoped agent and then observe its lifecycle state and artifacts. It should not focus tabs or acquire file/worktree tools to do the work itself in v1.
 

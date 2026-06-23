@@ -15,8 +15,6 @@ struct CoordinatorModeSnapshotProjector {
         var resolvableTabIDs: Set<UUID>
         var demoCoordinatorSessionIDs: Set<UUID>
         var coordinatorInternalSessionIDs: Set<UUID>
-        var acknowledgedHumanReviewIDs: Set<String>
-        var requiresHumanReviewAcknowledgement: Bool
 
         init(
             workspaceID: UUID?,
@@ -31,9 +29,7 @@ struct CoordinatorModeSnapshotProjector {
             boardScope: CoordinatorModeBoardScope = .coordinatorFleet,
             resolvableTabIDs: Set<UUID> = [],
             demoCoordinatorSessionIDs: Set<UUID> = [],
-            coordinatorInternalSessionIDs: Set<UUID> = [],
-            acknowledgedHumanReviewIDs: Set<String> = [],
-            requiresHumanReviewAcknowledgement: Bool = true
+            coordinatorInternalSessionIDs: Set<UUID> = []
         ) {
             self.workspaceID = workspaceID
             self.windowID = windowID
@@ -48,8 +44,6 @@ struct CoordinatorModeSnapshotProjector {
             self.resolvableTabIDs = resolvableTabIDs
             self.demoCoordinatorSessionIDs = demoCoordinatorSessionIDs
             self.coordinatorInternalSessionIDs = coordinatorInternalSessionIDs
-            self.acknowledgedHumanReviewIDs = acknowledgedHumanReviewIDs
-            self.requiresHumanReviewAcknowledgement = requiresHumanReviewAcknowledgement
         }
     }
 
@@ -408,17 +402,7 @@ struct CoordinatorModeSnapshotProjector {
             snapshot: mcpSnapshot,
             route: route
         )
-        let pendingHumanReviewID = input.requiresHumanReviewAcknowledgement
-            ? pendingHumanReviewID(
-                from: seed.activeWorktreeMergeSummaries,
-                acknowledgedReviewIDs: input.acknowledgedHumanReviewIDs
-            )
-            : nil
-        let statusGroup = statusGroup(
-            for: seed,
-            acknowledgedReviewIDs: input.acknowledgedHumanReviewIDs,
-            requiresHumanReviewAcknowledgement: input.requiresHumanReviewAcknowledgement
-        )
+        let statusGroup = statusGroup(for: seed)
         let workstream = workstream(from: seed.worktreeBindingSummaries.first)
         let mergeAttention = mergeAttention(from: seed.activeWorktreeMergeSummaries)
         let workstreamSummary = workstreamSummary(
@@ -428,7 +412,6 @@ struct CoordinatorModeSnapshotProjector {
             parentCoordinator: parentCoordinator,
             workstream: workstream,
             mergeAttention: mergeAttention,
-            pendingHumanReviewID: pendingHumanReviewID,
             pendingInteraction: pendingInteraction
         )
         return CoordinatorModeRow(
@@ -452,7 +435,6 @@ struct CoordinatorModeSnapshotProjector {
             workstreamSummary: workstreamSummary,
             workflow: seed.workflow,
             mergeAttention: mergeAttention,
-            pendingHumanReviewID: pendingHumanReviewID,
             pendingInteraction: pendingInteraction,
             openAgentChatRoute: route,
             statusReport: sessionStatusReport(snapshot: mcpSnapshot),
@@ -467,7 +449,6 @@ struct CoordinatorModeSnapshotProjector {
         parentCoordinator: CoordinatorModeRow.ParentCoordinator?,
         workstream: CoordinatorModeRow.Workstream?,
         mergeAttention: CoordinatorModeRow.MergeAttention?,
-        pendingHumanReviewID: String?,
         pendingInteraction: CoordinatorModePendingInteractionSummary?
     ) -> CoordinatorModeRow.WorkstreamSummary? {
         guard !isCoordinator else { return nil }
@@ -479,11 +460,9 @@ struct CoordinatorModeSnapshotProjector {
             coordinatorSessionID: parentCoordinator?.sessionID,
             worktree: workstream,
             workflow: seed.workflow,
-            reviewPacketID: pendingHumanReviewID ?? mergeAttention?.id,
             nextAction: nextAction(
                 statusGroup: statusGroup,
                 mergeAttention: mergeAttention,
-                pendingHumanReviewID: pendingHumanReviewID,
                 pendingInteraction: pendingInteraction,
                 parentCoordinator: parentCoordinator
             )
@@ -493,7 +472,6 @@ struct CoordinatorModeSnapshotProjector {
     private func nextAction(
         statusGroup: CoordinatorModeStatusGroup,
         mergeAttention: CoordinatorModeRow.MergeAttention?,
-        pendingHumanReviewID: String?,
         pendingInteraction: CoordinatorModePendingInteractionSummary?,
         parentCoordinator: CoordinatorModeRow.ParentCoordinator?
     ) -> CoordinatorModeRow.WorkstreamSummary.NextAction? {
@@ -524,15 +502,15 @@ struct CoordinatorModeSnapshotProjector {
                 detail: "The child session or merge state needs attention."
             )
         case .review:
-            if pendingHumanReviewID != nil || mergeAttention != nil {
+            if mergeAttention != nil {
                 return CoordinatorModeRow.WorkstreamSummary.NextAction(
-                    kind: .inspectReviewPacket,
-                    title: "Review packet ready",
+                    kind: .inspectOutput,
+                    title: "Inspect merge preview",
                     detail: "Preview artifacts are available for inspection."
                 )
             }
             return CoordinatorModeRow.WorkstreamSummary.NextAction(
-                kind: .inspectReviewPacket,
+                kind: .inspectOutput,
                 title: "Inspect review output",
                 detail: nil
             )
@@ -580,11 +558,7 @@ struct CoordinatorModeSnapshotProjector {
         )
     }
 
-    private func statusGroup(
-        for seed: RowSeed,
-        acknowledgedReviewIDs: Set<String>,
-        requiresHumanReviewAcknowledgement: Bool
-    ) -> CoordinatorModeStatusGroup {
+    private func statusGroup(for seed: RowSeed) -> CoordinatorModeStatusGroup {
         if !seed.isPersistedOnly, isNeedsYou(seed.runState) {
             return .needsYou
         }
@@ -599,8 +573,7 @@ struct CoordinatorModeSnapshotProjector {
             return .working
         }
         if seed.runState == .completed || seed.runState == .cancelled,
-           requiresHumanReviewAcknowledgement,
-           hasPendingHumanReviewMerge(seed.activeWorktreeMergeSummaries, acknowledgedReviewIDs: acknowledgedReviewIDs)
+           hasReviewableMerge(seed.activeWorktreeMergeSummaries)
         {
             return .review
         }
@@ -624,35 +597,14 @@ struct CoordinatorModeSnapshotProjector {
         summaries.contains { $0.status == .applying }
     }
 
-    private func hasPendingHumanReviewMerge(
-        _ summaries: [AgentSessionWorktreeMergeSummary],
-        acknowledgedReviewIDs: Set<String>
-    ) -> Bool {
-        pendingHumanReviewID(from: summaries, acknowledgedReviewIDs: acknowledgedReviewIDs) != nil
-    }
-
-    private func pendingHumanReviewID(
-        from summaries: [AgentSessionWorktreeMergeSummary],
-        acknowledgedReviewIDs: Set<String>
-    ) -> String? {
-        summaries
-            .filter { isHumanReviewMergeStatus($0.status) && !acknowledgedReviewIDs.contains($0.id) }
-            .sorted { lhs, rhs in
-                if lhs.updatedAt == rhs.updatedAt {
-                    return lhs.id < rhs.id
-                }
-                return lhs.updatedAt > rhs.updatedAt
+    private func hasReviewableMerge(_ summaries: [AgentSessionWorktreeMergeSummary]) -> Bool {
+        summaries.contains { summary in
+            switch summary.status {
+            case .previewed, .awaitingApproval, .awaitingCommit:
+                true
+            case .applying, .conflicted, .completed, .stale, .failed, .cancelled, .aborted:
+                false
             }
-            .first?
-            .id
-    }
-
-    private func isHumanReviewMergeStatus(_ status: AgentSessionWorktreeMergeOperation.Status) -> Bool {
-        switch status {
-        case .previewed, .awaitingApproval, .awaitingCommit, .stale, .failed, .cancelled, .aborted:
-            true
-        case .applying, .conflicted, .completed:
-            false
         }
     }
 

@@ -107,8 +107,7 @@ struct CoordinatorWorkstream: Identifiable, Equatable {
     enum NextActionKind: String, Equatable {
         case waitForChild
         case respondToChild
-        case inspectReviewPacket
-        case markReviewHandled
+        case inspectOutput
         case approveNextStep
         case inspectBlocker
     }
@@ -129,7 +128,6 @@ struct CoordinatorWorkstream: Identifiable, Equatable {
     let coordinatorSessionID: UUID?
     let worktree: CoordinatorWorkstreamBinding?
     let workflow: CoordinatorModeWorkflowDisplaySummary?
-    let reviewPacketID: String?
     let nextAction: NextAction?
 }
 
@@ -170,7 +168,6 @@ struct CoordinatorModeRow: Identifiable, Equatable {
     let workstreamSummary: WorkstreamSummary?
     let workflow: CoordinatorModeWorkflowDisplaySummary?
     let mergeAttention: MergeAttention?
-    let pendingHumanReviewID: String?
     let pendingInteraction: CoordinatorModePendingInteractionSummary?
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
     let statusReport: CoordinatorModeSessionStatusReport?

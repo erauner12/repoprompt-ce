@@ -18,7 +18,6 @@ struct CoordinatorFollowThroughBoundaryClassifier {
         case coordinatorActive
         case childNeedsUser(UUID)
         case childBlocked(UUID)
-        case requiredReviewUncleared(UUID)
         case duplicateEvent(String)
         case noResumableEvent
     }
@@ -70,30 +69,6 @@ struct CoordinatorFollowThroughBoundaryClassifier {
         rows: [CoordinatorModeRow],
         state: CoordinatorFollowThroughState
     ) -> Decision {
-        if let requiredReview = rows.first(where: requiresHumanReviewAcknowledgement) {
-            return .hold(.requiredReviewUncleared(requiredReview.sessionID))
-        }
-
-        if let advisory = rows.first(where: { row in
-            phase(for: row) == .done
-                && reviewID(for: row) != nil
-                && state.observedChildPhases[row.sessionID] == .review
-        }) {
-            let reviewID = reviewID(for: advisory)
-            let event = CoordinatorFollowThroughEvent(
-                id: "review:\(reviewID ?? advisory.sessionID.uuidString):advisory",
-                kind: .advisoryReview,
-                coordinatorSessionID: coordinatorSessionID,
-                childSessionID: advisory.sessionID,
-                childTitle: advisory.title,
-                reviewID: reviewID,
-                gate: nil,
-                phase: .done,
-                detail: "Advisory review packet is available without a hard human-review gate."
-            )
-            return deduped(event, state: state)
-        }
-
         if let completed = rows.first(where: { row in
             phase(for: row) == .done
                 && (state.observedChildPhases[row.sessionID].map { $0 != .done } ?? true)
@@ -105,10 +80,26 @@ struct CoordinatorFollowThroughBoundaryClassifier {
                 coordinatorSessionID: coordinatorSessionID,
                 childSessionID: completed.sessionID,
                 childTitle: completed.title,
-                reviewID: nil,
                 gate: nil,
                 phase: phase,
                 detail: "Delegated child reached terminal state \(completed.runState.rawValue)."
+            )
+            return deduped(event, state: state)
+        }
+
+        if let reviewable = rows.first(where: { row in
+            phase(for: row) == .review
+                && (state.observedChildPhases[row.sessionID].map { $0 != .review } ?? true)
+        }) {
+            let event = CoordinatorFollowThroughEvent(
+                id: "child:\(reviewable.sessionID.uuidString):review:\(reviewable.mergeAttention?.id ?? reviewable.sessionID.uuidString)",
+                kind: .childTerminal,
+                coordinatorSessionID: coordinatorSessionID,
+                childSessionID: reviewable.sessionID,
+                childTitle: reviewable.title,
+                gate: nil,
+                phase: .review,
+                detail: "Delegated child produced reviewable output."
             )
             return deduped(event, state: state)
         }
@@ -128,14 +119,8 @@ struct CoordinatorFollowThroughBoundaryClassifier {
             return .hold(.noResumableEvent)
         }
 
-        if gate.type == .actionApprovalRequired,
-           let requiredReview = rows.first(where: requiresHumanReviewAcknowledgement)
-        {
-            return .hold(.requiredReviewUncleared(requiredReview.sessionID))
-        }
-
         let row = rows.first {
-            $0.pendingHumanReviewID == gate.subjectID || reviewID(for: $0) == gate.subjectID
+            $0.sessionID.uuidString == gate.subjectID || $0.mergeAttention?.id == gate.subjectID
         }
         let event = CoordinatorFollowThroughEvent(
             id: "gate:\(gate.id):cleared",
@@ -143,7 +128,6 @@ struct CoordinatorFollowThroughBoundaryClassifier {
             coordinatorSessionID: coordinatorSessionID,
             childSessionID: row?.sessionID,
             childTitle: row?.title,
-            reviewID: gate.type == .reviewRequired ? gate.subjectID : nil,
             gate: gate,
             phase: row.map(phase(for:)),
             detail: "Continuation gate was cleared."
@@ -168,18 +152,5 @@ struct CoordinatorFollowThroughBoundaryClassifier {
 
     private func phase(for row: CoordinatorModeRow) -> CoordinatorFollowThroughChildPhase {
         CoordinatorFollowThroughChildPhase(row: row)
-    }
-
-    private func reviewID(for row: CoordinatorModeRow) -> String? {
-        row.workstreamSummary?.reviewPacketID ?? row.mergeAttention?.id
-    }
-
-    private func requiresHumanReviewAcknowledgement(_ row: CoordinatorModeRow) -> Bool {
-        guard phase(for: row) == .review else { return false }
-        if row.pendingHumanReviewID != nil {
-            return true
-        }
-        return row.workstreamSummary?.nextAction?.kind == .markReviewHandled
-            && row.workstreamSummary?.reviewPacketID != nil
     }
 }

@@ -29,14 +29,12 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias DirectiveSubmitter = @MainActor (_ text: String, _ coordinatorSessionID: UUID?, _ forceNewRuntime: Bool) async -> DirectiveSubmissionResult
     typealias ChildDirectiveSubmitter = @MainActor (_ text: String, _ row: CoordinatorModeRow) async -> DirectiveSubmissionResult
     typealias ContinuationGateHandler = @MainActor (_ gate: CoordinatorContinuationGate, _ snapshotBeforeGateCleared: CoordinatorModeSnapshot) async -> Void
-    static let requiresHumanReviewAcknowledgementDefaultsKey = "CoordinatorMode.requiresHumanReviewAcknowledgement"
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
     @Published private(set) var railTranscriptEntries: [CoordinatorModeRailTranscriptEntry] = []
     @Published private(set) var currentRailActivityText: String?
     @Published private(set) var composerNotice: String?
     @Published private(set) var isFreshCoordinatorRunPending = false
-    @Published private(set) var requiresHumanReviewAcknowledgement: Bool
     @Published private(set) var allowsProactiveFollowThrough: Bool
     @Published var sortMode: CoordinatorModeSortMode = .lastUpdated {
         didSet {
@@ -65,7 +63,6 @@ final class CoordinatorModeViewModel: ObservableObject {
     private var displayedTranscriptCoordinatorSessionID: UUID?
     private var lastDurableRailStatusEntryKey: String?
     private var displayedDelegateActionTargetIDs: Set<UUID> = []
-    private var acknowledgedHumanReviewIDs: Set<String> = []
     private(set) var isVisible = false
 
     init(
@@ -90,8 +87,6 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.continuationGateHandler = continuationGateHandler
         self.projector = projector
         self.userDefaults = userDefaults
-        userDefaults.removeObject(forKey: Self.requiresHumanReviewAcknowledgementDefaultsKey)
-        requiresHumanReviewAcknowledgement = false
         allowsProactiveFollowThrough = CoordinatorModeFollowThroughPreference.isEnabled(defaults: userDefaults)
     }
 
@@ -108,8 +103,6 @@ final class CoordinatorModeViewModel: ObservableObject {
         var input = inputProvider(sortMode, nil)
         input.selectedCoordinatorID = input.workspaceID.flatMap { selectedCoordinatorIDByWorkspaceID[$0] }
         input.boardScope = boardScope
-        input.acknowledgedHumanReviewIDs = acknowledgedHumanReviewIDs
-        input.requiresHumanReviewAcknowledgement = requiresHumanReviewAcknowledgement
         let projected = projector.project(input)
         publishIfChanged(isFreshCoordinatorRunPending ? pendingFreshCoordinatorSnapshot(from: projected) : projected)
     }
@@ -156,49 +149,6 @@ final class CoordinatorModeViewModel: ObservableObject {
         displayedDelegateActionTargetIDs.removeAll()
         currentRailActivityText = nil
         composerNotice = nil
-    }
-
-    func markHumanReviewHandled(_ reviewID: String, coordinatorSessionID: UUID? = nil) {
-        let previousSnapshot = snapshot
-        acknowledgedHumanReviewIDs.insert(reviewID)
-        refresh()
-        guard allowsProactiveFollowThrough else { return }
-        let gate = CoordinatorContinuationGate.reviewAcknowledgement(
-            reviewID: reviewID,
-            ownerCoordinatorSessionID: coordinatorSessionID
-        )
-        Task { @MainActor [continuationGateHandler] in
-            await continuationGateHandler(gate, previousSnapshot)
-        }
-    }
-
-    func approveCoordinatorContinuation(
-        reviewID: String,
-        subjectTitle: String?,
-        coordinatorSessionID: UUID? = nil
-    ) {
-        let previousSnapshot = snapshot
-        guard allowsProactiveFollowThrough else {
-            composerNotice = "Follow is off. Turn on Follow to approve the next Coordinator step automatically."
-            return
-        }
-        let gate = CoordinatorContinuationGate.actionApproval(
-            gateID: "approval:continue:\(reviewID)",
-            action: .continuePlan,
-            subjectID: reviewID,
-            subjectTitle: subjectTitle,
-            ownerCoordinatorSessionID: coordinatorSessionID
-        )
-        Task { @MainActor [continuationGateHandler] in
-            await continuationGateHandler(gate, previousSnapshot)
-        }
-    }
-
-    func setRequiresHumanReviewAcknowledgement(_ requiresAcknowledgement: Bool) {
-        guard requiresHumanReviewAcknowledgement != requiresAcknowledgement else { return }
-        requiresHumanReviewAcknowledgement = requiresAcknowledgement
-        userDefaults.set(requiresAcknowledgement, forKey: Self.requiresHumanReviewAcknowledgementDefaultsKey)
-        refresh()
     }
 
     func setAllowsProactiveFollowThrough(_ allowsFollowThrough: Bool) {
@@ -806,7 +756,6 @@ extension AgentModeViewModel {
                     pending.kind != .gateCleared
                         && (
                             (event.childSessionID != nil && pending.childSessionID == event.childSessionID)
-                                || (event.reviewID != nil && pending.reviewID == event.reviewID)
                                 || (event.gate?.subjectID != nil && pending.gate?.subjectID == event.gate?.subjectID)
                         )
                 }
@@ -820,7 +769,6 @@ extension AgentModeViewModel {
                         pending.kind != .gateCleared
                             && (
                                 (event.childSessionID != nil && pending.childSessionID == event.childSessionID)
-                                    || (event.reviewID != nil && pending.reviewID == event.reviewID)
                                     || (event.gate?.subjectID != nil && pending.gate?.subjectID == event.gate?.subjectID)
                             )
                     }

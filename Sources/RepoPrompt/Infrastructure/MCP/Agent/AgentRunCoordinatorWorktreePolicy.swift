@@ -92,7 +92,6 @@ enum AgentRunCoordinatorWorktreePolicy {
 
     private static let hardWorktreePhrases: [String] = [
         "merge preview",
-        "review packet",
         "worktree merge",
         "create a pr",
         "create pull request",

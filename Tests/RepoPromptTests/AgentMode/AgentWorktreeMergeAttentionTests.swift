@@ -151,7 +151,7 @@ final class AgentWorktreeMergeAttentionTests: XCTestCase {
 
         let presentation = WorktreeMergeCardPresentationBuilder.build(dto: dto, op: "apply", toolIsError: false)
 
-        XCTAssertEqual(presentation.title, "Review Packet • Apply")
+        XCTAssertEqual(presentation.title, "Merge Preview • Apply")
         XCTAssertEqual(presentation.status, ToolCardStatus.warning)
         XCTAssertTrue(presentation.subtitle.contains("feature → main"))
         XCTAssertTrue(presentation.subtitle.contains("conflicted"))
@@ -166,7 +166,7 @@ final class AgentWorktreeMergeAttentionTests: XCTestCase {
 
         for row in rows {
             let presentation = WorktreeMergeCardPresentationBuilder.build(dto: nil, toolIsError: row.toolIsError)
-            XCTAssertEqual(presentation.title, "Review Packet", row.label)
+            XCTAssertEqual(presentation.title, "Merge Preview", row.label)
             XCTAssertEqual(presentation.status, row.status, row.label)
             XCTAssertEqual(presentation.subtitle, row.subtitle, row.label)
         }

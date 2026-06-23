@@ -264,14 +264,14 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 #### Scenario: App-generated follow-through event resumes Coordinator
 - **WHEN** Coordinator follow-through is enabled
 - **AND** the owning Coordinator runtime is idle
-- **AND** a supervised delegated child reaches a terminal state or an advisory review packet becomes available
+- **AND** a supervised delegated child reaches a terminal state or reviewable child output becomes available
 - **THEN** the Coordinator view MAY submit a structured internal resume directive to the existing owning Coordinator runtime
 - **AND** it SHALL NOT create a new Coordinator parent runtime
 - **AND** the resume directive SHALL describe the observed event as app-generated context for the original objective rather than a new user request.
 
 #### Scenario: Follow-through classifies projected workstreams
 - **WHEN** the Coordinator view has projected a workstream summary for a supervised row
-- **THEN** follow-through resume/hold decisions SHALL prefer the projected owner Coordinator, phase, review packet ID, and next action over parallel ad hoc inference from row titles, assistant prose, or lower-level fallback status
+- **THEN** follow-through resume/hold decisions SHALL prefer the projected owner Coordinator, phase, and next action over parallel ad hoc inference from row titles, assistant prose, or lower-level fallback status
 - **AND** lower-level row fields MAY be used only when the structured workstream summary is unavailable.
 
 #### Scenario: Coordinator continuation checkpoint is chat-owned
@@ -299,7 +299,7 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **AND** it SHALL NOT imply the human accepted, merged, committed, pushed, or otherwise approved the produced work.
 
 #### Scenario: Follow-through resume events are deduplicated
-- **WHEN** repeated lifecycle refreshes observe the same child terminal state or advisory review packet
+- **WHEN** repeated lifecycle refreshes observe the same child terminal state or reviewable child output
 - **THEN** the Coordinator view SHALL use stable event identifiers to avoid submitting duplicate resume directives for the same event
 - **AND** if the Coordinator runtime is active, the event MAY remain pending until the runtime reaches a turn boundary.
 
@@ -315,7 +315,7 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **AND** the delegated child SHALL still retain normal tab-coupled transcript, permission, and routing state.
 
 #### Scenario: Mutable Coordinator delegation requires an explicit child worktree
-- **WHEN** the production-demo Coordinator runtime delegates work that may edit files, run validation that writes outputs, prepare a review packet, generate a merge preview, commit, or prepare a PR
+- **WHEN** the production-demo Coordinator runtime delegates work that may edit files, run validation that writes outputs, generate a merge preview, commit, or prepare a PR
 - **THEN** the delegated child start SHALL include an explicit isolated execution sandbox such as `worktree_create:true` or a specific `worktree_id`
 - **AND** inherited worktree binding alone SHALL NOT satisfy this requirement
 - **AND** the worktree identity SHALL be available before the child session is created so follow-through, review, and merge state can be attributed to a stable child execution context.
@@ -393,7 +393,7 @@ The system SHALL project Coordinator mode session rows/cards from structured ses
 #### Scenario: Workstream summary is projected
 - **WHEN** a Coordinator view row represents delegated or direct Agent work
 - **THEN** the Coordinator view SHALL project a read-only `CoordinatorWorkstream` summary from structured session/live-state data
-- **AND** the summary SHALL include the session objective/title, current phase, child session ID, owner Coordinator root when available, worktree binding when available, workflow label when available, review packet ID when available, and a derived next action when the row is actionable
+- **AND** the summary SHALL include the session objective/title, current phase, child session ID, owner Coordinator root when available, worktree binding when available, workflow label when available, available merge/inspection state, and a derived next action when the row is actionable
 - **AND** the summary ID SHALL be stable for the child session it describes
 - **AND** the summary SHALL remain a flat read model that can later receive dependency edges without requiring a DAG in v1
 - **AND** the summary SHALL NOT mutate runtime state, approve actions, apply/merge/commit changes, or parse assistant prose as authoritative state.
@@ -439,7 +439,7 @@ The system SHALL group Coordinator view rows by testable, structured status rule
 - **WHEN** a session run state is `.completed` or `.cancelled`
 - **AND** structured review material such as a worktree merge preview remains available for human review
 - **THEN** the Coordinator view MAY group that row under `Review` when the material is the next actionable thing to inspect
-- **AND** the row and inspector MAY expose review packet context for inspection
+- **AND** the row and inspector MAY expose merge/inspection context for inspection
 - **AND** the inspector SHALL NOT own continuation approval for the Coordinator objective.
 
 #### Scenario: Terminal session is eligible for Done

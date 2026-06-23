@@ -898,10 +898,6 @@ struct CoordinatorModeView: View {
 
             rowMetadata(row, metrics: metrics)
 
-            if let packet = reviewPacket(for: row) {
-                reviewPacketStrip(packet, metrics: metrics)
-            }
-
             if let nextAction = row.workstreamSummary?.nextAction {
                 workstreamNextActionHint(nextAction, metrics: metrics)
             }
@@ -1098,11 +1094,6 @@ struct CoordinatorModeView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
-                    let packet = reviewPacket(for: row)
-                    if let packet {
-                        reviewPacketInspector(packet, row: row, metrics: metrics)
-                    }
-
                     if let workstream = row.workstreamSummary {
                         workstreamInspector(workstream, row: row, metrics: metrics)
                     }
@@ -1137,7 +1128,7 @@ struct CoordinatorModeView: View {
                         }
                     }
 
-                    if let merge = row.mergeAttention, packet == nil {
+                    if let merge = row.mergeAttention {
                         inspectorGroup("Merge attention", metrics: metrics) {
                             keyValue("Status", merge.status.rawValue, metrics: metrics)
                             keyValue("Conflicts", "\(merge.conflictFileCount)", metrics: metrics)
@@ -2054,232 +2045,6 @@ struct CoordinatorModeView: View {
         return .secondary
     }
 
-    private func reviewPacket(for row: CoordinatorModeRow) -> CoordinatorReviewPacket? {
-        let corpus = reviewPacketTextCorpus(for: row)
-        let statusLine = reviewPacketLine(prefix: "Status:", in: corpus)
-        let blockedLine = reviewPacketLine(containing: "blocked", in: corpus)
-        let operationID = reviewPacketLine(prefix: "Operation ID:", in: corpus)
-        let hasMergePreview = corpus.localizedCaseInsensitiveContains("Merge preview:")
-            || corpus.localizedCaseInsensitiveContains("Merge preview generated")
-            || corpus.localizedCaseInsensitiveContains("Operation ID: merge_")
-        let hasDiffSummary = corpus.localizedCaseInsensitiveContains("Diff summary:")
-        let hasValidation = corpus.localizedCaseInsensitiveContains("Validation:")
-        let hasBlockedPreview = hasMergePreview && corpus.localizedCaseInsensitiveContains("blocked")
-
-        if let merge = row.mergeAttention, hasBlockedPreview {
-            return CoordinatorReviewPacket(
-                title: "Review packet blocked",
-                detail: statusLine ?? blockedLine ?? "Preview artifacts are available, but the preview reported a blocker.",
-                nextAction: "Open the agent thread to inspect the blocker and decide whether to continue.",
-                badge: "Blocked",
-                systemImage: "exclamationmark.triangle",
-                tint: .orange,
-                operationID: operationID ?? merge.id
-            )
-        }
-
-        if let merge = row.mergeAttention {
-            return reviewPacket(for: merge)
-        }
-
-        guard row.statusGroup == .review else { return nil }
-
-        if hasMergePreview {
-            let isBlocked = hasBlockedPreview
-            return CoordinatorReviewPacket(
-                title: isBlocked ? "Review packet blocked" : "Review packet ready",
-                detail: statusLine ?? blockedLine ?? "Source-vs-target preview artifacts are available for inspection.",
-                nextAction: isBlocked ? "Open the agent thread to inspect the blocker and decide whether to continue." : "Open the agent thread to review the source-vs-target packet before applying.",
-                badge: isBlocked ? "Blocked" : "Review",
-                systemImage: isBlocked ? "exclamationmark.triangle" : "arrow.triangle.merge",
-                tint: isBlocked ? .orange : .purple,
-                operationID: operationID
-            )
-        }
-
-        if hasDiffSummary {
-            return CoordinatorReviewPacket(
-                title: "Diff ready",
-                detail: "The agent reported a diff summary for review.",
-                nextAction: "Open the agent thread to inspect the patch, validation, and notes.",
-                badge: "Diff",
-                systemImage: "doc.text.magnifyingglass",
-                tint: .purple,
-                operationID: operationID
-            )
-        }
-
-        if hasValidation {
-            return CoordinatorReviewPacket(
-                title: "Validation captured",
-                detail: "The agent reported validation output for review.",
-                nextAction: "Open the agent thread to inspect validation details and remaining notes.",
-                badge: "Checks",
-                systemImage: "checkmark.seal",
-                tint: .green,
-                operationID: operationID
-            )
-        }
-
-        return CoordinatorReviewPacket(
-            title: "Ready for review",
-            detail: "This session finished with review output.",
-            nextAction: "Open the agent thread to inspect the latest result.",
-            badge: "Review",
-            systemImage: "eye",
-            tint: .purple,
-            operationID: operationID
-        )
-    }
-
-    private func reviewPacket(for merge: CoordinatorModeRow.MergeAttention) -> CoordinatorReviewPacket {
-        switch merge.status {
-        case .awaitingApproval:
-            CoordinatorReviewPacket(
-                title: "Review packet ready",
-                detail: "A source-vs-target merge review is waiting for user approval.",
-                nextAction: "Open the agent thread to approve, cancel, or inspect the review packet.",
-                badge: "Approval",
-                systemImage: "arrow.triangle.merge",
-                tint: .purple,
-                operationID: merge.id
-            )
-        case .conflicted:
-            CoordinatorReviewPacket(
-                title: "Review packet conflicted",
-                detail: "\(merge.conflictFileCount) conflict file(s) need attention.",
-                nextAction: "Open the agent thread to inspect and resolve conflicts.",
-                badge: "Conflicts",
-                systemImage: "exclamationmark.triangle",
-                tint: .red,
-                operationID: merge.id
-            )
-        case .awaitingCommit:
-            CoordinatorReviewPacket(
-                title: "Review packet staged",
-                detail: "The merge is applied and waiting for a commit.",
-                nextAction: "Open the agent thread to verify and continue.",
-                badge: "Commit",
-                systemImage: "checkmark.seal",
-                tint: .orange,
-                operationID: merge.id
-            )
-        case .previewed:
-            CoordinatorReviewPacket(
-                title: "Review packet ready",
-                detail: "Source-vs-target preview artifacts are available for inspection.",
-                nextAction: "Open the agent thread to inspect the review packet before applying.",
-                badge: "Review",
-                systemImage: "arrow.triangle.merge",
-                tint: .purple,
-                operationID: merge.id
-            )
-        case .applying:
-            CoordinatorReviewPacket(
-                title: "Review packet applying",
-                detail: "The merge operation is currently applying.",
-                nextAction: "Open the agent thread to monitor merge progress.",
-                badge: "Applying",
-                systemImage: "arrow.triangle.merge",
-                tint: .blue,
-                operationID: merge.id
-            )
-        case .stale, .completed, .failed, .cancelled, .aborted:
-            CoordinatorReviewPacket(
-                title: "Review packet \(merge.status.rawValue)",
-                detail: "The source-vs-target review operation reached a terminal state.",
-                nextAction: "Open the agent thread to inspect the final result.",
-                badge: merge.status.rawValue,
-                systemImage: "arrow.triangle.merge",
-                tint: .secondary,
-                operationID: merge.id
-            )
-        }
-    }
-
-    private func reviewPacketTextCorpus(for row: CoordinatorModeRow) -> String {
-        [
-            row.statusReport?.assistantPreview,
-            row.statusReport?.terminalOutput
-        ]
-        .compactMap(\.self)
-        .joined(separator: "\n")
-    }
-
-    private func reviewPacketLine(prefix: String, in text: String) -> String? {
-        let trimSet = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "-* "))
-        for line in text.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: trimSet)
-            guard let range = trimmed.range(of: prefix, options: [.caseInsensitive, .anchored]) else {
-                continue
-            }
-            let value = trimmed[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !value.isEmpty {
-                return value
-            }
-        }
-        return nil
-    }
-
-    private func reviewPacketLine(containing needle: String, in text: String) -> String? {
-        let trimSet = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "-* "))
-        return text.components(separatedBy: .newlines).first { line in
-            line.localizedCaseInsensitiveContains(needle)
-        }?
-            .trimmingCharacters(in: trimSet)
-    }
-
-    private func reviewPacketStrip(_ packet: CoordinatorReviewPacket, metrics: CoordinatorVisualMetrics) -> some View {
-        HStack(spacing: metrics.smallSpacing) {
-            Image(systemName: packet.systemImage)
-                .font(.system(size: metrics.microIconSize, weight: .semibold))
-                .foregroundStyle(packet.tint.opacity(0.92))
-                .frame(width: metrics.titlebarIconSize, height: metrics.titlebarIconSize)
-
-            Text(packet.title)
-                .font(metrics.microMedium)
-                .foregroundStyle(.primary.opacity(0.86))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .layoutPriority(1)
-
-            Text(packet.badge)
-                .font(metrics.chip)
-                .foregroundStyle(packet.tint.opacity(0.9))
-                .lineLimit(1)
-                .padding(.horizontal, metrics.miniPillHorizontalPadding)
-                .padding(.vertical, metrics.miniPillVerticalPadding)
-                .background(Capsule(style: .continuous).fill(packet.tint.opacity(0.12)))
-        }
-        .padding(.top, metrics.tightSpacing)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func reviewPacketInspector(_ packet: CoordinatorReviewPacket, row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
-        inspectorGroup("Review packet", metrics: metrics) {
-            HStack(spacing: metrics.smallSpacing) {
-                Image(systemName: packet.systemImage)
-                    .font(.system(size: metrics.smallIconSize, weight: .semibold))
-                    .foregroundStyle(packet.tint.opacity(0.92))
-                Text(packet.title)
-                    .font(metrics.bodySemibold)
-                Spacer(minLength: metrics.controlSpacing)
-                statusChip(packet.badge, color: packet.tint, metrics: metrics)
-            }
-
-            Text(packet.detail)
-                .font(metrics.body)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            keyValue("Action", packet.nextAction, metrics: metrics)
-
-            if let operationID = packet.operationID {
-                keyValue("Operation", operationID, metrics: metrics)
-            }
-        }
-    }
-
     private func workstreamNextActionHint(
         _ action: CoordinatorModeRow.WorkstreamSummary.NextAction,
         metrics: CoordinatorVisualMetrics
@@ -2330,9 +2095,6 @@ struct CoordinatorModeView: View {
                 if let branch = worktree.branch {
                     keyValue("Branch", branch, metrics: metrics)
                 }
-            }
-            if let reviewPacketID = summary.reviewPacketID {
-                keyValue("Review", reviewPacketID, metrics: metrics)
             }
             if let action = summary.nextAction, let detail = action.detail {
                 Text(detail)
@@ -2509,16 +2271,6 @@ private struct CoordinatorRailToggleButton: View {
     private var titlebarButtonFill: Color {
         isHovering ? Color.primary.opacity(0.08) : Color.clear
     }
-}
-
-private struct CoordinatorReviewPacket {
-    let title: String
-    let detail: String
-    let nextAction: String
-    let badge: String
-    let systemImage: String
-    let tint: Color
-    let operationID: String?
 }
 
 private struct CoordinatorVisualMetrics {
@@ -3098,8 +2850,7 @@ private extension CoordinatorModeRow.WorkstreamSummary.NextActionKind {
         switch self {
         case .waitForChild: "hourglass"
         case .respondToChild: "arrowshape.turn.up.left.fill"
-        case .inspectReviewPacket: "doc.text.magnifyingglass"
-        case .markReviewHandled: "checkmark.circle"
+        case .inspectOutput: "doc.text.magnifyingglass"
         case .approveNextStep: "arrow.right.circle"
         case .inspectBlocker: "exclamationmark.triangle"
         }
@@ -3335,7 +3086,6 @@ private extension AgentSessionRunState {
                     workstreamSummary: nil,
                     workflow: CoordinatorModeWorkflowDisplaySummary(AgentWorkflow.orchestrate.definition),
                     mergeAttention: nil,
-                    pendingHumanReviewID: nil,
                     pendingInteraction: nil,
                     openAgentChatRoute: nil,
                     statusReport: nil,
@@ -3362,7 +3112,6 @@ private extension AgentSessionRunState {
                     workstreamSummary: nil,
                     workflow: nil,
                     mergeAttention: nil,
-                    pendingHumanReviewID: nil,
                     pendingInteraction: nil,
                     openAgentChatRoute: nil,
                     statusReport: nil,

@@ -167,21 +167,20 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(summary?.worktree?.label, "Docs worktree")
         XCTAssertEqual(summary?.worktree?.branch, "docs/readme-tests")
         XCTAssertEqual(summary?.workflow?.id, AgentWorkflow.investigate.definition.id)
-        XCTAssertNil(summary?.reviewPacketID)
         XCTAssertEqual(summary?.nextAction?.kind, .waitForChild)
     }
 
-    func testReviewRowProjectsPacketInspectionAction() {
+    func testReviewRowProjectsMergePreviewInspectionAction() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
         let merge = mergeSummary(id: "merge-review-1", status: .previewed, conflicts: 0, updatedAt: date(95))
         let snapshot = projector.project(input(
             live: [
-                live(id: coordinatorID, tab: uuid(101), title: "Review packet demo", updatedAt: date(100), state: .idle),
+                live(id: coordinatorID, tab: uuid(101), title: "Merge preview demo", updatedAt: date(100), state: .idle),
                 live(
                     id: childID,
                     tab: uuid(102),
-                    title: "Prepare review packet",
+                    title: "Prepare merge preview",
                     updatedAt: date(90),
                     state: .completed,
                     parent: coordinatorID,
@@ -189,28 +188,26 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
                     merges: [merge]
                 )
             ],
-            demoCoordinatorIDs: [coordinatorID],
-            requiresHumanReviewAcknowledgement: true
+            demoCoordinatorIDs: [coordinatorID]
         ))
 
         let summary = allRows(in: snapshot).first { $0.sessionID == childID }?.workstreamSummary
         XCTAssertEqual(summary?.phase, .review)
-        XCTAssertEqual(summary?.reviewPacketID, "merge-review-1")
-        XCTAssertEqual(summary?.nextAction?.kind, .inspectReviewPacket)
-        XCTAssertEqual(summary?.nextAction?.title, "Review packet ready")
+        XCTAssertEqual(summary?.nextAction?.kind, .inspectOutput)
+        XCTAssertEqual(summary?.nextAction?.title, "Inspect merge preview")
     }
 
-    func testAcknowledgedReviewRowDoesNotProjectContinuationApproval() {
+    func testReviewRowStaysReviewUntilCoordinatorContinuesIt() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
         let merge = mergeSummary(id: "merge-review-1", status: .previewed, conflicts: 0, updatedAt: date(95))
         let snapshot = projector.project(input(
             live: [
-                live(id: coordinatorID, tab: uuid(101), title: "Review packet demo", updatedAt: date(100), state: .idle),
+                live(id: coordinatorID, tab: uuid(101), title: "Merge preview demo", updatedAt: date(100), state: .idle),
                 live(
                     id: childID,
                     tab: uuid(102),
-                    title: "Prepare review packet",
+                    title: "Prepare merge preview",
                     updatedAt: date(90),
                     state: .completed,
                     parent: coordinatorID,
@@ -218,15 +215,13 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
                     merges: [merge]
                 )
             ],
-            demoCoordinatorIDs: [coordinatorID],
-            acknowledgedHumanReviewIDs: ["merge-review-1"],
-            requiresHumanReviewAcknowledgement: true
+            demoCoordinatorIDs: [coordinatorID]
         ))
 
         let row = allRows(in: snapshot).first { $0.sessionID == childID }
-        XCTAssertEqual(row?.statusGroup, .done)
-        XCTAssertEqual(row?.workstreamSummary?.reviewPacketID, "merge-review-1")
-        XCTAssertNil(row?.workstreamSummary?.nextAction)
+        XCTAssertEqual(row?.statusGroup, .review)
+        XCTAssertEqual(row?.mergeAttention?.id, "merge-review-1")
+        XCTAssertEqual(row?.workstreamSummary?.nextAction?.kind, .inspectOutput)
     }
 
     func testBoardIncludesRunningDelegatedSnapshotBeforePersistence() {
@@ -446,14 +441,14 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(row?.mergeAttention?.conflictFileCount, 2)
     }
 
-    func testCompletedSessionWithUnacknowledgedReviewMergeStaysInReview() {
+    func testCompletedSessionWithReviewableMergeStaysInReview() {
         let coordinatorID = uuid(1)
         let sessionID = uuid(2)
         let merge = mergeSummary(id: "merge-review", status: .previewed, conflicts: 0, updatedAt: date(90))
         let completed = live(
             id: sessionID,
             tab: uuid(102),
-            title: "Review packet",
+            title: "Merge preview",
             updatedAt: date(100),
             state: .completed,
             parent: coordinatorID,
@@ -471,68 +466,7 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         let row = rows(in: snapshot, group: .review).first
         XCTAssertEqual(row?.sessionID, sessionID)
         XCTAssertEqual(row?.mergeAttention?.id, "merge-review")
-        XCTAssertEqual(row?.pendingHumanReviewID, "merge-review")
         XCTAssertTrue(rows(in: snapshot, group: .done).isEmpty)
-    }
-
-    func testAcknowledgedReviewMergeAllowsCompletedSessionToMoveToDone() {
-        let coordinatorID = uuid(1)
-        let sessionID = uuid(2)
-        let merge = mergeSummary(id: "merge-review", status: .previewed, conflicts: 0, updatedAt: date(90))
-        let completed = live(
-            id: sessionID,
-            tab: uuid(102),
-            title: "Review packet",
-            updatedAt: date(100),
-            state: .completed,
-            parent: coordinatorID,
-            merges: [merge]
-        )
-
-        let snapshot = projector.project(input(
-            live: [
-                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(110), state: .idle),
-                completed
-            ],
-            demoCoordinatorIDs: [coordinatorID],
-            acknowledgedHumanReviewIDs: ["merge-review"]
-        ))
-
-        let row = rows(in: snapshot, group: .done).first
-        XCTAssertEqual(row?.sessionID, sessionID)
-        XCTAssertEqual(row?.mergeAttention?.id, "merge-review")
-        XCTAssertNil(row?.pendingHumanReviewID)
-        XCTAssertTrue(rows(in: snapshot, group: .review).isEmpty)
-    }
-
-    func testAdvisoryReviewGateAllowsCompletedReviewMergeToMoveToDone() {
-        let coordinatorID = uuid(1)
-        let sessionID = uuid(2)
-        let merge = mergeSummary(id: "merge-review", status: .previewed, conflicts: 0, updatedAt: date(90))
-        let completed = live(
-            id: sessionID,
-            tab: uuid(102),
-            title: "Review packet",
-            updatedAt: date(100),
-            state: .completed,
-            parent: coordinatorID,
-            merges: [merge]
-        )
-
-        let snapshot = projector.project(input(
-            live: [
-                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(110), state: .idle),
-                completed
-            ],
-            demoCoordinatorIDs: [coordinatorID],
-            requiresHumanReviewAcknowledgement: false
-        ))
-
-        let row = rows(in: snapshot, group: .done).first
-        XCTAssertEqual(row?.sessionID, sessionID)
-        XCTAssertEqual(row?.mergeAttention?.id, "merge-review")
-        XCTAssertNil(row?.pendingHumanReviewID)
-        XCTAssertTrue(rows(in: snapshot, group: .review).isEmpty)
     }
 
     func testCoordinatorDetectionMetadataAloneDoesNotRenderBoard() {
@@ -904,9 +838,7 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         boardScope: CoordinatorModeBoardScope = .coordinatorFleet,
         resolvableTabs: Set<UUID>? = nil,
         demoCoordinatorIDs: Set<UUID> = [],
-        coordinatorInternalIDs: Set<UUID> = [],
-        acknowledgedHumanReviewIDs: Set<String> = [],
-        requiresHumanReviewAcknowledgement: Bool = true
+        coordinatorInternalIDs: Set<UUID> = []
     ) -> CoordinatorModeSnapshotProjector.Input {
         let tabs = resolvableTabs ?? Set(persisted.map(\.tabID) + live.map(\.tabID))
         return CoordinatorModeSnapshotProjector.Input(
@@ -922,9 +854,7 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             boardScope: boardScope,
             resolvableTabIDs: tabs,
             demoCoordinatorSessionIDs: demoCoordinatorIDs,
-            coordinatorInternalSessionIDs: coordinatorInternalIDs,
-            acknowledgedHumanReviewIDs: acknowledgedHumanReviewIDs,
-            requiresHumanReviewAcknowledgement: requiresHumanReviewAcknowledgement
+            coordinatorInternalSessionIDs: coordinatorInternalIDs
         )
     }
 

@@ -139,7 +139,6 @@ struct CoordinatorFollowThroughEvent: Codable, Equatable, Identifiable {
     enum Kind: String, Codable, Equatable {
         case childTerminal
         case gateCleared
-        case advisoryReview
     }
 
     let id: String
@@ -147,7 +146,6 @@ struct CoordinatorFollowThroughEvent: Codable, Equatable, Identifiable {
     let coordinatorSessionID: UUID
     let childSessionID: UUID?
     let childTitle: String?
-    let reviewID: String?
     let gate: CoordinatorContinuationGate?
     let phase: CoordinatorFollowThroughChildPhase?
     let detail: String
@@ -163,16 +161,12 @@ struct CoordinatorFollowThroughEvent: Codable, Equatable, Identifiable {
         if let childTitle {
             lines.append("- Child session: \(childTitle)")
         }
-        if let reviewID {
-            lines.append("- Review gate: \(reviewID)")
-        }
         if let gate {
             lines.append(contentsOf: gate.directiveLines)
         }
         lines.append(contentsOf: [
             "",
             "Continue the original objective only if this clears a safe boundary.",
-            "A review-required gate means the user inspected the review packet; it is not approval to apply, merge, commit, or push.",
             "An action-approval gate permits only the explicitly approved action and does not approve any later action.",
             "Respect any remaining permission, approval, blocked, or needs-user boundary. If the next safe step is unclear, ask one concise question and stop.",
             "</coordinator_follow_through_resume>"
@@ -183,7 +177,6 @@ struct CoordinatorFollowThroughEvent: Codable, Equatable, Identifiable {
 
 struct CoordinatorContinuationGate: Codable, Equatable, Identifiable {
     enum GateType: String, Codable, Equatable {
-        case reviewRequired
         case actionApprovalRequired
         case needsInput
         case permission
@@ -214,23 +207,6 @@ struct CoordinatorContinuationGate: Codable, Equatable, Identifiable {
     let approvedAction: ApprovedAction?
     let detail: String
     let clearedBy: ClearedBy
-
-    static func reviewAcknowledgement(
-        reviewID: String,
-        subjectTitle: String? = nil,
-        ownerCoordinatorSessionID: UUID? = nil
-    ) -> Self {
-        Self(
-            id: "review:\(reviewID)",
-            type: .reviewRequired,
-            subjectID: reviewID,
-            subjectTitle: subjectTitle,
-            ownerCoordinatorSessionID: ownerCoordinatorSessionID,
-            approvedAction: nil,
-            detail: "Human marked the review packet as reviewed.",
-            clearedBy: .human
-        )
-    }
 
     static func actionApproval(
         gateID: String,
