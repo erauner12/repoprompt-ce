@@ -50,6 +50,105 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.composerNotice)
     }
 
+    func testProceedContinuationSubmitsVisibleCoordinatorMessage() async {
+        let coordinatorID = uuid(1)
+        let coordinatorTab = uuid(101)
+        let input = input(
+            live: [
+                live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(20), state: .idle, isMCP: true)
+            ],
+            demoCoordinatorIDs: [coordinatorID]
+        )
+        var submissions: [(text: String, sessionID: UUID?, forceNewRuntime: Bool)] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                var next = input
+                next.sortMode = sortMode
+                next.selectedCoordinatorID = selectedCoordinatorID
+                return next
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { text, sessionID, forceNewRuntime in
+                submissions.append((text, sessionID, forceNewRuntime))
+                return .accepted
+            }
+        )
+        viewModel.refresh()
+
+        let result = await viewModel.submitCoordinatorContinuation(.proceed)
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(submissions.count, 1)
+        XCTAssertEqual(submissions.first?.text, CoordinatorModeViewModel.ContinuationAction.proceed.directiveText)
+        XCTAssertEqual(submissions.first?.sessionID, coordinatorID)
+        XCTAssertEqual(submissions.first?.forceNewRuntime, false)
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.user])
+        XCTAssertEqual(viewModel.railTranscriptEntries.first?.text, CoordinatorModeViewModel.ContinuationAction.proceed.directiveText)
+    }
+
+    func testCoordinatorCheckpointMarkerIsStrippedAndProjected() {
+        let parsed = CoordinatorModeConversationCheckpointParser.parse("""
+        I finished the safe part and can continue if you want.
+        COORDINATOR_CHECKPOINT: safe_continuation_ready
+        """)
+
+        XCTAssertEqual(parsed.visibleText, "I finished the safe part and can continue if you want.")
+        XCTAssertEqual(parsed.checkpoint?.kind, .safeContinuationReady)
+    }
+
+    func testCoordinatorCheckpointParserLeavesOrdinaryMessagesUngated() {
+        let parsed = CoordinatorModeConversationCheckpointParser.parse("I finished and summarized the result.")
+
+        XCTAssertEqual(parsed.visibleText, "I finished and summarized the result.")
+        XCTAssertNil(parsed.checkpoint)
+    }
+
+    func testCoordinatorRailProjectsCheckpointWhileHidingMarker() {
+        let coordinatorID = uuid(1)
+        let coordinatorTab = uuid(101)
+        let mcpSnapshots: [UUID: AgentRunMCPSnapshot] = [
+            coordinatorID: mcpSnapshot(
+                sessionID: coordinatorID,
+                tabID: coordinatorTab,
+                sessionName: "Coordinator",
+                status: .completed,
+                statusText: "Run complete",
+                assistantPreview: """
+                I finished the safe part and can continue if you want.
+                COORDINATOR_CHECKPOINT: safe_continuation_ready
+                """,
+                parent: nil
+            )
+        ]
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: coordinatorTab,
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            isMCP: true
+                        )
+                    ],
+                    mcpSnapshots: mcpSnapshots,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+
+        viewModel.refresh()
+
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.coordinator])
+        XCTAssertEqual(viewModel.railTranscriptEntries.first?.text, "I finished the safe part and can continue if you want.")
+        XCTAssertEqual(viewModel.railTranscriptEntries.first?.checkpoint?.kind, .safeContinuationReady)
+    }
+
     func testCoordinatorRailRestoresSelectedRuntimeConversationTranscript() {
         let firstCoordinatorID = uuid(1)
         let secondCoordinatorID = uuid(2)
@@ -107,28 +206,20 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.railTranscriptEntries.map(\.text), ["first directive", "first answer"])
     }
 
-    func testHumanReviewGateDefaultsRequiredAndPersistsChanges() throws {
+    func testHumanReviewGateDefaultsAdvisoryForChatOwnedContinuation() throws {
         let suiteName = "CoordinatorModeComposerViewModelTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
         defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: CoordinatorModeViewModel.requiresHumanReviewAcknowledgementDefaultsKey)
 
         let initial = CoordinatorModeViewModel(
             inputProvider: { _, _ in self.input() },
             dashboardVisibilityHandler: { _ in },
             userDefaults: defaults
         )
-        XCTAssertTrue(initial.requiresHumanReviewAcknowledgement)
-
-        initial.setRequiresHumanReviewAcknowledgement(false)
         XCTAssertFalse(initial.requiresHumanReviewAcknowledgement)
-
-        let restored = CoordinatorModeViewModel(
-            inputProvider: { _, _ in self.input() },
-            dashboardVisibilityHandler: { _ in },
-            userDefaults: defaults
-        )
-        XCTAssertFalse(restored.requiresHumanReviewAcknowledgement)
+        XCTAssertNil(defaults.object(forKey: CoordinatorModeViewModel.requiresHumanReviewAcknowledgementDefaultsKey))
     }
 
     func testProactiveFollowThroughDefaultsManualAndPersistsChanges() throws {

@@ -272,6 +272,82 @@ struct CoordinatorModeRailTranscriptEntry: Identifiable, Equatable {
     let text: String
     let createdAt: Date
     let action: CoordinatorModeCoordinatorAction?
+    let checkpoint: CoordinatorModeConversationCheckpoint?
+
+    init(
+        id: UUID,
+        role: Role,
+        text: String,
+        createdAt: Date,
+        action: CoordinatorModeCoordinatorAction?,
+        checkpoint: CoordinatorModeConversationCheckpoint? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.createdAt = createdAt
+        self.action = action
+        self.checkpoint = checkpoint
+    }
+}
+
+struct CoordinatorModeConversationCheckpoint: Equatable {
+    enum Kind: String, Equatable {
+        case safeContinuationReady = "safe_continuation_ready"
+        case needsClarification = "needs_clarification"
+        case reviewSuggested = "review_suggested"
+        case reviewRequired = "review_required"
+        case blocked
+        case approvalRequired = "approval_required"
+    }
+
+    static let markerPrefix = "COORDINATOR_CHECKPOINT:"
+
+    let kind: Kind
+
+    var displayName: String {
+        switch kind {
+        case .safeContinuationReady:
+            "Ready for next step"
+        case .needsClarification:
+            "Needs direction"
+        case .reviewSuggested:
+            "Review suggested"
+        case .reviewRequired:
+            "Review required"
+        case .blocked:
+            "Blocked"
+        case .approvalRequired:
+            "Approval required"
+        }
+    }
+}
+
+enum CoordinatorModeConversationCheckpointParser {
+    static func parse(_ text: String) -> (visibleText: String, checkpoint: CoordinatorModeConversationCheckpoint?) {
+        var checkpoint: CoordinatorModeConversationCheckpoint?
+        let visibleLines = text
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .compactMap { substring -> String? in
+                let line = String(substring)
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.hasPrefix(CoordinatorModeConversationCheckpoint.markerPrefix) else {
+                    return line
+                }
+
+                let rawKind = String(trimmed.dropFirst(CoordinatorModeConversationCheckpoint.markerPrefix.count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if let kind = CoordinatorModeConversationCheckpoint.Kind(rawValue: rawKind) {
+                    checkpoint = CoordinatorModeConversationCheckpoint(kind: kind)
+                }
+                return nil
+            }
+
+        return (
+            visibleText: visibleLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines),
+            checkpoint: checkpoint
+        )
+    }
 }
 
 struct CoordinatorModeCoordinatorAction: Equatable {

@@ -9,6 +9,20 @@ final class CoordinatorModeViewModel: ObservableObject {
         case rejected(message: String)
     }
 
+    enum ContinuationAction: Equatable {
+        case proceed
+        case stopHere
+
+        var directiveText: String {
+            switch self {
+            case .proceed:
+                "Approved to proceed with the next safe step you proposed. Do not merge, apply, commit, push, create a PR, or perform irreversible actions unless I explicitly request that next."
+            case .stopHere:
+                "Stop here. Do not continue this objective unless I ask again."
+            }
+        }
+    }
+
     typealias InputProvider = @MainActor (_ sortMode: CoordinatorModeSortMode, _ selectedCoordinatorID: UUID?) -> CoordinatorModeSnapshotProjector.Input
     typealias TranscriptProvider = @MainActor (_ coordinatorSessionID: UUID?) -> [CoordinatorModeRailTranscriptEntry]
     typealias DashboardVisibilityHandler = @MainActor (_ visible: Bool) -> Void
@@ -76,7 +90,8 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.continuationGateHandler = continuationGateHandler
         self.projector = projector
         self.userDefaults = userDefaults
-        requiresHumanReviewAcknowledgement = userDefaults.object(forKey: Self.requiresHumanReviewAcknowledgementDefaultsKey) as? Bool ?? true
+        userDefaults.removeObject(forKey: Self.requiresHumanReviewAcknowledgementDefaultsKey)
+        requiresHumanReviewAcknowledgement = false
         allowsProactiveFollowThrough = CoordinatorModeFollowThroughPreference.isEnabled(defaults: userDefaults)
     }
 
@@ -233,6 +248,11 @@ final class CoordinatorModeViewModel: ObservableObject {
             composerNotice = message.isEmpty ? nil : message
         }
         return result
+    }
+
+    @discardableResult
+    func submitCoordinatorContinuation(_ action: ContinuationAction) async -> DirectiveSubmissionResult {
+        await submitCoordinatorDirective(action.directiveText)
     }
 
     private func selectFreshCoordinatorRuntimeIfAvailable(
@@ -476,12 +496,22 @@ final class CoordinatorModeViewModel: ObservableObject {
         guard key != lastDurableRailStatusEntryKey else { return }
 
         lastDurableRailStatusEntryKey = key
+        let role: CoordinatorModeRailTranscriptEntry.Role = report.status.isTerminal ? .coordinator : .event
+        var displayText = text
+        var checkpoint: CoordinatorModeConversationCheckpoint?
+        if role == .coordinator {
+            let parsed = CoordinatorModeConversationCheckpointParser.parse(text)
+            displayText = parsed.visibleText
+            checkpoint = parsed.checkpoint
+        }
+
         railTranscriptEntries.append(CoordinatorModeRailTranscriptEntry(
             id: UUID(),
-            role: report.status.isTerminal ? .coordinator : .event,
-            text: text,
+            role: role,
+            text: displayText,
             createdAt: Date(),
-            action: nil
+            action: nil,
+            checkpoint: checkpoint
         ))
     }
 
@@ -632,7 +662,13 @@ extension AgentModeViewModel {
 
         return session.items.compactMap { item in
             guard let role = coordinatorModeRailRole(for: item.kind) else { return nil }
-            let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            var text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            var checkpoint: CoordinatorModeConversationCheckpoint?
+            if role == .coordinator {
+                let parsed = CoordinatorModeConversationCheckpointParser.parse(text)
+                text = parsed.visibleText
+                checkpoint = parsed.checkpoint
+            }
             guard AgentDisplayableText.hasDisplayableBody(text) else { return nil }
             if role == .user, isCoordinatorFollowThroughResumeDirective(text) {
                 return nil
@@ -642,7 +678,8 @@ extension AgentModeViewModel {
                 role: role,
                 text: text,
                 createdAt: item.timestamp,
-                action: nil
+                action: nil,
+                checkpoint: checkpoint
             )
         }
     }

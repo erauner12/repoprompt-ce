@@ -524,18 +524,11 @@ struct CoordinatorModeSnapshotProjector {
                 detail: "The child session or merge state needs attention."
             )
         case .review:
-            if pendingHumanReviewID != nil {
-                return CoordinatorModeRow.WorkstreamSummary.NextAction(
-                    kind: .markReviewHandled,
-                    title: "Review packet",
-                    detail: "Inspect the packet, then mark it reviewed to clear the gate."
-                )
-            }
-            if mergeAttention != nil {
+            if pendingHumanReviewID != nil || mergeAttention != nil {
                 return CoordinatorModeRow.WorkstreamSummary.NextAction(
                     kind: .inspectReviewPacket,
-                    title: "Inspect review packet",
-                    detail: "Preview artifacts are available for review."
+                    title: "Review packet ready",
+                    detail: "Preview artifacts are available for inspection."
                 )
             }
             return CoordinatorModeRow.WorkstreamSummary.NextAction(
@@ -544,26 +537,7 @@ struct CoordinatorModeSnapshotProjector {
                 detail: nil
             )
         case .done:
-            if parentCoordinator != nil,
-               let mergeAttention,
-               shouldOfferContinuationApproval(for: mergeAttention.status)
-            {
-                return CoordinatorModeRow.WorkstreamSummary.NextAction(
-                    kind: .approveNextStep,
-                    title: "Approve next step",
-                    detail: "The review gate is clear. Approve the Coordinator to continue this objective up to the next boundary."
-                )
-            }
             return nil
-        }
-    }
-
-    private func shouldOfferContinuationApproval(for status: AgentSessionWorktreeMergeOperation.Status) -> Bool {
-        switch status {
-        case .previewed, .awaitingApproval, .awaitingCommit:
-            true
-        case .applying, .conflicted, .completed, .stale, .failed, .cancelled, .aborted:
-            false
         }
     }
 

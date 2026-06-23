@@ -45,9 +45,9 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 5.7 Implement read-only sort controls for `Last updated` (default), `Name`, and `Priority` across board cards and list rows.
 - [x] 5.8 Ensure sorting only reorders cards/rows within existing status groups and never changes group membership, run state, pending state, Coordinator relationship, or persisted session state.
 - [x] 5.9 Ensure v1 does not expose drag-to-reorder, drag-to-dispatch, or drag-to-change-status interactions.
-- [x] 5.10 Keep completed/cancelled rows with unacknowledged review material in Review until the user marks that review handled.
-- [x] 5.11 Add snapshot adapter tests for grouping, counts, stale-row count exclusion, review/continuation gate acknowledgement, and sort-mode behavior.
-- [x] 5.12 Add a persisted default-on human review gate with an advisory mode that lets review-bearing completed rows resolve to Done.
+- [x] 5.10 Keep completed/cancelled rows with review material observable without treating Done as human acceptance.
+- [x] 5.11 Add snapshot adapter tests for grouping, counts, stale-row count exclusion, review observability, and sort-mode behavior.
+- [x] 5.12 Keep review-bearing completed rows eligible for Done or Review based on observable row state rather than an inspector-owned approval gate.
 
 ## 6. Pending interaction summaries
 
@@ -86,14 +86,15 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.10 Add focused tests for follow-through persistence and prompt-gating behavior.
 - [x] 9.11 Persist lightweight Coordinator follow-through state with objective summary, observed child phases, pending/handled events, and last resume result.
 - [x] 9.12 Add a pure follow-through boundary classifier for safe resume versus hold decisions.
-- [x] 9.13 Add an AgentMode-owned follow-through supervisor that wakes the existing Coordinator runtime on child lifecycle/continuation-gate events without creating a new parent.
-- [x] 9.14 Document and test that `Mark reviewed` clears the review gate only and does not approve merge/apply/commit/push work.
-- [x] 9.15 Model generic continuation gates so future scoped approvals can wake Coordinator follow-through for exactly one approved next action without granting blanket permission.
+- [x] 9.13 Add an AgentMode-owned follow-through supervisor that wakes the existing Coordinator runtime on child lifecycle events without creating a new parent.
+- [x] 9.14 Document and test that chat-level `Proceed` is a visible Coordinator message and does not approve merge/apply/commit/push work.
+- [x] 9.15 Keep app-generated resume events observational; human continuation remains chat-owned rather than inspector-owned.
 - [x] 9.16 Add a direct external MCP Coordinator chat control surface for fast live validation that reuses the Coordinator composer path and is hidden from in-agent role catalogs.
 - [x] 9.17 Enforce Coordinator mutable-delegation worktree policy so read-only child runs may omit worktrees, but edits, tests, review packets, merge previews, commit/PR prep, and inherited-binding-only mutable starts require an explicit child worktree.
 - [x] 9.18 Feed projected workstream summaries into follow-through classification so resume/hold decisions use the same phase, review packet, owner Coordinator, and next action shown on the board.
-- [x] 9.19 Add scoped `Approve next step` continuation approval after review acknowledgement, with tests proving it wakes only the owning Coordinator and cannot bypass uncleared required review.
-- [x] 9.20 Project acknowledged review packets as `Approve next step` workstream actions so reviewed items remain actionable without implying merge/apply/commit permission.
+- [x] 9.19 Add chat-level `Proceed`, `Revise`, and `Stop here` continuation controls that submit ordinary messages to the owning Coordinator parent.
+- [x] 9.20 Stop projecting acknowledged review packets as inspector approval actions; Done remains a terminal observed state rather than human acceptance.
+- [x] 9.21 Render chat-level continuation controls only from explicit Coordinator checkpoint metadata, not from ordinary Coordinator prose.
 
 ## 10. Coordinator view UI shell
 

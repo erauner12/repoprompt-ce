@@ -190,7 +190,6 @@ struct CoordinatorModeView: View {
 
             presentationPicker(metrics: metrics)
             scopePicker(metrics: metrics)
-            reviewGatePicker(metrics: metrics)
             followThroughPicker(metrics: metrics)
             sortPicker(metrics: metrics)
             filterSearchBox(metrics: metrics)
@@ -274,31 +273,7 @@ struct CoordinatorModeView: View {
         .accessibilityLabel("Board scope")
     }
 
-    private func reviewGatePicker(metrics: CoordinatorVisualMetrics) -> some View {
-        HStack(spacing: metrics.headerSegmentSpacing) {
-            reviewGateButton(
-                title: "Required",
-                isSelected: viewModel.requiresHumanReviewAcknowledgement,
-                metrics: metrics
-            ) {
-                viewModel.setRequiresHumanReviewAcknowledgement(true)
-            }
-
-            reviewGateButton(
-                title: "Advisory",
-                isSelected: !viewModel.requiresHumanReviewAcknowledgement,
-                metrics: metrics
-            ) {
-                viewModel.setRequiresHumanReviewAcknowledgement(false)
-            }
-        }
-        .padding(metrics.headerControlInset)
-        .frame(width: metrics.reviewGateControlWidth, height: metrics.headerControlHeight)
-        .coordinatorHeaderControlBackground()
-        .accessibilityLabel("Human review gate")
-    }
-
-    private func reviewGateButton(
+    private func headerSegmentButton(
         title: String,
         isSelected: Bool,
         metrics: CoordinatorVisualMetrics,
@@ -325,7 +300,7 @@ struct CoordinatorModeView: View {
 
     private func followThroughPicker(metrics: CoordinatorVisualMetrics) -> some View {
         HStack(spacing: metrics.headerSegmentSpacing) {
-            reviewGateButton(
+            headerSegmentButton(
                 title: "Manual",
                 isSelected: !viewModel.allowsProactiveFollowThrough,
                 metrics: metrics
@@ -333,7 +308,7 @@ struct CoordinatorModeView: View {
                 viewModel.setAllowsProactiveFollowThrough(false)
             }
 
-            reviewGateButton(
+            headerSegmentButton(
                 title: "Follow",
                 isSelected: viewModel.allowsProactiveFollowThrough,
                 metrics: metrics
@@ -1327,6 +1302,8 @@ struct CoordinatorModeView: View {
             }
             .frame(minHeight: metrics.conversationMinHeight)
 
+            coordinatorContinuationControls(rail, metrics: metrics)
+
             Divider()
                 .opacity(0.45)
 
@@ -1338,6 +1315,71 @@ struct CoordinatorModeView: View {
             fillOpacity: CoordinatorStyle.railCardFillOpacity,
             strokeOpacity: 0
         )
+    }
+
+    @ViewBuilder
+    private func coordinatorContinuationControls(
+        _ rail: CoordinatorModeCoordinatorRail,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        if let checkpoint = activeCoordinatorContinuationCheckpoint(rail) {
+            VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+                HStack(spacing: metrics.smallSpacing) {
+                    Label(checkpoint.displayName, systemImage: "flag.checkered")
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+
+                HStack(spacing: metrics.smallSpacing) {
+                    Button {
+                        submitCoordinatorContinuation(.proceed)
+                    } label: {
+                        Label("Proceed", systemImage: "arrow.right.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+
+                    Button {
+                        if coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            coordinatorDirectiveDraft = "Revise the plan: "
+                        }
+                        isCoordinatorComposerFocused = true
+                    } label: {
+                        Label("Revise", systemImage: "pencil")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button {
+                        submitCoordinatorContinuation(.stopHere)
+                    } label: {
+                        Label("Stop here", systemImage: "stop.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Spacer(minLength: metrics.smallSpacing)
+                }
+            }
+            .font(metrics.microMedium)
+            .padding(.horizontal, metrics.cardPadding)
+            .padding(.vertical, metrics.smallSpacing)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.14))
+        }
+    }
+
+    private func activeCoordinatorContinuationCheckpoint(
+        _ rail: CoordinatorModeCoordinatorRail
+    ) -> CoordinatorModeConversationCheckpoint? {
+        guard viewModel.allowsProactiveFollowThrough,
+              rail.state == .selected,
+              rail.isComposerSendEnabled,
+              !isSubmittingCoordinatorDirective
+        else { return nil }
+        guard let entry = viewModel.railTranscriptEntries.last(where: { $0.action == nil }),
+              entry.role == .coordinator
+        else { return nil }
+        return entry.checkpoint
     }
 
     private func coordinatorEmptyConversation(
@@ -1805,6 +1847,21 @@ struct CoordinatorModeView: View {
         }
     }
 
+    private func submitCoordinatorContinuation(_ action: CoordinatorModeViewModel.ContinuationAction) {
+        guard viewModel.snapshot.coordinatorRail.state == .selected,
+              viewModel.snapshot.coordinatorRail.isComposerSendEnabled,
+              !isSubmittingCoordinatorDirective
+        else { return }
+        coordinatorDirectiveDraft = ""
+        isSubmittingCoordinatorDirective = true
+        isCoordinatorComposerFocused = true
+        Task { @MainActor in
+            _ = await viewModel.submitCoordinatorContinuation(action)
+            isSubmittingCoordinatorDirective = false
+            isCoordinatorComposerFocused = true
+        }
+    }
+
     private func submitChildDirective(to row: CoordinatorModeRow) {
         let draft = childDirectiveDraft
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2220,43 +2277,7 @@ struct CoordinatorModeView: View {
             if let operationID = packet.operationID {
                 keyValue("Operation", operationID, metrics: metrics)
             }
-
-            if let reviewID = row.pendingHumanReviewID {
-                Button {
-                    viewModel.markHumanReviewHandled(
-                        reviewID,
-                        coordinatorSessionID: row.parentCoordinator?.sessionID
-                    )
-                } label: {
-                    Label("Mark reviewed", systemImage: "checkmark.circle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(packet.tint)
-            } else if row.parentCoordinator != nil, let reviewID = continuationApprovalReviewID(for: row) {
-                Button {
-                    viewModel.approveCoordinatorContinuation(
-                        reviewID: reviewID,
-                        subjectTitle: row.title,
-                        coordinatorSessionID: row.parentCoordinator?.sessionID
-                    )
-                } label: {
-                    Label("Approve next step", systemImage: "arrow.right.circle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .tint(Color.accentColor)
-
-                Text("Approves only the next Coordinator-planned step. It does not apply, merge, commit, push, or approve later actions.")
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }
-    }
-
-    private func continuationApprovalReviewID(for row: CoordinatorModeRow) -> String? {
-        row.workstreamSummary?.reviewPacketID ?? row.mergeAttention?.id
     }
 
     private func workstreamNextActionHint(

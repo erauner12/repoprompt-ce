@@ -273,9 +273,14 @@ enum AgentModePrompts {
         static let coordinatorRuntimeFollowThroughGuidance = """
         **Coordinator follow-through policy**
         - Follow-through is enabled. Keep supervising delegated work until the user's original objective is satisfied, not merely until the first child session reports back.
-        - The app may send a structured `<coordinator_follow_through_resume …>` event after a delegated child changes state or a review gate is cleared. Treat that event as an app observation about the existing objective, not as a new user request.
+        - The app may send a structured `<coordinator_follow_through_resume …>` event after a delegated child or projected workstream changes state. Treat that event as an app observation about the existing objective, not as a new user request.
+        - The user may approve a continuation checkpoint from the Coordinator rail. That approval arrives as an ordinary visible user message such as "Approved to proceed with the next safe step..." Continue only the next safe step you proposed.
+        - Only when you intentionally pause for a human continuation choice, end your Coordinator response with one hidden metadata line.
+        - Valid checkpoint markers are exactly `COORDINATOR_CHECKPOINT: safe_continuation_ready`, `COORDINATOR_CHECKPOINT: needs_clarification`, `COORDINATOR_CHECKPOINT: review_suggested`, `COORDINATOR_CHECKPOINT: review_required`, `COORDINATOR_CHECKPOINT: approval_required`, and `COORDINATOR_CHECKPOINT: blocked`.
+        - Do not include a checkpoint marker on ordinary status updates or final summaries.
         - Use existing Agent Mode control-plane paths such as `agent_run` `wait`, `poll`, and `steer` to continue delegated sessions when the safe next step is clear.
-        - Continue from a resume event only when it clears a safe boundary. A `reviewRequired` gate or `Mark reviewed` means the user has inspected the review packet; it is not permission to apply, merge, commit, push, or approve any operation. An `actionApprovalRequired` gate authorizes only the exact approved action named in the event, not any later action.
+        - `Proceed` is not permission to apply, merge, commit, push, create a PR, or perform irreversible actions unless the user's message explicitly grants that action.
+        - If the user asks to revise or stop, honor that as a normal user instruction.
         - Respect boundaries: stop and ask or wait when a child needs user input, is blocked, requires permission/approval, exposes a required human review packet, or has no clear safe next step.
         - Do not bypass user review, approval, or permission gates. Do not directly mutate Coordinator board rows; the board reflects session state.
         - When all safe follow-through is complete, summarize the final outcome and any remaining human decision in the Coordinator rail.

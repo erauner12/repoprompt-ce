@@ -210,7 +210,7 @@ The system SHALL present v1 as a read-only status board by default, with a list 
 #### Scenario: Board remains read-only in v1
 - **WHEN** the v1 board renders session cards
 - **THEN** it SHALL NOT provide drag-to-reorder, drag-to-dispatch, drag-to-change-status, inline child-session approval, inline retry, or direct child-session mutation
-- **AND** a scoped Coordinator continuation approval MAY be surfaced only as a parent-runtime resume gate that names exactly one next Coordinator action.
+- **AND** Coordinator continuation approval SHALL be surfaced through the Coordinator chat as an ordinary visible message, not as a board or inspector row mutation.
 
 ### Requirement: Coordinator composer
 The system SHALL provide a scoped Coordinator composer as the only v1 Coordinator-mode write path.
@@ -257,14 +257,14 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 
 #### Scenario: Coordinator follow-through reaches a boundary
 - **WHEN** Coordinator follow-through is enabled
-- **AND** a delegated session requires user input, permission, scoped action approval, required human review acknowledgement, or is blocked or ambiguous
+- **AND** a delegated session requires user input, permission, human continuation, or is blocked or ambiguous
 - **THEN** the Coordinator runtime SHALL stop at that boundary and surface the required user decision/status
-- **AND** it SHALL NOT bypass or auto-acknowledge the user's review, approval, permission, or Needs-you gate.
+- **AND** it SHALL NOT bypass or auto-acknowledge the user's continuation, approval, permission, or Needs-you gate.
 
 #### Scenario: App-generated follow-through event resumes Coordinator
 - **WHEN** Coordinator follow-through is enabled
 - **AND** the owning Coordinator runtime is idle
-- **AND** a supervised delegated child reaches a terminal state, an advisory review packet becomes available, or a continuation gate is cleared
+- **AND** a supervised delegated child reaches a terminal state or an advisory review packet becomes available
 - **THEN** the Coordinator view MAY submit a structured internal resume directive to the existing owning Coordinator runtime
 - **AND** it SHALL NOT create a new Coordinator parent runtime
 - **AND** the resume directive SHALL describe the observed event as app-generated context for the original objective rather than a new user request.
@@ -274,31 +274,32 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **THEN** follow-through resume/hold decisions SHALL prefer the projected owner Coordinator, phase, review packet ID, and next action over parallel ad hoc inference from row titles, assistant prose, or lower-level fallback status
 - **AND** lower-level row fields MAY be used only when the structured workstream summary is unavailable.
 
-#### Scenario: Human review acknowledgement clears a review gate
-- **WHEN** a required review packet is acknowledged with `Mark reviewed`
-- **THEN** the Coordinator view SHALL treat that acknowledgement as clearing the human review gate only
-- **AND** if follow-through is enabled and the owning Coordinator runtime is idle, it MAY wake that existing Coordinator with a structured resume event
-- **AND** it SHALL NOT treat the acknowledgement as permission to apply, merge, approve, commit, push, or bypass any remaining permission or Needs-you gate.
+#### Scenario: Coordinator continuation checkpoint is chat-owned
+- **WHEN** the Coordinator pauses at a meaningful continuation boundary
+- **AND** the selected Coordinator parent can receive another message
+- **AND** the Coordinator response carries explicit continuation checkpoint metadata
+- **THEN** the Coordinator rail MAY surface chat-level actions such as `Proceed`, `Revise`, and `Stop here`
+- **AND** selecting `Proceed` SHALL submit an ordinary visible user message to the same Coordinator parent
+- **AND** it SHALL NOT create a new Coordinator parent runtime
+- **AND** it SHALL NOT grant permission to apply, merge, approve, commit, push, create a PR, or perform irreversible actions unless the message explicitly grants that action.
+- **AND** the checkpoint metadata SHALL be stripped from Coordinator rail display text.
 
-#### Scenario: Scoped action approval clears one action gate
-- **WHEN** the user approval surface clears an action-approval gate for a named next action
-- **THEN** the Coordinator view SHALL represent the cleared gate as a typed continuation event with the exact approved action
-- **AND** if follow-through is enabled and the owning Coordinator runtime is idle, it MAY wake that existing Coordinator with a structured resume event
-- **AND** it SHALL NOT treat that approval as permission for any later apply, merge, approve, commit, push, PR, or destructive action beyond the named action.
+#### Scenario: Ordinary Coordinator replies do not create checkpoints
+- **WHEN** the Coordinator publishes a normal status update, conversational answer, or final summary without explicit checkpoint metadata
+- **THEN** the Coordinator rail SHALL NOT surface `Proceed`, `Revise`, or `Stop here` actions for that message.
 
-#### Scenario: Acknowledged review projects a continuation action
-- **WHEN** a Coordinator-owned row has a review packet whose required human-review gate has been acknowledged
-- **THEN** the workstream projection MAY expose `Approve next step` as the row's next action
-- **AND** that action SHALL approve only the Coordinator's next declared continuation step, not the review packet itself, not a child-session approval, and not any later apply, merge, commit, push, PR, or destructive action.
+#### Scenario: Inspector remains inspection-only
+- **WHEN** a selected delegated row has review, merge, worktree, status, or session details
+- **THEN** the inspector MAY expose those details and an `Open agent chat` affordance
+- **AND** it SHALL NOT own mission continuation approval semantics.
 
-#### Scenario: Scoped action approval waits for required review
-- **WHEN** a delegated row still has an uncleared required human-review packet
-- **AND** the user attempts to clear a scoped action-approval gate for that row
-- **THEN** the Coordinator view SHALL hold follow-through until the required review gate is acknowledged
-- **AND** it SHALL NOT treat scoped action approval as a substitute for `Mark reviewed`.
+#### Scenario: Done does not imply human acceptance
+- **WHEN** a delegated row reaches the `Done` group
+- **THEN** `Done` SHALL mean the child/workstream reached a terminal session outcome
+- **AND** it SHALL NOT imply the human accepted, merged, committed, pushed, or otherwise approved the produced work.
 
 #### Scenario: Follow-through resume events are deduplicated
-- **WHEN** repeated lifecycle refreshes observe the same child terminal state, advisory review packet, or cleared continuation gate
+- **WHEN** repeated lifecycle refreshes observe the same child terminal state or advisory review packet
 - **THEN** the Coordinator view SHALL use stable event identifiers to avoid submitting duplicate resume directives for the same event
 - **AND** if the Coordinator runtime is active, the event MAY remain pending until the runtime reaches a turn boundary.
 
@@ -434,25 +435,22 @@ The system SHALL group Coordinator view rows by testable, structured status rule
 - **WHEN** a session has current-window live run state `.running`
 - **THEN** the Coordinator view SHALL group that row under `Working`.
 
-#### Scenario: Completed session has unacknowledged review material
+#### Scenario: Completed session has review material
 - **WHEN** a session run state is `.completed` or `.cancelled`
 - **AND** structured review material such as a worktree merge preview remains available for human review
-- **AND** the persisted human review gate is set to require acknowledgement
-- **AND** that review material has not been acknowledged by the user
-- **THEN** the Coordinator view SHALL group that row under `Review`
-- **AND** the inspector SHALL expose an explicit acknowledgement affordance for the selected row.
+- **THEN** the Coordinator view MAY group that row under `Review` when the material is the next actionable thing to inspect
+- **AND** the row and inspector MAY expose review packet context for inspection
+- **AND** the inspector SHALL NOT own continuation approval for the Coordinator objective.
 
-#### Scenario: Human review gate is advisory
-- **WHEN** the user changes the persisted human review gate from required to advisory
-- **AND** a completed or cancelled row has structured review material
-- **THEN** the Coordinator view SHALL keep that row eligible for `Done` when no higher-priority status signal applies
-- **AND** the row MAY still expose review packet context for inspection
-- **AND** the advisory setting SHALL persist across view model recreation.
+#### Scenario: Terminal session is eligible for Done
+- **WHEN** a completed or cancelled row has no higher-priority Needs-you, Blocked, Working, or Review signal
+- **THEN** the Coordinator view SHALL keep that row eligible for `Done`
+- **AND** `Done` SHALL remain an observational terminal state, not a human acceptance state.
 
-#### Scenario: User acknowledges review material
-- **WHEN** the user acknowledges a row's structured review material from the Coordinator view
-- **THEN** the Coordinator view SHALL stop treating that review material as pending human review
-- **AND** the row SHALL be eligible for `Done` when no higher-priority status signal applies.
+#### Scenario: Coordinator asks for human continuation after inspection
+- **WHEN** the Coordinator determines the next step should wait for human confirmation after reviewing completed work
+- **THEN** the confirmation SHALL be requested in the Coordinator conversation
+- **AND** any continuation response SHALL be represented as a visible message in that conversation.
 
 #### Scenario: Session is done
 - **WHEN** a session run state is `.completed` or `.cancelled`
