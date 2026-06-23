@@ -670,18 +670,25 @@ class WorkspaceFilesViewModel: ObservableObject {
     }
 
     private(set) var selectionStateRevision: UInt64 = 0
+    private let selectionProjectionRevisionSubject = PassthroughSubject<UInt64, Never>()
+    private var selectionProjectionBatchDepth = 0
+    private var pendingSelectionProjectionRevision: UInt64?
+
+    var selectionProjectionRevisionPublisher: AnyPublisher<UInt64, Never> {
+        selectionProjectionRevisionSubject.eraseToAnyPublisher()
+    }
 
     @Published private(set) var selectedFiles: [FileViewModel] = [] {
         didSet {
             guard selectedFiles.map(\.id) != oldValue.map(\.id) else { return }
-            selectionStateRevision &+= 1
+            advanceSelectionStateRevision()
         }
     }
 
     @Published private(set) var autoCodemapFiles: [FileViewModel] = [] {
         didSet {
             guard autoCodemapFiles.map(\.id) != oldValue.map(\.id) else { return }
-            selectionStateRevision &+= 1
+            advanceSelectionStateRevision()
         }
     }
 
@@ -689,7 +696,7 @@ class WorkspaceFilesViewModel: ObservableObject {
     @Published var codemapAutoEnabled: Bool = true {
         didSet {
             guard codemapAutoEnabled != oldValue else { return }
-            selectionStateRevision &+= 1
+            advanceSelectionStateRevision()
             if codemapAutoEnabled {
                 scheduleAutoCodemapSync()
             } else {
@@ -735,8 +742,31 @@ class WorkspaceFilesViewModel: ObservableObject {
     @Published private(set) var selectionSlicesByFileID: [UUID: [LineRange]] = [:] {
         didSet {
             guard selectionSlicesByFileID != oldValue else { return }
-            selectionStateRevision &+= 1
+            advanceSelectionStateRevision()
         }
+    }
+
+    private func advanceSelectionStateRevision() {
+        selectionStateRevision &+= 1
+        if selectionProjectionBatchDepth > 0 {
+            pendingSelectionProjectionRevision = selectionStateRevision
+        } else {
+            selectionProjectionRevisionSubject.send(selectionStateRevision)
+        }
+    }
+
+    private func performSelectionProjectionBatch(_ work: () -> Void) {
+        selectionProjectionBatchDepth += 1
+        defer {
+            selectionProjectionBatchDepth -= 1
+            if selectionProjectionBatchDepth == 0,
+               let pendingRevision = pendingSelectionProjectionRevision
+            {
+                pendingSelectionProjectionRevision = nil
+                selectionProjectionRevisionSubject.send(pendingRevision)
+            }
+        }
+        work()
     }
 
     private var sliceSnapshotRebuildDeferralDepth = 0
@@ -6422,9 +6452,17 @@ class WorkspaceFilesViewModel: ObservableObject {
 
     @MainActor
     func clearSelection(persistWorkspace: Bool = false) async {
-        _ = try? await setSelectionSlices(entries: [], mode: .set, persistWorkspace: false)
-        clearCheckedFilesOnly()
-        finalizeSelectionClear(persistWorkspace: persistWorkspace)
+        _ = try? await setSelectionSlices(
+            entries: [],
+            mode: .set,
+            persistWorkspace: false,
+            rebuildSelectionProjection: false
+        )
+        performSelectionProjectionBatch {
+            requestSelectionSliceSnapshotRebuild(reason: "selection.slicesSnapshot")
+            clearCheckedFilesOnly()
+            finalizeSelectionClear(persistWorkspace: persistWorkspace)
+        }
     }
 
     @MainActor
@@ -9830,7 +9868,8 @@ class WorkspaceFilesViewModel: ObservableObject {
     func setSelectionSlices(
         entries: [SelectionSliceInput],
         mode: SliceMutationMode,
-        persistWorkspace: Bool = true
+        persistWorkspace: Bool = true,
+        rebuildSelectionProjection: Bool = true
     ) async throws -> SelectionSlicesMutationResult {
         guard !rootFolders.isEmpty else {
             throw SelectionSliceError.noWorkspaceLoaded
@@ -9854,7 +9893,9 @@ class WorkspaceFilesViewModel: ObservableObject {
                         currentSlicesByRoot[rootPath] = post
                     }
                 }
-                requestSelectionSliceSnapshotRebuild(reason: "selection.slicesSnapshot")
+                if rebuildSelectionProjection {
+                    requestSelectionSliceSnapshotRebuild(reason: "selection.slicesSnapshot")
+                }
                 if persistWorkspace {
                     requestWorkspaceSaveDebounced()
                 }
@@ -9924,6 +9965,7 @@ class WorkspaceFilesViewModel: ObservableObject {
         }
 
         var filesToSelect = Set<FileViewModel>()
+        var filesToRemoveFromCodemap = Set<FileViewModel>()
         var anchorsByRoot: [String: [String: [SliceAnchor]]] = [:]
         if mode != .remove {
             for (rootPath, payloads) in grouped {
@@ -9977,8 +10019,7 @@ class WorkspaceFilesViewModel: ObservableObject {
                             if !payload.file.isChecked {
                                 filesToSelect.insert(payload.file)
                             }
-                            // Clean transition from codemap → selected
-                            removeCodemapFile(payload.file)
+                            filesToRemoveFromCodemap.insert(payload.file)
                         }
                     }
                 }
@@ -10031,8 +10072,7 @@ class WorkspaceFilesViewModel: ObservableObject {
                         if !payload.file.isChecked {
                             filesToSelect.insert(payload.file)
                         }
-                        // Clean transition from codemap → selected
-                        removeCodemapFile(payload.file)
+                        filesToRemoveFromCodemap.insert(payload.file)
                     }
                 }
             }
@@ -10087,8 +10127,7 @@ class WorkspaceFilesViewModel: ObservableObject {
                             if !payload.file.isChecked {
                                 filesToSelect.insert(payload.file)
                             }
-                            // Clean transition from codemap → selected
-                            removeCodemapFile(payload.file)
+                            filesToRemoveFromCodemap.insert(payload.file)
                         }
                     }
                 }
@@ -10101,22 +10140,28 @@ class WorkspaceFilesViewModel: ObservableObject {
             requestWorkspaceSaveDebounced()
         }
 
-        if !filesToSelect.isEmpty {
-            let pending = filesToSelect.filter { !$0.isChecked }
-            if !pending.isEmpty {
-                let parents = Array(Set(pending.compactMap(\.parentFolder)))
-                performSelectionBatch {
-                    for file in pending where !file.isChecked {
-                        file.setIsChecked(true)
+        performSelectionProjectionBatch {
+            for file in filesToRemoveFromCodemap {
+                removeCodemapFile(file)
+            }
+
+            if !filesToSelect.isEmpty {
+                let pending = filesToSelect.filter { !$0.isChecked }
+                if !pending.isEmpty {
+                    let parents = Array(Set(pending.compactMap(\.parentFolder)))
+                    performSelectionBatch {
+                        for file in pending where !file.isChecked {
+                            file.setIsChecked(true)
+                        }
+                    }
+                    for parent in parents {
+                        recomputeAncestorStates(startingAt: parent)
                     }
                 }
-                for parent in parents {
-                    recomputeAncestorStates(startingAt: parent)
-                }
             }
-        }
 
-        requestSelectionSliceSnapshotRebuild(reason: "selection.slicesSnapshot")
+            requestSelectionSliceSnapshotRebuild(reason: "selection.slicesSnapshot")
+        }
 
         return SelectionSlicesMutationResult(
             invalidPaths: invalid,
@@ -11477,11 +11522,13 @@ extension WorkspaceFilesViewModel {
 
     @MainActor
     func clearAutoCodemapFiles(disableAuto: Bool = true) {
-        if disableAuto {
-            enterManualCodemapMode()
+        performSelectionProjectionBatch {
+            if disableAuto {
+                enterManualCodemapMode()
+            }
+            guard !autoCodemapFiles.isEmpty else { return }
+            resetAutoCodemapFiles([])
         }
-        guard !autoCodemapFiles.isEmpty else { return }
-        resetAutoCodemapFiles([])
     }
 
     @MainActor
@@ -11792,15 +11839,17 @@ extension WorkspaceFilesViewModel {
 
     @MainActor
     func setFileAsFullContent(_ file: FileViewModel) {
-        performSelectionBatch {
-            if !file.isChecked {
-                file.setIsChecked(true)
+        performSelectionProjectionBatch {
+            performSelectionBatch {
+                if !file.isChecked {
+                    file.setIsChecked(true)
+                }
             }
-        }
 
-        selectionSlicesByFileID.removeValue(forKey: file.id)
-        removeCodemapFile(file)
-        requestSelectionSliceSnapshotRebuild(reason: "selection.slicesSnapshot")
+            selectionSlicesByFileID.removeValue(forKey: file.id)
+            removeCodemapFile(file)
+            requestSelectionSliceSnapshotRebuild(reason: "selection.slicesSnapshot")
+        }
     }
 
     @MainActor
@@ -11809,44 +11858,50 @@ extension WorkspaceFilesViewModel {
         // Only allow files with codemap support to be added as codemaps
         guard file.supportsCodeMap else { return }
 
-        performSelectionBatch {
-            if file.isChecked {
-                file.setIsChecked(false)
+        performSelectionProjectionBatch {
+            performSelectionBatch {
+                if file.isChecked {
+                    file.setIsChecked(false)
+                }
             }
-        }
 
-        selectionSlicesByFileID.removeValue(forKey: file.id)
-        let wasAlreadyCodemap = isAutoCodemapFile(file)
-        if !wasAlreadyCodemap {
-            addAutoCodemapFile(file)
+            selectionSlicesByFileID.removeValue(forKey: file.id)
+            let wasAlreadyCodemap = isAutoCodemapFile(file)
+            if !wasAlreadyCodemap {
+                addAutoCodemapFile(file)
+            }
+            codemapAutoEnabled = false
+            requestSelectionSliceSnapshotRebuild(reason: "selection.slicesSnapshot")
         }
-        codemapAutoEnabled = false
-        requestSelectionSliceSnapshotRebuild(reason: "selection.slicesSnapshot")
     }
 
     @MainActor
     func removeCodemapFile(_ file: FileViewModel) {
-        guard isAutoCodemapFile(file) else { return }
-        enterManualCodemapMode()
-        removeAutoCodemapFile(file)
+        performSelectionProjectionBatch {
+            guard isAutoCodemapFile(file) else { return }
+            enterManualCodemapMode()
+            removeAutoCodemapFile(file)
+        }
     }
 
     @MainActor
     func removeFileFromAllSelections(_ file: FileViewModel) {
-        removeCodemapFile(file)
+        performSelectionProjectionBatch {
+            removeCodemapFile(file)
 
-        performSelectionBatch {
-            // Remove from selected files if present
-            if file.isChecked {
-                file.setIsChecked(false)
+            performSelectionBatch {
+                // Remove from selected files if present
+                if file.isChecked {
+                    file.setIsChecked(false)
+                }
+                // Remove any slices for this file
+                selectionSlicesByFileID.removeValue(forKey: file.id)
             }
-            // Remove any slices for this file
-            selectionSlicesByFileID.removeValue(forKey: file.id)
-        }
 
-        // Update parent folder states for UI consistency
-        if let parent = file.parentFolder {
-            recomputeAncestorStates(startingAt: parent)
+            // Update parent folder states for UI consistency
+            if let parent = file.parentFolder {
+                recomputeAncestorStates(startingAt: parent)
+            }
         }
     }
 
@@ -12387,6 +12442,7 @@ extension WorkspaceFilesViewModel {
     func applyCodemapOnlySelection(paths: [String]) async {
         guard !paths.isEmpty else { return }
 
+        var resolvedFiles: [FileViewModel] = []
         var filesToScan: [FileViewModel] = []
         var seen = Set<UUID>()
         var didResolveAny = false
@@ -12395,37 +12451,40 @@ extension WorkspaceFilesViewModel {
             var handled = false
             if let file = await resolveFileForUserInput(raw) {
                 handled = true
-                if !didResolveAny {
-                    enterManualCodemapMode()
-                    didResolveAny = true
-                }
+                didResolveAny = true
                 if seen.insert(file.id).inserted {
+                    resolvedFiles.append(file)
                     if file.fileAPI == nil {
                         filesToScan.append(file)
                     }
-                    setFileAsCodemap(file)
                 }
             } else {
                 let folderResolution = await resolveFilesForFolderInput(raw, rootScope: .visibleWorkspace)
                 if folderResolution.handled {
                     handled = true
-                    if !didResolveAny {
-                        enterManualCodemapMode()
-                        didResolveAny = true
-                    }
+                    didResolveAny = true
                 }
                 for file in folderResolution.files {
                     if seen.insert(file.id).inserted {
+                        resolvedFiles.append(file)
                         if file.fileAPI == nil {
                             filesToScan.append(file)
                         }
-                        setFileAsCodemap(file)
                     }
                 }
             }
 
             if !handled {
                 continue
+            }
+        }
+
+        performSelectionProjectionBatch {
+            if didResolveAny {
+                enterManualCodemapMode()
+            }
+            for file in resolvedFiles {
+                setFileAsCodemap(file)
             }
         }
 

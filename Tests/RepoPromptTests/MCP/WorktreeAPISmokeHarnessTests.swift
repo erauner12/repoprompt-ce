@@ -1,3 +1,4 @@
+import Combine
 import CoreServices
 import Foundation
 import MCP
@@ -112,6 +113,76 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
         let formattedStart = try Self.onlyText(ToolOutputFormatter.formatAgentRun(args: ["op": .string("start")], value: createStart))
         XCTAssertTrue(formattedStart.contains("Worktree:"), formattedStart)
         XCTAssertTrue(formattedStart.contains("Agent Created WT"), formattedStart)
+    }
+
+    func testUISelectionFlushesBeforeImmediateManageSelectionMutation() async throws {
+        let fixture = try Self.makeGitFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.sandbox) }
+
+        let window = try await Self.makeWindow(root: fixture.repo)
+        defer { WindowStatesManager.shared.unregisterWindowState(window) }
+        let manageSelection = try await Self.windowTool(named: MCPWindowToolName.manageSelection, in: window)
+        let tabID = try XCTUnwrap(window.workspaceManager.activeWorkspace?.activeComposeTabID)
+        let workspaceID = try XCTUnwrap(window.workspaceManager.activeWorkspace?.id)
+        let trackedFile = FileViewModel(
+            file: File(
+                name: fixture.trackedFile.lastPathComponent,
+                path: fixture.trackedFile.path,
+                modificationDate: Date(timeIntervalSince1970: 1000)
+            ),
+            rootPath: fixture.repo.path,
+            rootIdentifier: UUID(),
+            rootFolderPath: fixture.repo.path,
+            fileSystemService: nil
+        )
+        window.workspaceFilesViewModel.injectIndexedFileForTesting(trackedFile)
+        window.workspaceFilesViewModel.codemapAutoEnabled = false
+
+        var selectionChanges: [WorkspaceSelectionCoordinator.Change] = []
+        let selectionChangesCancellable = window.selectionCoordinator.changes
+            .sink { selectionChanges.append($0) }
+        defer { selectionChangesCancellable.cancel() }
+        window.workspaceFilesViewModel.selectFileForTesting(trackedFile)
+        let uiSelection = window.workspaceFilesViewModel.snapshotSelection()
+        XCTAssertEqual(uiSelection.selectedPaths, [fixture.trackedFile.path])
+        XCTAssertEqual(window.workspaceManager.composeTab(with: tabID)?.selection, uiSelection)
+        XCTAssertEqual(
+            window.promptManager.currentComposeTabs.first(where: { $0.id == tabID })?.selection,
+            uiSelection
+        )
+        XCTAssertEqual(selectionChanges.count(where: { $0.source == .uiFlush }), 1)
+
+        let connectionID = UUID()
+        try window.mcpServer.bindTabForConnection(
+            connectionID: connectionID,
+            clientName: "immediate-selection-ordering-client",
+            tabID: tabID,
+            workspaceID: workspaceID,
+            windowID: window.windowID
+        )
+        defer {
+            window.mcpServer.removeTabContext(
+                forConnectionID: connectionID,
+                clientName: "immediate-selection-ordering-client",
+                windowID: window.windowID
+            )
+        }
+        let changeCountBeforeMCPMutation = selectionChanges.count
+
+        _ = try await ServerNetworkManager.withConnectionID(connectionID) {
+            try await manageSelection(["op": .string("clear")])
+        }
+
+        let canonicalSelection = try XCTUnwrap(window.workspaceManager.composeTab(with: tabID)?.selection)
+        XCTAssertTrue(canonicalSelection.selectedPaths.isEmpty)
+        XCTAssertEqual(
+            window.promptManager.currentComposeTabs.first(where: { $0.id == tabID })?.selection,
+            canonicalSelection
+        )
+        XCTAssertTrue(window.workspaceFilesViewModel.snapshotSelection().selectedPaths.isEmpty)
+        XCTAssertFalse(selectionChanges.dropFirst(changeCountBeforeMCPMutation).contains { change in
+            change.source == .uiFlush && change.selection == uiSelection
+        })
     }
 
     func testWorktreeBoundManageSelectionPersistsAcrossOneShotContextConnections() async throws {
@@ -284,16 +355,6 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
         XCTAssertTrue(window.workspaceFilesViewModel.snapshotSelection().selectedPaths.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: logicalPath))
 
-        // Reproduce the app-only race absent from direct provider tests: a debounced file-tree
-        // publisher captured the empty logical-base UI before MCP persistence and fires later.
-        window.workspaceManager.publishActiveComposeTabSnapshot(commitToMemory: true, touchModified: false)
-        try await Task.sleep(for: .milliseconds(250))
-        XCTAssertEqual(window.workspaceManager.composeTab(with: tabID)?.selection.selectedPaths, [logicalPath])
-        XCTAssertEqual(
-            window.promptManager.currentComposeTabs.first(where: { $0.id == tabID })?.selection.selectedPaths,
-            [logicalPath]
-        )
-
         // Exec-mode CLI disconnect is asynchronous. Exercise the stale cleanup ordering where
         // an older bound snapshot commits after the setter has persisted newer canonical state.
         let staleCleanup = Task { @MainActor in
@@ -375,9 +436,6 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
         )
         await ServerNetworkManager.shared.setRunPurpose(.unknown, for: readConnectionID)
 
-        window.workspaceManager.publishActiveComposeTabSnapshot(commitToMemory: true, touchModified: false)
-        try await Task.sleep(for: .milliseconds(250))
-
         let finalConnectionID = UUID()
         try window.mcpServer.bindTabForConnection(
             connectionID: finalConnectionID,
@@ -408,14 +466,23 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
         )
 
         // A genuinely newer manual UI mutation advances the live-owner revision and supersedes
-        // the worktree fence rather than leaving canonical selection permanently pinned.
-        let manualUISelection = StoredSelection(
-            selectedPaths: [fixture.trackedFile.path],
-            codemapAutoEnabled: false
+        // the worktree fence immediately rather than leaving canonical selection pinned.
+        let trackedFile = FileViewModel(
+            file: File(
+                name: fixture.trackedFile.lastPathComponent,
+                path: fixture.trackedFile.path,
+                modificationDate: Date(timeIntervalSince1970: 1000)
+            ),
+            rootPath: fixture.repo.path,
+            rootIdentifier: UUID(),
+            rootFolderPath: fixture.repo.path,
+            fileSystemService: nil
         )
-        await window.workspaceFilesViewModel.applyStoredSelection(manualUISelection)
-        window.workspaceManager.publishActiveComposeTabSnapshot(commitToMemory: true, touchModified: false)
-        try await Task.sleep(for: .milliseconds(250))
+        window.workspaceFilesViewModel.injectIndexedFileForTesting(trackedFile)
+        window.workspaceFilesViewModel.codemapAutoEnabled = false
+        window.workspaceFilesViewModel.selectFileForTesting(trackedFile)
+        let manualUISelection = window.workspaceFilesViewModel.snapshotSelection()
+        XCTAssertEqual(manualUISelection.selectedPaths, [fixture.trackedFile.path])
         XCTAssertEqual(window.workspaceManager.composeTab(with: tabID)?.selection, manualUISelection)
         XCTAssertEqual(
             window.promptManager.currentComposeTabs.first(where: { $0.id == tabID })?.selection,

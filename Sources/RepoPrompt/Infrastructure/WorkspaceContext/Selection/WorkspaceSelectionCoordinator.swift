@@ -288,6 +288,7 @@ final class WorkspaceSelectionCoordinator {
         guard snapshot.tabID != previousIdentity?.tabID || snapshot.selection != previousSelection else { return }
         if let identity = activeSelectionIdentity() {
             recordSelectionRevision(for: identity)
+            workspaceManager.updateComposeTabSelectionPresentation(snapshot.selection, for: identity)
         }
         changeSubject.send(Change(tabID: snapshot.tabID, selection: snapshot.selection, source: .uiFlush))
     }
@@ -338,7 +339,6 @@ final class WorkspaceSelectionCoordinator {
             : nil
         let isActive = identity == activeSelectionIdentity()
         let mirrorToUI = isActive && mirrorToUIIfActive
-
         if currentSelection == selection {
             guard canCommitPeerMutation(
                 peerMutationFence,
@@ -456,7 +456,11 @@ final class WorkspaceSelectionCoordinator {
         }
 
         if source.isMCPSelectionSource {
-            updateMCPSelectionPresentation(after, for: identity, workspaceManager: workspaceManager)
+            updateMCPSelectionPresentation(
+                after,
+                for: identity,
+                workspaceManager: workspaceManager
+            )
         }
         if after != before, !mirrorToUI || source.isMCPSelectionSource {
             changeSubject.send(Change(tabID: identity.tabID, selection: after, source: source))

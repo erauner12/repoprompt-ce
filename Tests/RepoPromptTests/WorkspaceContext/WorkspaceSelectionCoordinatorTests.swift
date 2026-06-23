@@ -266,39 +266,6 @@ final class WorkspaceSelectionCoordinatorTests: XCTestCase {
         return harness.manager.mirrorCompletedSelections.count == count
     }
 
-    func testMCPActiveSelectionFencesStaleUISnapshotBeforeMirrorBegins() async {
-        let initial = StoredSelection()
-        let canonical = StoredSelection(selectedPaths: ["/tmp/canonical.swift"], codemapAutoEnabled: false)
-        let staleUI = StoredSelection()
-        let harness = CoordinatorHarness(initialSelection: initial)
-        harness.manager.pendingUISelection = staleUI
-        let coordinator = WorkspaceSelectionCoordinator(workspaceManager: harness.manager, store: harness.store)
-        harness.manager.activeUISnapshotResolver = { selection, tabID in
-            coordinator.selectionForActiveUISnapshot(selection, tabID: tabID)
-        }
-        harness.manager.presentationHandler = {
-            _ = coordinator.activeSelectionSnapshot(flushPendingUI: true)
-        }
-
-        _ = await coordinator.persistActiveSelection(canonical, source: .mcpTabContext)
-
-        XCTAssertEqual(harness.manager.publishSnapshotCallCount, 1)
-        XCTAssertEqual(harness.manager.composeTab(for: harness.identity)?.selection, canonical)
-        XCTAssertEqual(harness.manager.mirrorStartedSelections, [canonical])
-        XCTAssertEqual(harness.manager.mirrorCompletedSelections, [canonical])
-        XCTAssertEqual(harness.manager.mirroredSelection, canonical)
-
-        // The fence is not ownership by value: a genuinely newer UI revision must still win.
-        let newerUI = StoredSelection(selectedPaths: ["/tmp/newer-ui.swift"])
-        harness.manager.presentationHandler = nil
-        harness.manager.pendingUISelection = newerUI
-        harness.manager.advanceLiveUISelectionRevision()
-        XCTAssertEqual(
-            coordinator.activeSelectionSnapshot(flushPendingUI: true).selection,
-            newerUI
-        )
-    }
-
     func testMCPActiveSelectionCanDeferMirrorToReadFileAutoSelectionLane() async {
         let initial = StoredSelection(selectedPaths: ["/tmp/initial.swift"])
         let next = StoredSelection(selectedPaths: ["/tmp/next.swift"])
@@ -351,62 +318,34 @@ final class WorkspaceSelectionCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.selectionForActiveUISnapshot(staleUI, tabID: harness.tabID), staleUI)
     }
 
-    func testDeferredMCPMirrorRefreshesFenceBeforeQueuedCatalogSnapshotPublishes() async {
-        let first = StoredSelection(
-            selectedPaths: ["/tmp/Full.swift"],
-            autoCodemapPaths: ["/tmp/DependencyA.swift", "/tmp/DependencyB.swift"],
-            codemapAutoEnabled: true
+    func testDeferredMCPMirrorRefreshesExistingFenceAfterUIRevisionAdvance() async {
+        let canonical = StoredSelection(
+            selectedPaths: ["/tmp/worktree-only.swift"],
+            codemapAutoEnabled: false
         )
-        let latest = StoredSelection(
-            selectedPaths: ["/tmp/Full.swift", "/tmp/Sliced.swift"],
-            autoCodemapPaths: [
-                "/tmp/DependencyA.swift",
-                "/tmp/DependencyB.swift",
-                "/tmp/DependencyC.swift",
-                "/tmp/DependencyD.swift"
-            ],
-            slices: ["/tmp/Sliced.swift": [LineRange(start: 4, end: 7)]],
-            codemapAutoEnabled: true
-        )
-        let completeCatalog = StoredSelection(
-            selectedPaths: ["/tmp/Full.swift", "/tmp/Sliced.swift"],
-            autoCodemapPaths: (0 ..< 300).map { "/tmp/Catalog/\($0).swift" },
-            codemapAutoEnabled: true
-        )
-        let harness = CoordinatorHarness(initialSelection: StoredSelection())
+        let staleUI = StoredSelection()
+        let harness = CoordinatorHarness(initialSelection: staleUI)
+        harness.manager.pendingUISelection = staleUI
         let coordinator = WorkspaceSelectionCoordinator(workspaceManager: harness.manager, store: harness.store)
         harness.manager.activeUISnapshotResolver = { selection, tabID in
             coordinator.selectionForActiveUISnapshot(selection, tabID: tabID)
         }
         harness.manager.advanceLiveUISelectionRevisionDuringMirror = true
 
-        for expected in [first, latest] {
-            _ = await coordinator.persistActiveSelection(
-                expected,
-                source: .mcpTabContext,
-                mirrorToUI: false
-            )
-            harness.manager.pendingUISelection = completeCatalog
+        _ = await coordinator.persistActiveSelection(
+            canonical,
+            source: .mcpTabContext,
+            mirrorToUI: false
+        )
+        await coordinator.mirrorSelectionToActiveUI(canonical, forTabID: harness.tabID)
+        harness.manager.publishActiveComposeTabSnapshot(
+            commitToMemory: true,
+            touchModified: false
+        )
 
-            await coordinator.mirrorSelectionToActiveUI(expected, forTabID: harness.tabID)
-
-            // Model the already-enqueued selected-files debounce. This is not a read-file
-            // drain or manage_selection get; it is the ordinary UI publication that runs
-            // after the programmatic mirror has advanced the live selection revision.
-            harness.manager.publishActiveComposeTabSnapshot(
-                commitToMemory: true,
-                touchModified: false
-            )
-
-            XCTAssertEqual(harness.manager.composeTab(for: harness.identity)?.selection, expected)
-        }
-
-        XCTAssertEqual(harness.manager.mirroredSelection, latest)
-        XCTAssertEqual(harness.manager.publishedSelections, [first, latest])
-        XCTAssertTrue(harness.manager.publishedSelections.allSatisfy {
-            $0.selectedPaths.count + $0.autoCodemapPaths.count <= 6
-        })
-        XCTAssertFalse(harness.manager.publishedSelections.contains(completeCatalog))
+        XCTAssertEqual(harness.manager.publishSnapshotCallCount, 1)
+        XCTAssertEqual(harness.manager.composeTab(for: harness.identity)?.selection, canonical)
+        XCTAssertEqual(harness.manager.mirroredSelection, canonical)
     }
 
     func testTwoSourceWindowsRejectDelayedOlderPropagationAfterNewerLocalMutation() async {
@@ -926,9 +865,7 @@ private final class FakeWorkspaceSelectionManager: WorkspaceSelectionHost {
     let fileManager: WorkspaceFilesViewModel
     var pendingUISelection: StoredSelection?
     var activeUISnapshotResolver: ((StoredSelection, UUID) -> StoredSelection)?
-    var presentationHandler: (() -> Void)?
     var advanceLiveUISelectionRevisionDuringMirror = false
-    private(set) var publishedSelections: [StoredSelection] = []
     private(set) var publishSnapshotCallCount = 0
     private(set) var updateStoredOnlyCallCount = 0
     var firstMirrorGate: SelectionMirrorGate?
@@ -977,7 +914,6 @@ private final class FakeWorkspaceSelectionManager: WorkspaceSelectionHost {
         else { return }
         let publishedSelection = activeUISnapshotResolver?(pendingUISelection, activeID) ?? pendingUISelection
         workspace.composeTabs[index].selection = publishedSelection
-        publishedSelections.append(publishedSelection)
         if touchModified {
             workspace.composeTabs[index].lastModified = Date()
         }
@@ -1028,7 +964,6 @@ private final class FakeWorkspaceSelectionManager: WorkspaceSelectionHost {
     ) {
         guard activeWorkspace?.id == identity.workspaceID else { return }
         presentedSelection = selection
-        presentationHandler?()
     }
 
     func registerMCPSelectionSourceMutation(

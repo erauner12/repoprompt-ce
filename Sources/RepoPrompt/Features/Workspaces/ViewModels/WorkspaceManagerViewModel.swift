@@ -566,6 +566,7 @@ class WorkspaceManagerViewModel: ObservableObject {
         searchService: workspaceSearchService
     )
     private weak var selectionCoordinator: WorkspaceSelectionCoordinator?
+    private var selectionProjectionAuthorityCancellable: AnyCancellable?
 
     var liveUISelectionRevision: UInt64 {
         fileManager.selectionStateRevision
@@ -1361,26 +1362,12 @@ class WorkspaceManagerViewModel: ObservableObject {
             globalCustomStorageURL = URL(fileURLWithPath: path)
         }
 
-        // Track when the file selection changes to detect if active preset is dirty
+        // Preset dirty-state is presentation-only and can coalesce rapid selection changes.
         fileManager.$selectedFiles
-            // Debounce to avoid rapid consecutive events
             .debounce(for: .seconds(0.15), scheduler: DispatchQueue.main)
             .sink { [weak self] newSelection in
                 guard let self, !self.isSwitchingWorkspace else { return }
                 checkIfActivePresetIsDirty(with: newSelection)
-                bumpStateVersion(for: activeWorkspaceID)
-                // No disk save here - publish in-memory snapshot for mirroring
-                publishActiveComposeTabSnapshot(commitToMemory: true)
-            }
-            .store(in: &cancellables)
-
-        fileManager.$codemapAutoEnabled
-            .removeDuplicates()
-            .sink { [weak self] _ in
-                guard let self, !self.isSwitchingWorkspace else { return }
-                bumpStateVersion(for: activeWorkspaceID)
-                // No disk save here - publish in-memory snapshot for mirroring
-                publishActiveComposeTabSnapshot(commitToMemory: true)
             }
             .store(in: &cancellables)
 
@@ -1391,20 +1378,6 @@ class WorkspaceManagerViewModel: ObservableObject {
                 guard let self, !self.isSwitchingWorkspace else { return }
                 bumpStateVersion(for: activeWorkspaceID)
                 // No disk save here - publish in-memory snapshot for mirroring
-                publishActiveComposeTabSnapshot(commitToMemory: true)
-            }
-            .store(in: &cancellables)
-
-        // Track slice changes so run-scoped MCP "get" sees cleared/updated slices.
-        // Without this, clearing slices in the UI wouldn't propagate to the compose-tab
-        // snapshot, causing stale slices to reappear in mirrored tab contexts.
-        fileManager.$selectionSlicesByFileID
-            .removeDuplicates()
-            .debounce(for: .milliseconds(60), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self, !self.isSwitchingWorkspace else { return }
-                bumpStateVersion(for: activeWorkspaceID)
-                // Commit to memory so composeTab(with:) reflects the new slice state immediately.
                 publishActiveComposeTabSnapshot(commitToMemory: true)
             }
             .store(in: &cancellables)
@@ -3440,6 +3413,18 @@ class WorkspaceManagerViewModel: ObservableObject {
 
     func attachSelectionCoordinator(_ coordinator: WorkspaceSelectionCoordinator) {
         selectionCoordinator = coordinator
+        selectionProjectionAuthorityCancellable?.cancel()
+        selectionProjectionAuthorityCancellable = fileManager.selectionProjectionRevisionPublisher
+            .sink { [weak self, weak coordinator] _ in
+                guard let self,
+                      let coordinator,
+                      selectionCoordinator === coordinator,
+                      !isSwitchingWorkspace,
+                      !coordinator.isApplyingSelectionMirror
+                else { return }
+                bumpStateVersion(for: activeWorkspaceID)
+                coordinator.flushPendingUISelectionToActiveTab()
+            }
     }
 
     func collectComposeTabSnapshot(name: String, base: ComposeTabState? = nil) -> ComposeTabState {
