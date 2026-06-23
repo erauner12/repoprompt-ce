@@ -14,7 +14,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias DashboardVisibilityHandler = @MainActor (_ visible: Bool) -> Void
     typealias DirectiveSubmitter = @MainActor (_ text: String, _ coordinatorSessionID: UUID?, _ forceNewRuntime: Bool) async -> DirectiveSubmissionResult
     typealias ChildDirectiveSubmitter = @MainActor (_ text: String, _ row: CoordinatorModeRow) async -> DirectiveSubmissionResult
-    typealias HumanReviewAcknowledgementHandler = @MainActor (_ reviewID: String, _ snapshotBeforeAcknowledgement: CoordinatorModeSnapshot) async -> Void
+    typealias ContinuationGateHandler = @MainActor (_ gate: CoordinatorContinuationGate, _ snapshotBeforeGateCleared: CoordinatorModeSnapshot) async -> Void
     static let requiresHumanReviewAcknowledgementDefaultsKey = "CoordinatorMode.requiresHumanReviewAcknowledgement"
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
@@ -43,7 +43,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let dashboardVisibilityHandler: DashboardVisibilityHandler
     private let directiveSubmitter: DirectiveSubmitter
     private let childDirectiveSubmitter: ChildDirectiveSubmitter
-    private let humanReviewAcknowledgementHandler: HumanReviewAcknowledgementHandler
+    private let continuationGateHandler: ContinuationGateHandler
     private let projector: CoordinatorModeSnapshotProjector
     private let userDefaults: UserDefaults
     private var selectedCoordinatorIDByWorkspaceID: [UUID: UUID] = [:]
@@ -64,7 +64,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         childDirectiveSubmitter: @escaping ChildDirectiveSubmitter = { _, _ in
             .rejected(message: "Session replies are unavailable.")
         },
-        humanReviewAcknowledgementHandler: @escaping HumanReviewAcknowledgementHandler = { _, _ in },
+        continuationGateHandler: @escaping ContinuationGateHandler = { _, _ in },
         projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector(),
         userDefaults: UserDefaults = .standard
     ) {
@@ -73,7 +73,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.dashboardVisibilityHandler = dashboardVisibilityHandler
         self.directiveSubmitter = directiveSubmitter
         self.childDirectiveSubmitter = childDirectiveSubmitter
-        self.humanReviewAcknowledgementHandler = humanReviewAcknowledgementHandler
+        self.continuationGateHandler = continuationGateHandler
         self.projector = projector
         self.userDefaults = userDefaults
         requiresHumanReviewAcknowledgement = userDefaults.object(forKey: Self.requiresHumanReviewAcknowledgementDefaultsKey) as? Bool ?? true
@@ -148,8 +148,26 @@ final class CoordinatorModeViewModel: ObservableObject {
         acknowledgedHumanReviewIDs.insert(reviewID)
         refresh()
         guard allowsProactiveFollowThrough else { return }
-        Task { @MainActor [humanReviewAcknowledgementHandler] in
-            await humanReviewAcknowledgementHandler(reviewID, previousSnapshot)
+        let gate = CoordinatorContinuationGate.reviewAcknowledgement(reviewID: reviewID)
+        Task { @MainActor [continuationGateHandler] in
+            await continuationGateHandler(gate, previousSnapshot)
+        }
+    }
+
+    func approveCoordinatorContinuation(reviewID: String, subjectTitle: String?) {
+        let previousSnapshot = snapshot
+        guard allowsProactiveFollowThrough else {
+            composerNotice = "Follow is off. Turn on Follow to approve the next Coordinator step automatically."
+            return
+        }
+        let gate = CoordinatorContinuationGate.actionApproval(
+            gateID: "approval:continue:\(reviewID)",
+            action: .continuePlan,
+            subjectID: reviewID,
+            subjectTitle: subjectTitle
+        )
+        Task { @MainActor [continuationGateHandler] in
+            await continuationGateHandler(gate, previousSnapshot)
         }
     }
 
@@ -580,11 +598,10 @@ extension AgentModeViewModel {
             case let .blocked(message):
                 return .rejected(message: message)
             }
-        } humanReviewAcknowledgementHandler: { [weak self] reviewID, snapshotBeforeAcknowledgement in
-            let gate = CoordinatorContinuationGate.reviewAcknowledgement(reviewID: reviewID)
+        } continuationGateHandler: { [weak self] gate, snapshotBeforeGateCleared in
             await self?.evaluateCoordinatorFollowThrough(
                 trigger: .gateCleared(gate),
-                snapshot: snapshotBeforeAcknowledgement
+                snapshot: snapshotBeforeGateCleared
             )
         }
     }

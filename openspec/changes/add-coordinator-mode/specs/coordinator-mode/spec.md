@@ -280,10 +280,16 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **AND** it SHALL NOT treat the acknowledgement as permission to apply, merge, approve, commit, push, or bypass any remaining permission or Needs-you gate.
 
 #### Scenario: Scoped action approval clears one action gate
-- **WHEN** a future user approval surface clears an action-approval gate for a named next action
+- **WHEN** the user approval surface clears an action-approval gate for a named next action
 - **THEN** the Coordinator view SHALL represent the cleared gate as a typed continuation event with the exact approved action
 - **AND** if follow-through is enabled and the owning Coordinator runtime is idle, it MAY wake that existing Coordinator with a structured resume event
 - **AND** it SHALL NOT treat that approval as permission for any later apply, merge, approve, commit, push, PR, or destructive action beyond the named action.
+
+#### Scenario: Scoped action approval waits for required review
+- **WHEN** a delegated row still has an uncleared required human-review packet
+- **AND** the user attempts to clear a scoped action-approval gate for that row
+- **THEN** the Coordinator view SHALL hold follow-through until the required review gate is acknowledged
+- **AND** it SHALL NOT treat scoped action approval as a substitute for `Mark reviewed`.
 
 #### Scenario: Follow-through resume events are deduplicated
 - **WHEN** repeated lifecycle refreshes observe the same child terminal state, advisory review packet, or cleared continuation gate

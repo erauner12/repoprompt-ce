@@ -164,12 +164,12 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let expectation = expectation(description: "follow-through handler")
-        var capturedReviewID: String?
+        var capturedGate: CoordinatorContinuationGate?
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { _, _ in self.input() },
             dashboardVisibilityHandler: { _ in },
-            humanReviewAcknowledgementHandler: { reviewID, _ in
-                capturedReviewID = reviewID
+            continuationGateHandler: { gate, _ in
+                capturedGate = gate
                 expectation.fulfill()
             },
             userDefaults: defaults
@@ -179,7 +179,9 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         viewModel.markHumanReviewHandled("merge-review")
 
         await fulfillment(of: [expectation], timeout: 1.0)
-        XCTAssertEqual(capturedReviewID, "merge-review")
+        XCTAssertEqual(capturedGate?.type, .reviewRequired)
+        XCTAssertEqual(capturedGate?.subjectID, "merge-review")
+        XCTAssertNil(capturedGate?.approvedAction)
     }
 
     func testMarkReviewedDoesNotWakeFollowThroughHandlerWhenManual() async {
@@ -195,7 +197,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { _, _ in self.input() },
             dashboardVisibilityHandler: { _ in },
-            humanReviewAcknowledgementHandler: { _, _ in
+            continuationGateHandler: { _, _ in
                 expectation.fulfill()
             },
             userDefaults: defaults
@@ -204,6 +206,65 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         viewModel.markHumanReviewHandled("merge-review")
 
         await fulfillment(of: [expectation], timeout: 0.1)
+    }
+
+    func testApproveContinuationWakesScopedActionGateWhenEnabled() async {
+        let suiteName = "CoordinatorModeComposerViewModelTests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("Could not create isolated defaults suite")
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let expectation = expectation(description: "follow-through action approval")
+        var capturedGate: CoordinatorContinuationGate?
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { _, _ in self.input() },
+            dashboardVisibilityHandler: { _ in },
+            continuationGateHandler: { gate, _ in
+                capturedGate = gate
+                expectation.fulfill()
+            },
+            userDefaults: defaults
+        )
+        viewModel.setAllowsProactiveFollowThrough(true)
+
+        viewModel.approveCoordinatorContinuation(reviewID: "merge-review", subjectTitle: "Review packet")
+
+        await fulfillment(of: [expectation], timeout: 1.0)
+        XCTAssertEqual(capturedGate?.id, "approval:continue:merge-review")
+        XCTAssertEqual(capturedGate?.type, .actionApprovalRequired)
+        XCTAssertEqual(capturedGate?.subjectID, "merge-review")
+        XCTAssertEqual(capturedGate?.subjectTitle, "Review packet")
+        XCTAssertEqual(capturedGate?.approvedAction, .continuePlan)
+    }
+
+    func testApproveContinuationDoesNotWakeWhenManual() async {
+        let suiteName = "CoordinatorModeComposerViewModelTests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("Could not create isolated defaults suite")
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let expectation = expectation(description: "follow-through action approval not called")
+        expectation.isInverted = true
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { _, _ in self.input() },
+            dashboardVisibilityHandler: { _ in },
+            continuationGateHandler: { _, _ in
+                expectation.fulfill()
+            },
+            userDefaults: defaults
+        )
+
+        viewModel.approveCoordinatorContinuation(reviewID: "merge-review", subjectTitle: "Review packet")
+
+        await fulfillment(of: [expectation], timeout: 0.1)
+        XCTAssertEqual(
+            viewModel.composerNotice,
+            "Follow is off. Turn on Follow to approve the next Coordinator step automatically."
+        )
     }
 
     func testAcceptedDirectiveDoesNotDuplicateRuntimeBackedUserTranscriptEntry() async {

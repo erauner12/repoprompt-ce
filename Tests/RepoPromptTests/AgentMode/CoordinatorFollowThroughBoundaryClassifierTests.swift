@@ -261,6 +261,33 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
         XCTAssertTrue(event.resumeDirective.contains("permits only the explicitly approved action"))
     }
 
+    func testActionApprovalHoldsUntilRequiredReviewIsAcknowledged() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let row = childRow(
+            coordinatorID: coordinatorID,
+            childID: childID,
+            statusGroup: .review,
+            runState: .completed,
+            mergeAttention: mergeAttention(id: "merge-review"),
+            pendingHumanReviewID: "merge-review"
+        )
+        let gate = CoordinatorContinuationGate.actionApproval(
+            gateID: "approval:continue:merge-review",
+            action: .continuePlan,
+            subjectID: "merge-review",
+            subjectTitle: "Review packet"
+        )
+
+        let decision = classifier.classify(input(
+            coordinatorID: coordinatorID,
+            rows: [row],
+            trigger: .gateCleared(gate)
+        ))
+
+        XCTAssertEqual(decision, .hold(.requiredReviewUncleared(childID)))
+    }
+
     func testAdvisoryReviewResumes() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)

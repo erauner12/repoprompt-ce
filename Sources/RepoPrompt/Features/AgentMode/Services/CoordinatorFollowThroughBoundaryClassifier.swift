@@ -122,6 +122,12 @@ struct CoordinatorFollowThroughBoundaryClassifier {
         rows: [CoordinatorModeRow],
         state: CoordinatorFollowThroughState
     ) -> Decision {
+        if gate.type == .actionApprovalRequired,
+           let requiredReview = rows.first(where: requiresHumanReviewAcknowledgement)
+        {
+            return .hold(.requiredReviewUncleared(requiredReview.sessionID))
+        }
+
         let row = rows.first {
             $0.pendingHumanReviewID == gate.subjectID || reviewID(for: $0) == gate.subjectID
         }

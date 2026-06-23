@@ -2230,8 +2230,26 @@ struct CoordinatorModeView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(packet.tint)
+            } else if row.parentCoordinator != nil, let reviewID = continuationApprovalReviewID(for: row) {
+                Button {
+                    viewModel.approveCoordinatorContinuation(reviewID: reviewID, subjectTitle: row.title)
+                } label: {
+                    Label("Approve next step", systemImage: "arrow.right.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(Color.accentColor)
+
+                Text("Approves only the next Coordinator-planned step. It does not apply, merge, commit, push, or approve later actions.")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    private func continuationApprovalReviewID(for row: CoordinatorModeRow) -> String? {
+        row.workstreamSummary?.reviewPacketID ?? row.mergeAttention?.id
     }
 
     private func workstreamNextActionHint(
