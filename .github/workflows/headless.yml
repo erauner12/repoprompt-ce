@@ -5,6 +5,8 @@ on:
     paths:
       - "Sources/RepoPromptHeadless/**"
       - "Tests/RepoPromptHeadlessTests/**"
+      - "Sources/RepoPromptCore/**"
+      - "Sources/RepoPromptCoreMacOS/**"
       - "Sources/RepoPromptPOSIXSupport/**"
       - "Tests/RepoPromptPOSIXSupportTests/**"
       - "Package.swift"

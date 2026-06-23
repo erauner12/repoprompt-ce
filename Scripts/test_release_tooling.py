@@ -1316,6 +1316,27 @@ SIGNING_TEAM_ID=648A27MST5
         self.assertIn('gitleaks git --redact --log-opts="$range" .', workflow)
         self.assertIn("gitleaks dir --redact .", workflow)
 
+    def test_headless_ci_filters_and_integration_avoid_duplicate_package_and_smoke_work(self) -> None:
+        workflows = SCRIPT_DIR.parent / ".github" / "workflows"
+        focused_workflow = (workflows / "headless.yml").read_text(encoding="utf-8")
+        ci_workflow = (workflows / "ci.yml").read_text(encoding="utf-8")
+        build_and_test_job = ci_workflow.split("\n  build-and-test:", 1)[1].split("\n  secret-scan:", 1)[0]
+
+        for path_filter in (
+            '      - "Sources/RepoPromptCore/**"',
+            '      - "Sources/RepoPromptCoreMacOS/**"',
+        ):
+            with self.subTest(path_filter=path_filter):
+                self.assertEqual(focused_workflow.count(path_filter), 1)
+
+        self.assertEqual(build_and_test_job.count("swift test --filter RepoPromptHeadlessTests"), 1)
+        headless_test_step = build_and_test_job.split("      - name: Run Headless tests", 1)[1].split(
+            "\n      - name: Run app tests", 1
+        )[0]
+        for duplicated_work in ("dev-headless-package", "dev-headless-provenance", "dev-headless-smoke"):
+            with self.subTest(duplicated_work=duplicated_work):
+                self.assertNotIn(duplicated_work, headless_test_step)
+
     def test_publish_staged_validates_before_creating_dist(self) -> None:
         release_script = (SCRIPT_DIR / "release.sh").read_text(encoding="utf-8")
         publish_staged = release_script.split("publish_staged_release() {", 1)[1].split("\n}", 1)[0]

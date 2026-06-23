@@ -84,6 +84,9 @@ jobs:
       - name: Run POSIX support tests
         run: swift test --filter RepoPromptPOSIXSupportTests
 
+      - name: Run Headless tests
+        run: swift test --filter RepoPromptHeadlessTests
+
       - name: Run app tests
         shell: bash
         run: |
