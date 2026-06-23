@@ -181,7 +181,38 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         await fulfillment(of: [expectation], timeout: 1.0)
         XCTAssertEqual(capturedGate?.type, .reviewRequired)
         XCTAssertEqual(capturedGate?.subjectID, "merge-review")
+        XCTAssertNil(capturedGate?.ownerCoordinatorSessionID)
         XCTAssertNil(capturedGate?.approvedAction)
+    }
+
+    func testMarkReviewedScopesGateToOwningCoordinatorWhenProvided() async {
+        let suiteName = "CoordinatorModeComposerViewModelTests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("Could not create isolated defaults suite")
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let ownerID = uuid(42)
+        let expectation = expectation(description: "follow-through handler")
+        var capturedGate: CoordinatorContinuationGate?
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { _, _ in self.input() },
+            dashboardVisibilityHandler: { _ in },
+            continuationGateHandler: { gate, _ in
+                capturedGate = gate
+                expectation.fulfill()
+            },
+            userDefaults: defaults
+        )
+        viewModel.setAllowsProactiveFollowThrough(true)
+
+        viewModel.markHumanReviewHandled("merge-review", coordinatorSessionID: ownerID)
+
+        await fulfillment(of: [expectation], timeout: 1.0)
+        XCTAssertEqual(capturedGate?.type, .reviewRequired)
+        XCTAssertEqual(capturedGate?.subjectID, "merge-review")
+        XCTAssertEqual(capturedGate?.ownerCoordinatorSessionID, ownerID)
     }
 
     func testMarkReviewedDoesNotWakeFollowThroughHandlerWhenManual() async {
@@ -236,6 +267,44 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(capturedGate?.type, .actionApprovalRequired)
         XCTAssertEqual(capturedGate?.subjectID, "merge-review")
         XCTAssertEqual(capturedGate?.subjectTitle, "Review packet")
+        XCTAssertNil(capturedGate?.ownerCoordinatorSessionID)
+        XCTAssertEqual(capturedGate?.approvedAction, .continuePlan)
+    }
+
+    func testApproveContinuationScopesActionGateToOwningCoordinatorWhenProvided() async {
+        let suiteName = "CoordinatorModeComposerViewModelTests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("Could not create isolated defaults suite")
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let ownerID = uuid(42)
+        let expectation = expectation(description: "follow-through action approval")
+        var capturedGate: CoordinatorContinuationGate?
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { _, _ in self.input() },
+            dashboardVisibilityHandler: { _ in },
+            continuationGateHandler: { gate, _ in
+                capturedGate = gate
+                expectation.fulfill()
+            },
+            userDefaults: defaults
+        )
+        viewModel.setAllowsProactiveFollowThrough(true)
+
+        viewModel.approveCoordinatorContinuation(
+            reviewID: "merge-review",
+            subjectTitle: "Review packet",
+            coordinatorSessionID: ownerID
+        )
+
+        await fulfillment(of: [expectation], timeout: 1.0)
+        XCTAssertEqual(capturedGate?.id, "approval:continue:merge-review")
+        XCTAssertEqual(capturedGate?.type, .actionApprovalRequired)
+        XCTAssertEqual(capturedGate?.subjectID, "merge-review")
+        XCTAssertEqual(capturedGate?.subjectTitle, "Review packet")
+        XCTAssertEqual(capturedGate?.ownerCoordinatorSessionID, ownerID)
         XCTAssertEqual(capturedGate?.approvedAction, .continuePlan)
     }
 

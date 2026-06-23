@@ -2223,7 +2223,10 @@ struct CoordinatorModeView: View {
 
             if let reviewID = row.pendingHumanReviewID {
                 Button {
-                    viewModel.markHumanReviewHandled(reviewID)
+                    viewModel.markHumanReviewHandled(
+                        reviewID,
+                        coordinatorSessionID: row.parentCoordinator?.sessionID
+                    )
                 } label: {
                     Label("Mark reviewed", systemImage: "checkmark.circle")
                         .frame(maxWidth: .infinity)
@@ -2232,7 +2235,11 @@ struct CoordinatorModeView: View {
                 .tint(packet.tint)
             } else if row.parentCoordinator != nil, let reviewID = continuationApprovalReviewID(for: row) {
                 Button {
-                    viewModel.approveCoordinatorContinuation(reviewID: reviewID, subjectTitle: row.title)
+                    viewModel.approveCoordinatorContinuation(
+                        reviewID: reviewID,
+                        subjectTitle: row.title,
+                        coordinatorSessionID: row.parentCoordinator?.sessionID
+                    )
                 } label: {
                     Label("Approve next step", systemImage: "arrow.right.circle")
                         .frame(maxWidth: .infinity)
@@ -3072,6 +3079,7 @@ private extension CoordinatorModeRow.WorkstreamSummary.NextActionKind {
         case .respondToChild: "arrowshape.turn.up.left.fill"
         case .inspectReviewPacket: "doc.text.magnifyingglass"
         case .markReviewHandled: "checkmark.circle"
+        case .approveNextStep: "arrow.right.circle"
         case .inspectBlocker: "exclamationmark.triangle"
         }
     }

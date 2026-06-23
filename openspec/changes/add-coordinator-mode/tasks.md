@@ -93,6 +93,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.17 Enforce Coordinator mutable-delegation worktree policy so read-only child runs may omit worktrees, but edits, tests, review packets, merge previews, commit/PR prep, and inherited-binding-only mutable starts require an explicit child worktree.
 - [x] 9.18 Feed projected workstream summaries into follow-through classification so resume/hold decisions use the same phase, review packet, owner Coordinator, and next action shown on the board.
 - [x] 9.19 Add scoped `Approve next step` continuation approval after review acknowledgement, with tests proving it wakes only the owning Coordinator and cannot bypass uncleared required review.
+- [x] 9.20 Project acknowledged review packets as `Approve next step` workstream actions so reviewed items remain actionable without implying merge/apply/commit permission.
 
 ## 10. Coordinator view UI shell
 

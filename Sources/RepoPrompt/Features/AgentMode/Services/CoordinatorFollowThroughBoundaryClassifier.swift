@@ -122,6 +122,12 @@ struct CoordinatorFollowThroughBoundaryClassifier {
         rows: [CoordinatorModeRow],
         state: CoordinatorFollowThroughState
     ) -> Decision {
+        if let ownerID = gate.ownerCoordinatorSessionID,
+           ownerID != coordinatorSessionID
+        {
+            return .hold(.noResumableEvent)
+        }
+
         if gate.type == .actionApprovalRequired,
            let requiredReview = rows.first(where: requiresHumanReviewAcknowledgement)
         {

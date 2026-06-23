@@ -209,7 +209,8 @@ The system SHALL present v1 as a read-only status board by default, with a list 
 
 #### Scenario: Board remains read-only in v1
 - **WHEN** the v1 board renders session cards
-- **THEN** it SHALL NOT provide drag-to-reorder, drag-to-dispatch, drag-to-change-status, inline approval, inline retry, or direct child-session mutation.
+- **THEN** it SHALL NOT provide drag-to-reorder, drag-to-dispatch, drag-to-change-status, inline child-session approval, inline retry, or direct child-session mutation
+- **AND** a scoped Coordinator continuation approval MAY be surfaced only as a parent-runtime resume gate that names exactly one next Coordinator action.
 
 ### Requirement: Coordinator composer
 The system SHALL provide a scoped Coordinator composer as the only v1 Coordinator-mode write path.
@@ -284,6 +285,11 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **THEN** the Coordinator view SHALL represent the cleared gate as a typed continuation event with the exact approved action
 - **AND** if follow-through is enabled and the owning Coordinator runtime is idle, it MAY wake that existing Coordinator with a structured resume event
 - **AND** it SHALL NOT treat that approval as permission for any later apply, merge, approve, commit, push, PR, or destructive action beyond the named action.
+
+#### Scenario: Acknowledged review projects a continuation action
+- **WHEN** a Coordinator-owned row has a review packet whose required human-review gate has been acknowledged
+- **THEN** the workstream projection MAY expose `Approve next step` as the row's next action
+- **AND** that action SHALL approve only the Coordinator's next declared continuation step, not the review packet itself, not a child-session approval, and not any later apply, merge, commit, push, PR, or destructive action.
 
 #### Scenario: Scoped action approval waits for required review
 - **WHEN** a delegated row still has an uncleared required human-review packet

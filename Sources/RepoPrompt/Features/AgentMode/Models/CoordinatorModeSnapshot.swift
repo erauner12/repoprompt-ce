@@ -109,6 +109,7 @@ struct CoordinatorWorkstream: Identifiable, Equatable {
         case respondToChild
         case inspectReviewPacket
         case markReviewHandled
+        case approveNextStep
         case inspectBlocker
     }
 

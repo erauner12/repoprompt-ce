@@ -484,7 +484,8 @@ struct CoordinatorModeSnapshotProjector {
                 statusGroup: statusGroup,
                 mergeAttention: mergeAttention,
                 pendingHumanReviewID: pendingHumanReviewID,
-                pendingInteraction: pendingInteraction
+                pendingInteraction: pendingInteraction,
+                parentCoordinator: parentCoordinator
             )
         )
     }
@@ -493,7 +494,8 @@ struct CoordinatorModeSnapshotProjector {
         statusGroup: CoordinatorModeStatusGroup,
         mergeAttention: CoordinatorModeRow.MergeAttention?,
         pendingHumanReviewID: String?,
-        pendingInteraction: CoordinatorModePendingInteractionSummary?
+        pendingInteraction: CoordinatorModePendingInteractionSummary?,
+        parentCoordinator: CoordinatorModeRow.ParentCoordinator?
     ) -> CoordinatorModeRow.WorkstreamSummary.NextAction? {
         if pendingInteraction != nil {
             return CoordinatorModeRow.WorkstreamSummary.NextAction(
@@ -542,7 +544,26 @@ struct CoordinatorModeSnapshotProjector {
                 detail: nil
             )
         case .done:
+            if parentCoordinator != nil,
+               let mergeAttention,
+               shouldOfferContinuationApproval(for: mergeAttention.status)
+            {
+                return CoordinatorModeRow.WorkstreamSummary.NextAction(
+                    kind: .approveNextStep,
+                    title: "Approve next step",
+                    detail: "The review gate is clear. Approve the Coordinator to continue this objective up to the next boundary."
+                )
+            }
             return nil
+        }
+    }
+
+    private func shouldOfferContinuationApproval(for status: AgentSessionWorktreeMergeOperation.Status) -> Bool {
+        switch status {
+        case .previewed, .awaitingApproval, .awaitingCommit:
+            true
+        case .applying, .conflicted, .completed, .stale, .failed, .cancelled, .aborted:
+            false
         }
     }
 

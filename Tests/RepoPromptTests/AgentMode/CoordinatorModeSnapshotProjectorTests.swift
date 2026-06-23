@@ -200,6 +200,36 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(summary?.nextAction?.title, "Review packet")
     }
 
+    func testAcknowledgedReviewRowProjectsApproveNextStepAction() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let merge = mergeSummary(id: "merge-review-1", status: .previewed, conflicts: 0, updatedAt: date(95))
+        let snapshot = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Review packet demo", updatedAt: date(100), state: .idle),
+                live(
+                    id: childID,
+                    tab: uuid(102),
+                    title: "Prepare review packet",
+                    updatedAt: date(90),
+                    state: .completed,
+                    parent: coordinatorID,
+                    workflow: .review,
+                    merges: [merge]
+                )
+            ],
+            demoCoordinatorIDs: [coordinatorID],
+            acknowledgedHumanReviewIDs: ["merge-review-1"],
+            requiresHumanReviewAcknowledgement: true
+        ))
+
+        let row = allRows(in: snapshot).first { $0.sessionID == childID }
+        XCTAssertEqual(row?.statusGroup, .done)
+        XCTAssertEqual(row?.workstreamSummary?.reviewPacketID, "merge-review-1")
+        XCTAssertEqual(row?.workstreamSummary?.nextAction?.kind, .approveNextStep)
+        XCTAssertEqual(row?.workstreamSummary?.nextAction?.title, "Approve next step")
+    }
+
     func testBoardIncludesRunningDelegatedSnapshotBeforePersistence() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)

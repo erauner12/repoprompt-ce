@@ -143,18 +143,25 @@ final class CoordinatorModeViewModel: ObservableObject {
         composerNotice = nil
     }
 
-    func markHumanReviewHandled(_ reviewID: String) {
+    func markHumanReviewHandled(_ reviewID: String, coordinatorSessionID: UUID? = nil) {
         let previousSnapshot = snapshot
         acknowledgedHumanReviewIDs.insert(reviewID)
         refresh()
         guard allowsProactiveFollowThrough else { return }
-        let gate = CoordinatorContinuationGate.reviewAcknowledgement(reviewID: reviewID)
+        let gate = CoordinatorContinuationGate.reviewAcknowledgement(
+            reviewID: reviewID,
+            ownerCoordinatorSessionID: coordinatorSessionID
+        )
         Task { @MainActor [continuationGateHandler] in
             await continuationGateHandler(gate, previousSnapshot)
         }
     }
 
-    func approveCoordinatorContinuation(reviewID: String, subjectTitle: String?) {
+    func approveCoordinatorContinuation(
+        reviewID: String,
+        subjectTitle: String?,
+        coordinatorSessionID: UUID? = nil
+    ) {
         let previousSnapshot = snapshot
         guard allowsProactiveFollowThrough else {
             composerNotice = "Follow is off. Turn on Follow to approve the next Coordinator step automatically."
@@ -164,7 +171,8 @@ final class CoordinatorModeViewModel: ObservableObject {
             gateID: "approval:continue:\(reviewID)",
             action: .continuePlan,
             subjectID: reviewID,
-            subjectTitle: subjectTitle
+            subjectTitle: subjectTitle,
+            ownerCoordinatorSessionID: coordinatorSessionID
         )
         Task { @MainActor [continuationGateHandler] in
             await continuationGateHandler(gate, previousSnapshot)
@@ -599,10 +607,18 @@ extension AgentModeViewModel {
                 return .rejected(message: message)
             }
         } continuationGateHandler: { [weak self] gate, snapshotBeforeGateCleared in
-            await self?.evaluateCoordinatorFollowThrough(
-                trigger: .gateCleared(gate),
-                snapshot: snapshotBeforeGateCleared
-            )
+            if let ownerID = gate.ownerCoordinatorSessionID {
+                await self?.evaluateCoordinatorFollowThrough(
+                    coordinatorSessionID: ownerID,
+                    snapshot: snapshotBeforeGateCleared,
+                    trigger: .gateCleared(gate)
+                )
+            } else {
+                await self?.evaluateCoordinatorFollowThrough(
+                    trigger: .gateCleared(gate),
+                    snapshot: snapshotBeforeGateCleared
+                )
+            }
         }
     }
 
@@ -699,6 +715,20 @@ extension AgentModeViewModel {
                 trigger: trigger
             )
         }
+    }
+
+    @MainActor
+    private func evaluateCoordinatorFollowThrough(
+        coordinatorSessionID: UUID,
+        snapshot explicitSnapshot: CoordinatorModeSnapshot,
+        trigger: CoordinatorFollowThroughBoundaryClassifier.Trigger
+    ) async {
+        guard coordinatorModeViewModel.allowsProactiveFollowThrough else { return }
+        await evaluateCoordinatorFollowThrough(
+            coordinatorSessionID: coordinatorSessionID,
+            rows: coordinatorModeRows(in: explicitSnapshot),
+            trigger: trigger
+        )
     }
 
     @MainActor

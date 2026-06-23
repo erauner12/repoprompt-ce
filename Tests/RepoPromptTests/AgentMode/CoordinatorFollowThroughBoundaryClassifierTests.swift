@@ -261,6 +261,25 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
         XCTAssertTrue(event.resumeDirective.contains("permits only the explicitly approved action"))
     }
 
+    func testOwnerScopedGateDoesNotResumeDifferentCoordinator() {
+        let ownerID = uuid(1)
+        let otherCoordinatorID = uuid(99)
+        let gate = CoordinatorContinuationGate.actionApproval(
+            gateID: "approval:continue:merge-review",
+            action: .continuePlan,
+            subjectID: "merge-review",
+            subjectTitle: "Review packet",
+            ownerCoordinatorSessionID: ownerID
+        )
+
+        let decision = classifier.classify(input(
+            coordinatorID: otherCoordinatorID,
+            trigger: .gateCleared(gate)
+        ))
+
+        XCTAssertEqual(decision, .hold(.noResumableEvent))
+    }
+
     func testActionApprovalHoldsUntilRequiredReviewIsAcknowledged() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)

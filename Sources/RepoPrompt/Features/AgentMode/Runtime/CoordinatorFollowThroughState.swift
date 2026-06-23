@@ -210,16 +210,22 @@ struct CoordinatorContinuationGate: Codable, Equatable, Identifiable {
     let type: GateType
     let subjectID: String?
     let subjectTitle: String?
+    let ownerCoordinatorSessionID: UUID?
     let approvedAction: ApprovedAction?
     let detail: String
     let clearedBy: ClearedBy
 
-    static func reviewAcknowledgement(reviewID: String, subjectTitle: String? = nil) -> Self {
+    static func reviewAcknowledgement(
+        reviewID: String,
+        subjectTitle: String? = nil,
+        ownerCoordinatorSessionID: UUID? = nil
+    ) -> Self {
         Self(
             id: "review:\(reviewID)",
             type: .reviewRequired,
             subjectID: reviewID,
             subjectTitle: subjectTitle,
+            ownerCoordinatorSessionID: ownerCoordinatorSessionID,
             approvedAction: nil,
             detail: "Human marked the review packet as reviewed.",
             clearedBy: .human
@@ -230,13 +236,15 @@ struct CoordinatorContinuationGate: Codable, Equatable, Identifiable {
         gateID: String,
         action: ApprovedAction,
         subjectID: String? = nil,
-        subjectTitle: String? = nil
+        subjectTitle: String? = nil,
+        ownerCoordinatorSessionID: UUID? = nil
     ) -> Self {
         Self(
             id: gateID,
             type: .actionApprovalRequired,
             subjectID: subjectID,
             subjectTitle: subjectTitle,
+            ownerCoordinatorSessionID: ownerCoordinatorSessionID,
             approvedAction: action,
             detail: "Human approved exactly one next action: \(action.rawValue).",
             clearedBy: .human
@@ -257,6 +265,9 @@ struct CoordinatorContinuationGate: Codable, Equatable, Identifiable {
         }
         if let subjectTitle {
             lines.append("- Subject: \(subjectTitle)")
+        }
+        if let ownerCoordinatorSessionID {
+            lines.append("- Owning Coordinator session: \(ownerCoordinatorSessionID.uuidString)")
         }
         if let approvedAction {
             lines.append("- Approved action: \(approvedAction.rawValue)")
