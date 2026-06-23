@@ -33,8 +33,8 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def architectures(path: Path) -> list[str]:
-    return sorted(run("/usr/bin/lipo", "-archs", str(path)).split())
+def architectures(path: Path, lipo_tool: Path) -> list[str]:
+    return sorted(run(str(lipo_tool), "-archs", str(path)).split())
 
 
 def expected_architectures(raw: str) -> list[str]:
@@ -54,13 +54,23 @@ def binary_version(binary: Path) -> str:
     return run(str(binary), "--version")
 
 
+def absolute_normalized_path(raw: str) -> Path:
+    normalized = os.path.normpath(raw)
+    if not os.path.isabs(raw) or normalized != raw:
+        raise argparse.ArgumentTypeError(
+            f"must be an absolute normalized path, got {raw!r}"
+        )
+    return Path(raw)
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, object]:
     binary_input = args.binary.absolute()
     if binary_input.is_symlink() or not binary_input.is_file():
         raise ManifestError(f"artifact must be a regular non-symlink file: {binary_input}")
     binary = binary_input.resolve()
+    artifact_path = args.artifact_path.resolve() if args.artifact_path else binary
     file_stat = binary.stat()
-    actual_architectures = architectures(binary)
+    actual_architectures = architectures(binary, args.lipo_tool)
     expected = expected_architectures(args.expected_architectures)
     if actual_architectures != expected:
         raise ManifestError(f"architecture mismatch: expected {expected}, got {actual_architectures}")
@@ -80,7 +90,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
         "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "source": git_metadata(args.source_root.resolve()),
         "artifact": {
-            "path": str(binary),
+            "path": str(artifact_path),
             "sha256": sha256(binary),
             "size": file_stat.st_size,
             "mode": format(stat.S_IMODE(file_stat.st_mode), "04o"),
@@ -137,6 +147,8 @@ def parser() -> argparse.ArgumentParser:
         child.add_argument("--version", required=True)
         child.add_argument("--build", required=True)
         child.add_argument("--expected-architectures", required=True)
+        child.add_argument("--artifact-path", type=absolute_normalized_path)
+        child.add_argument("--lipo-tool", type=Path, default=Path("/usr/bin/lipo"))
         if action == "write":
             child.add_argument("--output", type=Path, required=True)
         else:
