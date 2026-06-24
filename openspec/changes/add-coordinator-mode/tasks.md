@@ -140,9 +140,10 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.38 Replace the Mission popover with inline rail history rows plus an archived-style persisted section.
 - [x] 10.39 Move the session filter field from the top board controls to a bottom board/list filter bar.
 - [x] 10.40 Let expanded archived Coordinator history use the left rail's flexible scroll area instead of a fixed three-row cap.
-- [x] 10.43 Hide empty lanes on the selected-Mission Kanban while preserving all lanes on the All Agents Board.
 - [x] 10.41 Restyle the Coordinator rail and work/inspector surfaces with rounded floating material chrome.
 - [x] 10.42 Rename Coordinator-specific parent-session rail copy to Missions and remove redundant per-row `Persisted` badges.
+- [x] 10.43 Hide empty lanes on the selected-Mission Kanban while preserving all lanes on the All Agents Board.
+- [x] 10.44 Render Coordinator worktree color indicators from the same persisted worktree identity used by Agent Mode.
 
 ## 11. Validation
 

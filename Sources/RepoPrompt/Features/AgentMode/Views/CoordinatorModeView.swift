@@ -1104,6 +1104,11 @@ struct CoordinatorModeView: View {
     private func sessionCard(_ row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(alignment: .leading, spacing: metrics.sessionCardInnerSpacing) {
             HStack(alignment: .top) {
+                if let worktree = row.workstream {
+                    worktreeMarker(worktree, metrics: metrics)
+                        .padding(.top, 3)
+                }
+
                 Text(row.title)
                     .font(metrics.cardTitle)
                     .foregroundStyle(.primary)
@@ -1224,11 +1229,7 @@ struct CoordinatorModeView: View {
                     .frame(width: metrics.listIdentityColumnWidth)
             }
 
-            Text(listWorkstreamText(for: row))
-                .font(metrics.body)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            worktreeListCell(for: row, metrics: metrics)
                 .frame(width: metrics.listWorkstreamColumnWidth, alignment: .leading)
 
             Text(row.updatedAt.formatted(date: .omitted, time: .shortened))
@@ -1281,6 +1282,20 @@ struct CoordinatorModeView: View {
             return "\(workstream.label) · \(branch)"
         }
         return workstream.label
+    }
+
+    private func worktreeListCell(for row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
+        Group {
+            if let worktree = row.workstream {
+                worktreeLabel(worktree, metrics: metrics)
+            } else {
+                Text(listWorkstreamText(for: row))
+                    .font(metrics.body)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
     }
 
     private func inspector(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
@@ -2655,6 +2670,44 @@ struct CoordinatorModeView: View {
         return .secondary
     }
 
+    private func worktreeLabel(_ worktree: CoordinatorModeRow.Workstream, metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.miniPillIconSpacing) {
+            worktreeMarker(worktree, metrics: metrics)
+            Text(worktree.branch ?? worktree.label)
+                .font(metrics.body)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .hoverTooltip(worktreeTooltip(worktree))
+        .accessibilityLabel("Worktree \(worktree.label)")
+    }
+
+    private func worktreeMarker(_ worktree: CoordinatorModeRow.Workstream, metrics _: CoordinatorVisualMetrics) -> some View {
+        Circle()
+            .fill(worktreeTint(worktree))
+            .frame(width: 7, height: 7)
+            .overlay(
+                Circle().strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5)
+            )
+            .accessibilityHidden(true)
+    }
+
+    private func worktreeTint(_ worktree: CoordinatorModeRow.Workstream) -> Color {
+        if let hex = worktree.colorHex, let color = Color(hex: hex) {
+            return color
+        }
+        return .secondary
+    }
+
+    private func worktreeTooltip(_ worktree: CoordinatorModeRow.Workstream) -> String {
+        var parts = ["Worktree \(worktree.label)"]
+        if let branch = worktree.branch, branch != worktree.label {
+            parts.append("branch \(branch)")
+        }
+        return parts.joined(separator: " · ")
+    }
+
     private func workstreamNextActionHint(
         _ action: CoordinatorModeRow.WorkstreamSummary.NextAction,
         metrics: CoordinatorVisualMetrics
@@ -2701,7 +2754,9 @@ struct CoordinatorModeView: View {
                 keyValue("Workflow", workflow.displayName, metrics: metrics)
             }
             if let worktree = summary.worktree {
-                keyValue("Worktree", worktree.label, metrics: metrics)
+                keyValue("Worktree", metrics: metrics) {
+                    worktreeLabel(worktree, metrics: metrics)
+                }
                 if let branch = worktree.branch {
                     keyValue("Branch", branch, metrics: metrics)
                 }
@@ -2800,12 +2855,18 @@ struct CoordinatorModeView: View {
     }
 
     private func keyValue(_ key: String, _ value: String, metrics: CoordinatorVisualMetrics) -> some View {
+        keyValue(key, metrics: metrics) {
+            Text(value)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func keyValue(_ key: String, metrics: CoordinatorVisualMetrics, @ViewBuilder value: () -> some View) -> some View {
         HStack(alignment: .top) {
             Text(key)
                 .foregroundStyle(.secondary)
             Spacer(minLength: metrics.controlSpacing)
-            Text(value)
-                .multilineTextAlignment(.trailing)
+            value()
         }
         .font(metrics.body)
     }

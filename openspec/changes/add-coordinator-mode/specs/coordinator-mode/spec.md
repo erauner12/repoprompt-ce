@@ -219,6 +219,11 @@ The system SHALL present v1 as a read-only status board by default, with a list 
 - **THEN** it SHALL NOT provide drag-to-reorder, drag-to-dispatch, drag-to-change-status, inline child-session approval, inline retry, or direct child-session mutation
 - **AND** Coordinator continuation approval SHALL be surfaced through the Coordinator chat as an ordinary visible message, not as a board or inspector row mutation.
 
+#### Scenario: Worktree identity is visually consistent
+- **WHEN** a Coordinator board card, list row, or inspector summary represents a session with a bound worktree
+- **THEN** it SHOULD render the worktree's persisted visual color using the same identity source as Agent Mode
+- **AND** sessions sharing the same worktree SHOULD show the same worktree color indicator across Coordinator and Agent Mode surfaces.
+
 #### Scenario: Session filtering is board-bottom chrome
 - **WHEN** the Coordinator board or list renders presentation controls
 - **THEN** view and sort controls SHALL remain in the top board control lane
