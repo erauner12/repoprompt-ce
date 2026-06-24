@@ -312,6 +312,7 @@ struct CoordinatorModeView: View {
         VStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 boardControls(
+                    mcpAwareness: snapshot.mcpAwareness,
                     forceList: forceList,
                     metrics: metrics,
                     showRailToggle: showRailToggle,
@@ -338,13 +339,14 @@ struct CoordinatorModeView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            boardFilterBar(metrics: metrics)
-            Divider()
-            mcpFooter(snapshot.mcpAwareness, metrics: metrics)
+            if snapshot.boardScope == .allAgents {
+                boardFilterBar(metrics: metrics)
+            }
         }
     }
 
     private func boardControls(
+        mcpAwareness: CoordinatorModeMCPAwareness,
         forceList: Bool,
         metrics: CoordinatorVisualMetrics,
         showRailToggle: Bool,
@@ -365,6 +367,8 @@ struct CoordinatorModeView: View {
             }
 
             Spacer(minLength: 0)
+
+            mcpAwarenessChip(mcpAwareness, metrics: metrics)
 
             if showInspectorToggle {
                 CoordinatorRailToggleButton(
@@ -389,6 +393,43 @@ struct CoordinatorModeView: View {
         .padding(.horizontal, metrics.outerPadding)
         .padding(.vertical, metrics.footerVerticalPadding)
         .background(.regularMaterial)
+    }
+
+    private func mcpAwarenessChip(_ awareness: CoordinatorModeMCPAwareness, metrics: CoordinatorVisualMetrics) -> some View {
+        let statusText = compactMCPStatusText(for: awareness)
+        return Label(statusText, systemImage: awareness.state.systemImage)
+            .font(metrics.bodyMedium)
+            .foregroundStyle(awareness.state == .active ? Color.accentColor : Color.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, metrics.headerControlHorizontalPadding)
+            .frame(height: metrics.headerControlHeight)
+            .coordinatorHeaderControlBackground()
+            .hoverTooltip(mcpAwarenessTooltip(for: awareness))
+            .accessibilityLabel(mcpAwarenessTooltip(for: awareness))
+    }
+
+    private func compactMCPStatusText(for awareness: CoordinatorModeMCPAwareness) -> String {
+        if awareness.inFlightToolCallCount > 0 {
+            return "\(awareness.state.displayName) · \(awareness.inFlightToolCallCount) in flight"
+        }
+        if awareness.connectedClientCount > 0 {
+            return "\(awareness.state.displayName) · \(awareness.connectedClientCount) clients"
+        }
+        return awareness.state.displayName
+    }
+
+    private func mcpAwarenessTooltip(for awareness: CoordinatorModeMCPAwareness) -> String {
+        var parts = [
+            awareness.state.displayName,
+            "Clients: \(awareness.connectedClientCount) connected, \(awareness.activeClientCount) active, \(awareness.idleClientCount) idle",
+            "In flight: \(awareness.inFlightToolCallCount)"
+        ]
+        if let recent = awareness.recentToolCalls.first {
+            parts.append("Recent: \(recent.clientName) -> \(recent.toolName)")
+        } else {
+            parts.append("No recent Coordinator MCP calls")
+        }
+        return parts.joined(separator: "\n")
     }
 
     private func presentationPicker(metrics: CoordinatorVisualMetrics) -> some View {
@@ -1055,7 +1096,7 @@ struct CoordinatorModeView: View {
             ScrollView([.horizontal, .vertical]) {
                 Group {
                     if visibleSections.isEmpty {
-                        Text(filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No sessions" : "No matching sessions")
+                        Text(isFilteringAllAgentsBoard ? "No matching sessions" : "No sessions")
                             .font(metrics.bodyMedium)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, minHeight: proxy.size.height, alignment: .center)
@@ -1386,7 +1427,7 @@ struct CoordinatorModeView: View {
 
     private func inspector(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(spacing: 0) {
-            inspectorSheetHandle(isExpanded: true, row: row, metrics: metrics) {
+            inspectorSheetHandle(isExpanded: true, metrics: metrics) {
                 isInspectorVisible = false
             }
             .padding(.top, metrics.tightSpacing)
@@ -1527,7 +1568,7 @@ struct CoordinatorModeView: View {
             Divider()
                 .opacity(0.28)
 
-            inspectorSheetHandle(isExpanded: false, row: row, metrics: metrics) {
+            inspectorSheetHandle(isExpanded: false, metrics: metrics) {
                 isInspectorVisible = true
             }
         }
@@ -1536,36 +1577,16 @@ struct CoordinatorModeView: View {
 
     private func inspectorSheetHandle(
         isExpanded: Bool,
-        row: CoordinatorModeRow,
         metrics: CoordinatorVisualMetrics,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            VStack(spacing: metrics.tightSpacing) {
-                Capsule(style: .continuous)
-                    .fill(Color.secondary.opacity(0.35))
-                    .frame(width: metrics.inspectorHandleWidth, height: metrics.inspectorHandleHeight)
-
-                HStack(spacing: metrics.smallSpacing) {
-                    Image(systemName: isExpanded ? "chevron.compact.down" : "chevron.compact.up")
-                        .font(.system(size: metrics.smallIconSize, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Text(isExpanded ? "Hide Inspector" : "Show Inspector")
-                        .font(metrics.microMedium)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    if !isExpanded {
-                        Text(row.title)
-                            .font(metrics.micro)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, metrics.inspectorHandleVerticalPadding)
-            .contentShape(Rectangle())
+            Capsule(style: .continuous)
+                .fill(Color.secondary.opacity(0.35))
+                .frame(width: metrics.inspectorHandleWidth, height: metrics.inspectorHandleHeight)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, metrics.inspectorHandleVerticalPadding)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .hoverTooltip(isExpanded ? "Hide Inspector" : "Show Inspector")
@@ -2616,7 +2637,9 @@ struct CoordinatorModeView: View {
 
     private func selectDelegatedActionTarget(_ row: CoordinatorModeRow?) {
         guard let row else { return }
-        if !filteredSections(from: viewModel.snapshot).flatMap(\.rows).contains(where: { $0.id == row.id }) {
+        if isFilteringAllAgentsBoard,
+           !filteredSections(from: viewModel.snapshot).flatMap(\.rows).contains(where: { $0.id == row.id })
+        {
             filterText = ""
         }
         selectedRowID = row.id
@@ -2635,33 +2658,6 @@ struct CoordinatorModeView: View {
         }
         parts.append(row.isMCPOriginated ? "MCP originated" : "App originated")
         return parts.joined(separator: " · ")
-    }
-
-    private func mcpFooter(_ awareness: CoordinatorModeMCPAwareness, metrics: CoordinatorVisualMetrics) -> some View {
-        HStack(spacing: metrics.controlSpacing) {
-            Label(awareness.state.displayName, systemImage: awareness.state.systemImage)
-                .font(metrics.bodyMedium)
-            Text("Clients: \(awareness.connectedClientCount) connected, \(awareness.activeClientCount) active, \(awareness.idleClientCount) idle")
-                .font(metrics.body)
-                .foregroundStyle(.secondary)
-            Text("In flight: \(awareness.inFlightToolCallCount)")
-                .font(metrics.body)
-                .foregroundStyle(.secondary)
-            Spacer()
-            if let recent = awareness.recentToolCalls.first {
-                Text("Recent: \(recent.clientName) → \(recent.toolName)")
-                    .font(metrics.body)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            } else {
-                Text("No recent Coordinator MCP calls")
-                    .font(metrics.body)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, metrics.outerPadding)
-        .padding(.vertical, metrics.footerVerticalPadding)
-        .background(.regularMaterial)
     }
 
     private func emptyState(snapshot: CoordinatorModeSnapshot, metrics: CoordinatorVisualMetrics) -> some View {
@@ -2974,7 +2970,7 @@ struct CoordinatorModeView: View {
 
     private func filteredSections(from snapshot: CoordinatorModeSnapshot) -> [CoordinatorModeStatusSection] {
         let query = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return snapshot.groups }
+        guard snapshot.boardScope == .allAgents, !query.isEmpty else { return snapshot.groups }
         return snapshot.groups.map { section in
             CoordinatorModeStatusSection(
                 group: section.group,
@@ -2988,6 +2984,10 @@ struct CoordinatorModeView: View {
                 }
             )
         }
+    }
+
+    private var isFilteringAllAgentsBoard: Bool {
+        viewModel.snapshot.boardScope == .allAgents && !filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func selectedRow(in sections: [CoordinatorModeStatusSection]) -> CoordinatorModeRow? {

@@ -36,7 +36,7 @@ The system SHALL provide a non-default Coordinator mode peer surface inside the 
 The system SHALL render Coordinator mode from a single Coordinator-view-facing `CoordinatorModeSnapshot` projection.
 
 #### Scenario: Coordinator Mode renders from one projection
-- **WHEN** the Coordinator view renders top counts, groups, rows, pending prompts, Coordinator rail, MCP footer, and deep-link affordances
+- **WHEN** the Coordinator view renders top counts, groups, rows, pending prompts, Coordinator rail, compact MCP awareness, and deep-link affordances
 - **THEN** those UI regions SHALL derive their displayed state from the same `CoordinatorModeSnapshot`.
 
 #### Scenario: Projection composes independent upstreams
@@ -223,7 +223,8 @@ The system SHALL present v1 as a read-only status board by default, with a list 
 #### Scenario: Inspector is vertically stacked below the board
 - **WHEN** the inspector is rendered as a bottom panel below the Kanban board
 - **THEN** its collapse and restore affordance SHALL behave like a vertical sheet handle that slides the inspector down and back up
-- **AND** it SHALL NOT use a left-side sidebar toggle as the primary hide/show control in that stacked layout.
+- **AND** it SHALL NOT use a left-side sidebar toggle as the primary hide/show control in that stacked layout
+- **AND** the expanded stacked inspector SHOULD prefer a quiet handle treatment instead of redundant visible hide/show text.
 
 #### Scenario: Board remains read-only in v1
 - **WHEN** the v1 board renders session cards
@@ -235,10 +236,11 @@ The system SHALL present v1 as a read-only status board by default, with a list 
 - **THEN** it SHOULD render the worktree's persisted visual color using the same identity source as Agent Mode
 - **AND** sessions sharing the same worktree SHOULD show the same worktree color indicator across Coordinator and Agent Mode surfaces.
 
-#### Scenario: Session filtering is board-bottom chrome
-- **WHEN** the Coordinator board or list renders presentation controls
+#### Scenario: Session filtering is All Agents board-bottom chrome
+- **WHEN** the All Agents Board renders board or list presentation controls
 - **THEN** view and sort controls SHALL remain in the top board control lane
-- **AND** the session filter field SHALL render along the bottom of the board/list workspace above MCP awareness rather than inline to the right of the top board controls.
+- **AND** the session filter field SHALL render along the bottom of the board/list workspace rather than inline to the right of the top board controls
+- **AND** selected-Mission boards SHOULD omit the session filter field and ignore stale All Agents filter text while scoped to the selected Mission.
 
 ### Requirement: Coordinator composer
 The system SHALL provide a scoped Coordinator composer as the only v1 Coordinator-mode write path.
@@ -625,8 +627,8 @@ The system SHALL provide compact MCP client/tool-call awareness without replacin
 
 #### Scenario: MCP clients or recent calls exist
 - **WHEN** MCP clients are connected, idle, or active, or the running MCP server has recent tool-call history
-- **THEN** the Coordinator view SHALL show compact client and in-flight/recent tool-call awareness
-- **AND** it SHALL allow MCP footer totals to include server/window-scoped clients or calls not represented by the active-workspace row list
+- **THEN** the Coordinator view SHALL show compact client and in-flight/recent tool-call awareness in stable board chrome
+- **AND** it SHALL allow MCP awareness totals to include server/window-scoped clients or calls not represented by the active-workspace row list
 - **AND** recent-call history without connected clients SHALL use a history-aware idle presentation rather than the empty/off state.
 
 #### Scenario: MCP is off or empty

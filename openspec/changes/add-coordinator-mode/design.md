@@ -113,7 +113,7 @@ When route data is resolvable, Coordinator view rows and pending summaries use `
 
 ### 10. MCP awareness is compact
 
-Consume the `MCPServerViewModel.DashboardConsumer.coordinatorMode` case added by `add-mcp-coordinator-mode-consumer`. The Coordinator view subscribes while visible and shows compact connected/idle/off client count, recent tool calls, and active/in-flight call count. Agent rows are active-workspace scoped, but the MCP footer is server/window scoped; it may include clients or calls not tied to the visible row list. External error triage, detailed attribution, and active-scope visualization are follow-ups.
+Consume the `MCPServerViewModel.DashboardConsumer.coordinatorMode` case added by `add-mcp-coordinator-mode-consumer`. The Coordinator view subscribes while visible and shows compact connected/idle/off client count, recent tool calls, and active/in-flight call count in stable board chrome. Agent rows are active-workspace scoped, but MCP awareness is server/window scoped; it may include clients or calls not tied to the visible row list. External error triage, detailed attribution, and active-scope visualization are follow-ups.
 
 ### 11. Status grouping is total and precedence-based
 
@@ -234,7 +234,7 @@ The v1 surface defaults to a read-only status board. List remains a first-class 
 
 The leading Coordinator rail titlebar should stay visually quiet. It may expose an icon-only `New Mission` action near the macOS window controls and the rail collapse affordance, but it should not repeat low-value descriptive title text that competes with the conversation and board.
 
-The board header should remain a compact control lane for view and sorting controls. Session filtering belongs along the bottom of the board/list workspace, above MCP awareness, so it does not crowd the board presentation controls or compete with the Coordinator chat.
+The board header should remain a compact control lane for view, sorting, and compact MCP awareness. Session filtering belongs along the bottom of the All Agents board/list workspace so it does not crowd the board presentation controls or compete with the Coordinator chat; selected-Mission boards omit the filter to keep the scoped board and inspector visually calm.
 
 ## Risks / Trade-offs
 

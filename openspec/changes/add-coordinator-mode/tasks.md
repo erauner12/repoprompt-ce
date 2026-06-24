@@ -9,7 +9,7 @@
 
 ## 2. Coordinator view snapshot projection
 
-- [x] 2.1 Define `CoordinatorModeSnapshot` as the single render contract for counts, groups, rows, Coordinator rail, pending summaries, MCP footer, and deep-link payloads.
+- [x] 2.1 Define `CoordinatorModeSnapshot` as the single render contract for counts, groups, rows, Coordinator rail, pending summaries, compact MCP awareness, and deep-link payloads.
 - [x] 2.2 Implement a lazy, window-scoped `@MainActor` Coordinator view model.
 - [x] 2.3 Compose the snapshot from current-window Agent Mode live state, active-workspace session metadata, and `MCPServerViewModel.dashboard`, assuming the named MCP Coordinator mode consumer from `add-mcp-coordinator-mode-consumer`.
 - [x] 2.4 Add diff-before-publish/fingerprint behavior so streaming transcript or token deltas do not republish unchanged Coordinator view rows.
@@ -100,7 +100,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 
 ## 10. Coordinator view UI shell
 
-- [x] 10.1 Build the Coordinator view shell with top counts, optional Coordinator rail, board-first status columns/cards, List view alternate/fallback, optional inspector / trailing detail column, MCP footer, and filter affordance.
+- [x] 10.1 Build the Coordinator view shell with top counts, optional Coordinator rail, board-first status columns/cards, List view alternate/fallback, optional inspector / trailing detail column, compact MCP awareness, and filter affordance.
 - [x] 10.2 Keep the main board/list content calm by default: no full transcripts, full logs, diffs, file viewers, streaming tool feeds, or card/row write controls.
 - [x] 10.3 Add Board/List view switching where Board is the v1 default and List renders the same snapshot as an alternate.
 - [x] 10.4 Add responsive behavior: inspector yields before the board, Coordinator chat may collapse to a rail, high-priority columns remain visible when possible, lower-priority columns may de-emphasize/collapse with visible counts, board columns preserve usable width or scroll horizontally, and widths below two usable board columns fall back to List.
@@ -150,6 +150,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.48 Persist workflow summaries in Agent session metadata and render delegated conversation workflow/worktree identity after restart without requiring Agent chat hydration.
 - [x] 10.49 Show an explicit `Open to reply` inspector action for routeable delegated sessions that are not live in the current window.
 - [x] 10.50 Let delegated conversation cards select their projected board/list row and reveal the inspector when the target is still visible in the selected Mission scope.
+- [x] 10.51 Move compact MCP awareness into stable board header chrome, limit session filtering to the All Agents Board, and reduce the stacked inspector handle to a quiet visual affordance.
 
 ## 11. Validation
 
