@@ -5,6 +5,84 @@ import RepoPromptShared
 import XCTest
 
 final class CodeMapArtifactRuntimeTests: XCTestCase {
+    func testPostSuccessfulInitializationIsLazyAndInvokedOnceAfterRuntimeConstruction() throws {
+        let applicationSupportRoot = try makeSecureRoot()
+        defer { try? FileManager.default.removeItem(at: applicationSupportRoot) }
+        let callbackCount = RuntimeProviderTestCounter()
+        let runtimeRoot = CodeMapArtifactRuntime.processWideRootURL(
+            applicationSupportRootURL: applicationSupportRoot,
+            buildFlavor: .debug
+        )
+        let rootObservationCount = RuntimeProviderTestCounter()
+        let provider = CodeMapArtifactRuntime.makeProcessWideProvider(
+            identity: .repoPromptCE(.debug),
+            applicationSupportRootURL: applicationSupportRoot,
+            postSuccessfulInitialization: {
+                callbackCount.increment()
+                if FileManager.default.fileExists(atPath: runtimeRoot.path) {
+                    rootObservationCount.increment()
+                }
+            }
+        )
+
+        XCTAssertEqual(callbackCount.value, 0)
+        let first = try provider.runtime()
+        XCTAssertEqual(callbackCount.value, 1)
+        XCTAssertEqual(rootObservationCount.value, 1)
+        let second = try provider.runtime()
+        XCTAssertTrue(first === second)
+        XCTAssertEqual(callbackCount.value, 1)
+        XCTAssertEqual(rootObservationCount.value, 1)
+    }
+
+    func testPostSuccessfulInitializationIsNotInvokedWhenRuntimeConstructionFails() throws {
+        let applicationSupportRoot = try makeSecureRoot()
+        defer { try? FileManager.default.removeItem(at: applicationSupportRoot) }
+        let runtimeRoot = CodeMapArtifactRuntime.processWideRootURL(
+            applicationSupportRootURL: applicationSupportRoot,
+            buildFlavor: .debug
+        )
+        try FileManager.default.createDirectory(
+            at: runtimeRoot,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o755]
+        )
+        XCTAssertEqual(chmod(runtimeRoot.path, 0o755), 0)
+        let callbackCount = RuntimeProviderTestCounter()
+        let provider = CodeMapArtifactRuntime.makeProcessWideProvider(
+            identity: .repoPromptCE(.debug),
+            applicationSupportRootURL: applicationSupportRoot,
+            postSuccessfulInitialization: {
+                callbackCount.increment()
+            }
+        )
+
+        XCTAssertThrowsError(try provider.runtime())
+        XCTAssertThrowsError(try provider.runtime())
+        XCTAssertEqual(callbackCount.value, 0)
+    }
+
+    #if DEBUG
+        func testDefaultDebugProviderDoesNotScheduleApplicationSupportCleanup() throws {
+            let applicationSupportRoot = try makeSecureRoot()
+            defer { try? FileManager.default.removeItem(at: applicationSupportRoot) }
+            let provider = CodeMapArtifactRuntime.makeProcessWideProvider(
+                identity: .repoPromptCE(.debug),
+                applicationSupportRootURL: applicationSupportRoot
+            )
+
+            _ = try provider.runtime()
+
+            XCTAssertFalse(
+                FileManager.default.fileExists(
+                    atPath: applicationSupportRoot
+                        .appendingPathComponent("CodeMapMaintenance", isDirectory: true)
+                        .path
+                )
+            )
+        }
+    #endif
+
     func testProcessWideRuntimeDoesNotConstructBeforeFirstCodemapDemand() throws {
         let applicationSupportRoot = try makeSecureRoot()
         defer { try? FileManager.default.removeItem(at: applicationSupportRoot) }

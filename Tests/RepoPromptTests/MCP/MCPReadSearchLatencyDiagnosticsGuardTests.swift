@@ -1800,7 +1800,6 @@
             let root = try temporaryRoots.makeRoot(suiteName: "FileSystemPublicationCorrelation")
             let service = try await FileSystemService(
                 path: root.path,
-                respectGitignore: false,
                 respectRepoIgnore: false,
                 respectCursorignore: false,
                 skipSymlinks: true

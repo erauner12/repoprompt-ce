@@ -15,7 +15,6 @@ final class FileSystemServiceRecoveryTests: XCTestCase {
         let root = try temporaryRoots.makeRoot(suiteName: "FileSystemServiceRecovery")
         let service = try await FileSystemService(
             path: root.path,
-            respectGitignore: false,
             respectRepoIgnore: false,
             respectCursorignore: false,
             skipSymlinks: true
@@ -43,7 +42,6 @@ final class FileSystemServiceRecoveryTests: XCTestCase {
 
             let service = try await FileSystemService(
                 path: root.path,
-                respectGitignore: false,
                 respectRepoIgnore: false,
                 respectCursorignore: false,
                 skipSymlinks: true,
@@ -103,7 +101,6 @@ final class FileSystemServiceRecoveryTests: XCTestCase {
 
             let service = try await FileSystemService(
                 path: root.path,
-                respectGitignore: false,
                 respectRepoIgnore: false,
                 respectCursorignore: false,
                 skipSymlinks: true,
@@ -151,7 +148,6 @@ final class FileSystemServiceRecoveryTests: XCTestCase {
             let retryGate = SteppedBatchGate()
             let service = try await FileSystemService(
                 path: root.path,
-                respectGitignore: false,
                 respectRepoIgnore: false,
                 respectCursorignore: false,
                 skipSymlinks: true,
@@ -243,7 +239,6 @@ final class FileSystemServiceRecoveryTests: XCTestCase {
 
             let service = try await FileSystemService(
                 path: root.path,
-                respectGitignore: false,
                 respectRepoIgnore: false,
                 respectCursorignore: false,
                 skipSymlinks: true,
@@ -304,7 +299,6 @@ final class FileSystemServiceRecoveryTests: XCTestCase {
 
             let service = try await FileSystemService(
                 path: root.path,
-                respectGitignore: true,
                 respectRepoIgnore: false,
                 respectCursorignore: false,
                 skipSymlinks: true,
@@ -348,7 +342,6 @@ final class FileSystemServiceRecoveryTests: XCTestCase {
 
             let service = try await FileSystemService(
                 path: root.path,
-                respectGitignore: true,
                 respectRepoIgnore: false,
                 respectCursorignore: false,
                 skipSymlinks: true,
@@ -391,7 +384,6 @@ final class FileSystemServiceRecoveryTests: XCTestCase {
 
             let service = try await FileSystemService(
                 path: root.path,
-                respectGitignore: false,
                 respectRepoIgnore: false,
                 respectCursorignore: false,
                 skipSymlinks: true,

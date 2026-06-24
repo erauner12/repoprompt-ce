@@ -83,8 +83,7 @@ final class FileSystemAcceptedIngressBarrierTests: XCTestCase {
         )
         let service = try await makeService(
             root: root,
-            maxPendingWatcherIngressEntries: 2,
-            respectGitignore: true
+            maxPendingWatcherIngressEntries: 2
         )
 
         for eventID in 1 ... 10 {
@@ -115,7 +114,7 @@ final class FileSystemAcceptedIngressBarrierTests: XCTestCase {
             atomically: true,
             encoding: .utf8
         )
-        let service = try await makeService(root: root, respectGitignore: true)
+        let service = try await makeService(root: root)
         let firstVisiblePath = root.appendingPathComponent("Sources/First.swift").path
         let secondVisiblePath = root.appendingPathComponent("Sources/Second.swift").path
 
@@ -148,7 +147,7 @@ final class FileSystemAcceptedIngressBarrierTests: XCTestCase {
         let root = try temporaryRoots.makeRoot(suiteName: "FileSystemAcceptedIngressEarlyIgnoreChange")
         let ignoreURL = root.appendingPathComponent(".gitignore")
         try ".build/\n".write(to: ignoreURL, atomically: true, encoding: .utf8)
-        let service = try await makeService(root: root, respectGitignore: true)
+        let service = try await makeService(root: root)
         let ignoredPath = root.appendingPathComponent(".build/generated.o").path
 
         let initiallyIgnored = await service.acceptWatcherPayloadForTesting([
@@ -341,12 +340,10 @@ final class FileSystemAcceptedIngressBarrierTests: XCTestCase {
 
     private func makeService(
         root: URL,
-        maxPendingWatcherIngressEntries: Int? = nil,
-        respectGitignore: Bool = false
+        maxPendingWatcherIngressEntries: Int? = nil
     ) async throws -> FileSystemService {
         try await FileSystemService(
             path: root.path,
-            respectGitignore: respectGitignore,
             respectRepoIgnore: false,
             respectCursorignore: false,
             skipSymlinks: true,

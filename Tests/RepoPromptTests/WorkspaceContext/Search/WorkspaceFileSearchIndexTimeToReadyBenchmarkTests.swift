@@ -646,7 +646,6 @@ import XCTest
             try sourceData.write(to: root.appendingPathComponent(relativePath), options: .atomic)
             let service = try await FileSystemService(
                 path: root.path,
-                respectGitignore: false,
                 respectRepoIgnore: false,
                 respectCursorignore: false,
                 skipSymlinks: true

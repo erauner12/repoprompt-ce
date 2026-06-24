@@ -726,7 +726,6 @@ class WorkspaceFilesViewModel: ObservableObject {
 
     var showEmptyFolders: Bool = false
     var skipSymlinks: Bool = true
-    var respectGitignore: Bool = true
     var respectRepoIgnore: Bool = true
     var respectCursorignore: Bool = true
     var enableHierarchicalIgnores: Bool = true
@@ -2836,7 +2835,6 @@ class WorkspaceFilesViewModel: ObservableObject {
                     path: rootPath,
                     isSystemRoot: rootKind == .supplementalSystem,
                     kind: workspaceRootKind(for: rootKind, url: url),
-                    respectGitignore: self.respectGitignore,
                     respectRepoIgnore: self.respectRepoIgnore,
                     respectCursorignore: self.respectCursorignore,
                     skipSymlinks: self.skipSymlinks,
@@ -3268,7 +3266,6 @@ class WorkspaceFilesViewModel: ObservableObject {
                 if let workspaceRoot {
                     let storeIgnoreRulesChanged = try await workspaceFileContextStore.refreshFileSystemSettings(
                         rootID: workspaceRoot.id,
-                        respectGitignore: respectGitignore,
                         respectRepoIgnore: respectRepoIgnore,
                         respectCursorignore: respectCursorignore,
                         skipSymlinks: skipSymlinks,
@@ -12713,7 +12710,6 @@ extension WorkspaceFilesViewModel {
     @MainActor
     private func syncFileSystemPreferencesFromGlobalSettings() {
         let settings = GlobalSettingsStore.shared.fileSystemSettingsSnapshot()
-        respectGitignore = settings.respectGitignore
         respectRepoIgnore = settings.respectRepoIgnore
         respectCursorignore = settings.respectCursorignore
         enableHierarchicalIgnores = settings.enableHierarchicalIgnores

@@ -36,7 +36,6 @@ extension FileSystemService {
             do {
                 ignoreRules = try await IgnoreRulesManager.shared.getIgnoreRules(
                     for: path,
-                    respectGitignore: respectGitignore,
                     respectRepoIgnore: respectRepoIgnore,
                     respectCursorignore: respectCursorignore
                 )
@@ -56,7 +55,6 @@ extension FileSystemService {
             do {
                 ignoreRules = try await IgnoreRulesManager.shared.getIgnoreRules(
                     for: path,
-                    respectGitignore: respectGitignore,
                     respectRepoIgnore: respectRepoIgnore,
                     respectCursorignore: respectCursorignore
                 )
@@ -210,7 +208,7 @@ extension FileSystemService {
             for: dirURL,
             parentRelPath: relativeDirectory,
             parentRules: parentRules,
-            hasGitignore: scan.hasGitignore && respectGitignore,
+            hasGitignore: scan.hasGitignore,
             hasRepoIgnore: scan.hasRepoIgnore && respectRepoIgnore,
             hasCursorignore: scan.hasCursorignore && respectCursorignore
         )
@@ -232,12 +230,6 @@ extension FileSystemService {
     func mergeIgnoreCache(_ localCache: [IgnoreCacheStore.PathKey: Bool]) {
         guard !localCache.isEmpty else { return }
         ignoreCacheStore.mergeIgnoreCache(localCache)
-    }
-
-    public func updateRespectGitignore(_ newValue: Bool) async throws {
-        guard respectGitignore != newValue else { return }
-        respectGitignore = newValue
-        try await refreshIgnoreRules()
     }
 
     public func updateRespectRepoIgnore(_ newValue: Bool) async throws {
@@ -270,7 +262,6 @@ extension FileSystemService {
         let earlyFilterGeneration = watcherEarlyFilter.invalidate()
         ignoreRules = try await IgnoreRulesManager.shared.getIgnoreRules(
             for: path,
-            respectGitignore: respectGitignore,
             respectRepoIgnore: respectRepoIgnore,
             respectCursorignore: respectCursorignore
         )
@@ -295,7 +286,7 @@ extension FileSystemService {
             for: dirURL,
             parentRelPath: parentRelPath,
             parentRules: parentRules,
-            hasGitignore: scanResult.hasGitignore && respectGitignore,
+            hasGitignore: scanResult.hasGitignore,
             hasRepoIgnore: scanResult.hasRepoIgnore && respectRepoIgnore,
             hasCursorignore: scanResult.hasCursorignore && respectCursorignore
         )
@@ -338,7 +329,7 @@ extension FileSystemService {
         // Clone parent rules and add new layers
         let effectiveRules = parentRules.clone()
 
-        if hasGitignore, respectGitignore {
+        if hasGitignore {
             let gitignoreURL = dirURL.appendingPathComponent(".gitignore")
             do {
                 #if DEBUG

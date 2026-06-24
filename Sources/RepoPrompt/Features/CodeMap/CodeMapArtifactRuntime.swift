@@ -95,7 +95,8 @@ final class CodeMapArtifactRuntime: @unchecked Sendable {
         bindingIntegrationRegistryFactory: @escaping @Sendable ()
             -> WorkspaceCodemapBindingIntegrationRegistry = {
                 WorkspaceCodemapBindingIntegrationRegistry()
-            }
+            },
+        postSuccessfulInitialization: @escaping @Sendable () -> Void = {}
     ) -> CodeMapArtifactRuntimeProvider {
         CodeMapArtifactRuntimeProvider {
             let rootURL = processWideRootURL(
@@ -108,7 +109,7 @@ final class CodeMapArtifactRuntime: @unchecked Sendable {
                 attributes: [.posixPermissions: 0o700]
             )
             let registry = bindingIntegrationRegistryFactory()
-            return try CodeMapArtifactRuntime(
+            let runtime = try CodeMapArtifactRuntime(
                 rootURL: rootURL,
                 bindingIntegrationRegistry: registry,
                 bindingEngineFactory: { runtime in
@@ -123,15 +124,27 @@ final class CodeMapArtifactRuntime: @unchecked Sendable {
                     )
                 }
             )
+            postSuccessfulInitialization()
+            return runtime
         }
     }
 
     private static let processWideProvider: CodeMapArtifactRuntimeProvider = {
         let identity = MCPFilesystemConstants.identity
-        return makeProcessWideProvider(
-            identity: identity,
-            applicationSupportRootURL: identity.applicationSupportRootURL()
-        )
+        #if DEBUG
+            return makeProcessWideProvider(
+                identity: identity,
+                applicationSupportRootURL: identity.applicationSupportRootURL()
+            )
+        #else
+            return makeProcessWideProvider(
+                identity: identity,
+                applicationSupportRootURL: identity.applicationSupportRootURL(),
+                postSuccessfulInitialization: {
+                    CodeMapV6CacheDeletionScheduler.schedule()
+                }
+            )
+        #endif
     }()
 }
 

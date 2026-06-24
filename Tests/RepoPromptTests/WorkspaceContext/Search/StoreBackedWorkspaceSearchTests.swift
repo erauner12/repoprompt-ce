@@ -1338,7 +1338,6 @@ final class StoreBackedWorkspaceSearchTests: XCTestCase {
             _ = try await store.loadRoot(path: searchRoot.path)
             let holdingService = try await FileSystemService(
                 path: holdingRoot.path,
-                respectGitignore: false,
                 respectRepoIgnore: false,
                 respectCursorignore: false,
                 skipSymlinks: true

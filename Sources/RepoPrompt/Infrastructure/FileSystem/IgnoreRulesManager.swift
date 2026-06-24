@@ -170,19 +170,15 @@ actor IgnoreRulesManager {
     /// Loads .gitignore and/or .repo_ignore content from disk, merges them into a single IgnoreRules.
     func getIgnoreRules(
         for path: String,
-        respectGitignore: Bool = true,
         respectRepoIgnore: Bool = true,
         respectCursorignore: Bool = true
     ) async throws -> IgnoreRules {
         let ignoreRules = IgnoreRules()
 
-        // If we want to load .gitignore content:
-        if respectGitignore {
-            let gitignorePath = (path as NSString).appendingPathComponent(".gitignore")
-            if fm.fileExists(atPath: gitignorePath, isDirectory: nil) {
-                let gitignoreContent = try await loadFileContent(at: gitignorePath)
-                ignoreRules.addIgnoreFile(content: gitignoreContent, priority: 1)
-            }
+        let gitignorePath = (path as NSString).appendingPathComponent(".gitignore")
+        if fm.fileExists(atPath: gitignorePath, isDirectory: nil) {
+            let gitignoreContent = try await loadFileContent(at: gitignorePath)
+            ignoreRules.addIgnoreFile(content: gitignoreContent, priority: 1)
         }
 
         // Always add global ignore defaults from user settings (lower priority)

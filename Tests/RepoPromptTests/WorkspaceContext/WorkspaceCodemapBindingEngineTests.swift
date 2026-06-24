@@ -528,7 +528,6 @@ final class WorkspaceCodemapBindingEngineTests: XCTestCase {
         let gate = EngineFirstResolutionGate()
         let fileSystem = try await FileSystemService(
             path: root.path,
-            respectGitignore: false,
             respectRepoIgnore: false,
             respectCursorignore: false
         )
@@ -1643,7 +1642,6 @@ final class WorkspaceCodemapBindingEngineTests: XCTestCase {
         let sourceGate = EngineMultiEntryGate()
         let fileSystem = try await FileSystemService(
             path: root.path,
-            respectGitignore: false,
             respectRepoIgnore: false,
             respectCursorignore: false
         )
@@ -1861,7 +1859,6 @@ final class WorkspaceCodemapBindingEngineTests: XCTestCase {
         let secondFileIDs = EngineFileIDs()
         let fileSystem = try await FileSystemService(
             path: root.path,
-            respectGitignore: false,
             respectRepoIgnore: false,
             respectCursorignore: false
         )
@@ -2602,7 +2599,6 @@ final class WorkspaceCodemapBindingEngineTests: XCTestCase {
         let service = capabilityService(hooks: capabilityHooks)
         let fileSystem = try await FileSystemService(
             path: root.path,
-            respectGitignore: false,
             respectRepoIgnore: false,
             respectCursorignore: false
         )

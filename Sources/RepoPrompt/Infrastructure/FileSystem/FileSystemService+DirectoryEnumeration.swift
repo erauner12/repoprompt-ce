@@ -646,14 +646,13 @@ extension FileSystemService {
         scanResult: DirectoryScanResult,
         skipSymlinks: Bool,
         enableHierarchicalIgnores: Bool,
-        respectGitignore: Bool,
         respectRepoIgnore: Bool,
         respectCursorignore: Bool,
         trackCycles: Bool
     ) async throws -> DirectoryChunkResult {
         let effectiveRulesSnapshot: IgnoreRulesSnapshot
         if enableHierarchicalIgnores {
-            let hasGitignore = scanResult.hasGitignore && respectGitignore
+            let hasGitignore = scanResult.hasGitignore
             let hasRepoIgnore = scanResult.hasRepoIgnore && respectRepoIgnore
             let hasCursorignore = scanResult.hasCursorignore && respectCursorignore
             if hasGitignore || hasRepoIgnore || hasCursorignore {
@@ -861,7 +860,6 @@ extension FileSystemService {
             directories.removeFirst(batch.count)
 
             let enableHierarchicalIgnores = enableHierarchicalIgnores
-            let respectGitignore = respectGitignore
             let respectRepoIgnore = respectRepoIgnore
             let respectCursorignore = respectCursorignore
 
@@ -874,7 +872,6 @@ extension FileSystemService {
                             isVirtualFS,
                             skipSymlinks,
                             enableHierarchicalIgnores,
-                            respectGitignore,
                             respectRepoIgnore,
                             respectCursorignore
                         ] in
@@ -884,7 +881,6 @@ extension FileSystemService {
                                 isVirtualFS: isVirtualFS,
                                 skipSymlinks: skipSymlinks,
                                 enableHierarchicalIgnores: enableHierarchicalIgnores,
-                                respectGitignore: respectGitignore,
                                 respectRepoIgnore: respectRepoIgnore,
                                 respectCursorignore: respectCursorignore
                             )
@@ -895,7 +891,6 @@ extension FileSystemService {
                             context,
                             skipSymlinks,
                             enableHierarchicalIgnores,
-                            respectGitignore,
                             respectRepoIgnore,
                             respectCursorignore
                         ] in
@@ -904,7 +899,6 @@ extension FileSystemService {
                                 context: context,
                                 skipSymlinks: skipSymlinks,
                                 enableHierarchicalIgnores: enableHierarchicalIgnores,
-                                respectGitignore: respectGitignore,
                                 respectRepoIgnore: respectRepoIgnore,
                                 respectCursorignore: respectCursorignore
                             )
@@ -1003,7 +997,6 @@ extension FileSystemService {
             isVirtualFS: Bool,
             skipSymlinks: Bool,
             enableHierarchicalIgnores: Bool,
-            respectGitignore: Bool,
             respectRepoIgnore: Bool,
             respectCursorignore: Bool
         ) async throws -> DirectoryChunkResult {
@@ -1023,7 +1016,6 @@ extension FileSystemService {
                 scanResult: scanResult,
                 skipSymlinks: skipSymlinks,
                 enableHierarchicalIgnores: enableHierarchicalIgnores,
-                respectGitignore: respectGitignore,
                 respectRepoIgnore: respectRepoIgnore,
                 respectCursorignore: respectCursorignore,
                 trackCycles: trackCycles
@@ -1035,7 +1027,6 @@ extension FileSystemService {
             context: DirectoryContext,
             skipSymlinks: Bool,
             enableHierarchicalIgnores: Bool,
-            respectGitignore: Bool,
             respectRepoIgnore: Bool,
             respectCursorignore: Bool
         ) async throws -> DirectoryChunkResult {
@@ -1048,7 +1039,6 @@ extension FileSystemService {
                 scanResult: scanResult,
                 skipSymlinks: skipSymlinks,
                 enableHierarchicalIgnores: enableHierarchicalIgnores,
-                respectGitignore: respectGitignore,
                 respectRepoIgnore: respectRepoIgnore,
                 respectCursorignore: respectCursorignore,
                 trackCycles: trackCycles
@@ -1138,7 +1128,6 @@ extension FileSystemService {
             }
         #endif
         let enableHierarchicalIgnores = enableHierarchicalIgnores
-        let respectGitignore = respectGitignore
         let respectRepoIgnore = respectRepoIgnore
         let respectCursorignore = respectCursorignore
 
@@ -1167,7 +1156,6 @@ extension FileSystemService {
                     isVirtualFS: isVirtualFS,
                     skipSymlinks: skipSymlinks,
                     enableHierarchicalIgnores: enableHierarchicalIgnores,
-                    respectGitignore: respectGitignore,
                     respectRepoIgnore: respectRepoIgnore,
                     respectCursorignore: respectCursorignore
                 )
@@ -1177,7 +1165,6 @@ extension FileSystemService {
                     context: context,
                     skipSymlinks: skipSymlinks,
                     enableHierarchicalIgnores: enableHierarchicalIgnores,
-                    respectGitignore: respectGitignore,
                     respectRepoIgnore: respectRepoIgnore,
                     respectCursorignore: respectCursorignore
                 )

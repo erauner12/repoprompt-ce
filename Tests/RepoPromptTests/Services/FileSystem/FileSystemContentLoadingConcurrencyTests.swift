@@ -1107,7 +1107,6 @@ final class FileSystemContentLoadingConcurrencyTests: XCTestCase {
         try FileSystemTestSupport.write("serial", to: root.appendingPathComponent("Serial.txt"))
         let service = try await FileSystemService(
             path: root.path,
-            respectGitignore: false,
             respectRepoIgnore: false,
             respectCursorignore: false,
             skipSymlinks: true,
@@ -1215,7 +1214,6 @@ final class FileSystemContentLoadingConcurrencyTests: XCTestCase {
     private func makeService(root: URL, skipSymlinks: Bool = true) async throws -> FileSystemService {
         try await FileSystemService(
             path: root.path,
-            respectGitignore: false,
             respectRepoIgnore: false,
             respectCursorignore: false,
             skipSymlinks: skipSymlinks

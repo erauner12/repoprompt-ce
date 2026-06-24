@@ -3,16 +3,16 @@ import Foundation
 @testable import RepoPrompt
 import XCTest
 
-final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
-    func testRootLoadSearchAndReadDoNotInvokeModernCodemapRuntimeProvider() async throws {
-        let sandbox = try ModernCodemapStoreFixture.makeSandbox(name: #function)
+final class WorkspaceFileContextStoreCodemapSeamTests: XCTestCase {
+    func testRootLoadSearchAndReadDoNotInvokeCodemapRuntimeProvider() async throws {
+        let sandbox = try CodemapStoreFixture.makeSandbox(name: #function)
         defer { try? FileManager.default.removeItem(at: sandbox) }
         let root = sandbox.appendingPathComponent("plain", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try Self.write("struct Feature {}\n", to: root.appendingPathComponent("Sources/Feature.swift"))
 
-        let providerInvocations = ModernCodemapLockedCounter()
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let providerInvocations = CodemapLockedCounter()
+        let graphProbe = CodemapSelectionGraphProbe()
         let store = WorkspaceFileContextStore(
             codemapRuntimeProvider: {
                 providerInvocations.increment()
@@ -42,8 +42,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
     }
 
     func testFirstExplicitDemandReturnsStableExactRootPendingTicketAndRegistersOnce() async throws {
-        let gate = ModernCodemapResolutionGate()
-        let fixture = try ModernCodemapStoreFixture(name: #function, resolutionGate: gate)
+        let gate = CodemapResolutionGate()
+        let fixture = try CodemapStoreFixture(name: #function, resolutionGate: gate)
         addTeardownBlock {
             await gate.release()
             await fixture.shutdown()
@@ -112,8 +112,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 """
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let suspensionGate = ModernCodemapSuspensionGate()
+        let fixture = try CodemapStoreFixture(name: #function)
+        let suspensionGate = CodemapSuspensionGate()
         addTeardownBlock {
             await suspensionGate.release()
             await fixture.shutdown()
@@ -256,7 +256,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "physical-second-secret",
             files: ["Sources/Second.swift": "protocol SecondProtocol { func second() -> String }\nstruct Second: SecondProtocol { func second() -> String { \"second\" } }\n"]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
+        let fixture = try CodemapStoreFixture(name: #function)
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -310,12 +310,12 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Pending.swift": "struct Pending { func value() -> Int { 2 } }\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
+        let fixture = try CodemapStoreFixture(name: #function)
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
         }
-        let pendingFileID = ModernCodemapLockedValues<UUID>()
+        let pendingFileID = CodemapLockedValues<UUID>()
         let store = fixture.makeStore(demandResultHook: { ticket, result in
             if pendingFileID.values.contains(ticket.fileID) {
                 return .busy(retryAfterMilliseconds: 1000)
@@ -338,9 +338,9 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             )
         case let .unavailable(reason):
             XCTFail("Expected ready warm demand, got \(reason)")
-            throw ModernCodemapStoreTestError.timedOut
+            throw CodemapStoreTestError.timedOut
         }
-        let receipts = ModernCodemapLockedValues<WorkspaceCodemapOperationPresentationPublicationReceipt>()
+        let receipts = CodemapLockedValues<WorkspaceCodemapOperationPresentationPublicationReceipt>()
         let coordinator = WorkspaceCodemapPresentationCoordinator(
             store: store,
             policy: WorkspaceCodemapPresentationRequestPolicy(
@@ -377,7 +377,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Two.swift": "struct Two {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
+        let fixture = try CodemapStoreFixture(name: #function)
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -420,7 +420,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         XCTAssertEqual(fixture.buildCount.value, 0)
     }
 
-    func testStructurePresentationSeedUsesPairedModernRenderAndReleasesReceiptResources() async throws {
+    func testStructurePresentationSeedUsesPairedCodemapRenderAndReleasesReceiptResources() async throws {
         let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
         let root = try repositoryFixture.makeRepository(
             named: "physical-secret",
@@ -428,12 +428,12 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Feature.swift": "protocol FeatureProtocol { func feature() }\nstruct Feature: FeatureProtocol { func feature() {} }\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
+        let fixture = try CodemapStoreFixture(name: #function)
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
         }
-        let releasedTickets = ModernCodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
+        let releasedTickets = CodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
         let store = fixture.makeStore(cancellationCleanupHook: { ticket in
             releasedTickets.append(ticket)
         })
@@ -483,7 +483,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Feature.swift": "protocol FeatureProtocol { func feature() }\nstruct Feature: FeatureProtocol { func feature() {} }\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
+        let fixture = try CodemapStoreFixture(name: #function)
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -492,8 +492,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         let loaded = try await store.loadRoot(path: root.path)
         let loadedFiles = await store.files(inRoot: loaded.id)
         let file = try XCTUnwrap(loadedFiles.first)
-        let publicationCount = ModernCodemapLockedCounter()
-        let structureAttempts = ModernCodemapLockedValues<Int>()
+        let publicationCount = CodemapLockedCounter()
+        let structureAttempts = CodemapLockedValues<Int>()
         let coordinator = WorkspaceCodemapPresentationCoordinator(
             store: store,
             policy: WorkspaceCodemapPresentationRequestPolicy(
@@ -542,7 +542,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "repository",
             files: ["Sources/Feature.swift": "protocol FeatureProtocol { func feature() -> String }\nstruct Feature: FeatureProtocol { func feature() -> String { \"feature\" } }\n"]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
+        let fixture = try CodemapStoreFixture(name: #function)
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -551,9 +551,9 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         let loaded = try await store.loadRoot(path: root.path)
         let loadedFiles = await store.files(inRoot: loaded.id)
         let file = try XCTUnwrap(loadedFiles.first)
-        let receipts = ModernCodemapLockedValues<WorkspaceCodemapOperationPresentationPublicationReceipt>()
-        let publicationCount = ModernCodemapLockedCounter()
-        let operationCount = ModernCodemapLockedCounter()
+        let receipts = CodemapLockedValues<WorkspaceCodemapOperationPresentationPublicationReceipt>()
+        let publicationCount = CodemapLockedCounter()
+        let operationCount = CodemapLockedCounter()
         let coordinator = WorkspaceCodemapPresentationCoordinator(
             store: store,
             beforePublicationRevalidation: { receipt in
@@ -598,16 +598,16 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "repository",
             files: ["Sources/Feature.swift": "struct Feature {}\n"]
         )
-        let resolutionGate = ModernCodemapResolutionGate()
-        let waiterGate = ModernCodemapSuspensionGate()
-        let fixture = try ModernCodemapStoreFixture(name: #function, resolutionGate: resolutionGate)
+        let resolutionGate = CodemapResolutionGate()
+        let waiterGate = CodemapSuspensionGate()
+        let fixture = try CodemapStoreFixture(name: #function, resolutionGate: resolutionGate)
         addTeardownBlock {
             await waiterGate.release()
             await resolutionGate.release()
             await fixture.shutdown()
             repositoryFixture.cleanup()
         }
-        let cancelledTickets = ModernCodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
+        let cancelledTickets = CodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
         let store = fixture.makeStore(cancellationCleanupHook: { ticket in
             cancelledTickets.append(ticket)
         })
@@ -656,14 +656,14 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "repository",
             files: ["Sources/Feature.swift": "struct ScopedCancellationFeature { func renderable() {} }\n"]
         )
-        let operationGate = ModernCodemapSuspensionGate()
-        let fixture = try ModernCodemapStoreFixture(name: #function)
+        let operationGate = CodemapSuspensionGate()
+        let fixture = try CodemapStoreFixture(name: #function)
         addTeardownBlock {
             await operationGate.release()
             await fixture.shutdown()
             repositoryFixture.cleanup()
         }
-        let cancelledTickets = ModernCodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
+        let cancelledTickets = CodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
         let store = fixture.makeStore(cancellationCleanupHook: { ticket in
             cancelledTickets.append(ticket)
         })
@@ -710,8 +710,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "repository",
             files: ["Sources/Feature.swift": "struct Feature {}\n"]
         )
-        let resolutionGate = ModernCodemapResolutionGate()
-        let fixture = try ModernCodemapStoreFixture(name: #function, resolutionGate: resolutionGate)
+        let resolutionGate = CodemapResolutionGate()
+        let fixture = try CodemapStoreFixture(name: #function, resolutionGate: resolutionGate)
         addTeardownBlock {
             await resolutionGate.release()
             await fixture.shutdown()
@@ -753,7 +753,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
     }
 
     func testPresentationFreezeRejectsPendingForeignEpochDuplicateAndLogicalPathMismatch() async throws {
-        let resolutionGate = ModernCodemapResolutionGate()
+        let resolutionGate = CodemapResolutionGate()
         let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
         let firstRoot = try repositoryFixture.makeRepository(
             named: "first",
@@ -763,7 +763,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "second",
             files: ["Sources/Second.swift": "struct Second {}\n"]
         )
-        let fixture = try ModernCodemapStoreFixture(
+        let fixture = try CodemapStoreFixture(
             name: #function,
             resolutionGate: resolutionGate
         )
@@ -905,8 +905,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "unload",
             files: ["Sources/Unload.swift": "struct Unload {}\n"]
         )
-        let cancellationGate = ModernCodemapSuspensionGate()
-        let fixture = try ModernCodemapStoreFixture(name: #function)
+        let cancellationGate = CodemapSuspensionGate()
+        let fixture = try CodemapStoreFixture(name: #function)
         addTeardownBlock {
             await cancellationGate.release()
             await fixture.shutdown()
@@ -1044,11 +1044,11 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Pending.swift": "struct Pending {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let firstPublicationGate = ModernCodemapArmableSuspensionGate()
-        let pendingPublicationGate = ModernCodemapArmableSuspensionGate()
+        let fixture = try CodemapStoreFixture(name: #function)
+        let firstPublicationGate = CodemapArmableSuspensionGate()
+        let pendingPublicationGate = CodemapArmableSuspensionGate()
         let initialGraphPolicy = WorkspaceCodemapSelectionGraphRuntimePolicy.initial
-        let graphProbe = ModernCodemapSelectionGraphProbe(runtimePolicy: .init(
+        let graphProbe = CodemapSelectionGraphProbe(runtimePolicy: .init(
             maximumActiveRebuildCount: initialGraphPolicy.maximumActiveRebuildCount,
             maximumReservedBindingCount: initialGraphPolicy.maximumReservedBindingCount,
             maximumInputBindingCount: initialGraphPolicy.maximumInputBindingCount,
@@ -1181,8 +1181,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         )
         XCTAssertEqual(firstRoot.lastPathComponent, secondRoot.lastPathComponent)
 
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let fixture = try CodemapStoreFixture(name: #function)
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await fixture.shutdown()
             firstRepository.cleanup()
@@ -1251,12 +1251,12 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         )
         XCTAssertEqual(foreign, .unavailable(.foreignRootEpoch(firstFile.id)))
 
-        let resolutionGate = ModernCodemapResolutionGate()
-        let pendingFixture = try ModernCodemapStoreFixture(
+        let resolutionGate = CodemapResolutionGate()
+        let pendingFixture = try CodemapStoreFixture(
             name: #function + "-pending",
             resolutionGate: resolutionGate
         )
-        let pendingProbe = ModernCodemapSelectionGraphProbe()
+        let pendingProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await resolutionGate.release()
             await pendingFixture.shutdown()
@@ -1301,8 +1301,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "third",
             files: ["Sources/Source.swift": "struct Third { let value: MissingThird }\n"]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let fixture = try CodemapStoreFixture(name: #function)
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await fixture.shutdown()
             firstRepository.cleanup()
@@ -1409,9 +1409,9 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Second.swift": "struct Second { let first: First }\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let buildGate = ModernCodemapSelectionGraphBuildGate()
-        let graphProbe = ModernCodemapSelectionGraphProbe(buildGate: buildGate)
+        let fixture = try CodemapStoreFixture(name: #function)
+        let buildGate = CodemapSelectionGraphBuildGate()
+        let graphProbe = CodemapSelectionGraphProbe(buildGate: buildGate)
         addTeardownBlock {
             buildGate.releaseAll()
             await fixture.shutdown()
@@ -1503,13 +1503,13 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
     }
 
     func testNonGitDemandBecomesTerminalWithoutSourceReadManifestBuildOrGraphWork() async throws {
-        let fixture = try ModernCodemapStoreFixture(name: #function)
+        let fixture = try CodemapStoreFixture(name: #function)
         addTeardownBlock { await fixture.shutdown() }
         let root = try fixture.makePlainRoot(files: [
             "Sources/Feature.swift": "struct Feature {}\n"
         ])
-        let graphProbe = ModernCodemapSelectionGraphProbe()
-        let preflightCount = ModernCodemapLockedCounter()
+        let graphProbe = CodemapSelectionGraphProbe()
+        let preflightCount = CodemapLockedCounter()
         let store = fixture.makeStore(
             codemapGitEligibilityProbe: WorkspaceCodemapGitEligibilityProbe { _ in
                 preflightCount.increment()
@@ -1552,13 +1552,13 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         await store.unloadRoot(id: reloaded.id)
     }
 
-    func testNonGitPresentationPlanStartsNoModernRuntimeDemandBuildOrCASWork() async throws {
-        let fixture = try ModernCodemapStoreFixture(name: #function)
+    func testNonGitPresentationPlanStartsNoCodemapRuntimeDemandBuildOrCASWork() async throws {
+        let fixture = try CodemapStoreFixture(name: #function)
         addTeardownBlock { await fixture.shutdown() }
         let root = try fixture.makePlainRoot(files: [
             "Sources/Feature.swift": "struct Feature {}\n"
         ])
-        let store = fixture.makeStore()
+        let store = fixture.makeStore(codemapGitEligibilityProbe: .production())
         _ = try await store.loadRoot(path: root.path)
 
         let plan = await WorkspaceCodemapPresentationIntentResolver.plan(
@@ -1591,8 +1591,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
     }
 
     func testCatalogAdvanceFencesPendingTicketAndExactRegistryRoute() async throws {
-        let gate = ModernCodemapResolutionGate()
-        let fixture = try ModernCodemapStoreFixture(name: #function, resolutionGate: gate)
+        let gate = CodemapResolutionGate()
+        let fixture = try CodemapStoreFixture(name: #function, resolutionGate: gate)
         addTeardownBlock {
             await gate.release()
             await fixture.shutdown()
@@ -1634,9 +1634,9 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         await store.unloadRoot(id: loaded.id)
     }
 
-    func testUnloadAndReloadFenceOldLifetimeAndDrainModernRootState() async throws {
-        let gate = ModernCodemapResolutionGate()
-        let fixture = try ModernCodemapStoreFixture(name: #function, resolutionGate: gate)
+    func testUnloadAndReloadFenceOldLifetimeAndDrainCodemapRootState() async throws {
+        let gate = CodemapResolutionGate()
+        let fixture = try CodemapStoreFixture(name: #function, resolutionGate: gate)
         addTeardownBlock {
             await gate.release()
             await fixture.shutdown()
@@ -1692,7 +1692,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Second.swift": "struct Second {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
+        let fixture = try CodemapStoreFixture(name: #function)
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -1760,7 +1760,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "repository",
             files: ["Sources/Feature.swift": "struct Feature {}\n"]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
+        let fixture = try CodemapStoreFixture(name: #function)
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -1815,10 +1815,10 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "repository",
             files: ["Sources/Feature.swift": "struct Feature {}\n"]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let cancellationGate = ModernCodemapSuspensionGate()
-        let successorPublicationGate = ModernCodemapArmableSuspensionGate()
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let fixture = try CodemapStoreFixture(name: #function)
+        let cancellationGate = CodemapSuspensionGate()
+        let successorPublicationGate = CodemapArmableSuspensionGate()
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await cancellationGate.release()
             await successorPublicationGate.release()
@@ -1916,8 +1916,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Unrelated.swift": "func unrelated() {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let fixture = try CodemapStoreFixture(name: #function)
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -1984,9 +1984,9 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Survivor.swift": "struct Survivor {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let buildGate = ModernCodemapSelectionGraphBuildGate()
-        let graphProbe = ModernCodemapSelectionGraphProbe(buildGate: buildGate)
+        let fixture = try CodemapStoreFixture(name: #function)
+        let buildGate = CodemapSelectionGraphBuildGate()
+        let graphProbe = CodemapSelectionGraphProbe(buildGate: buildGate)
         addTeardownBlock {
             buildGate.releaseAll()
             await fixture.shutdown()
@@ -2052,8 +2052,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Unrelated.swift": "func unrelated() {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let fixture = try CodemapStoreFixture(name: #function)
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -2140,7 +2140,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         await store.unloadRoot(id: loaded.id)
     }
 
-    func testStoreEditRenameAndDeleteAwaitModernAuthorityFenceBeforeReturning() async throws {
+    func testStoreEditRenameAndDeleteAwaitCodemapAuthorityFenceBeforeReturning() async throws {
         let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
         let root = try repositoryFixture.makeRepository(
             named: "repository",
@@ -2149,8 +2149,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Unrelated.swift": "struct Unrelated {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let fixture = try CodemapStoreFixture(name: #function)
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -2221,8 +2221,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "repository",
             files: ["Sources/Feature.swift": "struct Feature {}\n"]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let fixture = try CodemapStoreFixture(name: #function)
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -2291,8 +2291,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "repository",
             files: ["Sources/Feature.swift": "struct Feature {}\n"]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let fixture = try CodemapStoreFixture(name: #function)
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -2346,8 +2346,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Target.swift": "struct Target {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let fixture = try CodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -2410,7 +2410,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/ForeignDefinition.swift": "struct ForeignDefinition {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
+        let fixture = try CodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
         addTeardownBlock {
             await fixture.shutdown()
             firstRepository.cleanup()
@@ -2469,8 +2469,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Target.swift": "struct SecondTarget {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let fixture = try CodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await fixture.shutdown()
             firstRepository.cleanup()
@@ -2516,14 +2516,14 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
     }
 
     func testAutomaticSelectionReportsMissingPendingUnavailableAndStaleSourcesWithoutNewWork() async throws {
-        let resolutionGate = ModernCodemapResolutionGate()
-        let fixture = try ModernCodemapStoreFixture(name: #function, resolutionGate: resolutionGate)
+        let resolutionGate = CodemapResolutionGate()
+        let fixture = try CodemapStoreFixture(name: #function, resolutionGate: resolutionGate)
         let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
         let root = try repositoryFixture.makeRepository(
             named: "repository",
             files: ["Sources/Pending.swift": "struct Pending {}\n"]
         )
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await resolutionGate.release()
             await fixture.shutdown()
@@ -2624,8 +2624,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "second",
             files: ["Sources/Second.swift": "struct Second {}\n"]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let fixture = try CodemapStoreFixture(name: #function)
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await fixture.shutdown()
             firstRepository.cleanup()
@@ -2672,7 +2672,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Target.swift": "struct Target {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
+        let fixture = try CodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -2709,7 +2709,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
     }
 
     func testAutomaticSelectionOmitsTargetWhoseGenerationBecomesStale() async throws {
-        let queryGate = ModernCodemapArmableSuspensionGate()
+        let queryGate = CodemapArmableSuspensionGate()
         let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
         let root = try repositoryFixture.makeRepository(
             named: "repository",
@@ -2722,7 +2722,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Target.swift": "struct Target {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
+        let fixture = try CodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
         addTeardownBlock {
             await queryGate.release()
             await fixture.shutdown()
@@ -2776,7 +2776,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
     }
 
     func testAutomaticSelectionDropsResultWhenSourceChangesAfterGraphQuery() async throws {
-        let queryGate = ModernCodemapArmableSuspensionGate()
+        let queryGate = CodemapArmableSuspensionGate()
         let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
         let root = try repositoryFixture.makeRepository(
             named: "repository",
@@ -2785,7 +2785,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Target.swift": "struct Target {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
+        let fixture = try CodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
         addTeardownBlock {
             await queryGate.release()
             await fixture.shutdown()
@@ -2832,8 +2832,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
     }
 
     func testAutomaticSelectionRetriesWhenPendingSourceBecomesReadyDuringGraphAwait() async throws {
-        let pendingPublicationGate = ModernCodemapArmableSuspensionGate()
-        let queryGate = ModernCodemapArmableSuspensionGate()
+        let pendingPublicationGate = CodemapArmableSuspensionGate()
+        let queryGate = CodemapArmableSuspensionGate()
         let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
         let root = try repositoryFixture.makeRepository(
             named: "repository",
@@ -2842,8 +2842,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Pending.swift": "struct Pending {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let fixture = try CodemapStoreFixture(name: #function)
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await pendingPublicationGate.release()
             await queryGate.release()
@@ -2921,8 +2921,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "second",
             files: ["Sources/Source.swift": "struct Second { let missing: Missing }\n"]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function)
-        let queryGate = ModernCodemapRootSuspensionGate()
+        let fixture = try CodemapStoreFixture(name: #function)
+        let queryGate = CodemapRootSuspensionGate()
         addTeardownBlock {
             await queryGate.release()
             await fixture.shutdown()
@@ -2992,7 +2992,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Target.swift": "struct SecondTarget {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(
+        let fixture = try CodemapStoreFixture(
             name: #function,
             syntheticGraphArtifacts: true
         )
@@ -3059,7 +3059,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Second.swift": "struct SecondTarget {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
+        let fixture = try CodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -3094,12 +3094,12 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         )
         await budgetStore.unloadRoot(id: loaded.id)
 
-        let buildGate = ModernCodemapSelectionGraphBuildGate()
-        let busyFixture = try ModernCodemapStoreFixture(
+        let buildGate = CodemapSelectionGraphBuildGate()
+        let busyFixture = try CodemapStoreFixture(
             name: #function + "-busy",
             syntheticGraphArtifacts: true
         )
-        let graphProbe = ModernCodemapSelectionGraphProbe(buildGate: buildGate)
+        let graphProbe = CodemapSelectionGraphProbe(buildGate: buildGate)
         addTeardownBlock {
             buildGate.releaseAll()
             await busyFixture.shutdown()
@@ -3145,7 +3145,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Second.swift": "struct SecondTarget {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
+        let fixture = try CodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -3186,8 +3186,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
 
     @MainActor
     func testAutomaticSelectionTimeoutRetainsProjectionAndReadinessRetryRecovers() async throws {
-        let publicationGate = ModernCodemapArmableSuspensionGate()
-        let publishedTickets = ModernCodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
+        let publicationGate = CodemapArmableSuspensionGate()
+        let publishedTickets = CodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
         let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
         let root = try repositoryFixture.makeRepository(
             named: "repository",
@@ -3196,8 +3196,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Target.swift": "struct Target {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let fixture = try CodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock {
             await publicationGate.release()
             await fixture.shutdown()
@@ -3276,15 +3276,15 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Target.swift": "struct Target {}\n"
             ]
         )
-        let buildGate = ModernCodemapSelectionGraphBuildGate()
-        let graphProbe = ModernCodemapSelectionGraphProbe(
+        let buildGate = CodemapSelectionGraphBuildGate()
+        let graphProbe = CodemapSelectionGraphProbe(
             buildGate: buildGate,
             admissionPolicy: .init(
                 maximumActiveReservationCount: 1,
                 maximumReservedBindingCount: 100_000
             )
         )
-        let fixture = try ModernCodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
+        let fixture = try CodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
         addTeardownBlock {
             buildGate.releaseAll()
             await fixture.shutdown()
@@ -3369,11 +3369,11 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
     }
 
     func testAutomaticSelectionWithoutExistingDemandPerformsNoIOOrArtifactWork() async throws {
-        let fixture = try ModernCodemapStoreFixture(name: #function)
+        let fixture = try CodemapStoreFixture(name: #function)
         let root = try fixture.makePlainRoot(files: [
             "Sources/Source.swift": "struct Source {}\n"
         ])
-        let graphProbe = ModernCodemapSelectionGraphProbe()
+        let graphProbe = CodemapSelectionGraphProbe()
         addTeardownBlock { await fixture.shutdown() }
         let store = fixture.makeStore(selectionGraphFactory: graphProbe.factory)
         let loaded = try await store.loadRoot(path: root.path)
@@ -3410,12 +3410,12 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Source.swift": "struct Source {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(
+        let fixture = try CodemapStoreFixture(
             name: #function,
             syntheticGraphArtifacts: true
         )
-        let demandInvocations = ModernCodemapLockedCounter()
-        let waits = ModernCodemapLockedCounter()
+        let demandInvocations = CodemapLockedCounter()
+        let waits = CodemapLockedCounter()
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -3484,12 +3484,12 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Source.swift": "struct Source {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(
+        let fixture = try CodemapStoreFixture(
             name: #function,
             syntheticGraphArtifacts: true
         )
-        let demandInvocations = ModernCodemapLockedCounter()
-        let waits = ModernCodemapLockedCounter()
+        let demandInvocations = CodemapLockedCounter()
+        let waits = CodemapLockedCounter()
         addTeardownBlock {
             await fixture.shutdown()
             repositoryFixture.cleanup()
@@ -3554,7 +3554,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
     }
 
     func testAutomaticSelectionSourceDemandLimitAllowsNAndRejectsNPlusOneBeforeFanout() async throws {
-        let fixture = try ModernCodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
+        let fixture = try CodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
         let root = try fixture.makePlainRoot(files: [
             "Sources/First.swift": "struct First {}\n",
             "Sources/Second.swift": "struct Second {}\n",
@@ -3572,7 +3572,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         let files = await store.files(inRoot: loaded.id).sorted {
             $0.standardizedRelativePath < $1.standardizedRelativePath
         }
-        let demandCount = ModernCodemapLockedCounter()
+        let demandCount = CodemapLockedCounter()
         let service = WorkspaceSelectionMutationService(
             store: store,
             automaticSelectionSourceDemandHook: { _, _ in demandCount.increment() }
@@ -3597,7 +3597,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
 
     func testAutomaticSelectionCancellationMidSourceFanoutCancelsOnlyIssuedTickets() async throws {
         let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
-        let fixture = try ModernCodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
+        let fixture = try CodemapStoreFixture(name: #function, syntheticGraphArtifacts: true)
         let root = try repositoryFixture.makeRepository(
             named: "repository",
             files: [
@@ -3605,13 +3605,13 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Second.swift": "struct Second {}\n"
             ]
         )
-        let gate = ModernCodemapSuspensionGate()
+        let gate = CodemapSuspensionGate()
         addTeardownBlock {
             await gate.release()
             await fixture.shutdown()
             repositoryFixture.cleanup()
         }
-        let cancelledTickets = ModernCodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
+        let cancelledTickets = CodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
         let store = fixture.makeStore(cancellationCleanupHook: { ticket in
             cancelledTickets.append(ticket)
         })
@@ -3619,8 +3619,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         let files = await store.files(inRoot: loaded.id).sorted {
             $0.standardizedRelativePath < $1.standardizedRelativePath
         }
-        let demandCount = ModernCodemapLockedCounter()
-        let issuedTickets = ModernCodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
+        let demandCount = CodemapLockedCounter()
+        let issuedTickets = CodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
         let service = WorkspaceSelectionMutationService(
             store: store,
             automaticSelectionSourceDemandHook: { _, result in
@@ -3695,7 +3695,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Unrelated.swift": "struct Unrelated {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(
+        let fixture = try CodemapStoreFixture(
             name: #function,
             syntheticGraphArtifacts: true
         )
@@ -3740,7 +3740,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Unrelated.swift": "struct Unrelated {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(
+        let fixture = try CodemapStoreFixture(
             name: #function,
             syntheticGraphArtifacts: true
         )
@@ -3792,7 +3792,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             named: "second",
             files: ["Sources/Target.swift": "struct Target {}\n"]
         )
-        let fixture = try ModernCodemapStoreFixture(
+        let fixture = try CodemapStoreFixture(
             name: #function,
             syntheticGraphArtifacts: true
         )
@@ -3844,7 +3844,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Unrelated.swift": "struct Unrelated {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(
+        let fixture = try CodemapStoreFixture(
             name: #function,
             syntheticGraphArtifacts: true
         )
@@ -3904,7 +3904,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                 "Sources/Unrelated.swift": "struct Unrelated {}\n"
             ]
         )
-        let fixture = try ModernCodemapStoreFixture(
+        let fixture = try CodemapStoreFixture(
             name: #function,
             syntheticGraphArtifacts: true
         )
@@ -3967,7 +3967,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         _ result: WorkspaceCodemapArtifactDemandResult
     ) throws -> WorkspaceCodemapArtifactDemandTicket {
         guard case let .pending(ticket) = result else {
-            throw ModernCodemapStoreTestError.expectedPending
+            throw CodemapStoreTestError.expectedPending
         }
         return ticket
     }
@@ -3976,7 +3976,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         _ result: WorkspaceCodemapArtifactDemandResult
     ) throws -> WorkspaceCodemapArtifactDemandReady {
         guard case let .ready(ready) = result else {
-            throw ModernCodemapStoreTestError.expectedReady
+            throw CodemapStoreTestError.expectedReady
         }
         return ready
     }
@@ -3985,7 +3985,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         _ disposition: WorkspaceCodemapPresentationFreezeDisposition
     ) throws -> WorkspaceCodemapFrozenPresentationBundle {
         guard case let .ready(bundle) = disposition else {
-            throw ModernCodemapStoreTestError.expectedFrozenPresentationBundle
+            throw CodemapStoreTestError.expectedFrozenPresentationBundle
         }
         return bundle
     }
@@ -4003,7 +4003,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
                     line: line
                 )
             }
-            throw ModernCodemapStoreTestError.expectedRenderedPresentationEntries
+            throw CodemapStoreTestError.expectedRenderedPresentationEntries
         }
         return entries
     }
@@ -4058,13 +4058,13 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             case .busy, .stale(.runtime), .unavailable(.runtime):
                 try await Task.sleep(for: .milliseconds(10))
             case .readyPartial, .unavailable, .stale, .budget:
-                throw ModernCodemapStoreTestError.expectedReadyGraph(disposition)
+                throw CodemapStoreTestError.expectedReadyGraph(disposition)
             }
         }
         if let latest {
-            throw ModernCodemapStoreTestError.expectedReadyGraph(latest)
+            throw CodemapStoreTestError.expectedReadyGraph(latest)
         }
-        throw ModernCodemapStoreTestError.timedOut
+        throw CodemapStoreTestError.timedOut
     }
 
     private func settledResult(
@@ -4082,7 +4082,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
             }
             return result
         }
-        throw ModernCodemapStoreTestError.timedOut
+        throw CodemapStoreTestError.timedOut
     }
 
     private func routeBecomesUnavailable(
@@ -4101,7 +4101,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
 
     private func assertEngineRootCount(
         _ expected: Int,
-        fixture: ModernCodemapStoreFixture,
+        fixture: CodemapStoreFixture,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async throws {
@@ -4111,7 +4111,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
     }
 
     private func engineRootCountBecomesZero(
-        fixture: ModernCodemapStoreFixture
+        fixture: CodemapStoreFixture
     ) async throws -> Bool {
         let engine = try fixture.runtime().bindingEngine()
         for _ in 0 ..< 500 {
@@ -4160,7 +4160,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
     }
 }
 
-private enum ModernCodemapStoreTestError: Error {
+private enum CodemapStoreTestError: Error {
     case expectedFrozenPresentationBundle
     case expectedPending
     case expectedReady
@@ -4169,14 +4169,14 @@ private enum ModernCodemapStoreTestError: Error {
     case timedOut
 }
 
-private final class ModernCodemapStoreFixture: @unchecked Sendable {
+private final class CodemapStoreFixture: @unchecked Sendable {
     let registry = WorkspaceCodemapBindingIntegrationRegistry()
-    let providerAccessCount = ModernCodemapLockedCounter()
-    let runtimeFactoryCount = ModernCodemapLockedCounter()
-    let engineFactoryCount = ModernCodemapLockedCounter()
-    let manifestReadCount = ModernCodemapLockedCounter()
-    let buildCount = ModernCodemapLockedCounter()
-    let buildPriorities = ModernCodemapLockedValues<CodeMapArtifactBuildPriority>()
+    let providerAccessCount = CodemapLockedCounter()
+    let runtimeFactoryCount = CodemapLockedCounter()
+    let engineFactoryCount = CodemapLockedCounter()
+    let manifestReadCount = CodemapLockedCounter()
+    let buildCount = CodemapLockedCounter()
+    let buildPriorities = CodemapLockedValues<CodeMapArtifactBuildPriority>()
 
     private let sandbox: URL
     private let artifactRoot: URL
@@ -4185,7 +4185,7 @@ private final class ModernCodemapStoreFixture: @unchecked Sendable {
 
     init(
         name: String,
-        resolutionGate: ModernCodemapResolutionGate? = nil,
+        resolutionGate: CodemapResolutionGate? = nil,
         syntheticGraphArtifacts: Bool = false
     ) throws {
         let sandbox = try Self.makeSandbox(name: name)
@@ -4253,7 +4253,9 @@ private final class ModernCodemapStoreFixture: @unchecked Sendable {
     }
 
     func makeStore(
-        codemapGitEligibilityProbe: WorkspaceCodemapGitEligibilityProbe = .production(),
+        codemapGitEligibilityProbe: WorkspaceCodemapGitEligibilityProbe = WorkspaceCodemapGitEligibilityProbe { _ in
+            .eligible
+        },
         selectionGraphFactory: WorkspaceCodemapSelectionGraphFactory = .production,
         selectionGraphQueryBudgetPolicy: WorkspaceCodemapStoreSelectionGraphQueryBudgetPolicy = .initial,
         automaticSelectionAccountingMaximum: Int = .max,
@@ -4282,10 +4284,10 @@ private final class ModernCodemapStoreFixture: @unchecked Sendable {
             selectionGraphFactory: selectionGraphFactory,
             selectionGraphQueryBudgetPolicy: selectionGraphQueryBudgetPolicy,
             automaticSelectionAccountingMaximum: automaticSelectionAccountingMaximum,
-            modernCodemapCancellationCleanupHook: cancellationCleanupHook,
-            modernCodemapReadyPublicationHook: readyPublicationHook,
-            modernCodemapDemandResultHook: demandResultHook,
-            modernCodemapAutomaticSelectionQueryHook: automaticSelectionQueryHook
+            codemapCancellationCleanupHook: cancellationCleanupHook,
+            codemapReadyPublicationHook: readyPublicationHook,
+            codemapDemandResultHook: demandResultHook,
+            codemapAutomaticSelectionQueryHook: automaticSelectionQueryHook
         )
     }
 
@@ -4339,7 +4341,7 @@ private final class ModernCodemapStoreFixture: @unchecked Sendable {
     static func makeSandbox(name: String) throws -> URL {
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent(
-                "WorkspaceFileContextStoreModernCodemapSeamTests-\(name)-\(UUID().uuidString)",
+                "WorkspaceFileContextStoreCodemapSeamTests-\(name)-\(UUID().uuidString)",
                 isDirectory: true
             )
         try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true)
@@ -4423,16 +4425,16 @@ private final class ModernCodemapStoreFixture: @unchecked Sendable {
     }
 }
 
-private final class ModernCodemapSelectionGraphProbe: @unchecked Sendable {
+private final class CodemapSelectionGraphProbe: @unchecked Sendable {
     private let lock = NSLock()
     private let admission: CodeMapSelectionGraphAdmission
-    private let buildGate: ModernCodemapSelectionGraphBuildGate?
+    private let buildGate: CodemapSelectionGraphBuildGate?
     private let runtimePolicy: WorkspaceCodemapSelectionGraphRuntimePolicy
     private var graphsByRootEpoch: [WorkspaceCodemapRootEpoch: WorkspaceCodemapSelectionGraph] = [:]
     private var factoryInvocationCount = 0
 
     init(
-        buildGate: ModernCodemapSelectionGraphBuildGate? = nil,
+        buildGate: CodemapSelectionGraphBuildGate? = nil,
         admissionPolicy: CodeMapSelectionGraphAdmissionPolicy = .init(
             maximumActiveReservationCount: 8,
             maximumReservedBindingCount: 100_000
@@ -4495,7 +4497,7 @@ private final class ModernCodemapSelectionGraphProbe: @unchecked Sendable {
     }
 }
 
-private final class ModernCodemapSelectionGraphBuildGate: @unchecked Sendable {
+private final class CodemapSelectionGraphBuildGate: @unchecked Sendable {
     private let condition = NSCondition()
     private var blockedGenerations: [UInt64] = []
     private var releasedGenerations = Set<UInt64>()
@@ -4558,7 +4560,7 @@ private final class ModernCodemapSelectionGraphBuildGate: @unchecked Sendable {
     }
 }
 
-private final class ModernCodemapLockedCounter: @unchecked Sendable {
+private final class CodemapLockedCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var storage = 0
 
@@ -4571,7 +4573,7 @@ private final class ModernCodemapLockedCounter: @unchecked Sendable {
     }
 }
 
-private final class ModernCodemapLockedValues<Value: Sendable>: @unchecked Sendable {
+private final class CodemapLockedValues<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [Value] = []
 
@@ -4584,7 +4586,7 @@ private final class ModernCodemapLockedValues<Value: Sendable>: @unchecked Senda
     }
 }
 
-private actor ModernCodemapSuspensionGate {
+private actor CodemapSuspensionGate {
     private var entered = false
     private var released = false
     private var continuation: CheckedContinuation<Void, Never>?
@@ -4611,7 +4613,7 @@ private actor ModernCodemapSuspensionGate {
     }
 }
 
-private actor ModernCodemapArmableSuspensionGate {
+private actor CodemapArmableSuspensionGate {
     private var armed = false
     private var entered = false
     private var released = false
@@ -4644,7 +4646,7 @@ private actor ModernCodemapArmableSuspensionGate {
     }
 }
 
-private actor ModernCodemapRootSuspensionGate {
+private actor CodemapRootSuspensionGate {
     private var enteredRootEpoch: WorkspaceCodemapRootEpoch?
     private var released = false
     private var continuation: CheckedContinuation<Void, Never>?
@@ -4672,7 +4674,7 @@ private actor ModernCodemapRootSuspensionGate {
     }
 }
 
-private actor ModernCodemapResolutionGate {
+private actor CodemapResolutionGate {
     private var entered = false
     private var released = false
     private var continuation: CheckedContinuation<Void, Never>?

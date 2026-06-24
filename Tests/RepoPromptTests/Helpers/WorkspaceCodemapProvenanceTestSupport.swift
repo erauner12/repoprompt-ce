@@ -113,7 +113,6 @@ final class WorkspaceCodemapAuthorityTestFixture: @unchecked Sendable {
     ) async throws -> CodeMapSourceSnapshot {
         let fileSystem = try await FileSystemService(
             path: loadedRoot.path,
-            respectGitignore: false,
             respectRepoIgnore: false,
             respectCursorignore: false
         )

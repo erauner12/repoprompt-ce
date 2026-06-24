@@ -227,7 +227,6 @@ actor FileSystemService {
         rootURL.path
     }
 
-    var respectGitignore: Bool
     var respectRepoIgnore: Bool
     var respectCursorignore: Bool
     var skipSymlinks: Bool
@@ -316,7 +315,6 @@ actor FileSystemService {
     /// an FSEvents replay cut before the caller begins the initial crawl.
     init(
         path: String,
-        respectGitignore: Bool = true,
         respectRepoIgnore: Bool = true,
         respectCursorignore: Bool = true,
         skipSymlinks: Bool = true,
@@ -325,7 +323,6 @@ actor FileSystemService {
         self.path = path
         rootURL = URL(fileURLWithPath: path).standardizedFileURL
         canonicalRootURL = rootURL.resolvingSymlinksInPath()
-        self.respectGitignore = respectGitignore
         self.respectRepoIgnore = respectRepoIgnore
         self.respectCursorignore = respectCursorignore
         self.skipSymlinks = skipSymlinks
@@ -348,7 +345,6 @@ actor FileSystemService {
         // Load fresh ignore rules from manager, no caching done by manager
         ignoreRules = try await IgnoreRulesManager.shared.getIgnoreRules(
             for: path,
-            respectGitignore: respectGitignore,
             respectRepoIgnore: respectRepoIgnore,
             respectCursorignore: respectCursorignore
         )
@@ -380,7 +376,6 @@ actor FileSystemService {
         /// Test-only initializer that allows injecting initial state
         init(
             path: String,
-            respectGitignore: Bool = true,
             respectRepoIgnore: Bool = true,
             respectCursorignore: Bool = true,
             skipSymlinks: Bool = true,
@@ -402,7 +397,6 @@ actor FileSystemService {
             self.path = path
             rootURL = URL(fileURLWithPath: path).standardizedFileURL
             canonicalRootURL = rootURL.resolvingSymlinksInPath()
-            self.respectGitignore = respectGitignore
             self.respectRepoIgnore = respectRepoIgnore
             self.respectCursorignore = respectCursorignore
             self.skipSymlinks = skipSymlinks
@@ -444,7 +438,6 @@ actor FileSystemService {
                 #endif
                 ignoreRules = try await IgnoreRulesManager.shared.getIgnoreRules(
                     for: path,
-                    respectGitignore: respectGitignore,
                     respectRepoIgnore: respectRepoIgnore,
                     respectCursorignore: respectCursorignore
                 )

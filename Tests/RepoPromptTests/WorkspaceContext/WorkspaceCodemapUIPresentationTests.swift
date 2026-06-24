@@ -41,7 +41,7 @@ final class WorkspaceCodemapUIPresentationTests: XCTestCase {
         XCTAssertEqual(disposition, .revoked)
     }
 
-    func testNonGitPreviewIsTypedUnavailableWithoutLegacyCodemapWork() async throws {
+    func testNonGitPreviewIsTypedUnavailableWithoutCodemapArtifactWork() async throws {
         let rootURL = try makeTemporaryRoot(name: "NonGitPreview")
         let sourceURL = rootURL.appendingPathComponent("Sources/App.swift")
         try FileManager.default.createDirectory(
