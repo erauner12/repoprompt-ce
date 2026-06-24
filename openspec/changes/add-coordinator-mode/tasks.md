@@ -81,7 +81,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.5 Echo accepted user directives into the Coordinator rail transcript when appropriate, while surfacing Coordinator responses and child-session effects through normal coarse snapshot refresh.
 - [x] 9.6 Add tests for composer enablement, unreachable Coordinator fallback, ordinary-message dispatch, and no direct board/session mutation.
 - [x] 9.7 Suppress `Open in Agent Mode` / `Open agent chat` for the Coordinator backing actor in the production-demo rail while preserving Agent Mode deep links for supervised delegate rows and pending summaries.
-- [x] 9.8 Add a persisted chat-level manual/follow-through Coordinator runtime policy toggle that defaults to manual.
+- [x] 9.8 Add a persisted chat-level Manual/Auto Coordinator runtime mode toggle that defaults to Manual.
 - [x] 9.9 Inject follow-through guidance into Coordinator runtime prompts without changing submitted directive text or adding a structured directive envelope.
 - [x] 9.10 Add focused tests for follow-through persistence and prompt-gating behavior.
 - [x] 9.11 Persist lightweight Coordinator follow-through state with objective summary, observed child phases, pending/handled events, and last resume result.
@@ -91,7 +91,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.15 Keep app-generated resume events observational; human continuation remains chat-owned rather than inspector-owned.
 - [x] 9.16 Add a direct external MCP Coordinator chat control surface for fast live validation that reuses the Coordinator composer path and is hidden from in-agent role catalogs.
 - [x] 9.17 Enforce Coordinator mutable-delegation worktree policy so read-only child runs may omit worktrees, but edits, tests, merge previews, commit/PR prep, and inherited-binding-only mutable starts require an explicit child worktree.
-- [x] 9.18 Feed projected workstream summaries into follow-through classification so resume/hold decisions use the same phase, owner Coordinator, and next action shown on the board.
+- [x] 9.18 Feed projected workstream summaries into auto-mode classification so resume/hold decisions use the same phase, owner Coordinator, and next action shown on the board.
 - [x] 9.19 Add chat-level `Proceed`, `Revise`, and `Stop here` continuation controls that submit ordinary messages to the owning Coordinator parent.
 - [x] 9.20 Keep inspector continuation-free; Done remains a terminal observed state rather than human acceptance.
 - [x] 9.21 Render chat-level continuation controls only from explicit Coordinator checkpoint metadata, not from ordinary Coordinator prose.

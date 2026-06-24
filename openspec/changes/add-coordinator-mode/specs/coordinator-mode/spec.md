@@ -150,7 +150,7 @@ The production-demo Coordinator mode SHALL separate the selected Coordinator con
 - **AND** they SHALL continue to exclude Coordinator backing runtimes and explicitly marked Coordinator-internal housekeeping sessions
 - **AND** direct Agent Mode sessions that are not owned by an active Coordinator root SHALL NOT appear solely because they are live in Agent Mode
 - **AND** the destination SHALL hide the Coordinator chat/composer column so the board and inspector can use the available workspace width
-- **AND** this navigation change SHALL NOT mutate Agent Mode session ownership, archive state, Coordinator fleet membership, follow-through policy, or the selected Coordinator rail conversation.
+- **AND** this navigation change SHALL NOT mutate Agent Mode session ownership, archive state, Coordinator fleet membership, Manual/Auto mode, or the selected Coordinator rail conversation.
 
 #### Scenario: Delegate belongs to a parent Coordinator runtime
 - **WHEN** a delegated row is projected from an aggregate fleet that contains multiple Coordinator runtime roots
@@ -261,35 +261,35 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **AND** it SHALL return structured Coordinator, composer, and board state suitable for live smoke validation
 - **AND** the control surface SHALL NOT be advertised to in-agent role tool catalogs or used as a recursive Coordinator self-control tool.
 
-#### Scenario: Coordinator follow-through policy is manual by default
+#### Scenario: Coordinator mode is manual by default
 - **WHEN** the Coordinator view is created for a workspace
-- **THEN** the follow-through policy SHALL default to manual unless the user has previously changed the persisted setting
-- **AND** the policy control SHALL be presented as Coordinator chat/composer-level state rather than as a Kanban board setting
-- **AND** the default manual policy SHALL leave the Coordinator runtime to report current results/status and wait for the user's next directive at ordinary turn boundaries.
+- **THEN** the Manual/Auto mode SHALL default to Manual unless the user has previously changed the persisted setting
+- **AND** the mode control SHALL be presented as Coordinator chat/composer-level state rather than as a Kanban board setting
+- **AND** Manual mode SHALL leave the Coordinator runtime to report current results/status and wait for the user's next directive at ordinary turn boundaries.
 
-#### Scenario: User enables Coordinator follow-through
-- **WHEN** the user enables the persisted Coordinator follow-through policy
+#### Scenario: User enables Coordinator Auto mode
+- **WHEN** the user enables the persisted Coordinator Auto mode
 - **THEN** the Coordinator runtime MAY proactively continue supervising delegated work through existing Agent Mode control-plane/message paths until the user's original objective is satisfied
 - **AND** it MAY wait, poll, or steer delegated Agent sessions when the safe next step is clear
 - **AND** it SHALL NOT change the user-submitted directive text, create a new structured Coordinator command envelope, directly mutate board/list rows, change Kanban navigation/presentation state, or bypass normal Agent Mode session state.
 
-#### Scenario: Coordinator follow-through reaches a boundary
-- **WHEN** Coordinator follow-through is enabled
+#### Scenario: Coordinator Auto mode reaches a boundary
+- **WHEN** Coordinator Auto mode is enabled
 - **AND** a delegated session requires user input, permission, human continuation, or is blocked or ambiguous
 - **THEN** the Coordinator runtime SHALL stop at that boundary and surface the required user decision/status
 - **AND** it SHALL NOT bypass or auto-acknowledge the user's continuation, approval, permission, or Needs-you gate.
 
 #### Scenario: App-generated follow-through event resumes Coordinator
-- **WHEN** Coordinator follow-through is enabled
+- **WHEN** Coordinator Auto mode is enabled
 - **AND** the owning Coordinator runtime is idle
 - **AND** a supervised delegated child reaches a terminal state or reviewable child output becomes available
 - **THEN** the Coordinator view MAY submit a structured internal resume directive to the existing owning Coordinator runtime
 - **AND** it SHALL NOT create a new Coordinator parent runtime
 - **AND** the resume directive SHALL describe the observed event as app-generated context for the original objective rather than a new user request.
 
-#### Scenario: Follow-through classifies projected workstreams
+#### Scenario: Auto mode classifies projected workstreams
 - **WHEN** the Coordinator view has projected a workstream summary for a supervised row
-- **THEN** follow-through resume/hold decisions SHALL prefer the projected owner Coordinator, phase, and next action over parallel ad hoc inference from row titles, assistant prose, or lower-level fallback status
+- **THEN** auto-mode resume/hold decisions SHALL prefer the projected owner Coordinator, phase, and next action over parallel ad hoc inference from row titles, assistant prose, or lower-level fallback status
 - **AND** lower-level row fields MAY be used only when the structured workstream summary is unavailable.
 
 #### Scenario: Coordinator continuation checkpoint is chat-owned

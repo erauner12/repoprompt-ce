@@ -301,7 +301,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.railTranscriptEntries.map(\.text), ["first directive", "first answer"])
     }
 
-    func testProactiveFollowThroughDefaultsManualAndPersistsChanges() throws {
+    func testAutoModeDefaultsManualAndPersistsChanges() throws {
         let suiteName = "CoordinatorModeComposerViewModelTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
@@ -312,17 +312,17 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             dashboardVisibilityHandler: { _ in },
             userDefaults: defaults
         )
-        XCTAssertFalse(initial.allowsProactiveFollowThrough)
+        XCTAssertFalse(initial.usesAutoMode)
 
-        initial.setAllowsProactiveFollowThrough(true)
-        XCTAssertTrue(initial.allowsProactiveFollowThrough)
+        initial.setUsesAutoMode(true)
+        XCTAssertTrue(initial.usesAutoMode)
 
         let restored = CoordinatorModeViewModel(
             inputProvider: { _, _ in self.input() },
             dashboardVisibilityHandler: { _ in },
             userDefaults: defaults
         )
-        XCTAssertTrue(restored.allowsProactiveFollowThrough)
+        XCTAssertTrue(restored.usesAutoMode)
     }
 
     func testAcceptedDirectiveDoesNotDuplicateRuntimeBackedUserTranscriptEntry() async {

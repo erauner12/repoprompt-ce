@@ -1,6 +1,6 @@
 import Foundation
 
-struct CoordinatorFollowThroughBoundaryClassifier {
+struct CoordinatorAutoModeBoundaryClassifier {
     enum Trigger: Equatable {
         case lifecycle
         case gateCleared(CoordinatorContinuationGate)
@@ -12,7 +12,7 @@ struct CoordinatorFollowThroughBoundaryClassifier {
     }
 
     enum HoldReason: Equatable {
-        case followThroughDisabled
+        case autoModeDisabled
         case missingCoordinator
         case missingObjective
         case coordinatorActive
@@ -23,7 +23,7 @@ struct CoordinatorFollowThroughBoundaryClassifier {
     }
 
     struct Input {
-        var followThroughEnabled: Bool
+        var autoModeEnabled: Bool
         var coordinatorSessionID: UUID?
         var coordinatorRunState: AgentSessionRunState?
         var rows: [CoordinatorModeRow]
@@ -32,7 +32,7 @@ struct CoordinatorFollowThroughBoundaryClassifier {
     }
 
     func classify(_ input: Input) -> Decision {
-        guard input.followThroughEnabled else { return .hold(.followThroughDisabled) }
+        guard input.autoModeEnabled else { return .hold(.autoModeDisabled) }
         guard let coordinatorSessionID = input.coordinatorSessionID else { return .hold(.missingCoordinator) }
         guard input.state.originalObjectiveSummary?.isEmpty == false else { return .hold(.missingObjective) }
         if input.coordinatorRunState?.isActive == true {

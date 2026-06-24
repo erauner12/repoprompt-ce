@@ -415,28 +415,28 @@ struct CoordinatorModeView: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    private func followThroughPicker(metrics: CoordinatorVisualMetrics) -> some View {
+    private func automationModePicker(metrics: CoordinatorVisualMetrics) -> some View {
         HStack(spacing: metrics.headerSegmentSpacing) {
             headerSegmentButton(
                 title: "Manual",
-                isSelected: !viewModel.allowsProactiveFollowThrough,
+                isSelected: !viewModel.usesAutoMode,
                 metrics: metrics
             ) {
-                viewModel.setAllowsProactiveFollowThrough(false)
+                viewModel.setUsesAutoMode(false)
             }
 
             headerSegmentButton(
-                title: "Follow",
-                isSelected: viewModel.allowsProactiveFollowThrough,
+                title: "Auto",
+                isSelected: viewModel.usesAutoMode,
                 metrics: metrics
             ) {
-                viewModel.setAllowsProactiveFollowThrough(true)
+                viewModel.setUsesAutoMode(true)
             }
         }
         .padding(metrics.headerControlInset)
-        .frame(width: metrics.followThroughControlWidth, height: metrics.headerControlHeight)
+        .frame(width: metrics.automationModeControlWidth, height: metrics.headerControlHeight)
         .coordinatorHeaderControlBackground()
-        .accessibilityLabel("Coordinator follow-through")
+        .accessibilityLabel("Coordinator automation mode")
     }
 
     private func sortPicker(metrics: CoordinatorVisualMetrics) -> some View {
@@ -1594,7 +1594,7 @@ struct CoordinatorModeView: View {
     private func activeCoordinatorContinuationCheckpoint(
         _ rail: CoordinatorModeCoordinatorRail
     ) -> CoordinatorModeConversationCheckpoint? {
-        guard viewModel.allowsProactiveFollowThrough,
+        guard viewModel.usesAutoMode,
               rail.state == .selected,
               rail.isComposerSendEnabled,
               !isSubmittingCoordinatorDirective
@@ -1857,7 +1857,7 @@ struct CoordinatorModeView: View {
                     .fill(Color(nsColor: .controlBackgroundColor).opacity(0.22))
             )
 
-            coordinatorComposerFollowThroughToggle(metrics: metrics)
+            coordinatorComposerAutomationModeToggle(metrics: metrics)
 
             coordinatorComposerToolsButton(metrics: metrics)
 
@@ -2166,22 +2166,22 @@ struct CoordinatorModeView: View {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    private func coordinatorComposerFollowThroughToggle(metrics: CoordinatorVisualMetrics) -> some View {
+    private func coordinatorComposerAutomationModeToggle(metrics: CoordinatorVisualMetrics) -> some View {
         HStack(spacing: metrics.headerSegmentSpacing) {
-            coordinatorComposerFollowThroughButton(
+            coordinatorComposerAutomationModeButton(
                 title: "Manual",
-                isSelected: !viewModel.allowsProactiveFollowThrough,
+                isSelected: !viewModel.usesAutoMode,
                 metrics: metrics
             ) {
-                viewModel.setAllowsProactiveFollowThrough(false)
+                viewModel.setUsesAutoMode(false)
             }
 
-            coordinatorComposerFollowThroughButton(
-                title: "Follow",
-                isSelected: viewModel.allowsProactiveFollowThrough,
+            coordinatorComposerAutomationModeButton(
+                title: "Auto",
+                isSelected: viewModel.usesAutoMode,
                 metrics: metrics
             ) {
-                viewModel.setAllowsProactiveFollowThrough(true)
+                viewModel.setUsesAutoMode(true)
             }
         }
         .padding(metrics.composerToggleInset)
@@ -2189,10 +2189,10 @@ struct CoordinatorModeView: View {
             Capsule(style: .continuous)
                 .fill(Color(nsColor: .controlBackgroundColor).opacity(0.22))
         )
-        .accessibilityLabel("Coordinator chat follow-through")
+        .accessibilityLabel("Coordinator chat automation mode")
     }
 
-    private func coordinatorComposerFollowThroughButton(
+    private func coordinatorComposerAutomationModeButton(
         title: String,
         isSelected: Bool,
         metrics: CoordinatorVisualMetrics,
@@ -2205,7 +2205,7 @@ struct CoordinatorModeView: View {
                 .minimumScaleFactor(0.86)
                 .padding(.horizontal, metrics.miniPillHorizontalPadding)
                 .padding(.vertical, metrics.miniPillVerticalPadding)
-                .frame(minWidth: metrics.composerFollowThroughSegmentMinWidth)
+                .frame(minWidth: metrics.composerAutomationModeSegmentMinWidth)
                 .background(
                     Capsule(style: .continuous)
                         .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
@@ -2971,7 +2971,7 @@ private struct CoordinatorVisualMetrics {
         fontPreset.scaledClamped(188, min: 188, max: 228)
     }
 
-    var followThroughControlWidth: CGFloat {
+    var automationModeControlWidth: CGFloat {
         fontPreset.scaledClamped(178, min: 178, max: 214)
     }
 
@@ -2979,7 +2979,7 @@ private struct CoordinatorVisualMetrics {
         fontPreset.scaledClamped(2, max: 3)
     }
 
-    var composerFollowThroughSegmentMinWidth: CGFloat {
+    var composerAutomationModeSegmentMinWidth: CGFloat {
         fontPreset.scaledClamped(46, min: 42, max: 56)
     }
 

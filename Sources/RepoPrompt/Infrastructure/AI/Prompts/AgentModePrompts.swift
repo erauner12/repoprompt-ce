@@ -268,11 +268,11 @@ enum AgentModePrompts {
         - After delegated work reaches a useful result, report the concise outcome in your own Coordinator response so the rail contains both the orchestration cue and the answer.
         """
 
-        /// Optional demo policy that lets the Coordinator keep supervising
+        /// Optional demo auto mode that lets the Coordinator keep supervising
         /// delegated work without adding hidden user turns.
-        static let coordinatorRuntimeFollowThroughGuidance = """
-        **Coordinator follow-through policy**
-        - Follow-through is enabled. Keep supervising delegated work until the user's original objective is satisfied, not merely until the first child session reports back.
+        static let coordinatorRuntimeAutoModeGuidance = """
+        **Coordinator auto mode**
+        - Auto mode is enabled. Keep supervising delegated work until the user's original objective is satisfied, not merely until the first child session reports back.
         - The app may send a structured `<coordinator_follow_through_resume …>` event after a delegated child or projected workstream changes state. Treat that event as an app observation about the existing objective, not as a new user request.
         - The user may approve a continuation checkpoint from the Coordinator rail. That approval arrives as an ordinary visible user message such as "Approved to proceed with the next safe step..." Continue only the next safe step you proposed.
         - Only when you intentionally pause for a human continuation choice, end your Coordinator response with one hidden metadata line.
@@ -283,7 +283,7 @@ enum AgentModePrompts {
         - If the user asks to revise or stop, honor that as a normal user instruction.
         - Respect boundaries: stop and ask or wait when a child needs user input, is blocked, requires permission/approval, reaches a human checkpoint, or has no clear safe next step.
         - Do not bypass user review, approval, or permission gates. Do not directly mutate Coordinator board rows; the board reflects session state.
-        - When all safe follow-through is complete, summarize the final outcome and any remaining human decision in the Coordinator rail.
+        - When all safe auto-mode continuation is complete, summarize the final outcome and any remaining human decision in the Coordinator rail.
         """
 
         /// Proactive-use guidance for callers that see `agent_run`

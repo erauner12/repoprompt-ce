@@ -1,13 +1,13 @@
 @testable import RepoPrompt
 import XCTest
 
-final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
-    private let classifier = CoordinatorFollowThroughBoundaryClassifier()
+final class CoordinatorAutoModeBoundaryClassifierTests: XCTestCase {
+    private let classifier = CoordinatorAutoModeBoundaryClassifier()
 
-    func testFollowOffHolds() {
-        let decision = classifier.classify(input(followThroughEnabled: false))
+    func testAutoModeOffHolds() {
+        let decision = classifier.classify(input(autoModeEnabled: false))
 
-        XCTAssertEqual(decision, .hold(.followThroughDisabled))
+        XCTAssertEqual(decision, .hold(.autoModeDisabled))
     }
 
     func testRunningCoordinatorHolds() {
@@ -362,15 +362,15 @@ final class CoordinatorFollowThroughBoundaryClassifierTests: XCTestCase {
     }
 
     private func input(
-        followThroughEnabled: Bool = true,
+        autoModeEnabled: Bool = true,
         coordinatorID: UUID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
         coordinatorRunState: AgentSessionRunState = .idle,
         rows: [CoordinatorModeRow] = [],
         state: CoordinatorFollowThroughState? = nil,
-        trigger: CoordinatorFollowThroughBoundaryClassifier.Trigger = .lifecycle
-    ) -> CoordinatorFollowThroughBoundaryClassifier.Input {
-        CoordinatorFollowThroughBoundaryClassifier.Input(
-            followThroughEnabled: followThroughEnabled,
+        trigger: CoordinatorAutoModeBoundaryClassifier.Trigger = .lifecycle
+    ) -> CoordinatorAutoModeBoundaryClassifier.Input {
+        CoordinatorAutoModeBoundaryClassifier.Input(
+            autoModeEnabled: autoModeEnabled,
             coordinatorSessionID: coordinatorID,
             coordinatorRunState: coordinatorRunState,
             rows: rows,

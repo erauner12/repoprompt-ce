@@ -2,34 +2,34 @@
 import XCTest
 
 final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
-    func testCoordinatorPromptOmitsFollowThroughPolicyByDefault() {
+    func testCoordinatorPromptOmitsAutoModeByDefault() {
         let prompt = SystemPromptService.agentModePrompt(
             agentKind: .codexExec,
             coordinatorRuntimeDemo: true
         )
 
         XCTAssertTrue(prompt.contains("Coordinator runtime demo mode"))
-        XCTAssertFalse(prompt.contains("Coordinator follow-through policy"))
+        XCTAssertFalse(prompt.contains("Coordinator auto mode"))
     }
 
-    func testCoordinatorPromptIncludesFollowThroughPolicyWhenEnabled() {
+    func testCoordinatorPromptIncludesAutoModeWhenEnabled() {
         let prompt = SystemPromptService.agentModePrompt(
             agentKind: .codexExec,
             coordinatorRuntimeDemo: true,
-            coordinatorRuntimeFollowThrough: true
+            coordinatorRuntimeAutoMode: true
         )
 
         XCTAssertTrue(prompt.contains("Coordinator runtime demo mode"))
-        XCTAssertTrue(prompt.contains("Coordinator follow-through policy"))
+        XCTAssertTrue(prompt.contains("Coordinator auto mode"))
         XCTAssertTrue(prompt.contains("Respect boundaries"))
     }
 
-    func testFollowThroughPolicyRequiresCoordinatorRuntimeDemoMode() {
+    func testAutoModeRequiresCoordinatorRuntimeDemoMode() {
         let prompt = SystemPromptService.agentModePrompt(
             agentKind: .codexExec,
-            coordinatorRuntimeFollowThrough: true
+            coordinatorRuntimeAutoMode: true
         )
 
-        XCTAssertFalse(prompt.contains("Coordinator follow-through policy"))
+        XCTAssertFalse(prompt.contains("Coordinator auto mode"))
     }
 }

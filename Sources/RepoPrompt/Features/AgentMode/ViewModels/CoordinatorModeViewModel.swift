@@ -51,7 +51,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     @Published private(set) var currentRailActivityText: String?
     @Published private(set) var composerNotice: String?
     @Published private(set) var isFreshCoordinatorRunPending = false
-    @Published private(set) var allowsProactiveFollowThrough: Bool
+    @Published private(set) var usesAutoMode: Bool
     @Published var selectedWorkflowTemplate: CoordinatorWorkflowTemplate?
     @Published var sortMode: CoordinatorModeSortMode = .lastUpdated {
         didSet {
@@ -110,7 +110,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.coordinatorPinHandler = coordinatorPinHandler
         self.projector = projector
         self.userDefaults = userDefaults
-        allowsProactiveFollowThrough = CoordinatorModeFollowThroughPreference.isEnabled(defaults: userDefaults)
+        usesAutoMode = CoordinatorModeAutomationPreference.isEnabled(defaults: userDefaults)
     }
 
     func setVisible(_ visible: Bool) {
@@ -193,10 +193,10 @@ final class CoordinatorModeViewModel: ObservableObject {
         composerNotice = nil
     }
 
-    func setAllowsProactiveFollowThrough(_ allowsFollowThrough: Bool) {
-        guard allowsProactiveFollowThrough != allowsFollowThrough else { return }
-        allowsProactiveFollowThrough = allowsFollowThrough
-        CoordinatorModeFollowThroughPreference.setEnabled(allowsFollowThrough, defaults: userDefaults)
+    func setUsesAutoMode(_ usesAutoMode: Bool) {
+        guard self.usesAutoMode != usesAutoMode else { return }
+        self.usesAutoMode = usesAutoMode
+        CoordinatorModeAutomationPreference.setEnabled(usesAutoMode, defaults: userDefaults)
     }
 
     @discardableResult
@@ -757,10 +757,10 @@ extension AgentModeViewModel {
 
     @MainActor
     private func evaluateCoordinatorFollowThrough(
-        trigger: CoordinatorFollowThroughBoundaryClassifier.Trigger,
+        trigger: CoordinatorAutoModeBoundaryClassifier.Trigger,
         snapshot explicitSnapshot: CoordinatorModeSnapshot? = nil
     ) async {
-        guard coordinatorModeViewModel.allowsProactiveFollowThrough else { return }
+        guard coordinatorModeViewModel.usesAutoMode else { return }
         let snapshot = explicitSnapshot ?? coordinatorModeViewModel.snapshot
         let rows = coordinatorModeRows(in: snapshot)
         let coordinatorIDs = Set(
@@ -780,9 +780,9 @@ extension AgentModeViewModel {
     private func evaluateCoordinatorFollowThrough(
         coordinatorSessionID: UUID,
         snapshot explicitSnapshot: CoordinatorModeSnapshot,
-        trigger: CoordinatorFollowThroughBoundaryClassifier.Trigger
+        trigger: CoordinatorAutoModeBoundaryClassifier.Trigger
     ) async {
-        guard coordinatorModeViewModel.allowsProactiveFollowThrough else { return }
+        guard coordinatorModeViewModel.usesAutoMode else { return }
         await evaluateCoordinatorFollowThrough(
             coordinatorSessionID: coordinatorSessionID,
             rows: coordinatorModeRows(in: explicitSnapshot),
@@ -794,7 +794,7 @@ extension AgentModeViewModel {
     private func evaluateCoordinatorFollowThrough(
         coordinatorSessionID: UUID,
         rows: [CoordinatorModeRow],
-        trigger: CoordinatorFollowThroughBoundaryClassifier.Trigger
+        trigger: CoordinatorAutoModeBoundaryClassifier.Trigger
     ) async {
         guard let match = sessions.first(where: { _, session in
             session.activeAgentSessionID == coordinatorSessionID && session.isCoordinatorRuntime
@@ -813,9 +813,9 @@ extension AgentModeViewModel {
         }
 
         if case .gateCleared = trigger {
-            let classifier = CoordinatorFollowThroughBoundaryClassifier()
-            let input = CoordinatorFollowThroughBoundaryClassifier.Input(
-                followThroughEnabled: coordinatorModeViewModel.allowsProactiveFollowThrough,
+            let classifier = CoordinatorAutoModeBoundaryClassifier()
+            let input = CoordinatorAutoModeBoundaryClassifier.Input(
+                autoModeEnabled: coordinatorModeViewModel.usesAutoMode,
                 coordinatorSessionID: coordinatorSessionID,
                 coordinatorRunState: session.runState,
                 rows: rows,
@@ -859,9 +859,9 @@ extension AgentModeViewModel {
             return
         }
 
-        let classifier = CoordinatorFollowThroughBoundaryClassifier()
-        var input = CoordinatorFollowThroughBoundaryClassifier.Input(
-            followThroughEnabled: coordinatorModeViewModel.allowsProactiveFollowThrough,
+        let classifier = CoordinatorAutoModeBoundaryClassifier()
+        var input = CoordinatorAutoModeBoundaryClassifier.Input(
+            autoModeEnabled: coordinatorModeViewModel.usesAutoMode,
             coordinatorSessionID: coordinatorSessionID,
             coordinatorRunState: session.runState,
             rows: rows,
