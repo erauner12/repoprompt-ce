@@ -276,7 +276,7 @@ struct CoordinatorModeView: View {
                 } else {
                     boardView(
                         sections: sections,
-                        hidesEmptyLanes: snapshot.boardScope == .coordinatorFleet,
+                        boardScope: snapshot.boardScope,
                         metrics: metrics
                     )
                 }
@@ -991,10 +991,10 @@ struct CoordinatorModeView: View {
 
     private func boardView(
         sections: [CoordinatorModeStatusSection],
-        hidesEmptyLanes: Bool,
+        boardScope: CoordinatorModeBoardScope,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        let visibleSections = hidesEmptyLanes ? sections.filter { !$0.rows.isEmpty } : sections
+        let visibleSections = visibleBoardSections(from: sections, boardScope: boardScope)
 
         return GeometryReader { proxy in
             ScrollView([.horizontal, .vertical]) {
@@ -1013,10 +1013,11 @@ struct CoordinatorModeView: View {
                             ForEach(visibleSections, id: \.group) { section in
                                 boardColumn(
                                     section: section,
+                                    boardScope: boardScope,
                                     metrics: metrics,
                                     minHeight: max(proxy.size.height - (metrics.outerPadding * 2), metrics.boardColumnMinHeight)
                                 )
-                                .frame(width: metrics.boardColumnWidth)
+                                .frame(width: boardColumnWidth(for: visibleSections, availableWidth: proxy.size.width, metrics: metrics))
                             }
                         }
                     }
@@ -1032,6 +1033,35 @@ struct CoordinatorModeView: View {
         }
     }
 
+    private func boardColumnWidth(
+        for sections: [CoordinatorModeStatusSection],
+        availableWidth: CGFloat,
+        metrics: CoordinatorVisualMetrics
+    ) -> CGFloat {
+        let count = max(CGFloat(sections.count), 1)
+        guard sections.count <= 3 else { return metrics.boardColumnWidth }
+        let horizontalPadding = metrics.outerPadding * 2
+        let columnSpacing = metrics.boardColumnSpacing * max(count - 1, 0)
+        let usableWidth = max(availableWidth - horizontalPadding - columnSpacing, 0)
+        let fittedWidth = floor(usableWidth / count)
+        return max(metrics.boardColumnCompactWidth, fittedWidth)
+    }
+
+    private func visibleBoardSections(
+        from sections: [CoordinatorModeStatusSection],
+        boardScope: CoordinatorModeBoardScope
+    ) -> [CoordinatorModeStatusSection] {
+        switch boardScope {
+        case .allAgents:
+            return sections
+        case .coordinatorFleet:
+            let defaultGroups: Set<CoordinatorModeStatusGroup> = [.working, .review, .done]
+            return sections.filter { section in
+                !section.rows.isEmpty || defaultGroups.contains(section.group)
+            }
+        }
+    }
+
     private func boardAnimationKey(for sections: [CoordinatorModeStatusSection]) -> [String] {
         sections.flatMap { section in
             section.rows.map { "\(section.group.rawValue):\($0.id.uuidString)" }
@@ -1040,6 +1070,7 @@ struct CoordinatorModeView: View {
 
     private func boardColumn(
         section: CoordinatorModeStatusSection,
+        boardScope: CoordinatorModeBoardScope,
         metrics: CoordinatorVisualMetrics,
         minHeight: CGFloat
     ) -> some View {
@@ -1079,7 +1110,7 @@ struct CoordinatorModeView: View {
                     }
             } else {
                 ForEach(section.rows) { row in
-                    sessionCard(row, metrics: metrics)
+                    sessionCard(row, boardScope: boardScope, metrics: metrics)
                 }
             }
 
@@ -1101,7 +1132,11 @@ struct CoordinatorModeView: View {
         )
     }
 
-    private func sessionCard(_ row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
+    private func sessionCard(
+        _ row: CoordinatorModeRow,
+        boardScope: CoordinatorModeBoardScope,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
         VStack(alignment: .leading, spacing: metrics.sessionCardInnerSpacing) {
             HStack(alignment: .top) {
                 if let worktree = row.workstream {
@@ -1118,14 +1153,10 @@ struct CoordinatorModeView: View {
                 Spacer(minLength: metrics.controlSpacing)
             }
 
-            rowMetadata(row, metrics: metrics)
+            rowMetadata(row, boardScope: boardScope, metrics: metrics)
 
             if let nextAction = row.workstreamSummary?.nextAction {
                 workstreamNextActionHint(nextAction, metrics: metrics)
-            }
-
-            if row.isPersistedOnly {
-                statusChip("Persisted only", color: .secondary, metrics: metrics)
             }
         }
         .padding(metrics.sessionCardPadding)
@@ -2564,39 +2595,25 @@ struct CoordinatorModeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func rowMetadata(_ row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
-        HStack(spacing: metrics.smallSpacing) {
-            statusChip(row.runState.displayName, color: row.statusGroup.accentColor, metrics: metrics)
-            if let workflow = row.workflow {
-                workflowBadge(workflow, metrics: metrics)
+    @ViewBuilder
+    private func rowMetadata(
+        _ row: CoordinatorModeRow,
+        boardScope: CoordinatorModeBoardScope,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let showsParentCoordinator = boardScope == .allAgents && row.parentCoordinator != nil
+        if row.workflow != nil || showsParentCoordinator || row.origin == .directAgent {
+            HStack(spacing: metrics.smallSpacing) {
+                if let workflow = row.workflow {
+                    workflowBadge(workflow, metrics: metrics)
+                }
+                if showsParentCoordinator, let parentCoordinator = row.parentCoordinator {
+                    parentCoordinatorBadge(parentCoordinator, metrics: metrics)
+                } else if row.origin == .directAgent {
+                    directAgentBadge(metrics: metrics)
+                }
             }
-            if let parentCoordinator = row.parentCoordinator {
-                parentCoordinatorBadge(parentCoordinator, metrics: metrics)
-            } else if row.origin == .directAgent {
-                directAgentBadge(metrics: metrics)
-            }
-            if let identity = cardIdentityText(for: row) {
-                Text(identity)
-                    .font(metrics.body)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
         }
-    }
-
-    private func cardIdentityText(for row: CoordinatorModeRow) -> String? {
-        var parts: [String] = []
-        if let providerName = row.providerName {
-            parts.append(providerName)
-        }
-        if let modelName = row.modelName, modelName != row.providerName {
-            parts.append(modelName)
-        }
-        if let workstream = row.workstream {
-            parts.append(workstream.label)
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private func parentCoordinatorBadge(
@@ -3033,6 +3050,10 @@ private struct CoordinatorVisualMetrics {
 
     var boardColumnWidth: CGFloat {
         fontPreset.scaledClamped(206, min: 196, max: 248)
+    }
+
+    var boardColumnCompactWidth: CGFloat {
+        fontPreset.scaledClamped(150, min: 140, max: 170)
     }
 
     var boardColumnMinHeight: CGFloat {

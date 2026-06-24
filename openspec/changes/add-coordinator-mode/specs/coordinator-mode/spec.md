@@ -198,7 +198,11 @@ The system SHALL present v1 as a read-only status board by default, with a list 
 - **THEN** the Coordinator view SHALL show a board view by default
 - **AND** status groups SHALL render as board columns containing session cards
 - **AND** the board SHALL derive columns and cards from the same `CoordinatorModeSnapshot` grouping and row projection used by other Coordinator view regions
-- **AND** the selected-Mission board SHOULD omit empty status lanes while the All Agents Board SHALL continue to show every status lane for the fleet overview.
+- **AND** the selected-Mission board SHALL keep `Working`, `Review`, and `Done` visible as stable default lanes even when empty
+- **AND** the selected-Mission board SHOULD omit empty `Needs you` and `Blocked` lanes until those statuses contain rows
+- **AND** the selected-Mission board SHOULD size the stable default lanes so all three fit without horizontal scrolling at ordinary Coordinator panel widths
+- **AND** Kanban cards SHOULD avoid redundant status or persistence chips when the same information is already communicated by the lane, inspector, or list view
+- **AND** the All Agents Board SHALL continue to show every status lane for the fleet overview.
 
 #### Scenario: User switches to list view
 - **WHEN** the user chooses List view
