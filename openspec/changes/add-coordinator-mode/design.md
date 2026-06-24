@@ -218,6 +218,8 @@ Delegated-session cards are part of that visible conversational timeline. They s
 
 Selected-Mission board rows, Mission history child counts, and delegated-session chat cards must share the same owner-resolution projection. If those surfaces compute ownership independently, MCP-submitted starts can appear in chat while the selected board stays empty, or workflow badges/status can go stale after the child row updates. The selected-Mission projection should therefore filter the already root-resolved Coordinator owner map rather than rebuilding a separate selected-owner map.
 
+Because delegated-session cards are the conversational record of concrete child work, clicking one should behave as navigation to that same projected object when it is still present: select the matching board/list row, reveal the inspector, and leave the Coordinator Mission conversation selected. This is a read-only observability jump, not a workflow command or a child-session mutation. If a local row filter hides the object, the jump can clear that filter so the visual target and inspector are brought back into view.
+
 ### 14. Inspector stays sourced; full logs stay in Agent Mode
 
 The v1 inspector / trailing detail column shows sourced summaries only: status, pending interaction, blocker, worktree/merge, route, and MCP/session metadata. Full transcript, raw log, file, and diff inspection remain in Agent Mode via `Open agent chat`. A Coordinator-view-native full-log toggle is a follow-up unless backed by a sourced activity projection.

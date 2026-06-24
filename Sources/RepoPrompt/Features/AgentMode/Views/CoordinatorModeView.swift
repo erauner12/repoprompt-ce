@@ -1863,6 +1863,11 @@ struct CoordinatorModeView: View {
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
                 .stroke(action.verb.tint.opacity(0.16), lineWidth: 0.8)
         )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectDelegatedActionTarget(targetRow)
+        }
+        .hoverTooltip(targetRow == nil ? "Delegated session is no longer visible on the board" : "Show delegated session in inspector")
     }
 
     private func coordinatorRow(for sessionID: UUID) -> CoordinatorModeRow? {
@@ -2607,6 +2612,15 @@ struct CoordinatorModeView: View {
         childDirectiveNotice = nil
         isSubmittingChildDirective = false
         isChildComposerExpanded = false
+    }
+
+    private func selectDelegatedActionTarget(_ row: CoordinatorModeRow?) {
+        guard let row else { return }
+        if !filteredSections(from: viewModel.snapshot).flatMap(\.rows).contains(where: { $0.id == row.id }) {
+            filterText = ""
+        }
+        selectedRowID = row.id
+        isInspectorVisible = true
     }
 
     private func clearSelectedRow() {

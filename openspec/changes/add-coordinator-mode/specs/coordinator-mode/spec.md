@@ -270,6 +270,13 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **THEN** the Coordinator chat SHOULD render delegated-session event cards as soon as those child sessions are projected
 - **AND** those event cards SHOULD update from the live board row state rather than waiting for the child to reach a terminal state.
 
+#### Scenario: Delegated event selects its board row
+- **WHEN** the user clicks a delegated-session event card in the Coordinator conversation
+- **AND** the delegated target still has a projected board or list row in the selected Mission scope
+- **THEN** the Coordinator view SHOULD select that row and reveal the inspector for it
+- **AND** the interaction MAY clear a local session filter that is hiding the selected row
+- **AND** the interaction SHALL NOT mutate the delegated session, Coordinator Mission ownership, Manual/Auto mode, or Agent Mode state.
+
 #### Scenario: Coordinator composer uses Agent Mode input affordances
 - **WHEN** the Coordinator composer is editable
 - **THEN** it MAY expose Agent Mode-compatible slash-skill insertion and workspace file-mention affordances that write into the ordinary directive text

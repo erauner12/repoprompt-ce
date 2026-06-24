@@ -149,6 +149,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.47 Fit selected-Mission default Kanban lanes into ordinary board widths and remove redundant status/persistence chips from Kanban cards.
 - [x] 10.48 Persist workflow summaries in Agent session metadata and render delegated conversation workflow/worktree identity after restart without requiring Agent chat hydration.
 - [x] 10.49 Show an explicit `Open to reply` inspector action for routeable delegated sessions that are not live in the current window.
+- [x] 10.50 Let delegated conversation cards select their projected board/list row and reveal the inspector when the target is still visible in the selected Mission scope.
 
 ## 11. Validation
 
