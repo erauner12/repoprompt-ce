@@ -35,6 +35,10 @@ struct CoordinatorModeView: View {
     }
 
     @ObservedObject var viewModel: CoordinatorModeViewModel
+    let agentModeVM: AgentModeViewModel?
+    let promptManager: PromptViewModel?
+    let workspaceSearchService: WorkspaceSearchService?
+    let selectionCoordinator: WorkspaceSelectionCoordinator?
     let onOpenAgentChat: (AgentSessionDeepLinkRoute) -> Void
 
     @State private var presentationMode: PresentationMode = .board
@@ -46,6 +50,10 @@ struct CoordinatorModeView: View {
     @State private var childDirectiveNotice: String?
     @State private var isSubmittingCoordinatorDirective = false
     @State private var isSubmittingChildDirective = false
+    @State private var coordinatorTextFieldResetTrigger = false
+    @State private var coordinatorTextFieldHeight = ResizableTextField.height(forPresetIndex: 1, preset: .normal)
+    @State private var isCoordinatorToolsPopoverPresented = false
+    @State private var coordinatorToolsRevision = 0
     @State private var isChildComposerExpanded = false
     @State private var isCoordinatorRailVisible = true
     @State private var isInspectorVisible = true
@@ -54,6 +62,7 @@ struct CoordinatorModeView: View {
     @FocusState private var isCoordinatorComposerFocused: Bool
     @FocusState private var isChildComposerFocused: Bool
     @ObservedObject private var fontScale = FontScaleManager.shared
+    @ObservedObject private var globalSettings = GlobalSettingsStore.shared
 
     private var visualMetrics: CoordinatorVisualMetrics {
         CoordinatorVisualMetrics(fontPreset: fontScale.preset)
@@ -1767,18 +1776,31 @@ struct CoordinatorModeView: View {
             }
 
             VStack(alignment: .leading, spacing: 0) {
-                TextField("Message Coordinator...", text: $coordinatorDirectiveDraft, axis: .vertical)
-                    .lineLimit(2 ... 5)
-                    .textFieldStyle(.plain)
-                    .font(metrics.body)
-                    .disabled(!canEditCoordinatorDirective(rail))
-                    .focused($isCoordinatorComposerFocused)
-                    .onSubmit {
-                        submitCoordinatorDirective()
+                ResizableTextField(
+                    text: $coordinatorDirectiveDraft,
+                    placeholder: "Message Coordinator...",
+                    onReturn: submitCoordinatorDirective,
+                    resetTrigger: $coordinatorTextFieldResetTrigger,
+                    features: coordinatorComposerFeatures(),
+                    onHeightChange: { newHeight in
+                        coordinatorTextFieldHeight = newHeight
                     }
-                    .frame(minHeight: metrics.composerTextMinHeight, alignment: .topLeading)
-                    .padding(.horizontal, metrics.composerHorizontalPadding)
-                    .padding(.vertical, metrics.composerVerticalPadding)
+                )
+                .frame(height: max(coordinatorTextFieldHeight, metrics.composerTextMinHeight))
+                .disabled(!canEditCoordinatorDirective(rail))
+                .focused($isCoordinatorComposerFocused)
+                .overlay(
+                    Text("Message Coordinator...")
+                        .font(metrics.body)
+                        .foregroundStyle(.secondary)
+                        .opacity(coordinatorDirectiveDraft.isEmpty ? 1 : 0)
+                        .padding(.leading, metrics.composerHorizontalPadding + 5)
+                        .padding(.top, metrics.composerVerticalPadding + 2)
+                        .allowsHitTesting(false),
+                    alignment: .topLeading
+                )
+                .padding(.horizontal, metrics.composerHorizontalPadding)
+                .padding(.vertical, metrics.composerVerticalPadding)
 
                 Divider()
                     .opacity(0.42)
@@ -1837,6 +1859,8 @@ struct CoordinatorModeView: View {
 
             coordinatorComposerFollowThroughToggle(metrics: metrics)
 
+            coordinatorComposerToolsButton(metrics: metrics)
+
             if rail.state == .chooseCoordinator {
                 Button {
                     viewModel.selectedWorkflowTemplate = viewModel.selectedWorkflowTemplate == .scopedChange ? nil : .scopedChange
@@ -1876,6 +1900,270 @@ struct CoordinatorModeView: View {
         }
         .frame(height: metrics.composerControlStripHeight)
         .padding(.horizontal, metrics.composerControlHorizontalPadding)
+    }
+
+    private func coordinatorComposerFeatures() -> ResizableTextFieldFeatures {
+        guard let agentModeVM else {
+            return .plain
+        }
+        let props = agentModeVM.makeComposerProps()
+        return .agentInputBar(
+            fileTagStore: promptManager?.fileManager.workspaceFileContextStore,
+            fileTagSearchService: workspaceSearchService,
+            fileTagSelectionCoordinator: selectionCoordinator,
+            fileTagLookupContextIdentity: AnyHashable(props.fileTagLookupContextIdentity),
+            fileTagLookupContextProvider: { [tabID = props.currentTabID] in
+                guard let tabID else {
+                    return .visibleWorkspace
+                }
+                return await agentModeVM.agentWorkspaceLookupContext(tabID: tabID)
+            },
+            fileMentionPickerConfiguration: globalSettings.fileMentionPickerConfiguration(),
+            onFileTagCommitted: { _ in },
+            slashSkillSuggestionsProvider: { query in
+                await agentModeVM.slashSkillSuggestions(for: query)
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func coordinatorComposerToolsButton(metrics: CoordinatorVisualMetrics) -> some View {
+        if let props = agentModeVM?.makeComposerProps(),
+           props.hasAvailableAgentProviders,
+           props.selectedAgent == .codexExec || props.selectedAgent.usesClaudeTooling
+        {
+            Button {
+                isCoordinatorToolsPopoverPresented.toggle()
+            } label: {
+                HStack(spacing: metrics.miniPillIconSpacing) {
+                    Image(systemName: "server.rack")
+                        .font(.system(size: metrics.microIconSize, weight: .medium))
+                    Text("MCP / Tools")
+                        .font(metrics.microMedium)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, metrics.miniPillHorizontalPadding)
+                .padding(.vertical, metrics.miniPillVerticalPadding)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(isCoordinatorToolsPopoverPresented ? Color.accentColor.opacity(0.16) : Color(nsColor: .controlBackgroundColor).opacity(0.22))
+                )
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(isCoordinatorToolsPopoverPresented ? Color.accentColor : Color.secondary)
+            .hoverTooltip("Configure MCP and tool settings for Coordinator runs. Type / to insert a skill.")
+            .popover(isPresented: $isCoordinatorToolsPopoverPresented, arrowEdge: .bottom) {
+                coordinatorComposerToolsPopover(metrics: metrics)
+                    .id(coordinatorToolsRevision)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func coordinatorComposerToolsPopover(metrics: CoordinatorVisualMetrics) -> some View {
+        if let props = agentModeVM?.makeComposerProps(), props.selectedAgent == .codexExec {
+            coordinatorCodexToolsPopoverContent(props, metrics: metrics)
+        } else if let props = agentModeVM?.makeComposerProps(), props.selectedAgent.usesClaudeTooling {
+            coordinatorClaudeToolsPopoverContent(props, metrics: metrics)
+        } else {
+            Text("MCP tool settings are unavailable for this agent.")
+                .font(metrics.micro)
+                .foregroundStyle(.secondary)
+                .padding(14)
+                .frame(width: 300)
+        }
+    }
+
+    @ViewBuilder
+    private func coordinatorCodexToolsPopoverContent(_ props: AgentComposerProps, metrics: CoordinatorVisualMetrics) -> some View {
+        if let agentModeVM, let codexTools = props.providerControls?.codexTools {
+            Form {
+                if props.runState.isActive {
+                    Section {
+                        HStack(spacing: 6) {
+                            Image(systemName: "lock.fill")
+                                .font(metrics.micro)
+                            Text("Tool settings are locked during an active run")
+                                .font(metrics.micro)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                Section {
+                    Toggle("Bash", isOn: Binding(
+                        get: { codexTools.bashToolEnabled },
+                        set: { newValue in
+                            agentModeVM.setCodexBashToolEnabled(newValue)
+                            coordinatorToolsRevision += 1
+                        }
+                    ))
+
+                    Toggle("Search", isOn: Binding(
+                        get: { codexTools.searchToolEnabled },
+                        set: { newValue in
+                            agentModeVM.setCodexSearchToolEnabled(newValue)
+                            coordinatorToolsRevision += 1
+                        }
+                    ))
+
+                    Toggle("Goals", isOn: Binding(
+                        get: { codexTools.goalSupportEnabled },
+                        set: { newValue in
+                            agentModeVM.setCodexGoalSupportEnabled(newValue)
+                            coordinatorToolsRevision += 1
+                        }
+                    ))
+                } header: {
+                    Text("Tools")
+                }
+
+                Section {
+                    if codexTools.mcpServerEntries.isEmpty {
+                        Text("No servers in ~/.codex/config.toml")
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        ForEach(codexTools.mcpServerEntries, id: \.normalizedName) { entry in
+                            let isRepoPromptServer = entry.normalizedName.compare(MCPIntegrationHelper.repoPromptMCPServerName, options: .caseInsensitive) == .orderedSame
+                            Toggle(
+                                isOn: Binding(
+                                    get: {
+                                        codexTools.mcpServerStatesByNormalizedName[normalizedServerToggleKey(entry.normalizedName)] ?? isRepoPromptServer
+                                    },
+                                    set: { newValue in
+                                        agentModeVM.setCodexMCPServerEnabled(normalizedName: entry.normalizedName, enabled: newValue)
+                                        coordinatorToolsRevision += 1
+                                    }
+                                )
+                            ) {
+                                HStack(spacing: 4) {
+                                    Text(entry.normalizedName)
+                                    if isRepoPromptServer {
+                                        Text("(required)")
+                                            .font(metrics.micro)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                            }
+                            .disabled(isRepoPromptServer)
+                        }
+                    }
+                } header: {
+                    Text("MCP Servers")
+                }
+            }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .frame(width: 310)
+            .disabled(props.runState.isActive)
+        } else {
+            Text("Codex tool settings are unavailable until an agent provider is active.")
+                .font(metrics.micro)
+                .foregroundStyle(.secondary)
+                .padding(14)
+                .frame(width: 310)
+        }
+    }
+
+    @ViewBuilder
+    private func coordinatorClaudeToolsPopoverContent(_ props: AgentComposerProps, metrics: CoordinatorVisualMetrics) -> some View {
+        if let agentModeVM, let claudeTools = props.providerControls?.claudeTools {
+            Form {
+                ClaudeToolSettingsActiveRunNotice(
+                    isVisible: props.selectedAgent.usesClaudeTooling && props.runState.isActive,
+                    fontPreset: fontScale.preset
+                )
+
+                Section {
+                    Toggle("Bash", isOn: Binding(
+                        get: { claudeTools.bashToolEnabled },
+                        set: { newValue in
+                            agentModeVM.setClaudeBashToolEnabled(newValue)
+                            coordinatorToolsRevision += 1
+                        }
+                    ))
+                } header: {
+                    Text("Tools")
+                }
+
+                Section {
+                    Toggle("RepoPrompt Only", isOn: Binding(
+                        get: { claudeTools.mcpStrictModeEnabled },
+                        set: { newValue in
+                            agentModeVM.setClaudeMCPStrictModeEnabled(newValue)
+                            coordinatorToolsRevision += 1
+                        }
+                    ))
+                } header: {
+                    Text("MCP Servers")
+                } footer: {
+                    Text(
+                        claudeTools.mcpStrictModeEnabled
+                            ? "Only RepoPrompt MCP is active. Other MCP servers are ignored."
+                            : "Other MCP servers from your Claude config will also be loaded."
+                    )
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Toggle("Lazy Tool Loading", isOn: Binding(
+                        get: { claudeTools.toolSearchEnabled },
+                        set: { newValue in
+                            agentModeVM.setClaudeToolSearchEnabled(newValue)
+                            coordinatorToolsRevision += 1
+                        }
+                    ))
+                } header: {
+                    Text("Tool Search")
+                } footer: {
+                    Text(
+                        claudeTools.toolSearchEnabled
+                            ? "Claude searches for each tool before using it. Uses less context but adds latency."
+                            : "All tools are preloaded into context. Faster but uses more tokens."
+                    )
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Picker(selection: Binding(
+                        get: { claudeTools.agentModePromptDelivery },
+                        set: { newValue in
+                            agentModeVM.setClaudeAgentModePromptDelivery(newValue)
+                            coordinatorToolsRevision += 1
+                        }
+                    )) {
+                        ForEach(ClaudeAgentToolPreferences.AgentModePromptDelivery.allCases, id: \.rawValue) { delivery in
+                            Text(delivery.displayName).tag(delivery)
+                        }
+                    } label: {
+                        EmptyView()
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                } header: {
+                    Text("Sys Prompt Packaging")
+                } footer: {
+                    Text(claudeTools.agentModePromptDelivery.detailText)
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .frame(width: 300)
+        } else {
+            Text("Claude tool settings are unavailable until an agent provider is active.")
+                .font(metrics.micro)
+                .foregroundStyle(.secondary)
+                .padding(14)
+                .frame(width: 300)
+        }
+    }
+
+    private func normalizedServerToggleKey(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     private func coordinatorComposerFollowThroughToggle(metrics: CoordinatorVisualMetrics) -> some View {
@@ -3389,11 +3677,18 @@ private extension AgentSessionRunState {
         var height: CGFloat = 720
 
         var body: some View {
-            CoordinatorModeView(viewModel: viewModel, onOpenAgentChat: { _ in })
-                .onAppear {
-                    viewModel.testPublish(snapshot)
-                }
-                .frame(width: width, height: height)
+            CoordinatorModeView(
+                viewModel: viewModel,
+                agentModeVM: nil,
+                promptManager: nil,
+                workspaceSearchService: nil,
+                selectionCoordinator: nil,
+                onOpenAgentChat: { _ in }
+            )
+            .onAppear {
+                viewModel.testPublish(snapshot)
+            }
+            .frame(width: width, height: height)
         }
     }
 

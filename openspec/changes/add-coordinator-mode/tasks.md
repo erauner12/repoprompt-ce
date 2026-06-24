@@ -95,6 +95,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.19 Add chat-level `Proceed`, `Revise`, and `Stop here` continuation controls that submit ordinary messages to the owning Coordinator parent.
 - [x] 9.20 Keep inspector continuation-free; Done remains a terminal observed state rather than human acceptance.
 - [x] 9.21 Render chat-level continuation controls only from explicit Coordinator checkpoint metadata, not from ordinary Coordinator prose.
+- [x] 9.22 Reuse Agent Mode slash-skill/file-mention input affordances and compact provider MCP/tool preference controls in the Coordinator composer for demo-ready Coordinator directives.
 
 ## 10. Coordinator view UI shell
 

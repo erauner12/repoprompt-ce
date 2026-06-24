@@ -145,6 +145,8 @@ A v1 directive is an ordinary user message delivered to the Coordinator session 
 
 Manual/follow-through policy is a Coordinator chat-level setting. It belongs with the Coordinator composer/conversation controls and must not be coupled to Kanban presentation, sorting, filtering, or all-agents board navigation.
 
+The Coordinator composer may reuse Agent Mode input conveniences when they feed the same ordinary-message path: slash-skill insertion, workspace file mentions, and provider MCP/tool preference controls. These are Coordinator-run launch/preferences and directive-composition affordances, not a second Agent Mode session control strip; model selection, attachments, broad permission editing, and child-session mutation remain out of scope unless a specific Coordinator-view behavior is defined.
+
 ### 13A. Production demo bridge hides Coordinator backing-session chrome
 
 The production-feeling demo may still deliver directives through a selected, auto-detected, or marked/background Agent `TabSession` while the real Coordinator role work lands. That runtime is an implementation bridge. The Coordinator rail should not expose `Open in Agent Mode` for the Coordinator itself once the rail is acting as the primary Coordinator conversation surface.
@@ -159,7 +161,7 @@ Window-level chrome should follow the same rule. When Coordinator mode is the ac
 
 The rail conversation should also be wide and rich enough to read as a first-class command log. Coordinator responses may contain bullets, links, code fences, and inline code, so production-demo rows should reuse the same Markdown rendering substrate used by Agent Mode assistant messages instead of presenting raw Markdown as plain wrapped text.
 
-The Coordinator composer should share Agent Mode's composer visual vocabulary without exposing Agent Mode's normal agent-session controls. It may use a rounded command surface, separated text area, compact status/identity strip, and send affordance, but it should not add model, workflow, tool, permission, attachment, or context controls until those controls represent real Coordinator-view behavior.
+The Coordinator composer should share Agent Mode's composer visual vocabulary without exposing Agent Mode's normal agent-session controls. It may use a rounded command surface, separated text area, compact status/identity strip, send affordance, slash-skill/file-mention input overlays, and compact MCP/tool controls that write to the same provider preferences used by Coordinator runs. It should not add model, workflow, broad permission, attachment, or child-session controls until those controls represent real Coordinator-view behavior.
 
 ### 13B. Demo fleet scope must become one-to-many
 

@@ -248,6 +248,12 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **THEN** the Coordinator view SHALL deliver that text as an ordinary user message to the Coordinator session through the existing Agent Mode message path
 - **AND** it SHALL NOT wrap the directive in a new structured command envelope in v1.
 
+#### Scenario: Coordinator composer uses Agent Mode input affordances
+- **WHEN** the Coordinator composer is editable
+- **THEN** it MAY expose Agent Mode-compatible slash-skill insertion and workspace file-mention affordances that write into the ordinary directive text
+- **AND** it MAY expose compact provider MCP/tool preference controls for settings that affect Coordinator runtime launches or follow-up turns
+- **AND** those affordances SHALL NOT create child-session mutations, attachments, permission changes, or model switches unless a specific Coordinator-view behavior is defined.
+
 #### Scenario: External test client submits a Coordinator directive
 - **WHEN** a direct external MCP client uses the Coordinator chat control surface to list, select, create, or submit to Coordinator parents in the current window
 - **THEN** the app SHALL route accepted submissions through the same Coordinator view submission path as the visible Coordinator composer
@@ -628,7 +634,7 @@ The system SHALL keep the Coordinator view calm by default and expose detail onl
 #### Scenario: Coordinator composer matches Agent Mode visual language
 - **WHEN** the Coordinator rail renders its scoped composer
 - **THEN** it SHALL use a composer surface consistent with Agent Mode's message bar, including a clear text area, compact status/identity strip, and send affordance
-- **AND** it SHALL NOT expose Agent Mode model, workflow, tool, permission, attachment, or context controls unless those controls map to real Coordinator-view behavior.
+- **AND** it SHALL NOT expose Agent Mode model, workflow, broad permission, attachment, child-session mutation, or unrelated context controls unless those controls map to real Coordinator-view behavior.
 
 #### Scenario: Coordinator composer remains draftable while busy
 - **WHEN** the Coordinator runtime is connecting, submitting, or rendering a response
