@@ -344,6 +344,7 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 #### Scenario: Inspector remains inspection-only
 - **WHEN** a selected delegated row has review, merge, worktree, status, or session details
 - **THEN** the inspector MAY expose those details and an `Open agent chat` affordance
+- **AND** routeable but non-live reply affordances MAY open Agent Mode so the user can reply in the existing Agent session
 - **AND** it SHALL NOT own mission continuation approval semantics.
 
 #### Scenario: Done does not imply human acceptance
@@ -578,6 +579,12 @@ The system SHALL deep-link Coordinator view rows to the existing Agent Mode sess
 #### Scenario: Route is resolvable
 - **WHEN** a Coordinator view row has active workspace context, a resolvable tab, and optional session ID
 - **THEN** the Coordinator view SHALL provide an `Open agent chat` affordance that opens the existing Agent Mode session.
+
+#### Scenario: Inspector reply target is routeable but not live
+- **WHEN** a selected delegated row is not live in the current Coordinator window
+- **AND** the row has a resolvable Agent chat route
+- **THEN** the inspector reply affordance SHOULD present an explicit `Open to reply` action
+- **AND** activating it SHALL route to the existing Agent Mode session instead of requiring the user to first discover the separate `Open Agent` button.
 
 #### Scenario: Route is not resolvable
 - **WHEN** a Coordinator view row lacks required route data

@@ -222,6 +222,8 @@ Selected-Mission board rows, Mission history child counts, and delegated-session
 
 The v1 inspector / trailing detail column shows sourced summaries only: status, pending interaction, blocker, worktree/merge, route, and MCP/session metadata. Full transcript, raw log, file, and diff inspection remain in Agent Mode via `Open agent chat`. A Coordinator-view-native full-log toggle is a follow-up unless backed by a sourced activity projection.
 
+Inspector reply controls follow the same routeability boundary. A delegated child that is live in the current window may expose the inline follow-up composer. A child that is routeable but not live should present an explicit `Open to reply` action that opens the existing Agent Mode session, rather than showing a dead disabled reply card until the user separately clicks `Open Agent`. If no route exists, the reply affordance stays disabled/unavailable.
+
 When the inspector is rendered below the board rather than as a trailing side column, its collapse affordance should match that geometry: a sheet-like handle that slides the inspector down when hidden and back up when restored. It should not use a left-side sidebar toggle while the inspector is vertically stacked under the Kanban.
 
 ### 15. Board-first v1 keeps List as alternate and fallback

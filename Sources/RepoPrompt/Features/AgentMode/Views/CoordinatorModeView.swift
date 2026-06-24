@@ -34,6 +34,61 @@ struct CoordinatorModeView: View {
         }
     }
 
+    private enum ChildDirectiveAvailability {
+        case ready(status: String)
+        case openToReply(AgentSessionDeepLinkRoute)
+        case blocked(status: String, notice: String)
+
+        var canEdit: Bool {
+            if case .ready = self { true } else { false }
+        }
+
+        var canAct: Bool {
+            switch self {
+            case .ready, .openToReply: true
+            case .blocked: false
+            }
+        }
+
+        var status: String {
+            switch self {
+            case let .ready(status), let .blocked(status, _):
+                status
+            case .openToReply:
+                "Open"
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .openToReply:
+                "Open to reply"
+            case .ready, .blocked:
+                "Reply to this session"
+            }
+        }
+
+        func notice(for row: CoordinatorModeRow) -> String? {
+            switch self {
+            case .ready:
+                "Send a follow-up to \(row.title)"
+            case .openToReply:
+                "Open this session in Agent Mode to send a follow-up."
+            case let .blocked(_, notice):
+                notice
+            }
+        }
+
+        var iconName: String {
+            switch self {
+            case .openToReply:
+                "arrow.up.forward.app"
+            case .ready, .blocked:
+                "arrowshape.turn.up.left.fill"
+            }
+        }
+    }
+
     @ObservedObject var viewModel: CoordinatorModeViewModel
     let agentModeVM: AgentModeViewModel?
     let promptManager: PromptViewModel?
@@ -2313,7 +2368,7 @@ struct CoordinatorModeView: View {
         let isExpanded = isChildComposerExpanded || isSubmittingChildDirective || !childDirectiveDraft.isEmpty
 
         return VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-            if isExpanded, let notice = availability.notice ?? childDirectiveNotice, !notice.isEmpty {
+            if isExpanded, let notice = childDirectiveNotice ?? availability.notice(for: row), !notice.isEmpty {
                 coordinatorComposerNotice(notice, metrics: metrics)
             }
 
@@ -2327,24 +2382,30 @@ struct CoordinatorModeView: View {
 
     private func inspectorCollapsedChildComposer(
         row: CoordinatorModeRow,
-        availability: (canEdit: Bool, status: String, notice: String?),
+        availability: ChildDirectiveAvailability,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         Button {
-            guard availability.canEdit else { return }
-            isChildComposerExpanded = true
-            isChildComposerFocused = true
+            switch availability {
+            case .ready:
+                isChildComposerExpanded = true
+                isChildComposerFocused = true
+            case let .openToReply(route):
+                onOpenAgentChat(route)
+            case .blocked:
+                return
+            }
         } label: {
             HStack(spacing: metrics.controlSpacing) {
-                Image(systemName: "arrowshape.turn.up.left.fill")
+                Image(systemName: availability.iconName)
                     .font(.system(size: metrics.smallIconSize, weight: .semibold))
-                    .foregroundStyle(availability.canEdit ? Color.accentColor : Color.secondary.opacity(0.7))
+                    .foregroundStyle(availability.canAct ? Color.accentColor : Color.secondary.opacity(0.7))
 
                 VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                    Text("Reply to this session")
+                    Text(availability.title)
                         .font(metrics.bodyMedium)
-                        .foregroundStyle(availability.canEdit ? .primary : .secondary)
-                    Text(availability.notice ?? "Send a follow-up to \(row.title)")
+                        .foregroundStyle(availability.canAct ? .primary : .secondary)
+                    Text(availability.notice(for: row) ?? "")
                         .font(metrics.micro)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -2355,7 +2416,7 @@ struct CoordinatorModeView: View {
 
                 HStack(spacing: metrics.miniPillIconSpacing) {
                     Circle()
-                        .fill(availability.canEdit ? Color.green.opacity(0.82) : Color.secondary.opacity(0.55))
+                        .fill(availability.canAct ? Color.green.opacity(0.82) : Color.secondary.opacity(0.55))
                         .frame(width: metrics.composerStatusDotSize, height: metrics.composerStatusDotSize)
                     Text(availability.status)
                         .font(metrics.microMedium)
@@ -2368,7 +2429,7 @@ struct CoordinatorModeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
-        .disabled(!availability.canEdit)
+        .disabled(!availability.canAct)
         .background(
             RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
                 .fill(Color(nsColor: .windowBackgroundColor).opacity(0.58))
@@ -2377,12 +2438,12 @@ struct CoordinatorModeView: View {
             RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
                 .stroke(CoordinatorStyle.hairline.opacity(1.08), lineWidth: 1)
         )
-        .hoverTooltip(availability.notice ?? "Reply to \(row.title)")
+        .hoverTooltip(availability.notice(for: row) ?? "Reply to \(row.title)")
     }
 
     private func inspectorExpandedChildComposer(
         row: CoordinatorModeRow,
-        availability: (canEdit: Bool, status: String, notice: String?),
+        availability: ChildDirectiveAvailability,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         HStack(alignment: .bottom, spacing: metrics.smallSpacing) {
@@ -2445,14 +2506,17 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func childDirectiveAvailability(for row: CoordinatorModeRow) -> (canEdit: Bool, status: String, notice: String?) {
+    private func childDirectiveAvailability(for row: CoordinatorModeRow) -> ChildDirectiveAvailability {
         guard row.tabID != nil, !row.isPersistedOnly else {
-            return (false, "Unavailable", "This session is not live in the current window.")
+            if let route = row.openAgentChatRoute {
+                return .openToReply(route)
+            }
+            return .blocked(status: "Unavailable", notice: "This session is not live in the current window.")
         }
         guard row.runState != .running else {
-            return (false, "Working", "Waiting for this session to reach a turn boundary.")
+            return .blocked(status: "Working", notice: "Waiting for this session to reach a turn boundary.")
         }
-        return (true, row.runState.displayName, nil)
+        return .ready(status: row.runState.displayName)
     }
 
     private func coordinatorComposerNotice(_ text: String, metrics: CoordinatorVisualMetrics) -> some View {
