@@ -191,7 +191,8 @@ The system SHALL present v1 as a read-only status board by default, with a list 
 - **WHEN** the user opens the Coordinator mode in v1
 - **THEN** the Coordinator view SHALL show a board view by default
 - **AND** status groups SHALL render as board columns containing session cards
-- **AND** the board SHALL derive columns and cards from the same `CoordinatorModeSnapshot` grouping and row projection used by other Coordinator view regions.
+- **AND** the board SHALL derive columns and cards from the same `CoordinatorModeSnapshot` grouping and row projection used by other Coordinator view regions
+- **AND** the selected-Mission board SHOULD omit empty status lanes while the All Agents Board SHALL continue to show every status lane for the fleet overview.
 
 #### Scenario: User switches to list view
 - **WHEN** the user chooses List view

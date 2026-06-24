@@ -274,7 +274,11 @@ struct CoordinatorModeView: View {
                 } else if useList {
                     listView(sections: sections, metrics: metrics)
                 } else {
-                    boardView(sections: sections, metrics: metrics)
+                    boardView(
+                        sections: sections,
+                        hidesEmptyLanes: snapshot.boardScope == .coordinatorFleet,
+                        metrics: metrics
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -985,17 +989,36 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func boardView(sections: [CoordinatorModeStatusSection], metrics: CoordinatorVisualMetrics) -> some View {
-        GeometryReader { proxy in
+    private func boardView(
+        sections: [CoordinatorModeStatusSection],
+        hidesEmptyLanes: Bool,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let visibleSections = hidesEmptyLanes ? sections.filter { !$0.rows.isEmpty } : sections
+
+        return GeometryReader { proxy in
             ScrollView([.horizontal, .vertical]) {
-                HStack(alignment: .top, spacing: metrics.boardColumnSpacing) {
-                    ForEach(sections, id: \.group) { section in
-                        boardColumn(
-                            section: section,
-                            metrics: metrics,
-                            minHeight: max(proxy.size.height - (metrics.outerPadding * 2), metrics.boardColumnMinHeight)
-                        )
-                        .frame(width: metrics.boardColumnWidth)
+                Group {
+                    if visibleSections.isEmpty {
+                        Text(filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No sessions" : "No matching sessions")
+                            .font(metrics.bodyMedium)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: proxy.size.height, alignment: .center)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                clearSelectedRow()
+                            }
+                    } else {
+                        HStack(alignment: .top, spacing: metrics.boardColumnSpacing) {
+                            ForEach(visibleSections, id: \.group) { section in
+                                boardColumn(
+                                    section: section,
+                                    metrics: metrics,
+                                    minHeight: max(proxy.size.height - (metrics.outerPadding * 2), metrics.boardColumnMinHeight)
+                                )
+                                .frame(width: metrics.boardColumnWidth)
+                            }
+                        }
                     }
                 }
                 .padding(metrics.outerPadding)
@@ -1004,7 +1027,7 @@ struct CoordinatorModeView: View {
                     minHeight: proxy.size.height,
                     alignment: .topLeading
                 )
-                .animation(.easeInOut(duration: 0.22), value: boardAnimationKey(for: sections))
+                .animation(.easeInOut(duration: 0.22), value: boardAnimationKey(for: visibleSections))
             }
         }
     }
