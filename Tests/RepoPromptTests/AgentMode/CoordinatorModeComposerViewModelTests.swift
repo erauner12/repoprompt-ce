@@ -3,6 +3,97 @@ import XCTest
 
 @MainActor
 final class CoordinatorModeComposerViewModelTests: XCTestCase {
+    func testColdOpenStartsAsDraftAndFirstSendCreatesCoordinatorRuntime() async {
+        let coordinatorID = uuid(1)
+        var liveSessions: [CoordinatorModeSnapshotProjector.LiveSession] = []
+        var demoCoordinatorIDs: Set<UUID> = []
+        var submissions: [(text: String, sessionID: UUID?, forceNewRuntime: Bool)] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: liveSessions,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    autoSelectDemoCoordinator: false,
+                    sort: sortMode,
+                    demoCoordinatorIDs: demoCoordinatorIDs
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { text, sessionID, forceNewRuntime in
+                submissions.append((text, sessionID, forceNewRuntime))
+                liveSessions = [
+                    self.live(id: coordinatorID, tab: self.uuid(101), title: "New coordinator", updatedAt: self.date(30), state: .idle, isMCP: true)
+                ]
+                demoCoordinatorIDs.insert(coordinatorID)
+                return .accepted
+            }
+        )
+
+        viewModel.refresh()
+
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.state, .chooseCoordinator)
+
+        let result = await viewModel.submitCoordinatorDirective("start scoped work")
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(submissions.first?.text, "start scoped work")
+        XCTAssertNil(submissions.first?.sessionID)
+        XCTAssertEqual(submissions.first?.forceNewRuntime, true)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
+    }
+
+    func testScopedChangeTemplateWrapsInitialCoordinatorDirectiveOnly() async {
+        var submissions: [(text: String, sessionID: UUID?, forceNewRuntime: Bool)] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    autoSelectDemoCoordinator: false,
+                    sort: sortMode
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { text, sessionID, forceNewRuntime in
+                submissions.append((text, sessionID, forceNewRuntime))
+                return .accepted
+            }
+        )
+        viewModel.selectedWorkflowTemplate = .scopedChange
+        viewModel.refresh()
+
+        let result = await viewModel.submitCoordinatorDirective("fix flaky docs tests")
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertTrue(submissions.first?.text.contains("Run this as a scoped Coordinator change.") == true)
+        XCTAssertTrue(submissions.first?.text.hasSuffix("fix flaky docs tests") == true)
+        XCTAssertNil(submissions.first?.sessionID)
+        XCTAssertEqual(submissions.first?.forceNewRuntime, true)
+        XCTAssertNil(viewModel.selectedWorkflowTemplate)
+        XCTAssertEqual(viewModel.railTranscriptEntries.first?.text, "fix flaky docs tests")
+    }
+
+    func testRejectedDraftSendPreservesTemplateSelection() async {
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    autoSelectDemoCoordinator: false,
+                    sort: sortMode
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { _, _, _ in .rejected(message: "Nope") }
+        )
+        viewModel.selectedWorkflowTemplate = .scopedChange
+        viewModel.refresh()
+
+        let result = await viewModel.submitCoordinatorDirective("try this")
+
+        XCTAssertEqual(result, .rejected(message: "Nope"))
+        XCTAssertEqual(viewModel.selectedWorkflowTemplate, .scopedChange)
+        XCTAssertEqual(viewModel.composerNotice, "Nope")
+    }
+
     func testAcceptedDirectiveUsesSubmitterEchoesIntoRailAndKeepsSnapshotRowsReadOnly() async {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
@@ -22,7 +113,9 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             inputProvider: { sortMode, selectedCoordinatorID in
                 var next = input
                 next.sortMode = sortMode
-                next.selectedCoordinatorID = selectedCoordinatorID
+                if let selectedCoordinatorID {
+                    next.selectedCoordinatorID = selectedCoordinatorID
+                }
                 return next
             },
             dashboardVisibilityHandler: { _ in },
@@ -64,7 +157,9 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             inputProvider: { sortMode, selectedCoordinatorID in
                 var next = input
                 next.sortMode = sortMode
-                next.selectedCoordinatorID = selectedCoordinatorID
+                if let selectedCoordinatorID {
+                    next.selectedCoordinatorID = selectedCoordinatorID
+                }
                 return next
             },
             dashboardVisibilityHandler: { _ in },
@@ -628,7 +723,9 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             inputProvider: { sortMode, selectedCoordinatorID in
                 var next = input
                 next.sortMode = sortMode
-                next.selectedCoordinatorID = selectedCoordinatorID
+                if let selectedCoordinatorID {
+                    next.selectedCoordinatorID = selectedCoordinatorID
+                }
                 return next
             },
             dashboardVisibilityHandler: { _ in },
@@ -775,7 +872,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.availableCoordinators.map(\.isSelected), [false])
         XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
         XCTAssertTrue(viewModel.isFreshCoordinatorRunPending)
-        XCTAssertEqual(viewModel.composerNotice, "Next directive will start another Codex Coordinator runtime.")
+        XCTAssertEqual(viewModel.composerNotice, "Next directive will start another Coordinator runtime.")
 
         let result = await viewModel.submitCoordinatorDirective("start fresh")
 
@@ -783,7 +880,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(submissions.first?.text, "start fresh")
         XCTAssertNil(submissions.first?.sessionID)
         XCTAssertEqual(submissions.first?.forceNewRuntime, true)
-        XCTAssertFalse(viewModel.isFreshCoordinatorRunPending)
+        XCTAssertTrue(viewModel.isFreshCoordinatorRunPending)
     }
 
     func testSelectingExistingCoordinatorCancelsPendingFreshRunAndRestoresTranscript() {
@@ -900,7 +997,9 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             inputProvider: { sortMode, selectedCoordinatorID in
                 var next = input
                 next.sortMode = sortMode
-                next.selectedCoordinatorID = selectedCoordinatorID
+                if let selectedCoordinatorID {
+                    next.selectedCoordinatorID = selectedCoordinatorID
+                }
                 return next
             },
             dashboardVisibilityHandler: { _ in },
@@ -926,20 +1025,56 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         live: [CoordinatorModeSnapshotProjector.LiveSession] = [],
         mcpSnapshots: [UUID: AgentRunMCPSnapshot] = [:],
         selectedCoordinatorID: UUID? = nil,
+        autoSelectDemoCoordinator: Bool = true,
         sort: CoordinatorModeSortMode = .lastUpdated,
         demoCoordinatorIDs: Set<UUID> = []
     ) -> CoordinatorModeSnapshotProjector.Input {
-        CoordinatorModeSnapshotProjector.Input(
+        let resolvedSelectedCoordinatorID = selectedCoordinatorID ?? (autoSelectDemoCoordinator ? newestDemoCoordinatorID(
+            demoCoordinatorIDs,
+            persisted: persisted,
+            live: live,
+            mcpSnapshots: mcpSnapshots
+        ) : nil)
+        return CoordinatorModeSnapshotProjector.Input(
             workspaceID: workspaceID,
             windowID: 7,
             persistedSessions: persisted,
             liveSessions: live,
             mcpSnapshotsBySessionID: mcpSnapshots,
-            selectedCoordinatorID: selectedCoordinatorID,
+            selectedCoordinatorID: resolvedSelectedCoordinatorID,
             sortMode: sort,
             resolvableTabIDs: Set(persisted.map(\.tabID) + live.map(\.tabID) + mcpSnapshots.values.compactMap(\.tabID)),
             demoCoordinatorSessionIDs: demoCoordinatorIDs
         )
+    }
+
+    private func newestDemoCoordinatorID(
+        _ ids: Set<UUID>,
+        persisted: [CoordinatorModeSnapshotProjector.PersistedSession],
+        live: [CoordinatorModeSnapshotProjector.LiveSession],
+        mcpSnapshots: [UUID: AgentRunMCPSnapshot]
+    ) -> UUID? {
+        ids.max { lhs, rhs in
+            let lhsDate = coordinatorDate(lhs, persisted: persisted, live: live, mcpSnapshots: mcpSnapshots)
+            let rhsDate = coordinatorDate(rhs, persisted: persisted, live: live, mcpSnapshots: mcpSnapshots)
+            if lhsDate == rhsDate { return lhs.uuidString < rhs.uuidString }
+            return lhsDate < rhsDate
+        }
+    }
+
+    private func coordinatorDate(
+        _ id: UUID,
+        persisted: [CoordinatorModeSnapshotProjector.PersistedSession],
+        live: [CoordinatorModeSnapshotProjector.LiveSession],
+        mcpSnapshots: [UUID: AgentRunMCPSnapshot]
+    ) -> Date {
+        [
+            live.first { $0.sessionID == id }?.updatedAt,
+            persisted.first { $0.id == id }?.updatedAt,
+            mcpSnapshots[id]?.updatedAt
+        ]
+        .compactMap(\.self)
+        .max() ?? .distantPast
     }
 
     private func persisted(

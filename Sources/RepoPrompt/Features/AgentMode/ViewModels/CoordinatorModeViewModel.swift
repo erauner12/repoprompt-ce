@@ -23,12 +23,28 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
     }
 
+    enum CoordinatorSelectionState: Equatable {
+        case newDraft
+        case session(UUID)
+
+        var selectedCoordinatorID: UUID? {
+            switch self {
+            case .newDraft:
+                nil
+            case let .session(sessionID):
+                sessionID
+            }
+        }
+    }
+
     typealias InputProvider = @MainActor (_ sortMode: CoordinatorModeSortMode, _ selectedCoordinatorID: UUID?) -> CoordinatorModeSnapshotProjector.Input
     typealias TranscriptProvider = @MainActor (_ coordinatorSessionID: UUID?) -> [CoordinatorModeRailTranscriptEntry]
     typealias DashboardVisibilityHandler = @MainActor (_ visible: Bool) -> Void
     typealias DirectiveSubmitter = @MainActor (_ text: String, _ coordinatorSessionID: UUID?, _ forceNewRuntime: Bool) async -> DirectiveSubmissionResult
     typealias ChildDirectiveSubmitter = @MainActor (_ text: String, _ row: CoordinatorModeRow) async -> DirectiveSubmissionResult
     typealias ContinuationGateHandler = @MainActor (_ gate: CoordinatorContinuationGate, _ snapshotBeforeGateCleared: CoordinatorModeSnapshot) async -> Void
+    typealias CoordinatorActivationHandler = @MainActor (_ sessionID: UUID) async -> Void
+    typealias CoordinatorPinHandler = @MainActor (_ option: CoordinatorModeCoordinatorOption, _ isPinned: Bool) -> Void
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
     @Published private(set) var railTranscriptEntries: [CoordinatorModeRailTranscriptEntry] = []
@@ -36,6 +52,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     @Published private(set) var composerNotice: String?
     @Published private(set) var isFreshCoordinatorRunPending = false
     @Published private(set) var allowsProactiveFollowThrough: Bool
+    @Published var selectedWorkflowTemplate: CoordinatorWorkflowTemplate?
     @Published var sortMode: CoordinatorModeSortMode = .lastUpdated {
         didSet {
             guard sortMode != oldValue else { return }
@@ -56,9 +73,11 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let directiveSubmitter: DirectiveSubmitter
     private let childDirectiveSubmitter: ChildDirectiveSubmitter
     private let continuationGateHandler: ContinuationGateHandler
+    private let coordinatorActivationHandler: CoordinatorActivationHandler
+    private let coordinatorPinHandler: CoordinatorPinHandler
     private let projector: CoordinatorModeSnapshotProjector
     private let userDefaults: UserDefaults
-    private var selectedCoordinatorIDByWorkspaceID: [UUID: UUID] = [:]
+    private var coordinatorSelectionByWorkspaceID: [UUID: CoordinatorSelectionState] = [:]
     private var lastPublishedFingerprint: CoordinatorModeSnapshotFingerprint?
     private var displayedTranscriptCoordinatorSessionID: UUID?
     private var lastDurableRailStatusEntryKey: String?
@@ -76,6 +95,8 @@ final class CoordinatorModeViewModel: ObservableObject {
             .rejected(message: "Session replies are unavailable.")
         },
         continuationGateHandler: @escaping ContinuationGateHandler = { _, _ in },
+        coordinatorActivationHandler: @escaping CoordinatorActivationHandler = { _ in },
+        coordinatorPinHandler: @escaping CoordinatorPinHandler = { _, _ in },
         projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector(),
         userDefaults: UserDefaults = .standard
     ) {
@@ -85,6 +106,8 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.directiveSubmitter = directiveSubmitter
         self.childDirectiveSubmitter = childDirectiveSubmitter
         self.continuationGateHandler = continuationGateHandler
+        self.coordinatorActivationHandler = coordinatorActivationHandler
+        self.coordinatorPinHandler = coordinatorPinHandler
         self.projector = projector
         self.userDefaults = userDefaults
         allowsProactiveFollowThrough = CoordinatorModeFollowThroughPreference.isEnabled(defaults: userDefaults)
@@ -101,10 +124,15 @@ final class CoordinatorModeViewModel: ObservableObject {
 
     func refresh() {
         var input = inputProvider(sortMode, nil)
-        input.selectedCoordinatorID = input.workspaceID.flatMap { selectedCoordinatorIDByWorkspaceID[$0] }
+        let selectionState = input.workspaceID.flatMap { coordinatorSelectionByWorkspaceID[$0] }
+        if let selectionState {
+            input.selectedCoordinatorID = selectionState.selectedCoordinatorID
+        }
         input.boardScope = boardScope
         let projected = projector.project(input)
-        publishIfChanged(isFreshCoordinatorRunPending ? pendingFreshCoordinatorSnapshot(from: projected) : projected)
+        let isNewDraft = selectionState == .newDraft
+        isFreshCoordinatorRunPending = isNewDraft
+        publishIfChanged(isNewDraft ? pendingFreshCoordinatorSnapshot(from: projected) : projected)
     }
 
     @discardableResult
@@ -120,8 +148,17 @@ final class CoordinatorModeViewModel: ObservableObject {
         if sessionID != nil {
             isFreshCoordinatorRunPending = false
         }
-        selectedCoordinatorIDByWorkspaceID[workspaceID] = sessionID
+        coordinatorSelectionByWorkspaceID[workspaceID] = sessionID.map(CoordinatorSelectionState.session) ?? .newDraft
         refresh()
+        if let sessionID,
+           let option = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == sessionID }),
+           option.isPersistedOnly || !option.isLiveInCurrentWindow
+        {
+            Task { @MainActor in
+                await coordinatorActivationHandler(sessionID)
+                refresh()
+            }
+        }
     }
 
     func startNewCoordinatorRun() {
@@ -133,10 +170,15 @@ final class CoordinatorModeViewModel: ObservableObject {
         currentRailActivityText = nil
         lastPublishedFingerprint = nil
         if let workspaceID = snapshot.workspaceID ?? inputProvider(sortMode, nil).workspaceID {
-            selectedCoordinatorIDByWorkspaceID[workspaceID] = nil
+            coordinatorSelectionByWorkspaceID[workspaceID] = .newDraft
         }
         refresh()
-        composerNotice = "Next directive will start another Codex Coordinator runtime."
+        composerNotice = "Next directive will start another Coordinator runtime."
+    }
+
+    func togglePinnedCoordinator(_ option: CoordinatorModeCoordinatorOption) {
+        coordinatorPinHandler(option, !option.isPinned)
+        refresh()
     }
 
     func clearCoordinator() {
@@ -164,7 +206,7 @@ final class CoordinatorModeViewModel: ObservableObject {
             composerNotice = nil
             return .rejected(message: "")
         }
-        let forceNewRuntime = isFreshCoordinatorRunPending
+        let forceNewRuntime = isFreshCoordinatorRunPending || snapshot.coordinatorRail.state == .chooseCoordinator
         let coordinatorSessionID = forceNewRuntime ? nil : snapshot.coordinatorRail.coordinatorSessionID
         let previousCoordinatorIDs = Set(snapshot.coordinatorRail.availableCoordinators.map(\.sessionID))
         let submissionWorkspaceID = snapshot.workspaceID
@@ -181,10 +223,12 @@ final class CoordinatorModeViewModel: ObservableObject {
             }
         }
 
-        let result = await directiveSubmitter(trimmed, coordinatorSessionID, forceNewRuntime)
+        let submittedText = forceNewRuntime ? selectedWorkflowTemplate.map { $0.wrap(trimmed) } ?? trimmed : trimmed
+        let result = await directiveSubmitter(submittedText, coordinatorSessionID, forceNewRuntime)
         switch result {
         case .accepted:
             isFreshCoordinatorRunPending = false
+            selectedWorkflowTemplate = nil
             composerNotice = nil
             if forceNewRuntime {
                 selectFreshCoordinatorRuntimeIfAvailable(
@@ -211,9 +255,17 @@ final class CoordinatorModeViewModel: ObservableObject {
     ) {
         let input = inputProvider(sortMode, nil)
         guard let workspaceID = workspaceID ?? input.workspaceID else { return }
-        let newCoordinatorIDs = input.demoCoordinatorSessionIDs.subtracting(previousCoordinatorIDs)
+        let newCoordinatorIDs = coordinatorSessionIDs(in: input).subtracting(previousCoordinatorIDs)
         guard let selectedCoordinatorID = newestCoordinatorID(in: newCoordinatorIDs, input: input) else { return }
-        selectedCoordinatorIDByWorkspaceID[workspaceID] = selectedCoordinatorID
+        coordinatorSelectionByWorkspaceID[workspaceID] = .session(selectedCoordinatorID)
+    }
+
+    private func coordinatorSessionIDs(in input: CoordinatorModeSnapshotProjector.Input) -> Set<UUID> {
+        var ids = input.demoCoordinatorSessionIDs
+        ids.formUnion(input.persistedSessions.compactMap { $0.isCoordinatorRuntime ? $0.id : nil })
+        ids.formUnion(input.liveSessions.compactMap { $0.isCoordinatorRuntime ? $0.sessionID : nil })
+        ids.formUnion(input.coordinatorDetectionSessions.compactMap { $0.isCoordinatorRuntime ? $0.id : nil })
+        return ids
     }
 
     private func newestCoordinatorID(
@@ -248,21 +300,31 @@ final class CoordinatorModeViewModel: ObservableObject {
         let options = projected.coordinatorRail.availableCoordinators.map { option in
             CoordinatorModeCoordinatorOption(
                 sessionID: option.sessionID,
+                tabID: option.tabID,
+                workspaceID: option.workspaceID,
                 title: option.title,
                 selectionSource: option.selectionSource,
                 isSelected: false,
                 isLiveInCurrentWindow: option.isLiveInCurrentWindow,
+                isPinned: option.isPinned,
+                isPersistedOnly: option.isPersistedOnly,
+                childCounts: option.childCounts,
                 runState: option.runState,
-                updatedAt: option.updatedAt
+                updatedAt: option.updatedAt,
+                lastActivityAt: option.lastActivityAt
             )
         }
         let rail = CoordinatorModeCoordinatorRail(
             state: .chooseCoordinator,
             coordinatorSessionID: nil,
+            coordinatorTabID: nil,
             selectionSource: nil,
             title: nil,
             availableCoordinators: options,
             isLiveInCurrentWindow: false,
+            isPersistedOnly: false,
+            isPinned: false,
+            childCounts: .empty,
             openAgentChatRoute: nil,
             statusReport: nil,
             isComposerEnabled: false,
@@ -534,8 +596,14 @@ final class CoordinatorModeViewModel: ObservableObject {
 extension AgentModeViewModel {
     @MainActor
     @discardableResult
+    func refreshCoordinatorModeIfVisible() -> Bool {
+        visibleCoordinatorModeViewModel?.refreshIfVisible() ?? false
+    }
+
+    @MainActor
+    @discardableResult
     func refreshCoordinatorModeForChildLifecycleIfVisible() -> Bool {
-        let refreshed = coordinatorModeViewModel.refreshIfVisible()
+        let refreshed = visibleCoordinatorModeViewModel?.refreshIfVisible() ?? false
         guard refreshed else { return false }
         Task { @MainActor [weak self] in
             await self?.evaluateCoordinatorFollowThrough(trigger: .lifecycle)
@@ -599,6 +667,10 @@ extension AgentModeViewModel {
                     snapshot: snapshotBeforeGateCleared
                 )
             }
+        } coordinatorActivationHandler: { [weak self] sessionID in
+            await self?.activateCoordinatorRuntimeSession(sessionID)
+        } coordinatorPinHandler: { [weak self] option, isPinned in
+            self?.setCoordinatorRuntimePinned(isPinned, option: option)
         }
     }
 
@@ -961,7 +1033,53 @@ extension AgentModeViewModel {
             return (match.key, preferredSessionID)
         }
 
+        if let preferredSessionID,
+           ownerValidatedSessionIndex[preferredSessionID]?.isCoordinatorRuntime == true
+        {
+            let target = try await mcpResolveOrCreateSessionTarget(
+                tabID: nil,
+                sessionID: preferredSessionID,
+                createIfNeeded: true,
+                sessionName: ownerValidatedSessionIndex[preferredSessionID]?.name ?? Self.coordinatorRuntimeDemoSessionName
+            )
+            guard let sessionID = target.sessionID else {
+                throw MCPError.invalidParams("The Coordinator runtime tab could not be bound to the selected session.")
+            }
+            try await ensureCoordinatorRuntimeDemoControl(tabID: target.tabID, sessionID: sessionID)
+            return (target.tabID, sessionID)
+        }
+
         return try await createCoordinatorRuntimeDemoTarget()
+    }
+
+    @MainActor
+    private func activateCoordinatorRuntimeSession(_ sessionID: UUID) async {
+        do {
+            let target = try await mcpResolveOrCreateSessionTarget(
+                tabID: nil,
+                sessionID: sessionID,
+                createIfNeeded: true,
+                sessionName: ownerValidatedSessionIndex[sessionID]?.name ?? Self.coordinatorRuntimeDemoSessionName
+            )
+            guard let resolvedSessionID = target.sessionID else { return }
+            try await ensureCoordinatorRuntimeDemoControl(tabID: target.tabID, sessionID: resolvedSessionID)
+        } catch {
+            #if DEBUG
+                AgentModePerfDiagnostics.event(
+                    "coordinator.runtime.activateFailed",
+                    fields: ["sessionID": sessionID.uuidString, "error": String(describing: error)]
+                )
+            #endif
+        }
+    }
+
+    @MainActor
+    private func setCoordinatorRuntimePinned(
+        _ isPinned: Bool,
+        option: CoordinatorModeCoordinatorOption
+    ) {
+        guard let tabID = option.tabID else { return }
+        promptManager?.setComposeTabPinned(isPinned, for: tabID)
     }
 
     @MainActor
@@ -1004,22 +1122,29 @@ extension AgentModeViewModel {
     ) -> CoordinatorModeSnapshotProjector.Input {
         let workspaceID = coordinatorModeActiveWorkspaceID
         let resolvableTabIDs = coordinatorModeResolvableTabIDs()
+        let tabStateByID = coordinatorModeTabStateByID()
         let persistedSessions = ownerValidatedSessionIndex.values.map { entry in
-            CoordinatorModeSnapshotProjector.PersistedSession(
+            var persisted = CoordinatorModeSnapshotProjector.PersistedSession(
                 entry: entry,
                 updatedAt: ownerValidatedSessionListSortDates[entry.tabID]
                     ?? AgentSessionRestoreSupport.sidebarActivityDate(for: entry)
             )
+            if let tab = tabStateByID[entry.tabID] {
+                persisted.title = tab.name
+                persisted.isPinned = tab.isPinned
+            }
+            return persisted
         }
         let liveSessions = sessions.values.compactMap { session -> CoordinatorModeSnapshotProjector.LiveSession? in
             guard let sessionID = session.activeAgentSessionID,
                   resolvableTabIDs.contains(session.tabID)
             else { return nil }
             let workflow = session.items.last(where: { $0.kind == .user })?.workflow
+            let tab = tabStateByID[session.tabID]
             return CoordinatorModeSnapshotProjector.LiveSession(
                 sessionID: sessionID,
                 tabID: session.tabID,
-                title: coordinatorModeTabName(for: session.tabID) ?? ownerValidatedSessionIndex[sessionID]?.name ?? "Agent Session",
+                title: tab?.name ?? ownerValidatedSessionIndex[sessionID]?.name ?? "Agent Session",
                 updatedAt: session.lastUserMessageAt ?? session.lastActivityAt,
                 runState: session.runState,
                 agentKind: session.selectedAgent.rawValue,
@@ -1029,7 +1154,9 @@ extension AgentModeViewModel {
                 worktreeBindingSummaries: session.worktreeBindings.worktreeBindingSummaries,
                 activeWorktreeMergeSummaries: session.worktreeMergeOperations.activeWorktreeMergeSummaries,
                 workflow: workflow.map(CoordinatorModeWorkflowDisplaySummary.init),
-                isCoordinatorInternal: session.isCoordinatorInternalSession
+                isCoordinatorInternal: session.isCoordinatorInternalSession,
+                isCoordinatorRuntime: session.isCoordinatorRuntime,
+                isPinned: tab?.isPinned ?? false
             )
         }
         var mcpSnapshotsBySessionID: [UUID: AgentRunMCPSnapshot] = [:]
@@ -1068,6 +1195,13 @@ extension AgentModeViewModel {
         let composeTabs = promptManager?.currentComposeTabs ?? workspaceManager?.activeWorkspace?.composeTabs ?? []
         let stashedTabs = workspaceManager?.activeWorkspace?.stashedTabs.map(\.tab) ?? []
         return Set((composeTabs + stashedTabs).map(\.id))
+    }
+
+    @MainActor
+    private func coordinatorModeTabStateByID() -> [UUID: ComposeTabState] {
+        let composeTabs = promptManager?.currentComposeTabs ?? workspaceManager?.activeWorkspace?.composeTabs ?? []
+        let stashedTabs = workspaceManager?.activeWorkspace?.stashedTabs.map(\.tab) ?? []
+        return Dictionary((composeTabs + stashedTabs).map { ($0.id, $0) }, uniquingKeysWith: { active, _ in active })
     }
 
     @MainActor

@@ -50,7 +50,7 @@ struct CoordinatorModeView: View {
     @State private var isCoordinatorRailVisible = true
     @State private var isInspectorVisible = true
     @State private var isSortMenuOpen = false
-    @State private var isCoordinatorThreadPickerOpen = false
+    @State private var areArchivedMissionsExpanded = false
     @FocusState private var isCoordinatorComposerFocused: Bool
     @FocusState private var isChildComposerFocused: Bool
     @ObservedObject private var fontScale = FontScaleManager.shared
@@ -105,35 +105,135 @@ struct CoordinatorModeView: View {
         inspectorIsAvailable: Bool,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        HStack(spacing: 0) {
-            if railIsAvailable, isCoordinatorRailVisible {
-                coordinatorRail(snapshot: snapshot, metrics: metrics)
-                    .frame(width: metrics.railWidth)
-                    .frame(maxHeight: .infinity)
-            }
+        Group {
+            let isAllAgentsBoard = snapshot.boardScope == .allAgents
+            if inspectorIsAvailable {
+                HStack(spacing: 0) {
+                    if railIsAvailable {
+                        Group {
+                            if isCoordinatorRailVisible {
+                                coordinatorHistorySidebar(snapshot: snapshot, metrics: metrics)
+                            } else {
+                                collapsedCoordinatorRailRestore(metrics: metrics)
+                            }
+                        }
+                        .frame(width: isCoordinatorRailVisible ? metrics.railWidth : metrics.collapsedRailWidth)
+                        .frame(maxHeight: .infinity)
+                    }
 
+                    if !isAllAgentsBoard {
+                        coordinatorConversation(snapshot.coordinatorRail, metrics: metrics)
+                            .padding(metrics.outerPadding)
+                            .frame(minWidth: metrics.centerChatMinWidth, maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color(nsColor: .windowBackgroundColor))
+                    }
+
+                    if isAllAgentsBoard {
+                        rightWorkPanel(
+                            snapshot: snapshot,
+                            sections: sections,
+                            selectedRow: selectedRow,
+                            useList: useList,
+                            forceList: forceList,
+                            railIsAvailable: railIsAvailable,
+                            metrics: metrics
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        rightWorkPanel(
+                            snapshot: snapshot,
+                            sections: sections,
+                            selectedRow: selectedRow,
+                            useList: useList,
+                            forceList: forceList,
+                            railIsAvailable: railIsAvailable,
+                            metrics: metrics
+                        )
+                        .frame(width: metrics.rightWorkPanelWidth)
+                        .frame(maxHeight: .infinity)
+                    }
+                }
+            } else {
+                HStack(spacing: 0) {
+                    if railIsAvailable {
+                        Group {
+                            if isCoordinatorRailVisible {
+                                if isAllAgentsBoard {
+                                    coordinatorHistorySidebar(snapshot: snapshot, metrics: metrics)
+                                } else {
+                                    coordinatorRail(snapshot: snapshot, metrics: metrics)
+                                }
+                            } else {
+                                collapsedCoordinatorRailRestore(metrics: metrics)
+                            }
+                        }
+                        .frame(width: isCoordinatorRailVisible ? metrics.railWidth : metrics.collapsedRailWidth)
+                        .frame(maxHeight: .infinity)
+                    }
+
+                    if !isAllAgentsBoard || !inspectorIsAvailable {
+                        coordinatorContent(
+                            snapshot: snapshot,
+                            sections: sections,
+                            useList: useList,
+                            forceList: forceList,
+                            metrics: metrics,
+                            showRailToggle: false,
+                            showInspectorToggle: inspectorIsAvailable && selectedRow != nil && !isInspectorVisible
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        rightWorkPanel(
+                            snapshot: snapshot,
+                            sections: sections,
+                            selectedRow: selectedRow,
+                            useList: useList,
+                            forceList: forceList,
+                            railIsAvailable: railIsAvailable,
+                            metrics: metrics
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func rightWorkPanel(
+        snapshot: CoordinatorModeSnapshot,
+        sections: [CoordinatorModeStatusSection],
+        selectedRow: CoordinatorModeRow?,
+        useList: Bool,
+        forceList: Bool,
+        railIsAvailable: Bool,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(spacing: 0) {
             coordinatorContent(
                 snapshot: snapshot,
                 sections: sections,
                 useList: useList,
                 forceList: forceList,
                 metrics: metrics,
-                showRailToggle: railIsAvailable && !isCoordinatorRailVisible,
-                showInspectorToggle: inspectorIsAvailable && selectedRow != nil && !isInspectorVisible
+                showRailToggle: false,
+                showInspectorToggle: false
             )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxHeight: selectedRow == nil || !isInspectorVisible ? .infinity : metrics.rightBoardHeight)
 
-            if inspectorIsAvailable, isInspectorVisible, let selectedRow {
+            if let selectedRow, isInspectorVisible {
+                Divider()
+                    .opacity(0.28)
                 inspector(row: selectedRow, metrics: metrics)
-                    .frame(
-                        minWidth: metrics.inspectorWidth,
-                        idealWidth: metrics.inspectorWidth,
-                        maxWidth: metrics.inspectorWidth,
-                        maxHeight: .infinity
-                    )
+                    .frame(maxHeight: .infinity)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let selectedRow {
+                collapsedInspectorHandle(row: selectedRow, metrics: metrics)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(.easeInOut(duration: 0.22), value: isInspectorVisible)
+        .coordinatorSidebarPanel(edge: .leading)
     }
 
     private func coordinatorContent(
@@ -170,6 +270,7 @@ struct CoordinatorModeView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            boardFilterBar(metrics: metrics)
             Divider()
             mcpFooter(snapshot.mcpAwareness, metrics: metrics)
         }
@@ -189,11 +290,7 @@ struct CoordinatorModeView: View {
             }
 
             presentationPicker(metrics: metrics)
-            scopePicker(metrics: metrics)
-            followThroughPicker(metrics: metrics)
             sortPicker(metrics: metrics)
-            filterSearchBox(metrics: metrics)
-                .frame(width: metrics.searchWidth)
 
             if forceList {
                 forceListLabel(metrics: metrics)
@@ -213,6 +310,17 @@ struct CoordinatorModeView: View {
                 }
             }
         }
+    }
+
+    private func boardFilterBar(metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.controlSpacing) {
+            filterSearchBox(metrics: metrics)
+                .frame(minWidth: metrics.searchWidth, maxWidth: metrics.bottomSearchMaxWidth)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, metrics.outerPadding)
+        .padding(.vertical, metrics.footerVerticalPadding)
+        .background(.regularMaterial)
     }
 
     private func presentationPicker(metrics: CoordinatorVisualMetrics) -> some View {
@@ -434,7 +542,9 @@ struct CoordinatorModeView: View {
         return VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
             coordinatorRailTitlebarLane(metrics: metrics)
 
-            coordinatorThreadsPanel(rail, metrics: metrics)
+            coordinatorRailHistoryContent(snapshot: snapshot, metrics: metrics)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .layoutPriority(1)
             coordinatorConversation(rail, metrics: metrics)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(maxHeight: .infinity, alignment: .top)
@@ -443,32 +553,76 @@ struct CoordinatorModeView: View {
         .coordinatorSidebarPanel(edge: .trailing)
     }
 
-    private func coordinatorThreadsPanel(
-        _ rail: CoordinatorModeCoordinatorRail,
+    private func coordinatorHistorySidebar(
+        snapshot: CoordinatorModeSnapshot,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
-            HStack(spacing: metrics.smallSpacing) {
-                Label("Active Coordinator", systemImage: "rectangle.3.group.bubble")
-                    .font(metrics.cardTitle)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
+            coordinatorRailTitlebarLane(metrics: metrics)
+            coordinatorRailHistoryContent(snapshot: snapshot, metrics: metrics)
+                .frame(maxHeight: .infinity, alignment: .top)
+        }
+        .padding(metrics.outerPadding)
+        .coordinatorSidebarPanel(edge: .trailing)
+    }
 
-                Spacer(minLength: 0)
-
-                Button {
-                    viewModel.startNewCoordinatorRun()
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: metrics.smallIconSize, weight: .medium))
-                        .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .hoverTooltip("New Coordinator chat")
+    private func coordinatorRailHistoryContent(
+        snapshot: CoordinatorModeSnapshot,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
+                coordinatorNavigationPanel(snapshot: snapshot, metrics: metrics)
+                coordinatorMissionsPanel(snapshot.coordinatorRail, metrics: metrics)
             }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(.bottom, metrics.outerPadding)
+        }
+        .scrollIndicators(.visible)
+        .frame(maxWidth: .infinity)
+    }
 
-            coordinatorActiveThreadRow(rail, metrics: metrics)
+    private func collapsedCoordinatorRailRestore(metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(spacing: 0) {
+            Button {
+                toggleCoordinatorRail()
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: metrics.smallIconSize, weight: .medium))
+                    .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .hoverTooltip("Show Coordinator Rail")
+            .accessibilityLabel("Show Coordinator Rail")
+            .padding(.top, metrics.outerPadding)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .coordinatorSidebarPanel(edge: .trailing)
+    }
+
+    private func coordinatorNavigationPanel(
+        snapshot: CoordinatorModeSnapshot,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            coordinatorNavigationButton(
+                title: "Coordinator Chat",
+                subtitle: "Selected parent and linked work",
+                systemImage: "bubble.left.and.bubble.right",
+                scope: .coordinatorFleet,
+                metrics: metrics
+            )
+
+            coordinatorNavigationButton(
+                title: "All Agents Board",
+                subtitle: "Active work across Coordinator mode",
+                systemImage: "rectangle.3.group.bubble",
+                scope: .allAgents,
+                metrics: metrics
+            )
         }
         .padding(metrics.cardPadding)
         .coordinatorCardBackground(
@@ -476,126 +630,163 @@ struct CoordinatorModeView: View {
             fillOpacity: CoordinatorStyle.railCardFillOpacity,
             strokeOpacity: 0
         )
+        .accessibilityLabel("Coordinator navigation")
     }
 
-    private func coordinatorActiveThreadRow(
-        _ rail: CoordinatorModeCoordinatorRail,
+    private func coordinatorNavigationButton(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        scope: CoordinatorModeBoardScope,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        let activeOption = rail.availableCoordinators.first(where: \.isSelected)
-        let status = coordinatorThreadStatus(for: activeOption, rail: rail)
+        let isSelected = viewModel.boardScope == scope
 
         return Button {
-            isCoordinatorThreadPickerOpen.toggle()
+            viewModel.boardScope = scope
         } label: {
-            HStack(alignment: .center, spacing: metrics.smallSpacing) {
-                Image(systemName: rail.state == .chooseCoordinator ? "plus.bubble" : "bubble.left.and.bubble.right")
+            HStack(spacing: metrics.smallSpacing) {
+                Image(systemName: systemImage)
                     .font(.system(size: metrics.smallIconSize, weight: .semibold))
-                    .foregroundStyle(rail.state == .chooseCoordinator ? .secondary : Color.accentColor)
+                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                     .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
 
                 VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                    Text(activeOption?.title ?? rail.title ?? "New Coordinator")
+                    Text(title)
                         .font(metrics.bodySemibold)
                         .foregroundStyle(.primary.opacity(0.9))
                         .lineLimit(1)
-                        .truncationMode(.tail)
-                    Text(activeOption?.selectionSource.displayName ?? "Start a blank parent thread")
+                    Text(subtitle)
                         .font(metrics.micro)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
 
-                Spacer(minLength: metrics.smallSpacing)
-
-                HStack(spacing: metrics.smallSpacing) {
-                    coordinatorThreadStatusPill(status, metrics: metrics)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: metrics.microIconSize, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
+                Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
             .padding(.horizontal, metrics.pendingPadding)
             .padding(.vertical, metrics.smallSpacing)
-            .frame(minHeight: metrics.coordinatorThreadRowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
         .coordinatorCardBackground(
             cornerRadius: metrics.pendingCornerRadius,
-            isSelected: rail.state == .chooseCoordinator || activeOption != nil,
+            isSelected: isSelected,
             fillOpacity: 0.12,
             strokeOpacity: 0.10
         )
-        .hoverTooltip("Switch Coordinator chat")
-        .popover(isPresented: $isCoordinatorThreadPickerOpen, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
-            coordinatorThreadPicker(rail, metrics: metrics)
-        }
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    private func coordinatorThreadPicker(
+    private func coordinatorMissionsPanel(
         _ rail: CoordinatorModeCoordinatorRail,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+        let primaryOptions = rail.availableCoordinators.filter {
+            !$0.isPersistedOnly || $0.isSelected || $0.isPinned
+        }
+        let archivedOptions = rail.availableCoordinators.filter {
+            $0.isPersistedOnly && !$0.isSelected && !$0.isPinned
+        }
+
+        return VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
             HStack(spacing: metrics.smallSpacing) {
-                Label("Coordinator Threads", systemImage: "rectangle.3.group.bubble")
+                Label("Missions", systemImage: "rectangle.3.group.bubble")
                     .font(metrics.cardTitle)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
                 Spacer(minLength: 0)
             }
 
-            coordinatorNewThreadRow(rail, metrics: metrics)
+            coordinatorNewMissionRow(rail, metrics: metrics)
 
-            if rail.availableCoordinators.isEmpty {
-                Text("No Coordinator threads yet.")
+            if primaryOptions.isEmpty {
+                Text("No active missions.")
                     .font(metrics.micro)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, metrics.pendingPadding)
                     .padding(.vertical, metrics.smallSpacing)
             } else {
+                coordinatorMissionRows(primaryOptions, metrics: metrics)
+            }
+
+            if !archivedOptions.isEmpty {
                 Divider()
-                coordinatorThreadRows(rail.availableCoordinators, metrics: metrics)
+                    .padding(.vertical, metrics.tightSpacing)
+                archivedMissionsDisclosure(
+                    options: archivedOptions,
+                    metrics: metrics
+                )
             }
         }
-        .padding(metrics.cardPadding)
-        .frame(width: metrics.coordinatorThreadPopoverWidth)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
-    private func coordinatorThreadRows(
+    private func coordinatorMissionRows(
         _ options: [CoordinatorModeCoordinatorOption],
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         let rows = VStack(alignment: .leading, spacing: metrics.smallSpacing) {
             ForEach(options) { option in
-                coordinatorThreadRow(option, metrics: metrics)
+                coordinatorMissionRow(option, metrics: metrics)
             }
         }
 
-        if options.count > metrics.coordinatorThreadVisibleRowLimit {
-            ScrollView {
-                rows
+        rows
+    }
+
+    private func archivedMissionsDisclosure(
+        options: [CoordinatorModeCoordinatorOption],
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    areArchivedMissionsExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: metrics.smallSpacing) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: metrics.microIconSize, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(areArchivedMissionsExpanded ? 90 : 0))
+                    Image(systemName: "archivebox")
+                        .font(.system(size: metrics.smallIconSize, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text("Archived Missions")
+                        .font(metrics.bodySemibold)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text("\(options.count)")
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.tertiary)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+                .padding(.horizontal, metrics.pendingPadding)
+                .padding(.vertical, metrics.smallSpacing)
             }
-            .scrollIndicators(.visible)
-            .frame(height: coordinatorThreadListHeight(
-                count: options.count,
-                metrics: metrics
-            ))
-        } else {
-            rows
+            .buttonStyle(.plain)
+            .accessibilityLabel(areArchivedMissionsExpanded ? "Hide archived missions" : "Show archived missions")
+
+            if areArchivedMissionsExpanded {
+                coordinatorMissionRows(options, metrics: metrics)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
     }
 
-    private func coordinatorNewThreadRow(
+    private func coordinatorNewMissionRow(
         _ rail: CoordinatorModeCoordinatorRail,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         Button {
             viewModel.startNewCoordinatorRun()
-            closeCoordinatorThreadPicker()
         } label: {
             HStack(alignment: .center, spacing: metrics.smallSpacing) {
                 Image(systemName: rail.state == .chooseCoordinator ? "plus.circle.fill" : "plus.bubble")
@@ -604,10 +795,10 @@ struct CoordinatorModeView: View {
                     .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
 
                 VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                    Text("New Coordinator")
+                    Text("New Mission")
                         .font(metrics.bodySemibold)
                         .lineLimit(1)
-                    Text("Start a blank parent thread")
+                    Text("Start a blank Coordinator run")
                         .font(metrics.micro)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -629,21 +820,20 @@ struct CoordinatorModeView: View {
             fillOpacity: 0.14,
             strokeOpacity: 0.10
         )
-        .hoverTooltip("Prepare a fresh Coordinator parent")
+        .hoverTooltip("Prepare a fresh mission")
         .accessibilityAction {
             viewModel.startNewCoordinatorRun()
         }
     }
 
-    private func coordinatorThreadRow(
+    private func coordinatorMissionRow(
         _ option: CoordinatorModeCoordinatorOption,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        let status = coordinatorThreadStatus(for: option)
+        let status = coordinatorMissionStatus(for: option)
 
         return Button {
             viewModel.selectCoordinator(sessionID: option.sessionID)
-            closeCoordinatorThreadPicker()
         } label: {
             HStack(alignment: .center, spacing: metrics.smallSpacing) {
                 Image(systemName: option.isSelected ? "checkmark.circle.fill" : "bubble.left.and.bubble.right")
@@ -665,12 +855,20 @@ struct CoordinatorModeView: View {
 
                 Spacer(minLength: metrics.smallSpacing)
 
-                coordinatorThreadStatusPill(status, metrics: metrics)
+                if option.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: metrics.microIconSize, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                if let status {
+                    coordinatorMissionStatusPill(status, metrics: metrics)
+                }
             }
             .contentShape(Rectangle())
             .padding(.horizontal, metrics.pendingPadding)
             .padding(.vertical, metrics.smallSpacing)
-            .frame(minHeight: metrics.coordinatorThreadRowHeight)
+            .frame(minHeight: metrics.coordinatorMissionRowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
@@ -680,13 +878,19 @@ struct CoordinatorModeView: View {
             fillOpacity: 0.12,
             strokeOpacity: 0.10
         )
-        .hoverTooltip("Switch to \(option.title)")
+        .contextMenu {
+            Button(option.isPinned ? "Unpin" : "Pin") {
+                viewModel.togglePinnedCoordinator(option)
+            }
+            .disabled(option.tabID == nil)
+        }
+        .hoverTooltip("Switch mission to \(option.title)")
         .accessibilityAction {
             viewModel.selectCoordinator(sessionID: option.sessionID)
         }
     }
 
-    private func coordinatorThreadStatusPill(
+    private func coordinatorMissionStatusPill(
         _ status: (text: String, color: Color),
         metrics: CoordinatorVisualMetrics
     ) -> some View {
@@ -705,43 +909,14 @@ struct CoordinatorModeView: View {
         .overlay(Capsule(style: .continuous).stroke(status.color.opacity(0.18), lineWidth: 0.5))
     }
 
-    private func closeCoordinatorThreadPicker() {
-        DispatchQueue.main.async {
-            isCoordinatorThreadPickerOpen = false
-        }
-    }
-
-    private func coordinatorThreadListHeight(count: Int, metrics: CoordinatorVisualMetrics) -> CGFloat {
-        let visibleRows = min(max(count, 1), metrics.coordinatorThreadVisibleRowLimit)
-        let rowHeights = CGFloat(visibleRows) * metrics.coordinatorThreadRowHeight
-        let spacings = CGFloat(max(visibleRows - 1, 0)) * metrics.smallSpacing
-        return rowHeights + spacings
-    }
-
-    private func coordinatorThreadStatus(
-        for option: CoordinatorModeCoordinatorOption?,
-        rail: CoordinatorModeCoordinatorRail
-    ) -> (text: String, color: Color) {
-        if let option {
-            return coordinatorThreadStatus(for: option)
-        }
-        if rail.state == .chooseCoordinator {
-            return ("Ready", .secondary)
-        }
-        if rail.isLiveInCurrentWindow {
-            return ("Live", .green)
-        }
-        return ("Persisted", .secondary)
-    }
-
-    private func coordinatorThreadStatus(for option: CoordinatorModeCoordinatorOption) -> (text: String, color: Color) {
+    private func coordinatorMissionStatus(for option: CoordinatorModeCoordinatorOption) -> (text: String, color: Color)? {
         if let runState = option.runState, runState.isActive {
-            return (runState.coordinatorThreadDisplayName, .blue)
+            return (runState.coordinatorMissionDisplayName, .blue)
         }
         if option.isLiveInCurrentWindow {
             return ("Live", .green)
         }
-        return ("Persisted", .secondary)
+        return nil
     }
 
     private enum SidebarTitlebarControlPlacement {
@@ -773,16 +948,26 @@ struct CoordinatorModeView: View {
 
     private func coordinatorRailTitlebarLane(metrics: CoordinatorVisualMetrics) -> some View {
         coordinatorSidebarTitlebarLane(metrics: metrics, controlPlacement: .trailing) {
-            Label("Coordinator", systemImage: "rectangle.3.group.bubble")
-                .font(metrics.bodyMedium)
-                .foregroundStyle(.secondary)
-                .labelStyle(.titleAndIcon)
-                .lineLimit(1)
+            coordinatorNewChatToolbarButton(metrics: metrics)
         } control: {
             CoordinatorRailToggleButton(isRailVisible: true, metrics: metrics) {
                 toggleCoordinatorRail()
             }
         }
+    }
+
+    private func coordinatorNewChatToolbarButton(metrics: CoordinatorVisualMetrics) -> some View {
+        Button {
+            viewModel.startNewCoordinatorRun()
+        } label: {
+            Image(systemName: "square.and.pencil")
+                .font(.system(size: metrics.smallIconSize, weight: .medium))
+                .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .hoverTooltip("New Mission")
+        .accessibilityLabel("New Mission")
     }
 
     private func toggleCoordinatorRail() {
@@ -1068,25 +1253,14 @@ struct CoordinatorModeView: View {
 
     private func inspector(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(spacing: 0) {
-            coordinatorSidebarTitlebarLane(metrics: metrics, controlPlacement: .leading) {
-                EmptyView()
-            } control: {
-                CoordinatorRailToggleButton(
-                    isRailVisible: true,
-                    metrics: metrics,
-                    systemImage: "sidebar.right",
-                    visibleAccessibilityLabel: "Hide Inspector",
-                    hiddenAccessibilityLabel: "Show Inspector"
-                ) {
-                    isInspectorVisible = false
-                }
+            inspectorSheetHandle(isExpanded: true, row: row, metrics: metrics) {
+                isInspectorVisible = false
             }
-            .padding(.horizontal, metrics.outerPadding)
-            .padding(.top, metrics.outerPadding)
+            .padding(.top, metrics.tightSpacing)
 
             inspectorHeader(row: row, metrics: metrics)
                 .padding(.horizontal, metrics.outerPadding)
-                .padding(.top, metrics.sectionSpacing)
+                .padding(.top, metrics.controlSpacing)
                 .padding(.bottom, metrics.controlSpacing)
 
             Divider()
@@ -1183,7 +1357,6 @@ struct CoordinatorModeView: View {
             inspectorChildComposer(row: row, metrics: metrics)
                 .padding(metrics.outerPadding)
         }
-        .coordinatorSidebarPanel(edge: .leading)
     }
 
     private func inspectorHeader(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
@@ -1214,6 +1387,56 @@ struct CoordinatorModeView: View {
                 }
             }
         }
+    }
+
+    private func collapsedInspectorHandle(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(spacing: 0) {
+            Divider()
+                .opacity(0.28)
+
+            inspectorSheetHandle(isExpanded: false, row: row, metrics: metrics) {
+                isInspectorVisible = true
+            }
+        }
+        .background(.regularMaterial)
+    }
+
+    private func inspectorSheetHandle(
+        isExpanded: Bool,
+        row: CoordinatorModeRow,
+        metrics: CoordinatorVisualMetrics,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: metrics.tightSpacing) {
+                Capsule(style: .continuous)
+                    .fill(Color.secondary.opacity(0.35))
+                    .frame(width: metrics.inspectorHandleWidth, height: metrics.inspectorHandleHeight)
+
+                HStack(spacing: metrics.smallSpacing) {
+                    Image(systemName: isExpanded ? "chevron.compact.down" : "chevron.compact.up")
+                        .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text(isExpanded ? "Hide Inspector" : "Show Inspector")
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if !isExpanded {
+                        Text(row.title)
+                            .font(metrics.micro)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, metrics.inspectorHandleVerticalPadding)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverTooltip(isExpanded ? "Hide Inspector" : "Show Inspector")
+        .accessibilityLabel(isExpanded ? "Hide Inspector" : "Show Inspector")
     }
 
     @ViewBuilder
@@ -1378,7 +1601,7 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-            Text(rail.state == .chooseCoordinator ? "Start a Coordinator chat." : "Ask the Coordinator what to do next.")
+            Text(rail.state == .chooseCoordinator ? "Start a Mission." : "Ask the Coordinator what to do next.")
                 .font(metrics.bodyMedium)
                 .foregroundStyle(.primary.opacity(0.82))
             Text("Delegated sessions will appear on the board as this conversation creates work.")
@@ -1612,6 +1835,31 @@ struct CoordinatorModeView: View {
                     .fill(Color(nsColor: .controlBackgroundColor).opacity(0.22))
             )
 
+            coordinatorComposerFollowThroughToggle(metrics: metrics)
+
+            if rail.state == .chooseCoordinator {
+                Button {
+                    viewModel.selectedWorkflowTemplate = viewModel.selectedWorkflowTemplate == .scopedChange ? nil : .scopedChange
+                } label: {
+                    HStack(spacing: metrics.miniPillIconSpacing) {
+                        Image(systemName: CoordinatorWorkflowTemplate.scopedChange.iconName)
+                            .font(.system(size: metrics.microIconSize, weight: .medium))
+                        Text(CoordinatorWorkflowTemplate.scopedChange.displayName)
+                            .font(metrics.microMedium)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, metrics.miniPillHorizontalPadding)
+                    .padding(.vertical, metrics.miniPillVerticalPadding)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(viewModel.selectedWorkflowTemplate == .scopedChange ? Color.accentColor.opacity(0.16) : Color(nsColor: .controlBackgroundColor).opacity(0.22))
+                    )
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(viewModel.selectedWorkflowTemplate == .scopedChange ? Color.accentColor : Color.secondary)
+                .hoverTooltip(CoordinatorWorkflowTemplate.scopedChange.displayName)
+            }
+
             Spacer(minLength: metrics.smallSpacing)
 
             Button {
@@ -1628,6 +1876,57 @@ struct CoordinatorModeView: View {
         }
         .frame(height: metrics.composerControlStripHeight)
         .padding(.horizontal, metrics.composerControlHorizontalPadding)
+    }
+
+    private func coordinatorComposerFollowThroughToggle(metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.headerSegmentSpacing) {
+            coordinatorComposerFollowThroughButton(
+                title: "Manual",
+                isSelected: !viewModel.allowsProactiveFollowThrough,
+                metrics: metrics
+            ) {
+                viewModel.setAllowsProactiveFollowThrough(false)
+            }
+
+            coordinatorComposerFollowThroughButton(
+                title: "Follow",
+                isSelected: viewModel.allowsProactiveFollowThrough,
+                metrics: metrics
+            ) {
+                viewModel.setAllowsProactiveFollowThrough(true)
+            }
+        }
+        .padding(metrics.composerToggleInset)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.22))
+        )
+        .accessibilityLabel("Coordinator chat follow-through")
+    }
+
+    private func coordinatorComposerFollowThroughButton(
+        title: String,
+        isSelected: Bool,
+        metrics: CoordinatorVisualMetrics,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(metrics.microMedium)
+                .lineLimit(1)
+                .minimumScaleFactor(0.86)
+                .padding(.horizontal, metrics.miniPillHorizontalPadding)
+                .padding(.vertical, metrics.miniPillVerticalPadding)
+                .frame(minWidth: metrics.composerFollowThroughSegmentMinWidth)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func coordinatorComposerStatusText(_ rail: CoordinatorModeCoordinatorRail) -> String {
@@ -1930,9 +2229,9 @@ struct CoordinatorModeView: View {
             Image(systemName: snapshot.workspaceID == nil ? "folder.badge.questionmark" : "rectangle.3.group.bubble")
                 .font(.system(size: metrics.emptyStateIconSize))
                 .foregroundStyle(.secondary)
-            Text(snapshot.workspaceID == nil ? "Open a workspace" : (isAllAgents ? "No active agent sessions yet" : "No delegated sessions yet"))
+            Text(snapshot.workspaceID == nil ? "Open a workspace" : (isAllAgents ? "No active delegated work yet" : "No delegated work yet"))
                 .font(metrics.headerTitle)
-            Text(isAllAgents ? "The board shows active Agent Mode sessions plus Coordinator fleet work." : "The board shows delegated sessions from the Coordinator fleet.")
+            Text(isAllAgents ? "The board shows active delegated work across Coordinator Missions." : "The board shows delegated work from the selected Mission.")
                 .font(metrics.sectionTitle)
                 .foregroundStyle(.secondary)
         }
@@ -2325,15 +2624,43 @@ private struct CoordinatorVisualMetrics {
     }
 
     var railWidth: CGFloat {
-        fontPreset.scaledClamped(340, min: 340, max: 420)
+        fontPreset.scaledClamped(292, min: 280, max: 340)
+    }
+
+    var collapsedRailWidth: CGFloat {
+        fontPreset.scaledClamped(42, min: 38, max: 48)
+    }
+
+    var centerChatMinWidth: CGFloat {
+        fontPreset.scaledClamped(500, min: 460, max: 620)
+    }
+
+    var rightWorkPanelWidth: CGFloat {
+        fontPreset.scaledClamped(600, min: 560, max: 720)
+    }
+
+    var rightBoardHeight: CGFloat {
+        fontPreset.scaledClamped(430, min: 380, max: 560)
     }
 
     var inspectorWidth: CGFloat {
         fontPreset.scaledClamped(300, min: 300, max: 360)
     }
 
+    var inspectorHandleWidth: CGFloat {
+        fontPreset.scaledClamped(46, min: 40, max: 58)
+    }
+
+    var inspectorHandleHeight: CGFloat {
+        fontPreset.scaledClamped(4, min: 3, max: 5)
+    }
+
+    var inspectorHandleVerticalPadding: CGFloat {
+        fontPreset.scaledClamped(7, min: 6, max: 10)
+    }
+
     var boardColumnWidth: CGFloat {
-        fontPreset.scaledClamped(224, min: 224, max: 276)
+        fontPreset.scaledClamped(206, min: 196, max: 248)
     }
 
     var boardColumnMinHeight: CGFloat {
@@ -2358,6 +2685,14 @@ private struct CoordinatorVisualMetrics {
 
     var followThroughControlWidth: CGFloat {
         fontPreset.scaledClamped(178, min: 178, max: 214)
+    }
+
+    var composerToggleInset: CGFloat {
+        fontPreset.scaledClamped(2, max: 3)
+    }
+
+    var composerFollowThroughSegmentMinWidth: CGFloat {
+        fontPreset.scaledClamped(46, min: 42, max: 56)
     }
 
     var headerControlHeight: CGFloat {
@@ -2386,6 +2721,10 @@ private struct CoordinatorVisualMetrics {
 
     var searchWidth: CGFloat {
         fontPreset.scaledClamped(240, min: 240, max: 300)
+    }
+
+    var bottomSearchMaxWidth: CGFloat {
+        fontPreset.scaledClamped(360, min: 360, max: 460)
     }
 
     var outerPadding: CGFloat {
@@ -2472,16 +2811,8 @@ private struct CoordinatorVisualMetrics {
         fontPreset.scaledClamped(8, max: 12)
     }
 
-    var coordinatorThreadRowHeight: CGFloat {
+    var coordinatorMissionRowHeight: CGFloat {
         fontPreset.scaledClamped(42, min: 42, max: 50)
-    }
-
-    var coordinatorThreadVisibleRowLimit: Int {
-        3
-    }
-
-    var coordinatorThreadPopoverWidth: CGFloat {
-        fontPreset.scaledClamped(320, min: 320, max: 380)
     }
 
     var footerVerticalPadding: CGFloat {
@@ -2670,6 +3001,17 @@ private enum CoordinatorStyle {
         Color.secondary.opacity(0.10)
     }
 
+    static var floatingPanelStroke: Color {
+        Color.secondary.opacity(0.18)
+    }
+
+    static var floatingPanelShadow: Color {
+        Color.black.opacity(0.18)
+    }
+
+    static let floatingPanelCornerRadius: CGFloat = 18
+    static let floatingPanelInset: CGFloat = 8
+
     static var selectedFill: Color {
         Color.accentColor.opacity(0.15)
     }
@@ -2697,19 +3039,28 @@ private enum CoordinatorSidebarPanelEdge {
 
 private extension View {
     func coordinatorSidebarPanel(edge: CoordinatorSidebarPanelEdge) -> some View {
-        background(
-            CoordinatorSidebarMaterialView()
-                .ignoresSafeArea(.container, edges: .top)
+        let shape = RoundedRectangle(
+            cornerRadius: CoordinatorStyle.floatingPanelCornerRadius,
+            style: .continuous
         )
-        .overlay(alignment: edge.alignment) {
-            GeometryReader { proxy in
-                Rectangle()
-                    .fill(CoordinatorStyle.panelSeam)
-                    .frame(width: 0.5, height: proxy.size.height + proxy.safeAreaInsets.top)
-                    .offset(y: -proxy.safeAreaInsets.top)
+
+        return padding(CoordinatorStyle.floatingPanelInset)
+            .background(
+                CoordinatorSidebarMaterialView()
+                    .clipShape(shape)
+            )
+            .overlay {
+                shape
+                    .strokeBorder(CoordinatorStyle.floatingPanelStroke, lineWidth: 0.75)
             }
-            .frame(width: 0.5)
-        }
+            .overlay(alignment: edge.alignment) {
+                Rectangle()
+                    .fill(CoordinatorStyle.panelSeam.opacity(0.55))
+                    .frame(width: 0.5)
+                    .padding(.vertical, CoordinatorStyle.floatingPanelCornerRadius)
+            }
+            .clipShape(shape)
+            .shadow(color: CoordinatorStyle.floatingPanelShadow, radius: 12, x: 0, y: 4)
     }
 
     func coordinatorSidebarHeaderPill(cornerRadius: CGFloat) -> some View {
@@ -2789,15 +3140,15 @@ private extension CoordinatorModeSortMode {
 private extension CoordinatorModeBoardScope {
     var displayName: String {
         switch self {
-        case .coordinatorFleet: "Coordinator"
-        case .allAgents: "All Agents"
+        case .coordinatorFleet: "Coordinator Chat"
+        case .allAgents: "All Agents Board"
         }
     }
 
     var accessibilityLabel: String {
         switch self {
-        case .coordinatorFleet: "Show Coordinator fleet sessions"
-        case .allAgents: "Show all active Agent sessions"
+        case .coordinatorFleet: "Show selected Mission"
+        case .allAgents: "Show all active delegated work across Missions"
         }
     }
 }
@@ -2869,7 +3220,7 @@ private extension CoordinatorModeCoordinatorRail.SelectionSource {
 }
 
 private extension AgentSessionRunState {
-    var coordinatorThreadDisplayName: String {
+    var coordinatorMissionDisplayName: String {
         switch self {
         case .idle: "Idle"
         case .running: "Running"
@@ -3139,10 +3490,14 @@ private extension AgentSessionRunState {
                 coordinatorRail: CoordinatorModeCoordinatorRail(
                     state: .selected,
                     coordinatorSessionID: coordinatorID,
+                    coordinatorTabID: nil,
                     selectionSource: .mcpLineageRoot,
                     title: "Coordinate PR stack",
                     availableCoordinators: [],
                     isLiveInCurrentWindow: true,
+                    isPersistedOnly: false,
+                    isPinned: false,
+                    childCounts: .empty,
                     openAgentChatRoute: nil,
                     statusReport: CoordinatorModeSessionStatusReport(
                         status: .running,

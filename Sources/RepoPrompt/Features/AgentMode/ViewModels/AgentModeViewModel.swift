@@ -462,18 +462,23 @@ final class AgentModeViewModel: ObservableObject {
         didSet {
             syncSidebarUIState(refresh: true, reason: .sessionIndex)
             scheduleSidebarAutoArchiveIfReady(reason: .sessionIndexChanged)
+            refreshCoordinatorModeIfVisible()
         }
     }
 
     /// Cached last-user-message timestamps for tabs (used for list ordering before sessions load)
     @Published private(set) var sessionListSortDates: [UUID: Date] = [:] {
-        didSet { syncSidebarUIState(refresh: true, reason: .sortDates) }
+        didSet {
+            syncSidebarUIState(refresh: true, reason: .sortDates)
+            refreshCoordinatorModeIfVisible()
+        }
     }
 
     @Published private(set) var sessionListCacheReady: Bool = false {
         didSet {
             guard sessionListCacheReady != oldValue else { return }
             syncSidebarUIState(refresh: true, reason: .sessionList)
+            refreshCoordinatorModeIfVisible()
         }
     }
 
@@ -525,7 +530,21 @@ final class AgentModeViewModel: ObservableObject {
     private let workspaceFileContextStore: WorkspaceFileContextStore?
     weak var workspaceManager: WorkspaceManagerViewModel?
     private weak var mcpServer: MCPServerViewModel?
-    lazy var coordinatorModeViewModel: CoordinatorModeViewModel = makeCoordinatorModeViewModel()
+    private var _coordinatorModeViewModel: CoordinatorModeViewModel?
+    var coordinatorModeViewModel: CoordinatorModeViewModel {
+        if let _coordinatorModeViewModel {
+            return _coordinatorModeViewModel
+        }
+        let viewModel = makeCoordinatorModeViewModel()
+        _coordinatorModeViewModel = viewModel
+        return viewModel
+    }
+
+    var visibleCoordinatorModeViewModel: CoordinatorModeViewModel? {
+        guard _coordinatorModeViewModel?.isVisible == true else { return nil }
+        return _coordinatorModeViewModel
+    }
+
     private let dataService = AgentSessionDataService.shared
     private var sidebarPrioritizedIndexBuilder: SidebarPrioritizedIndexBuilder = { request in
         try await AgentSessionDataService.shared.buildPrioritizedSidebarIndex(request)

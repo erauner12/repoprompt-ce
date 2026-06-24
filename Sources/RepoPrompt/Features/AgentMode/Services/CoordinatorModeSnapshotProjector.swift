@@ -61,6 +61,8 @@ struct CoordinatorModeSnapshotProjector {
         var activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary]
         var workflow: CoordinatorModeWorkflowDisplaySummary?
         var isCoordinatorInternal: Bool
+        var isCoordinatorRuntime: Bool
+        var isPinned: Bool
         var priority: Int?
 
         init(
@@ -77,6 +79,8 @@ struct CoordinatorModeSnapshotProjector {
             activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary] = [],
             workflow: CoordinatorModeWorkflowDisplaySummary? = nil,
             isCoordinatorInternal: Bool = false,
+            isCoordinatorRuntime: Bool = false,
+            isPinned: Bool = false,
             priority: Int? = nil
         ) {
             self.id = id
@@ -92,6 +96,8 @@ struct CoordinatorModeSnapshotProjector {
             self.activeWorktreeMergeSummaries = activeWorktreeMergeSummaries
             self.workflow = workflow
             self.isCoordinatorInternal = isCoordinatorInternal
+            self.isCoordinatorRuntime = isCoordinatorRuntime
+            self.isPinned = isPinned
             self.priority = priority
         }
     }
@@ -110,6 +116,8 @@ struct CoordinatorModeSnapshotProjector {
         var activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary]
         var workflow: CoordinatorModeWorkflowDisplaySummary?
         var isCoordinatorInternal: Bool
+        var isCoordinatorRuntime: Bool
+        var isPinned: Bool
         var priority: Int?
 
         init(
@@ -126,6 +134,8 @@ struct CoordinatorModeSnapshotProjector {
             activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary] = [],
             workflow: CoordinatorModeWorkflowDisplaySummary? = nil,
             isCoordinatorInternal: Bool = false,
+            isCoordinatorRuntime: Bool = false,
+            isPinned: Bool = false,
             priority: Int? = nil
         ) {
             self.sessionID = sessionID
@@ -141,6 +151,8 @@ struct CoordinatorModeSnapshotProjector {
             self.activeWorktreeMergeSummaries = activeWorktreeMergeSummaries
             self.workflow = workflow
             self.isCoordinatorInternal = isCoordinatorInternal
+            self.isCoordinatorRuntime = isCoordinatorRuntime
+            self.isPinned = isPinned
             self.priority = priority
         }
     }
@@ -153,6 +165,10 @@ struct CoordinatorModeSnapshotProjector {
         var isMCPOriginated: Bool
         var workflow: CoordinatorModeWorkflowDisplaySummary?
         var isCoordinatorInternal: Bool
+        var isCoordinatorRuntime: Bool
+        var tabID: UUID?
+        var isPinned: Bool
+        var isPersistedOnly: Bool
 
         init(
             id: UUID,
@@ -161,7 +177,11 @@ struct CoordinatorModeSnapshotProjector {
             parentSessionID: UUID? = nil,
             isMCPOriginated: Bool = false,
             workflow: CoordinatorModeWorkflowDisplaySummary? = nil,
-            isCoordinatorInternal: Bool = false
+            isCoordinatorInternal: Bool = false,
+            isCoordinatorRuntime: Bool = false,
+            tabID: UUID? = nil,
+            isPinned: Bool = false,
+            isPersistedOnly: Bool = true
         ) {
             self.id = id
             self.title = title
@@ -170,6 +190,10 @@ struct CoordinatorModeSnapshotProjector {
             self.isMCPOriginated = isMCPOriginated
             self.workflow = workflow
             self.isCoordinatorInternal = isCoordinatorInternal
+            self.isCoordinatorRuntime = isCoordinatorRuntime
+            self.tabID = tabID
+            self.isPinned = isPinned
+            self.isPersistedOnly = isPersistedOnly
         }
     }
 
@@ -184,26 +208,40 @@ struct CoordinatorModeSnapshotProjector {
             resolvableTabIDs: input.resolvableTabIDs
         )
 
-        let boardOwnerIDs = fleetOwnerIDs(
+        let coordinatorSessionIDs = coordinatorSessionIDs(from: detectionSeeds, input: input)
+        let allCoordinatorOwnerIDs = allFleetOwnerIDs(
             childrenByParent: renderedChildrenByParent,
-            demoCoordinatorSessionIDs: input.demoCoordinatorSessionIDs,
+            coordinatorSessionIDs: coordinatorSessionIDs,
             selectedCoordinatorID: coordinator?.sessionID
         )
-        let coordinatorFleetSeeds = delegatedFleetSeeds(
+        let selectedCoordinatorOwnerIDs = fleetOwnerIDs(
+            childrenByParent: renderedChildrenByParent,
+            coordinatorSessionIDs: coordinatorSessionIDs,
+            selectedCoordinatorID: coordinator?.sessionID
+        )
+        let boardOwnerIDs: [UUID: UUID] = input.boardScope == .allAgents
+            ? allCoordinatorOwnerIDs
+            : selectedCoordinatorOwnerIDs
+        let selectedCoordinatorFleetSeeds = delegatedFleetSeeds(
             from: rowSeeds,
-            ownerIDs: boardOwnerIDs,
-            demoCoordinatorSessionIDs: input.demoCoordinatorSessionIDs
+            ownerIDs: selectedCoordinatorOwnerIDs,
+            coordinatorSessionIDs: coordinatorSessionIDs
+        )
+        let allCoordinatorFleetSeeds = delegatedFleetSeeds(
+            from: rowSeeds,
+            ownerIDs: allCoordinatorOwnerIDs,
+            coordinatorSessionIDs: coordinatorSessionIDs
         )
         let boardSeeds = projectedBoardSeeds(
-            from: rowSeeds,
-            coordinatorFleetSeeds: coordinatorFleetSeeds,
+            selectedCoordinatorFleetSeeds: selectedCoordinatorFleetSeeds,
+            allCoordinatorFleetSeeds: allCoordinatorFleetSeeds,
             input: input
         )
         let boardSeedIDs = Set(boardSeeds.map(\.id))
         let boardChildrenByParent = eligibleChildrenByParent(from: boardSeeds, visibleIDs: boardSeedIDs)
         let coordinatorTitlesByID = Dictionary(
             uniqueKeysWithValues: detectionSeeds
-                .filter { input.demoCoordinatorSessionIDs.contains($0.id) }
+                .filter { coordinatorSessionIDs.contains($0.id) }
                 .map { ($0.id, $0.title) }
         )
         let boardRows = sortedRows(boardSeeds.map { seed in
@@ -242,6 +280,7 @@ struct CoordinatorModeSnapshotProjector {
         let coordinatorOptions = coordinatorOptions(
             from: detectionSeeds,
             selection: coordinator,
+            ownerIDs: allCoordinatorOwnerIDs,
             rowsByID: rowsByID,
             input: input
         )
@@ -279,6 +318,8 @@ struct CoordinatorModeSnapshotProjector {
         var activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary]
         var workflow: CoordinatorModeWorkflowDisplaySummary?
         var isCoordinatorInternal: Bool
+        var isCoordinatorRuntime: Bool
+        var isPinned: Bool
         var priority: Int?
         var isPersistedOnly: Bool
     }
@@ -291,6 +332,10 @@ struct CoordinatorModeSnapshotProjector {
         var isMCPOriginated: Bool
         var workflow: CoordinatorModeWorkflowDisplaySummary?
         var isCoordinatorInternal: Bool
+        var isCoordinatorRuntime: Bool
+        var tabID: UUID?
+        var isPinned: Bool
+        var isPersistedOnly: Bool
     }
 
     private struct CoordinatorSelection: Equatable {
@@ -327,6 +372,8 @@ struct CoordinatorModeSnapshotProjector {
                 activeWorktreeMergeSummaries: persisted.activeWorktreeMergeSummaries,
                 workflow: persisted.workflow,
                 isCoordinatorInternal: persisted.isCoordinatorInternal || input.coordinatorInternalSessionIDs.contains(persisted.id),
+                isCoordinatorRuntime: persisted.isCoordinatorRuntime || input.demoCoordinatorSessionIDs.contains(persisted.id),
+                isPinned: persisted.isPinned,
                 priority: persisted.priority,
                 isPersistedOnly: true
             )
@@ -348,6 +395,8 @@ struct CoordinatorModeSnapshotProjector {
                 activeWorktreeMergeSummaries: live.activeWorktreeMergeSummaries.isEmpty ? previous?.activeWorktreeMergeSummaries ?? [] : live.activeWorktreeMergeSummaries,
                 workflow: live.workflow,
                 isCoordinatorInternal: live.isCoordinatorInternal || input.coordinatorInternalSessionIDs.contains(live.sessionID),
+                isCoordinatorRuntime: live.isCoordinatorRuntime || previous?.isCoordinatorRuntime == true || input.demoCoordinatorSessionIDs.contains(live.sessionID),
+                isPinned: live.isPinned || previous?.isPinned == true,
                 priority: live.priority ?? previous?.priority,
                 isPersistedOnly: false
             )
@@ -373,6 +422,8 @@ struct CoordinatorModeSnapshotProjector {
                     : snapshot.activeWorktreeMerges,
                 workflow: previous?.workflow,
                 isCoordinatorInternal: previous?.isCoordinatorInternal ?? input.coordinatorInternalSessionIDs.contains(snapshot.sessionID),
+                isCoordinatorRuntime: previous?.isCoordinatorRuntime ?? input.demoCoordinatorSessionIDs.contains(snapshot.sessionID),
+                isPinned: previous?.isPinned ?? false,
                 priority: previous?.priority,
                 isPersistedOnly: false
             )
@@ -611,30 +662,30 @@ struct CoordinatorModeSnapshotProjector {
     private func delegatedFleetSeeds(
         from seeds: [RowSeed],
         ownerIDs: [UUID: UUID],
-        demoCoordinatorSessionIDs: Set<UUID>
+        coordinatorSessionIDs: Set<UUID>
     ) -> [RowSeed] {
         seeds.filter { seed in
             ownerIDs[seed.id] != nil
-                && !demoCoordinatorSessionIDs.contains(seed.id)
+                && !coordinatorSessionIDs.contains(seed.id)
                 && !seed.isCoordinatorInternal
         }
     }
 
     private func projectedBoardSeeds(
-        from seeds: [RowSeed],
-        coordinatorFleetSeeds: [RowSeed],
+        selectedCoordinatorFleetSeeds: [RowSeed],
+        allCoordinatorFleetSeeds: [RowSeed],
         input: Input
     ) -> [RowSeed] {
         switch input.boardScope {
         case .coordinatorFleet:
-            coordinatorFleetSeeds
+            selectedCoordinatorFleetSeeds
         case .allAgents:
-            seeds.filter { seed in
-                !seed.isPersistedOnly
-                    && !input.demoCoordinatorSessionIDs.contains(seed.id)
-                    && !seed.isCoordinatorInternal
-            }
+            allCoordinatorFleetSeeds.filter { !$0.isPersistedOnly }
         }
+    }
+
+    private func isCoordinatorRuntime(_ seed: RowSeed, input: Input) -> Bool {
+        seed.isCoordinatorRuntime || input.demoCoordinatorSessionIDs.contains(seed.id)
     }
 
     private func rowOrigin(
@@ -646,11 +697,32 @@ struct CoordinatorModeSnapshotProjector {
 
     private func fleetOwnerIDs(
         childrenByParent: [UUID: Set<UUID>],
-        demoCoordinatorSessionIDs: Set<UUID>,
+        coordinatorSessionIDs: Set<UUID>,
+        selectedCoordinatorID: UUID?
+    ) -> [UUID: UUID] {
+        guard let selectedCoordinatorID, coordinatorSessionIDs.contains(selectedCoordinatorID) else {
+            return [:]
+        }
+        var ownerIDs: [UUID: UUID] = [:]
+        let coordinatorIDs = [selectedCoordinatorID]
+        for coordinatorID in coordinatorIDs {
+            var stack = Array(childrenByParent[coordinatorID, default: []])
+            while let sessionID = stack.popLast() {
+                guard ownerIDs[sessionID] == nil, sessionID != coordinatorID else { continue }
+                ownerIDs[sessionID] = coordinatorID
+                stack.append(contentsOf: childrenByParent[sessionID, default: []])
+            }
+        }
+        return ownerIDs
+    }
+
+    private func allFleetOwnerIDs(
+        childrenByParent: [UUID: Set<UUID>],
+        coordinatorSessionIDs: Set<UUID>,
         selectedCoordinatorID: UUID?
     ) -> [UUID: UUID] {
         var ownerIDs: [UUID: UUID] = [:]
-        let coordinatorIDs = demoCoordinatorSessionIDs.sorted { lhs, rhs in
+        let coordinatorIDs = coordinatorSessionIDs.sorted { lhs, rhs in
             if lhs == selectedCoordinatorID { return true }
             if rhs == selectedCoordinatorID { return false }
             return lhs.uuidString < rhs.uuidString
@@ -664,6 +736,15 @@ struct CoordinatorModeSnapshotProjector {
             }
         }
         return ownerIDs
+    }
+
+    private func coordinatorSessionIDs(
+        from detectionSeeds: [CoordinatorDetectionSeed],
+        input: Input
+    ) -> Set<UUID> {
+        Set(detectionSeeds.compactMap { seed in
+            seed.isCoordinatorRuntime || input.demoCoordinatorSessionIDs.contains(seed.id) ? seed.id : nil
+        })
     }
 
     private func parentCoordinator(
@@ -712,7 +793,11 @@ struct CoordinatorModeSnapshotProjector {
                     parentSessionID: seed.parentSessionID,
                     isMCPOriginated: seed.isMCPOriginated,
                     workflow: seed.workflow,
-                    isCoordinatorInternal: seed.isCoordinatorInternal
+                    isCoordinatorInternal: seed.isCoordinatorInternal,
+                    isCoordinatorRuntime: seed.isCoordinatorRuntime || input.demoCoordinatorSessionIDs.contains(seed.id),
+                    tabID: seed.tabID,
+                    isPinned: seed.isPinned,
+                    isPersistedOnly: seed.isPersistedOnly
                 )
             )
         })
@@ -726,7 +811,11 @@ struct CoordinatorModeSnapshotProjector {
                 parentSessionID: session.parentSessionID ?? previous?.parentSessionID,
                 isMCPOriginated: session.isMCPOriginated || (previous?.isMCPOriginated ?? false),
                 workflow: session.workflow,
-                isCoordinatorInternal: session.isCoordinatorInternal || (previous?.isCoordinatorInternal ?? false)
+                isCoordinatorInternal: session.isCoordinatorInternal || (previous?.isCoordinatorInternal ?? false),
+                isCoordinatorRuntime: session.isCoordinatorRuntime || (previous?.isCoordinatorRuntime ?? false) || input.demoCoordinatorSessionIDs.contains(session.id),
+                tabID: session.tabID ?? previous?.tabID,
+                isPinned: session.isPinned || (previous?.isPinned ?? false),
+                isPersistedOnly: previous?.isPersistedOnly ?? session.isPersistedOnly
             )
         }
 
@@ -743,14 +832,12 @@ struct CoordinatorModeSnapshotProjector {
         from detectionSeeds: [CoordinatorDetectionSeed],
         input: Input
     ) -> CoordinatorSelection? {
-        let demoCandidates = detectionSeeds.filter { input.demoCoordinatorSessionIDs.contains($0.id) }
+        let candidates = detectionSeeds.filter { $0.isCoordinatorRuntime || input.demoCoordinatorSessionIDs.contains($0.id) }
         if let selectedCoordinatorID = input.selectedCoordinatorID,
-           demoCandidates.contains(where: { $0.id == selectedCoordinatorID })
+           candidates.contains(where: { $0.id == selectedCoordinatorID })
         {
-            return CoordinatorSelection(sessionID: selectedCoordinatorID, source: .demoRuntime)
-        }
-        if let demoRuntime = mostRecentCandidate(from: demoCandidates) {
-            return CoordinatorSelection(sessionID: demoRuntime.id, source: .demoRuntime)
+            let source: CoordinatorModeCoordinatorRail.SelectionSource = input.demoCoordinatorSessionIDs.contains(selectedCoordinatorID) ? .demoRuntime : .mcpLineageRoot
+            return CoordinatorSelection(sessionID: selectedCoordinatorID, source: source)
         }
 
         return nil
@@ -769,12 +856,14 @@ struct CoordinatorModeSnapshotProjector {
     private func coordinatorOptions(
         from detectionSeeds: [CoordinatorDetectionSeed],
         selection: CoordinatorSelection?,
+        ownerIDs: [UUID: UUID],
         rowsByID: [UUID: CoordinatorModeRow],
         input: Input
     ) -> [CoordinatorModeCoordinatorOption] {
         detectionSeeds
-            .filter { input.demoCoordinatorSessionIDs.contains($0.id) }
+            .filter { $0.isCoordinatorRuntime || input.demoCoordinatorSessionIDs.contains($0.id) }
             .sorted { lhs, rhs in
+                if lhs.isPinned != rhs.isPinned { return lhs.isPinned && !rhs.isPinned }
                 if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
                 if lhs.title.localizedCaseInsensitiveCompare(rhs.title) != .orderedSame {
                     return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
@@ -783,14 +872,21 @@ struct CoordinatorModeSnapshotProjector {
             }
             .map { seed in
                 let row = rowsByID[seed.id]
+                let source: CoordinatorModeCoordinatorRail.SelectionSource = input.demoCoordinatorSessionIDs.contains(seed.id) ? .demoRuntime : .mcpLineageRoot
                 return CoordinatorModeCoordinatorOption(
                     sessionID: seed.id,
+                    tabID: row?.tabID ?? seed.tabID,
+                    workspaceID: input.workspaceID,
                     title: row?.title ?? seed.title,
-                    selectionSource: .demoRuntime,
+                    selectionSource: source,
                     isSelected: seed.id == selection?.sessionID,
                     isLiveInCurrentWindow: row.map { !$0.isPersistedOnly } ?? false,
+                    isPinned: row?.isCoordinator == true ? seed.isPinned : seed.isPinned,
+                    isPersistedOnly: row?.isPersistedOnly ?? seed.isPersistedOnly,
+                    childCounts: childCounts(for: seed.id, ownerIDs: ownerIDs, rowsByID: rowsByID),
                     runState: row?.runState,
-                    updatedAt: row?.updatedAt ?? seed.updatedAt
+                    updatedAt: row?.updatedAt ?? seed.updatedAt,
+                    lastActivityAt: row?.updatedAt ?? seed.updatedAt
                 )
             }
     }
@@ -800,21 +896,83 @@ struct CoordinatorModeSnapshotProjector {
         availableCoordinators: [CoordinatorModeCoordinatorOption],
         rowsByID: [UUID: CoordinatorModeRow]
     ) -> CoordinatorModeCoordinatorRail {
-        guard let selection, let row = rowsByID[selection.sessionID] else {
-            return .empty
+        guard let selection else {
+            var empty = CoordinatorModeCoordinatorRail.empty
+            if !availableCoordinators.isEmpty {
+                empty = CoordinatorModeCoordinatorRail(
+                    state: .chooseCoordinator,
+                    coordinatorSessionID: nil,
+                    coordinatorTabID: nil,
+                    selectionSource: nil,
+                    title: nil,
+                    availableCoordinators: availableCoordinators,
+                    isLiveInCurrentWindow: false,
+                    isPersistedOnly: false,
+                    isPinned: false,
+                    childCounts: .empty,
+                    openAgentChatRoute: nil,
+                    statusReport: nil,
+                    isComposerEnabled: false,
+                    isComposerSendEnabled: false
+                )
+            }
+            return empty
+        }
+        guard let row = rowsByID[selection.sessionID],
+              let selectedOption = availableCoordinators.first(where: { $0.sessionID == selection.sessionID })
+        else {
+            return CoordinatorModeCoordinatorRail(
+                state: .chooseCoordinator,
+                coordinatorSessionID: nil,
+                coordinatorTabID: nil,
+                selectionSource: nil,
+                title: nil,
+                availableCoordinators: availableCoordinators,
+                isLiveInCurrentWindow: false,
+                isPersistedOnly: false,
+                isPinned: false,
+                childCounts: .empty,
+                openAgentChatRoute: nil,
+                statusReport: nil,
+                isComposerEnabled: false,
+                isComposerSendEnabled: false
+            )
         }
         let isLiveInCurrentWindow = !row.isPersistedOnly
         return CoordinatorModeCoordinatorRail(
             state: .selected,
             coordinatorSessionID: row.sessionID,
+            coordinatorTabID: row.tabID,
             selectionSource: selection.source,
             title: row.title,
             availableCoordinators: availableCoordinators,
             isLiveInCurrentWindow: isLiveInCurrentWindow,
+            isPersistedOnly: row.isPersistedOnly,
+            isPinned: selectedOption.isPinned,
+            childCounts: selectedOption.childCounts,
             openAgentChatRoute: nil,
             statusReport: row.statusReport,
             isComposerEnabled: isLiveInCurrentWindow,
             isComposerSendEnabled: isLiveInCurrentWindow && !row.runState.isActive
+        )
+    }
+
+    private func childCounts(
+        for coordinatorID: UUID,
+        ownerIDs: [UUID: UUID],
+        rowsByID: [UUID: CoordinatorModeRow]
+    ) -> CoordinatorModeCoordinatorChildCounts {
+        let rows = ownerIDs.compactMap { sessionID, ownerID -> CoordinatorModeRow? in
+            guard ownerID == coordinatorID else { return nil }
+            return rowsByID[sessionID]
+        }
+        return CoordinatorModeCoordinatorChildCounts(
+            total: rows.count,
+            needsYou: rows.count(where: { $0.statusGroup == .needsYou }),
+            working: rows.count(where: { $0.statusGroup == .working }),
+            blocked: rows.count(where: { $0.statusGroup == .blocked }),
+            review: rows.count(where: { $0.statusGroup == .review }),
+            done: rows.count(where: { $0.statusGroup == .done })
         )
     }
 
@@ -986,7 +1144,11 @@ extension CoordinatorModeSnapshotProjector.CoordinatorDetectionSession {
             parentSessionID: persisted.parentSessionID,
             isMCPOriginated: persisted.isMCPOriginated,
             workflow: persisted.workflow,
-            isCoordinatorInternal: persisted.isCoordinatorInternal
+            isCoordinatorInternal: persisted.isCoordinatorInternal,
+            isCoordinatorRuntime: persisted.isCoordinatorRuntime,
+            tabID: persisted.tabID,
+            isPinned: persisted.isPinned,
+            isPersistedOnly: true
         )
     }
 }
@@ -1004,7 +1166,8 @@ extension CoordinatorModeSnapshotProjector.PersistedSession {
             parentSessionID: entry.parentSessionID,
             isMCPOriginated: entry.isMCPOriginated,
             worktreeBindingSummaries: entry.worktreeBindingSummaries,
-            activeWorktreeMergeSummaries: entry.activeWorktreeMergeSummaries
+            activeWorktreeMergeSummaries: entry.activeWorktreeMergeSummaries,
+            isCoordinatorRuntime: entry.isCoordinatorRuntime
         )
     }
 }

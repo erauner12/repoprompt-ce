@@ -19,6 +19,12 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(object["selected_coordinator_session_id"]?.stringValue, firstID.uuidString)
         XCTAssertEqual(object["selected_title"]?.stringValue, "Coordinator 1")
         XCTAssertEqual(object["coordinators"]?.arrayValue?.count, 2)
+        let firstCoordinator = try XCTUnwrap(object["coordinators"]?.arrayValue?.first?.objectValue)
+        XCTAssertNotNil(firstCoordinator["tab_id"]?.stringValue)
+        XCTAssertEqual(firstCoordinator["workspace_id"]?.stringValue, "00000000-0000-0000-0000-000000000001")
+        XCTAssertEqual(firstCoordinator["pinned"]?.boolValue, false)
+        XCTAssertEqual(firstCoordinator["persisted_only"]?.boolValue, false)
+        XCTAssertEqual(firstCoordinator["child_counts"]?.objectValue?["total"]?.intValue, 0)
     }
 
     func testSelectUpdatesCoordinatorSelection() async throws {
@@ -152,12 +158,18 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let options = coordinatorIDs.enumerated().map { index, id in
             CoordinatorModeCoordinatorOption(
                 sessionID: id,
+                tabID: UUID(),
+                workspaceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001"),
                 title: "Coordinator \(index + 1)",
                 selectionSource: .demoRuntime,
                 isSelected: id == selectedID,
                 isLiveInCurrentWindow: true,
+                isPinned: false,
+                isPersistedOnly: false,
+                childCounts: .empty,
                 runState: .idle,
-                updatedAt: Date(timeIntervalSince1970: TimeInterval(index + 1))
+                updatedAt: Date(timeIntervalSince1970: TimeInterval(index + 1)),
+                lastActivityAt: Date(timeIntervalSince1970: TimeInterval(index + 1))
             )
         }
 
@@ -170,10 +182,14 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             coordinatorRail: CoordinatorModeCoordinatorRail(
                 state: .selected,
                 coordinatorSessionID: selectedID,
+                coordinatorTabID: options.first(where: { $0.sessionID == selectedID })?.tabID,
                 selectionSource: .demoRuntime,
                 title: options.first(where: { $0.sessionID == selectedID })?.title,
                 availableCoordinators: options,
                 isLiveInCurrentWindow: true,
+                isPersistedOnly: false,
+                isPinned: false,
+                childCounts: .empty,
                 openAgentChatRoute: nil,
                 statusReport: nil,
                 isComposerEnabled: true,

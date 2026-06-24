@@ -205,14 +205,45 @@ struct CoordinatorModeSessionStatusReport: Equatable {
     }
 }
 
+struct CoordinatorWorkflowTemplate: Identifiable, Equatable {
+    static let scopedChange = CoordinatorWorkflowTemplate(
+        id: "scoped-change",
+        displayName: "Scoped Change",
+        iconName: "scope",
+        promptPrefix: """
+        Run this as a scoped Coordinator change.
+
+        1. Deeply inspect the existing code and produce a short plan before delegating.
+        2. Delegate mutable work only into isolated worktrees.
+        3. Keep workstreams focused on user-level outcomes, not raw session mechanics.
+        4. Review delegated results, ask me before irreversible actions, then coordinate any needed fixes.
+
+        User objective:
+        """
+    )
+
+    let id: String
+    let displayName: String
+    let iconName: String
+    let promptPrefix: String
+
+    func wrap(_ text: String) -> String {
+        "\(promptPrefix)\n\(text.trimmingCharacters(in: .whitespacesAndNewlines))"
+    }
+}
+
 struct CoordinatorModeCoordinatorRail: Equatable {
     static let empty = CoordinatorModeCoordinatorRail(
         state: .chooseCoordinator,
         coordinatorSessionID: nil,
+        coordinatorTabID: nil,
         selectionSource: nil,
         title: nil,
         availableCoordinators: [],
         isLiveInCurrentWindow: false,
+        isPersistedOnly: false,
+        isPinned: false,
+        childCounts: .empty,
         openAgentChatRoute: nil,
         statusReport: nil,
         isComposerEnabled: false,
@@ -233,14 +264,29 @@ struct CoordinatorModeCoordinatorRail: Equatable {
 
     let state: State
     let coordinatorSessionID: UUID?
+    let coordinatorTabID: UUID?
     let selectionSource: SelectionSource?
     let title: String?
     let availableCoordinators: [CoordinatorModeCoordinatorOption]
     let isLiveInCurrentWindow: Bool
+    let isPersistedOnly: Bool
+    let isPinned: Bool
+    let childCounts: CoordinatorModeCoordinatorChildCounts
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
     let statusReport: CoordinatorModeSessionStatusReport?
     let isComposerEnabled: Bool
     let isComposerSendEnabled: Bool
+}
+
+struct CoordinatorModeCoordinatorChildCounts: Equatable {
+    static let empty = CoordinatorModeCoordinatorChildCounts(total: 0, needsYou: 0, working: 0, blocked: 0, review: 0, done: 0)
+
+    let total: Int
+    let needsYou: Int
+    let working: Int
+    let blocked: Int
+    let review: Int
+    let done: Int
 }
 
 struct CoordinatorModeCoordinatorOption: Identifiable, Equatable {
@@ -249,12 +295,18 @@ struct CoordinatorModeCoordinatorOption: Identifiable, Equatable {
     }
 
     let sessionID: UUID
+    let tabID: UUID?
+    let workspaceID: UUID?
     let title: String
     let selectionSource: CoordinatorModeCoordinatorRail.SelectionSource
     let isSelected: Bool
     let isLiveInCurrentWindow: Bool
+    let isPinned: Bool
+    let isPersistedOnly: Bool
+    let childCounts: CoordinatorModeCoordinatorChildCounts
     let runState: AgentSessionRunState?
     let updatedAt: Date
+    let lastActivityAt: Date
 }
 
 struct CoordinatorModeRailTranscriptEntry: Identifiable, Equatable {

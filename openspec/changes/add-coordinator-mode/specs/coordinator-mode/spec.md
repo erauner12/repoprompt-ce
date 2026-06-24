@@ -143,13 +143,14 @@ The production-demo Coordinator mode SHALL separate the selected Coordinator con
 - **AND** delegated descendants MAY include read-only probe descendants that are not immediate children of a Coordinator root
 - **AND** they SHALL preserve existing status grouping, sorting, stale-row, workflow-label, and Agent Mode deep-link behavior.
 
-#### Scenario: User switches board projection to all active Agent work
-- **WHEN** the user changes the Coordinator board/list projection from the Coordinator fleet scope to an all-agents scope
-- **THEN** the board and list SHALL include currently live Agent Mode sessions from the active workspace even when those sessions were started directly in Agent Mode rather than by a Coordinator runtime
+#### Scenario: User opens the all-agents Coordinator board
+- **WHEN** the user chooses the all-agents board destination from Coordinator mode navigation
+- **THEN** the board and list SHALL include live delegated rows owned by all active Coordinator runtime roots in the workspace
 - **AND** historical persisted-only rows SHALL NOT be included solely because they are still known to Agent Mode
 - **AND** they SHALL continue to exclude Coordinator backing runtimes and explicitly marked Coordinator-internal housekeeping sessions
-- **AND** rows that were not launched by the Coordinator fleet SHALL be visually identified as direct Agent Mode work
-- **AND** this scope change SHALL NOT mutate Agent Mode session ownership, archive state, Coordinator fleet membership, or the selected Coordinator rail conversation.
+- **AND** direct Agent Mode sessions that are not owned by an active Coordinator root SHALL NOT appear solely because they are live in Agent Mode
+- **AND** the destination SHALL hide the Coordinator chat/composer column so the board and inspector can use the available workspace width
+- **AND** this navigation change SHALL NOT mutate Agent Mode session ownership, archive state, Coordinator fleet membership, follow-through policy, or the selected Coordinator rail conversation.
 
 #### Scenario: Delegate belongs to a parent Coordinator runtime
 - **WHEN** a delegated row is projected from an aggregate fleet that contains multiple Coordinator runtime roots
@@ -207,10 +208,20 @@ The system SHALL present v1 as a read-only status board by default, with a list 
 - **AND** Coordinator chat MAY collapse to a rail before board columns are reduced below their usable minimum
 - **AND** the board MAY scroll horizontally to preserve usable column width.
 
+#### Scenario: Inspector is vertically stacked below the board
+- **WHEN** the inspector is rendered as a bottom panel below the Kanban board
+- **THEN** its collapse and restore affordance SHALL behave like a vertical sheet handle that slides the inspector down and back up
+- **AND** it SHALL NOT use a left-side sidebar toggle as the primary hide/show control in that stacked layout.
+
 #### Scenario: Board remains read-only in v1
 - **WHEN** the v1 board renders session cards
 - **THEN** it SHALL NOT provide drag-to-reorder, drag-to-dispatch, drag-to-change-status, inline child-session approval, inline retry, or direct child-session mutation
 - **AND** Coordinator continuation approval SHALL be surfaced through the Coordinator chat as an ordinary visible message, not as a board or inspector row mutation.
+
+#### Scenario: Session filtering is board-bottom chrome
+- **WHEN** the Coordinator board or list renders presentation controls
+- **THEN** view and sort controls SHALL remain in the top board control lane
+- **AND** the session filter field SHALL render along the bottom of the board/list workspace above MCP awareness rather than inline to the right of the top board controls.
 
 ### Requirement: Coordinator composer
 The system SHALL provide a scoped Coordinator composer as the only v1 Coordinator-mode write path.
@@ -247,13 +258,14 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 #### Scenario: Coordinator follow-through policy is manual by default
 - **WHEN** the Coordinator view is created for a workspace
 - **THEN** the follow-through policy SHALL default to manual unless the user has previously changed the persisted setting
+- **AND** the policy control SHALL be presented as Coordinator chat/composer-level state rather than as a Kanban board setting
 - **AND** the default manual policy SHALL leave the Coordinator runtime to report current results/status and wait for the user's next directive at ordinary turn boundaries.
 
 #### Scenario: User enables Coordinator follow-through
 - **WHEN** the user enables the persisted Coordinator follow-through policy
 - **THEN** the Coordinator runtime MAY proactively continue supervising delegated work through existing Agent Mode control-plane/message paths until the user's original objective is satisfied
 - **AND** it MAY wait, poll, or steer delegated Agent sessions when the safe next step is clear
-- **AND** it SHALL NOT change the user-submitted directive text, create a new structured Coordinator command envelope, directly mutate board/list rows, or bypass normal Agent Mode session state.
+- **AND** it SHALL NOT change the user-submitted directive text, create a new structured Coordinator command envelope, directly mutate board/list rows, change Kanban navigation/presentation state, or bypass normal Agent Mode session state.
 
 #### Scenario: Coordinator follow-through reaches a boundary
 - **WHEN** Coordinator follow-through is enabled
@@ -391,7 +403,7 @@ The system SHALL project Coordinator mode session rows/cards from structured ses
 - **AND** it SHALL NOT parse session titles to invent workstream labels.
 
 #### Scenario: Workstream summary is projected
-- **WHEN** a Coordinator view row represents delegated or direct Agent work
+- **WHEN** a Coordinator view row represents delegated Agent work
 - **THEN** the Coordinator view SHALL project a read-only `CoordinatorWorkstream` summary from structured session/live-state data
 - **AND** the summary SHALL include the session objective/title, current phase, child session ID, owner Coordinator root when available, worktree binding when available, workflow label when available, available merge/inspection state, and a derived next action when the row is actionable
 - **AND** the summary ID SHALL be stable for the child session it describes
@@ -567,6 +579,29 @@ The system SHALL keep the Coordinator view calm by default and expose detail onl
 - **WHEN** the Coordinator view renders the Coordinator rail in v1
 - **THEN** the rail SHALL focus on Coordinator identity, selection, optional context, and the scoped Coordinator composer
 - **AND** it SHALL NOT provide a separate `Agents` tab, agent roster, or "agents in current Coordinator context" surface that duplicates the board/list fleet view.
+
+#### Scenario: Coordinator Mission history is inline
+- **WHEN** multiple Coordinator parent sessions are available in the active workspace
+- **THEN** the leading Coordinator rail SHALL present those Coordinator-specific parent sessions as `Missions`
+- **AND** it SHALL render the new-Mission row and selectable Mission rows inline rather than behind a Mission popover
+- **AND** dormant persisted Missions MAY be grouped behind an archived Mission disclosure within the same rail
+- **AND** persisted-only Mission rows SHALL NOT render a redundant per-row `Persisted` badge
+- **AND** an expanded archived section SHALL use the rail's flexible scroll area rather than a fixed tiny row cap
+- **AND** selecting an existing Mission row SHALL retarget the rail conversation and selected-Mission board scope without creating a new Coordinator runtime.
+
+#### Scenario: Coordinator rail titlebar stays compact
+- **WHEN** the leading Coordinator rail renders its top chrome
+- **THEN** it SHALL provide an icon-only `New Mission` affordance near the window controls and rail collapse control
+- **AND** it SHALL avoid low-value descriptive title text in that top chrome.
+
+#### Scenario: Coordinator rail is collapsed
+- **WHEN** the user hides the leading Coordinator rail
+- **THEN** the Coordinator view SHALL preserve a slim left-edge affordance for showing the rail again
+- **AND** that restore affordance SHALL be independent from Kanban toolbar controls and inspector hide/show controls.
+
+#### Scenario: Sidebars use floating chrome
+- **WHEN** the Coordinator rail, collapsed rail restore, right work panel, or inspector side surface renders
+- **THEN** the surface SHALL use rounded floating material chrome with subtle border/shadow treatment rather than a hard full-height splitter seam.
 
 #### Scenario: Coordinator rail is not a session proxy
 - **WHEN** the Coordinator rail renders the current Coordinator conversation

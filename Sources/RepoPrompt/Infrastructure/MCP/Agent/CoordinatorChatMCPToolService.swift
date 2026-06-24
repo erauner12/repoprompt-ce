@@ -135,11 +135,28 @@ struct CoordinatorChatMCPToolService {
         .object([
             "session_id": .string(option.sessionID.uuidString),
             "title": .string(option.title),
+            "tab_id": AgentMCPToolHelpers.stringOrNull(option.tabID?.uuidString),
+            "workspace_id": AgentMCPToolHelpers.stringOrNull(option.workspaceID?.uuidString),
             "selection_source": .string(option.selectionSource.rawValue),
             "selected": .bool(option.isSelected),
             "live_in_current_window": .bool(option.isLiveInCurrentWindow),
+            "pinned": .bool(option.isPinned),
+            "persisted_only": .bool(option.isPersistedOnly),
+            "child_counts": coordinatorChildCountsValue(option.childCounts),
             "run_state": AgentMCPToolHelpers.stringOrNull(option.runState?.rawValue),
-            "updated_at": .string(AgentMCPToolHelpers.timestamp(option.updatedAt))
+            "updated_at": .string(AgentMCPToolHelpers.timestamp(option.updatedAt)),
+            "last_activity_at": .string(AgentMCPToolHelpers.timestamp(option.lastActivityAt))
+        ])
+    }
+
+    private func coordinatorChildCountsValue(_ counts: CoordinatorModeCoordinatorChildCounts) -> Value {
+        .object([
+            "total": .int(counts.total),
+            "needs_you": .int(counts.needsYou),
+            "working": .int(counts.working),
+            "blocked": .int(counts.blocked),
+            "review": .int(counts.review),
+            "done": .int(counts.done)
         ])
     }
 

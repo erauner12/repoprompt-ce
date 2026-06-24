@@ -81,7 +81,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.5 Echo accepted user directives into the Coordinator rail transcript when appropriate, while surfacing Coordinator responses and child-session effects through normal coarse snapshot refresh.
 - [x] 9.6 Add tests for composer enablement, unreachable Coordinator fallback, ordinary-message dispatch, and no direct board/session mutation.
 - [x] 9.7 Suppress `Open in Agent Mode` / `Open agent chat` for the Coordinator backing actor in the production-demo rail while preserving Agent Mode deep links for supervised delegate rows and pending summaries.
-- [x] 9.8 Add a persisted manual/follow-through Coordinator runtime policy toggle that defaults to manual.
+- [x] 9.8 Add a persisted chat-level manual/follow-through Coordinator runtime policy toggle that defaults to manual.
 - [x] 9.9 Inject follow-through guidance into Coordinator runtime prompts without changing submitted directive text or adding a structured directive envelope.
 - [x] 9.10 Add focused tests for follow-through persistence and prompt-gating behavior.
 - [x] 9.11 Persist lightweight Coordinator follow-through state with objective summary, observed child phases, pending/handled events, and last resume result.
@@ -128,9 +128,18 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.28 Add a demo use-case taxonomy with gesture sequence, prompt text, expected result, and required checkpoint for single delegation, one-parent fan-out, sequential multi-parent work, simultaneous multi-parent work, and switch-back supervision.
 - [x] 10.29 Confirm or add a visible parent-selection affordance so users can return to an earlier Coordinator runtime after `New Coordinator` creates another parent.
 - [x] 10.30 Verify workflow-bearing demo prompts by proving `agent_run workflow_name` reaches delegated starts and returns workflow display metadata.
-- [x] 10.31 Add a board/list projection scope control so the default Coordinator fleet remains focused while an all-agents scope can show direct active Agent Mode sessions with distinct origin labeling.
+- [x] 10.31 Add left-side Coordinator mode navigation so the default Coordinator chat board remains selected-parent focused while an All Agents Board shows live delegated rows across active Coordinator roots.
 - [x] 10.32 Project structured workstream summaries for board/list rows with objective, phase, child session, owner Coordinator, worktree, workflow, merge/inspection state, and derived next action.
 - [x] 10.33 Promote structured workstream projection to a first-class `CoordinatorWorkstream` read model with stable child-session identity without introducing DAG/source-of-truth state.
+- [x] 10.34 Replace the vertically stacked inspector's side toggle with a bottom-sheet handle that slides the inspector down/up.
+- [x] 10.35 Move `New Mission` into the leading rail titlebar as an icon-only action and remove redundant titlebar text.
+- [x] 10.36 Hide Coordinator chat/composer in All Agents Board so the board and inspector can use the available workspace width.
+- [x] 10.37 Add an independent left-edge restore affordance when the Coordinator rail is collapsed.
+- [x] 10.38 Replace the Mission popover with inline rail history rows plus an archived-style persisted section.
+- [x] 10.39 Move the session filter field from the top board controls to a bottom board/list filter bar.
+- [x] 10.40 Let expanded archived Coordinator history use the left rail's flexible scroll area instead of a fixed three-row cap.
+- [x] 10.41 Restyle the Coordinator rail and work/inspector surfaces with rounded floating material chrome.
+- [x] 10.42 Rename Coordinator-specific parent-session rail copy to Missions and remove redundant per-row `Persisted` badges.
 
 ## 11. Validation
 
