@@ -273,6 +273,19 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **AND** it MAY wait, poll, or steer delegated Agent sessions when the safe next step is clear
 - **AND** it SHALL NOT change the user-submitted directive text, create a new structured Coordinator command envelope, directly mutate board/list rows, change Kanban navigation/presentation state, or bypass normal Agent Mode session state.
 
+#### Scenario: Coordinator-owned checks stay recoverable
+- **WHEN** the Coordinator runtime performs its own follow-through, final inspection, or child recovery steps
+- **THEN** it SHOULD prefer app-owned structured MCP tools such as Agent session wait/poll/log and Git status/diff over raw shell commands for routine status, diff, and validation checks
+- **AND** it SHOULD use bounded waits plus poll, log, steer, or cancel to recover a delegated child or workflow that appears stuck
+- **AND** it SHALL NOT rely on a raw shell loop in the Coordinator turn for routine child recovery or final confirmation when a structured MCP tool can answer the question.
+
+#### Scenario: Coordinator chains workflow-bearing delegated sessions
+- **WHEN** Coordinator Auto mode is enabled
+- **AND** the user asks for a multi-stage workflow such as Orchestrate followed by Review
+- **THEN** the Coordinator runtime MAY start separate workflow-bearing delegated Agent sessions through `agent_run.start` with `workflow_name` or `workflow_id`
+- **AND** later workflow stages MAY bind to the same explicit child worktree created or returned by an earlier delegated stage
+- **AND** the Coordinator SHALL continue to treat those workflow sessions as normal delegated children whose lifecycle state, review output, and worktree diff are observed through Agent Mode control-plane and MCP projection paths.
+
 #### Scenario: Coordinator Auto mode reaches a boundary
 - **WHEN** Coordinator Auto mode is enabled
 - **AND** a delegated session requires user input, permission, human continuation, or is blocked or ambiguous

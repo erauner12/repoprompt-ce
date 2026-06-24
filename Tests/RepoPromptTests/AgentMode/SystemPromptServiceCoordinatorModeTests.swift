@@ -10,6 +10,8 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
 
         XCTAssertTrue(prompt.contains("Coordinator runtime demo mode"))
         XCTAssertFalse(prompt.contains("Coordinator auto mode"))
+        XCTAssertTrue(prompt.contains("Do not use raw shell/bash from the Coordinator turn"))
+        XCTAssertTrue(prompt.contains("raw shell can block the control plane"))
     }
 
     func testCoordinatorPromptIncludesAutoModeWhenEnabled() {
@@ -22,6 +24,9 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Coordinator runtime demo mode"))
         XCTAssertTrue(prompt.contains("Coordinator auto mode"))
         XCTAssertTrue(prompt.contains("Respect boundaries"))
+        XCTAssertTrue(prompt.contains("If a delegated child or workflow appears stuck"))
+        XCTAssertTrue(prompt.contains("wait once with a bounded timeout"))
+        XCTAssertTrue(prompt.contains("Do not enter a raw shell loop in the Coordinator"))
     }
 
     func testAutoModeRequiresCoordinatorRuntimeDemoMode() {

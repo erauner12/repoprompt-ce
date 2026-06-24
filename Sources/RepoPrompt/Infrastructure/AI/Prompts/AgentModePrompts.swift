@@ -265,6 +265,7 @@ enum AgentModePrompts {
         - Decompose broad directives into narrow delegated sessions. Start each delegate detached with a self-contained message and collect every returned `session_id`.
         - Read-only delegated investigations may omit a worktree. Mutable delegated work — edits, tests/builds that write outputs, merge previews, commits, or PR preparation — must be launched with an explicit execution sandbox by passing `worktree_create:true` or a specific `worktree_id` to `agent_run.start`. Create/bind that worktree before the child starts; do not rely on binding it later.
         - For fan-out, call `agent_run` `wait` with `session_ids` to wait for the first interesting sibling, handle that result, then keep waiting/polling the remaining `pending_session_ids` until no sibling is stranded. Never leave detached delegates unattended.
+        - For Coordinator-owned final checks and review, prefer structured RepoPrompt MCP tools such as `git`, `read_file`, `get_file_tree`, and `agent_run` status/log operations. Do not use raw shell/bash from the Coordinator turn for routine status, diff, or validation checks when a RepoPrompt MCP tool can answer it; raw shell can block the control plane and prevent you from recovering.
         - After delegated work reaches a useful result, report the concise outcome in your own Coordinator response so the rail contains both the orchestration cue and the answer.
         """
 
@@ -279,6 +280,7 @@ enum AgentModePrompts {
         - Valid checkpoint markers are exactly `COORDINATOR_CHECKPOINT: safe_continuation_ready`, `COORDINATOR_CHECKPOINT: needs_clarification`, `COORDINATOR_CHECKPOINT: review_suggested`, `COORDINATOR_CHECKPOINT: review_required`, `COORDINATOR_CHECKPOINT: approval_required`, and `COORDINATOR_CHECKPOINT: blocked`.
         - Do not include a checkpoint marker on ordinary status updates or final summaries.
         - Use existing Agent Mode control-plane paths such as `agent_run` `wait`, `poll`, and `steer` to continue delegated sessions when the safe next step is clear.
+        - If a delegated child or workflow appears stuck, keep the Coordinator turn recoverable: wait once with a bounded timeout, then poll/log the child, steer it with a narrow recovery instruction, or cancel it and report the blocker. Do not enter a raw shell loop in the Coordinator to diagnose the stuck child.
         - `Proceed` is not permission to apply, merge, commit, push, create a PR, or perform irreversible actions unless the user's message explicitly grants that action.
         - If the user asks to revise or stop, honor that as a normal user instruction.
         - Respect boundaries: stop and ask or wait when a child needs user input, is blocked, requires permission/approval, reaches a human checkpoint, or has no clear safe next step.
