@@ -307,10 +307,27 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 
 #### Scenario: User manages Coordinator Mission Templates
 - **WHEN** the user opens Mission Template management from the Coordinator composer picker
-- **THEN** the app SHALL support creating custom markdown templates, viewing built-in template markdown, cloning the built-in Scoped Change template, editing custom template markdown in-app, deleting custom templates, and revealing template files or the template folder
+- **THEN** the app SHALL support creating custom markdown templates, viewing built-in template markdown, cloning built-in templates, editing custom template markdown in-app, deleting custom templates, and revealing template files or the template folder
 - **AND** template markdown frontmatter MAY include `id`, `name`, `icon`, `accent_color`, `tooltip`, and `description`
 - **AND** template bodies SHALL support `$MISSION` and `$ARGUMENTS` placeholders
 - **AND** if a template has neither placeholder, the app SHALL append the raw Mission text after the template body.
+
+#### Scenario: Built-in Mission Template chains Deep Plan, Orchestrate, and Review
+- **WHEN** the user selects a built-in staged Mission Template for Deep Plan, Orchestrate, and Review
+- **THEN** the Coordinator runtime SHALL receive template guidance to start with a delegated `Deep Plan` workflow child
+- **AND** it SHALL stop when the Deep Plan child reaches a user-question, approval, or Needs-you checkpoint instead of answering on the user's behalf
+- **AND** after the user proceeds, the template guidance MAY continue with workflow-bearing `Orchestrate` and `Review` delegated children through the normal Agent Mode control-plane paths
+- **AND** mutable Orchestrate work SHALL still require explicit child worktree isolation before launch.
+
+#### Scenario: Coordinator chat answers an owned child checkpoint
+- **WHEN** a delegated child session owned by the selected Mission has a live pending interaction
+- **THEN** the selected-Mission board SHALL classify that child under `Needs you`
+- **AND** when the child pending interaction contains structured `ask_user` fields, the Coordinator chat composer SHALL show those fields with the same option labels, option descriptions, custom-answer affordance, skip controls, and completion validation expected by the child interaction
+- **AND** submitting that structured Coordinator-chat checkpoint SHALL forward selected options, custom answers, or skipped answers to the child's pending interaction response path rather than converting the answer through freeform text
+- **AND** for non-structured pending interaction kinds, the Coordinator chat composer MAY fall back to a visible text checkpoint with the pending title, prompt, and details
+- **AND** the external `coordinator_chat` control surface SHALL support structured child-checkpoint answers keyed by question ID as well as the text fallback
+- **AND** the rail transcript SHALL visibly record that the user answered the child checkpoint
+- **AND** Auto mode SHALL NOT proactively resume the Coordinator while the owned child remains in `Needs you`.
 
 #### Scenario: External test client submits a Coordinator directive
 - **WHEN** a direct external MCP client uses the Coordinator chat control surface to list, select, create, or submit to Coordinator parents in the current window
@@ -600,10 +617,11 @@ The system SHALL display pending interactions as read-only prompts that deep-lin
 - **WHEN** a pending interaction summary cannot resolve an Agent UI route
 - **THEN** the Coordinator view SHALL hide or disable `Open agent chat` and decision navigation affordances for that summary.
 
-#### Scenario: User needs to respond
+#### Scenario: User needs to respond outside selected-Mission child checkpoint
 - **WHEN** a user chooses to respond to a pending interaction from the Coordinator view
-- **THEN** the Coordinator view SHALL route the user to the existing Agent Mode session
-- **AND** the Coordinator view SHALL NOT execute approval, decline, retry, reassign, or directive actions in v1.
+- **AND** the pending interaction is not an owned child checkpoint currently bridged into the selected Coordinator Mission chat
+- **THEN** the Coordinator view SHALL route the user to the existing Agent Mode session when route data is available
+- **AND** the Coordinator view SHALL NOT execute approval, decline, retry, reassign, or unrelated directive actions in v1.
 
 #### Scenario: Assistant prose mentions a decision
 - **WHEN** assistant text contains words that appear to request a user decision

@@ -23,8 +23,22 @@ final class CoordinatorMissionTemplateStoreTests: XCTestCase {
     func testBuiltInScopedChangeAppears() {
         let store = CoordinatorMissionTemplateStore(directoryURL: directoryURL)
 
-        XCTAssertEqual(store.builtInTemplates.map(\.displayName), ["Scoped Change"])
+        XCTAssertEqual(store.builtInTemplates.map(\.displayName), [
+            "Scoped Change",
+            "Deep Plan -> Orchestrate -> Review"
+        ])
         XCTAssertTrue(store.allTemplates.contains(.scopedChange))
+        XCTAssertTrue(store.allTemplates.contains(.deepPlanOrchestrateReview))
+    }
+
+    func testBuiltInDeepPlanOrchestrateReviewWrapsWorkflowStages() {
+        let wrapped = CoordinatorMissionTemplate.deepPlanOrchestrateReview.wrap("ship the coordinator demo")
+
+        XCTAssertTrue(wrapped.contains("workflow_name=\"Deep Plan\""))
+        XCTAssertTrue(wrapped.contains("workflow_name=\"Orchestrate\""))
+        XCTAssertTrue(wrapped.contains("workflow_name=\"Review\""))
+        XCTAssertTrue(wrapped.contains("Needs you"))
+        XCTAssertTrue(wrapped.contains("ship the coordinator demo"))
     }
 
     func testCustomMarkdownParsesFrontmatter() throws {

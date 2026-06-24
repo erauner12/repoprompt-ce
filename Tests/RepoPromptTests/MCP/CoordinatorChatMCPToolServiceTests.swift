@@ -74,6 +74,74 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(object["accepted"]?.boolValue, true)
     }
 
+    func testSubmitRoutesToPendingChildInteractionWhenSelectedCoordinatorNeedsInput() async throws {
+        let coordinatorID = UUID()
+        let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
+        var coordinatorSubmissions: [String] = []
+        var childResponses: [(submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission, rowID: UUID)] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submit: {
+                coordinatorSubmissions.append($0)
+                return .accepted
+            },
+            pendingChild: { childRow },
+            submitPendingChild: { submission, row in
+                childResponses.append((submission, row.sessionID))
+                return .accepted
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("submit"),
+            "message": .string("Stay involved at review checkpoints.")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertTrue(coordinatorSubmissions.isEmpty)
+        XCTAssertEqual(childResponses.count, 1)
+        XCTAssertEqual(childResponses.first?.submission.text, "Stay involved at review checkpoints.")
+        XCTAssertEqual(childResponses.first?.submission.displayText, "Stay involved at review checkpoints.")
+        XCTAssertEqual(childResponses.first?.rowID, childRow.sessionID)
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "child_interaction")
+    }
+
+    func testSubmitRoutesStructuredAnswersToPendingChildInteraction() async throws {
+        let coordinatorID = UUID()
+        let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
+        var childResponses: [CoordinatorModeViewModel.ChildInteractionResponseSubmission] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            pendingChild: { childRow },
+            submitPendingChild: { submission, _ in
+                childResponses.append(submission)
+                return .accepted
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("submit"),
+            "answers": .object([
+                "involvement": .object([
+                    "selected_options": .array([.string("Mid-flow")]),
+                    "answers": .array([.string("Mid-flow")])
+                ])
+            ])
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "child_interaction")
+        let submission = try XCTUnwrap(childResponses.first)
+        XCTAssertNil(submission.text)
+        XCTAssertEqual(submission.answersByQuestionID["involvement"]?.selectedOptions, ["Mid-flow"])
+        XCTAssertEqual(submission.answersByQuestionID["involvement"]?.answers, ["Mid-flow"])
+        XCTAssertEqual(submission.displayText, "involvement: Mid-flow")
+    }
+
     func testSubmitRejectsBlankMessageBeforeMutating() async throws {
         let coordinatorID = UUID()
         var startNewCount = 0
@@ -118,13 +186,17 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         coordinatorIDs: [UUID],
         selectedID: UUID,
         startNew: @escaping () -> Void = {},
-        submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted }
+        submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
+        pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
+        submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted }
     ) -> CoordinatorChatMCPToolService {
         makeService(
             coordinatorIDs: coordinatorIDs,
             selectedID: { selectedID },
             startNew: startNew,
-            submit: submit
+            submit: submit,
+            pendingChild: pendingChild,
+            submitPendingChild: submitPendingChild
         )
     }
 
@@ -133,7 +205,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         selectedID: @escaping () -> UUID,
         select: @escaping (UUID?) -> Void = { _ in },
         startNew: @escaping () -> Void = {},
-        submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted }
+        submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
+        pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
+        submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted }
     ) -> CoordinatorChatMCPToolService {
         CoordinatorChatMCPToolService(toolName: MCPWindowToolName.coordinatorChat) {
             CoordinatorChatMCPToolService.Environment(
@@ -146,7 +220,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 refresh: {},
                 selectCoordinator: select,
                 startNewCoordinatorRun: startNew,
-                submitDirective: submit
+                submitDirective: submit,
+                activePendingChildInteractionRow: pendingChild,
+                submitPendingChildInteractionResponse: submitPendingChild
             )
         }
     }
@@ -198,6 +274,72 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             pendingInteractions: [],
             mcpAwareness: .off,
             isEmpty: false
+        )
+    }
+
+    private static func pendingChildRow(parentCoordinatorID: UUID) -> CoordinatorModeRow {
+        let childID = UUID()
+        return CoordinatorModeRow(
+            id: childID,
+            sessionID: childID,
+            tabID: UUID(),
+            title: "Deep Plan child",
+            providerName: "codexExec",
+            modelName: "gpt-5.5",
+            runState: .waitingForQuestion,
+            statusGroup: .needsYou,
+            parentSessionID: parentCoordinatorID,
+            parentCoordinator: CoordinatorModeRow.ParentCoordinator(
+                sessionID: parentCoordinatorID,
+                title: "Coordinator mission",
+                isSelected: true
+            ),
+            childSessionIDs: [],
+            isMCPOriginated: true,
+            isPersistedOnly: false,
+            isCoordinator: false,
+            startedAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 20),
+            priority: nil,
+            workstream: nil,
+            workstreamSummary: nil,
+            workflow: CoordinatorModeWorkflowDisplaySummary(
+                id: "rp-deep-plan",
+                displayName: "Deep Plan",
+                iconName: "text.book.closed.fill",
+                accentColorHex: "#2F80ED"
+            ),
+            mergeAttention: nil,
+            pendingInteraction: CoordinatorModePendingInteractionSummary(
+                id: UUID(),
+                sessionID: childID,
+                kind: .question,
+                responseType: .structured,
+                title: "Deep Plan involvement",
+                prompt: "How involved would you like to be?",
+                context: "Choose how the child should pause.",
+                options: [],
+                fields: [
+                    AgentRunMCPSnapshot.Interaction.Field(
+                        id: "involvement",
+                        header: "Plan involvement",
+                        prompt: "How involved would you like to be?",
+                        context: nil,
+                        isSecret: false,
+                        allowsOther: true,
+                        allowsMultiple: false,
+                        allowsCustom: true,
+                        options: [
+                            AgentRunMCPSnapshot.Interaction.Option(label: "Mid-flow", description: nil)
+                        ]
+                    )
+                ],
+                details: [],
+                openAgentChatRoute: nil
+            ),
+            openAgentChatRoute: nil,
+            statusReport: nil,
+            origin: .coordinatorFleet
         )
     }
 }

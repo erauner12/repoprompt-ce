@@ -12,7 +12,7 @@ final class CoordinatorMissionTemplateStore: ObservableObject {
     private var fileURLsByID: [UUID: URL] = [:]
 
     var builtInTemplates: [CoordinatorMissionTemplate] {
-        [.scopedChange]
+        [.scopedChange, .deepPlanOrchestrateReview]
     }
 
     var allTemplates: [CoordinatorMissionTemplate] {

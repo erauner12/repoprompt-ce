@@ -45,11 +45,42 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
     }
 
+    struct ChildInteractionResponseSubmission: Equatable {
+        var text: String?
+        var skip: Bool
+        var answersByQuestionID: [String: AgentAskUserAnswer]
+        var displayText: String
+
+        static func text(_ text: String) -> ChildInteractionResponseSubmission {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return ChildInteractionResponseSubmission(
+                text: trimmed,
+                skip: false,
+                answersByQuestionID: [:],
+                displayText: trimmed
+            )
+        }
+
+        var fallbackText: String {
+            let trimmedText = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmedText.isEmpty {
+                return trimmedText
+            }
+            return displayText.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        var hasStructuredAnswers: Bool {
+            !answersByQuestionID.isEmpty
+        }
+    }
+
     typealias InputProvider = @MainActor (_ sortMode: CoordinatorModeSortMode, _ selectedCoordinatorID: UUID?) -> CoordinatorModeSnapshotProjector.Input
     typealias TranscriptProvider = @MainActor (_ coordinatorSessionID: UUID?) -> [CoordinatorModeRailTranscriptEntry]
     typealias DashboardVisibilityHandler = @MainActor (_ visible: Bool) -> Void
     typealias DirectiveSubmitter = @MainActor (_ submission: CoordinatorDirectiveSubmission) async -> DirectiveSubmissionResult
     typealias ChildDirectiveSubmitter = @MainActor (_ text: String, _ row: CoordinatorModeRow) async -> DirectiveSubmissionResult
+    typealias ChildInteractionResponseSubmitter = @MainActor (_ submission: ChildInteractionResponseSubmission, _ row: CoordinatorModeRow) async -> DirectiveSubmissionResult
+    typealias ChildInteractionResponseRecorder = @MainActor (_ text: String, _ row: CoordinatorModeRow) -> Void
     typealias ContinuationGateHandler = @MainActor (_ gate: CoordinatorContinuationGate, _ snapshotBeforeGateCleared: CoordinatorModeSnapshot) async -> Void
     typealias CoordinatorActivationHandler = @MainActor (_ sessionID: UUID) async -> Void
     typealias CoordinatorPinHandler = @MainActor (_ option: CoordinatorModeCoordinatorOption, _ isPinned: Bool) -> Void
@@ -80,6 +111,8 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let dashboardVisibilityHandler: DashboardVisibilityHandler
     private let directiveSubmitter: DirectiveSubmitter
     private let childDirectiveSubmitter: ChildDirectiveSubmitter
+    private let childInteractionResponseSubmitter: ChildInteractionResponseSubmitter
+    private let childInteractionResponseRecorder: ChildInteractionResponseRecorder
     private let continuationGateHandler: ContinuationGateHandler
     private let coordinatorActivationHandler: CoordinatorActivationHandler
     private let coordinatorPinHandler: CoordinatorPinHandler
@@ -102,6 +135,8 @@ final class CoordinatorModeViewModel: ObservableObject {
         childDirectiveSubmitter: @escaping ChildDirectiveSubmitter = { _, _ in
             .rejected(message: "Session replies are unavailable.")
         },
+        childInteractionResponseSubmitter: ChildInteractionResponseSubmitter? = nil,
+        childInteractionResponseRecorder: @escaping ChildInteractionResponseRecorder = { _, _ in },
         continuationGateHandler: @escaping ContinuationGateHandler = { _, _ in },
         coordinatorActivationHandler: @escaping CoordinatorActivationHandler = { _ in },
         coordinatorPinHandler: @escaping CoordinatorPinHandler = { _, _ in },
@@ -113,6 +148,10 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.dashboardVisibilityHandler = dashboardVisibilityHandler
         self.directiveSubmitter = directiveSubmitter
         self.childDirectiveSubmitter = childDirectiveSubmitter
+        self.childInteractionResponseSubmitter = childInteractionResponseSubmitter ?? { submission, row in
+            await childDirectiveSubmitter(submission.fallbackText, row)
+        }
+        self.childInteractionResponseRecorder = childInteractionResponseRecorder
         self.continuationGateHandler = continuationGateHandler
         self.coordinatorActivationHandler = coordinatorActivationHandler
         self.coordinatorPinHandler = coordinatorPinHandler
@@ -378,6 +417,56 @@ final class CoordinatorModeViewModel: ObservableObject {
         return result
     }
 
+    func activePendingChildInteractionRow() -> CoordinatorModeRow? {
+        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID else { return nil }
+        return snapshot.groups
+            .flatMap(\.rows)
+            .filter { row in
+                row.parentCoordinator?.sessionID == coordinatorSessionID
+                    && row.pendingInteraction != nil
+                    && row.statusGroup == .needsYou
+                    && !row.isPersistedOnly
+            }
+            .sorted { lhs, rhs in
+                if lhs.updatedAt == rhs.updatedAt {
+                    return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+                }
+                return lhs.updatedAt < rhs.updatedAt
+            }
+            .first
+    }
+
+    @discardableResult
+    func submitPendingChildInteractionResponse(_ text: String, to row: CoordinatorModeRow) async -> DirectiveSubmissionResult {
+        await submitPendingChildInteractionResponse(.text(text), to: row)
+    }
+
+    @discardableResult
+    func submitPendingChildInteractionResponse(
+        _ submission: ChildInteractionResponseSubmission,
+        to row: CoordinatorModeRow
+    ) async -> DirectiveSubmissionResult {
+        let displayText = submission.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !displayText.isEmpty || submission.skip || submission.hasStructuredAnswers else {
+            return .rejected(message: "")
+        }
+        guard row.pendingInteraction != nil else {
+            let message = "This child session is no longer waiting for input."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        let result = await childInteractionResponseSubmitter(submission, row)
+        switch result {
+        case .accepted:
+            composerNotice = nil
+            childInteractionResponseRecorder(displayText, row)
+            appendChildInteractionResponseTranscriptEntry(row: row, text: displayText)
+        case let .rejected(message):
+            composerNotice = message.isEmpty ? nil : message
+        }
+        return result
+    }
+
     #if DEBUG
         func testPublish(_ snapshot: CoordinatorModeSnapshot) {
             self.snapshot = snapshot
@@ -421,6 +510,25 @@ final class CoordinatorModeViewModel: ObservableObject {
         ))
     }
 
+    private func appendChildInteractionResponseTranscriptEntry(row: CoordinatorModeRow, text: String) {
+        let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedText.isEmpty else { return }
+        let displayText = "You answered \(row.title):\n\n\(normalizedText)"
+        let alreadyVisible = railTranscriptEntries.contains { entry in
+            entry.role == .event
+                && entry.action == nil
+                && entry.text.trimmingCharacters(in: .whitespacesAndNewlines) == displayText
+        }
+        guard !alreadyVisible else { return }
+        railTranscriptEntries.append(CoordinatorModeRailTranscriptEntry(
+            id: UUID(),
+            role: .event,
+            text: displayText,
+            createdAt: Date(),
+            action: nil
+        ))
+    }
+
     private func syncRailConversationTranscript(for coordinatorSessionID: UUID?) {
         let transcriptEntries = transcriptProvider(coordinatorSessionID)
         guard !transcriptEntries.isEmpty else { return }
@@ -429,9 +537,13 @@ final class CoordinatorModeViewModel: ObservableObject {
             entry.role == .event || entry.action != nil
         }
         var seenIDs = Set(mergedEntries.map(\.id))
+        var seenDisplayKeys = Set(mergedEntries.map(Self.displayKey(for:)))
         for entry in transcriptEntries where !seenIDs.contains(entry.id) {
+            let displayKey = Self.displayKey(for: entry)
+            guard !seenDisplayKeys.contains(displayKey) else { continue }
             mergedEntries.append(entry)
             seenIDs.insert(entry.id)
+            seenDisplayKeys.insert(displayKey)
         }
         mergedEntries.sort { lhs, rhs in
             if lhs.createdAt == rhs.createdAt {
@@ -440,6 +552,16 @@ final class CoordinatorModeViewModel: ObservableObject {
             return lhs.createdAt < rhs.createdAt
         }
         railTranscriptEntries = mergedEntries
+    }
+
+    private static func displayKey(for entry: CoordinatorModeRailTranscriptEntry) -> String {
+        let text = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let actionKey = if let targetID = entry.action?.targetSessionID {
+            "action:\(targetID.uuidString)"
+        } else {
+            "action:nil"
+        }
+        return "\(entry.role.rawValue)|\(actionKey)|\(text)"
     }
 
     private func updateRailActionPresentation(from snapshot: CoordinatorModeSnapshot) {
@@ -661,6 +783,18 @@ extension AgentModeViewModel {
             case let .blocked(message):
                 return .rejected(message: message)
             }
+        } childInteractionResponseSubmitter: { [weak self] submission, row in
+            guard let self else {
+                return .rejected(message: "Session replies are unavailable.")
+            }
+            switch await submitChildInteractionResponseToAgentMode(submission, row: row) {
+            case .submitted:
+                return .accepted
+            case let .blocked(message):
+                return .rejected(message: message)
+            }
+        } childInteractionResponseRecorder: { [weak self] text, row in
+            self?.rememberCoordinatorChildInteractionResponse(text, row: row)
         } continuationGateHandler: { [weak self] gate, snapshotBeforeGateCleared in
             if let ownerID = gate.ownerCoordinatorSessionID {
                 await self?.evaluateCoordinatorFollowThrough(
@@ -689,7 +823,7 @@ extension AgentModeViewModel {
               })
         else { return [] }
 
-        return session.items.compactMap { item in
+        var entries: [CoordinatorModeRailTranscriptEntry] = session.items.compactMap { item in
             guard let role = coordinatorModeRailRole(for: item.kind) else { return nil }
             var text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
             var checkpoint: CoordinatorModeConversationCheckpoint?
@@ -711,6 +845,23 @@ extension AgentModeViewModel {
                 checkpoint: checkpoint
             )
         }
+        let childResponseEntries = session.coordinatorFollowThroughState?.childInteractionResponses.map { record in
+            CoordinatorModeRailTranscriptEntry(
+                id: record.id,
+                role: .event,
+                text: record.transcriptText,
+                createdAt: record.answeredAt,
+                action: nil
+            )
+        } ?? []
+        entries.append(contentsOf: childResponseEntries)
+        entries.sort { lhs, rhs in
+            if lhs.createdAt == rhs.createdAt {
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            return lhs.createdAt < rhs.createdAt
+        }
+        return entries
     }
 
     private func coordinatorModeRailRole(for itemKind: AgentChatItemKind) -> CoordinatorModeRailTranscriptEntry.Role? {
@@ -940,6 +1091,21 @@ extension AgentModeViewModel {
     }
 
     @MainActor
+    private func rememberCoordinatorChildInteractionResponse(_ text: String, row: CoordinatorModeRow) {
+        guard let coordinatorID = row.parentCoordinator?.sessionID,
+              let match = sessions.first(where: { _, session in
+                  session.activeAgentSessionID == coordinatorID && session.isCoordinatorRuntime
+              })
+        else { return }
+        let tabID = match.key
+        let session = match.value
+        var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        state.rememberChildInteractionResponse(row: row, text: text)
+        session.coordinatorFollowThroughState = state
+        scheduleSave(for: tabID)
+    }
+
+    @MainActor
     private func rememberCoordinatorObjective(
         _ text: String,
         tabID: UUID,
@@ -982,6 +1148,25 @@ extension AgentModeViewModel {
         guard row.runState != .running else {
             return .blocked(message: "This session is mid-run. Reply when it reaches a turn boundary.")
         }
+        if let pendingInteraction = row.pendingInteraction {
+            do {
+                _ = try await mcpResolvePendingInteraction(
+                    sessionID: row.sessionID,
+                    interactionID: pendingInteraction.id,
+                    payload: MCPInteractionResponsePayload(
+                        text: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                        skip: false,
+                        decisionRaw: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                        amendment: nil,
+                        answersByQuestionID: [:],
+                        elicitationActionRaw: text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    )
+                )
+                return .submitted
+            } catch {
+                return .blocked(message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            }
+        }
         guard let target = makeComposerSubmitTarget(tabID: tabID, session: session),
               target.route == .existingAgentSession,
               target.expectedSourceAgentSessionID == row.sessionID
@@ -990,6 +1175,45 @@ extension AgentModeViewModel {
         }
         return await submitUserTurnCreatingSessionIfNeeded(text: text, target: target) {
             nil
+        }
+    }
+
+    @MainActor
+    func submitChildInteractionResponseToAgentMode(
+        _ submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission,
+        row: CoordinatorModeRow
+    ) async -> UserTurnSubmissionResult {
+        guard let tabID = row.tabID else {
+            return .blocked(message: "This session is not live in the current window.")
+        }
+        guard let session = sessions[tabID] else {
+            return .blocked(message: "This session is no longer available.")
+        }
+        guard session.activeAgentSessionID == row.sessionID else {
+            return .blocked(message: "This session changed before the reply could be sent.")
+        }
+        guard let pendingInteraction = row.pendingInteraction else {
+            return .blocked(message: "This child session is no longer waiting for input.")
+        }
+        do {
+            _ = try await mcpResolvePendingInteraction(
+                sessionID: row.sessionID,
+                interactionID: pendingInteraction.id,
+                payload: MCPInteractionResponsePayload(
+                    text: submission.text,
+                    skip: submission.skip,
+                    explicitSkip: submission.skip,
+                    decisionRaw: submission.text,
+                    amendment: nil,
+                    answersByQuestionID: [:],
+                    askUserAnswersByQuestionID: submission.answersByQuestionID,
+                    hasStructuredAnswerObjects: submission.hasStructuredAnswers,
+                    elicitationActionRaw: submission.text
+                )
+            )
+            return .submitted
+        } catch {
+            return .blocked(message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
     }
 

@@ -54,7 +54,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 6.1 Define Coordinator view pending summaries with `AgentRunMCPSnapshot.Interaction.Kind`, `AgentRunMCPSnapshot.Interaction.Detail`, and nullable `AgentSessionDeepLinkRoute`.
 - [x] 6.2 Project prompt/detail summaries from live MCP-controlled `AgentRunMCPSnapshot.Interaction` values; leave broader non-MCP pending projection as a follow-up Agent Mode contract change.
 - [ ] 6.3 Hide or disable decision navigation when `openAgentChatRoute` cannot be resolved.
-- [ ] 6.4 Route users to Agent Mode for pending-interaction responses instead of executing Coordinator-view-side approval/retry actions.
+- [x] 6.4 Bridge selected-Mission child pending interactions into the Coordinator chat so the user's answer forwards to the child response path and records visibly in the rail.
 - [x] 6.5 Add tests for pending interaction rendering, missing routes, and non-prose inference.
 
 ## 7. Deep-link behavior
@@ -102,6 +102,9 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.26 Persist lightweight Mission Template metadata with Coordinator follow-through state.
 - [x] 9.27 Add focused tests for Mission Template wrapping, rejected-send preservation, accepted-send clearing, follow-up non-wrapping, and visible objective persistence.
 - [x] 9.28 Add in-app Mission Template viewing/editing so built-ins can be inspected and custom markdown can be saved without leaving the app.
+- [x] 9.29 Add a built-in Deep Plan -> Orchestrate -> Review Mission Template that pauses on Deep Plan user checkpoints before mutable delegation.
+- [x] 9.30 Render selected-Mission child Needs-you checkpoints in the Coordinator composer and hold ordinary Coordinator submissions while the child answer is pending.
+- [x] 9.31 Render structured selected-Mission child `ask_user` checkpoints with their original options/custom-answer controls and route selected answers through the child interaction response path.
 
 ## 10. Coordinator view UI shell
 

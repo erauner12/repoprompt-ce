@@ -101,6 +101,10 @@ struct CoordinatorModeView: View {
     @State private var hoveredRowID: UUID?
     @State private var filterText = ""
     @State private var coordinatorDirectiveDraft = ""
+    @State private var coordinatorCheckpointDrafts: [UUID: [String: AgentAskUserDraft]] = [:]
+    @State private var coordinatorCheckpointQuestionIndex: [UUID: Int] = [:]
+    @State private var coordinatorOwnedCheckpointDrafts: [String: [String: AgentAskUserDraft]] = [:]
+    @State private var coordinatorOwnedCheckpointQuestionIndex: [String: Int] = [:]
     @State private var childDirectiveDraft = ""
     @State private var childDirectiveNotice: String?
     @State private var isSubmittingCoordinatorDirective = false
@@ -1693,49 +1697,96 @@ struct CoordinatorModeView: View {
         _ rail: CoordinatorModeCoordinatorRail,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        if let checkpoint = activeCoordinatorContinuationCheckpoint(rail) {
-            VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-                HStack(spacing: metrics.smallSpacing) {
-                    Label(checkpoint.displayName, systemImage: "flag.checkered")
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                }
-
-                HStack(spacing: metrics.smallSpacing) {
-                    Button {
-                        submitCoordinatorContinuation(.proceed)
-                    } label: {
-                        Label("Proceed", systemImage: "arrow.right.circle.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-
-                    Button {
-                        if coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            coordinatorDirectiveDraft = "Revise the plan: "
-                        }
-                        isCoordinatorComposerFocused = true
-                    } label: {
-                        Label("Revise", systemImage: "pencil")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    Button {
-                        submitCoordinatorContinuation(.stopHere)
-                    } label: {
-                        Label("Stop here", systemImage: "stop.circle")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    Spacer(minLength: metrics.smallSpacing)
-                }
-            }
-            .font(metrics.microMedium)
+        if let checkpoint = activeCoordinatorContinuationCheckpoint(rail),
+           let pending = coordinatorOwnedCheckpointState(for: checkpoint)
+        {
+            coordinatorCompactCheckpointCard(
+                pending: pending,
+                badgeTitle: "Coordinator checkpoint",
+                badgeSystemImage: "flag.checkered",
+                accentColor: Color.accentColor,
+                submitLabel: "Continue",
+                showsSkipControls: false,
+                metrics: metrics,
+                onDraftChange: { questionID, draft in
+                    let key = checkpoint.kind.rawValue
+                    var drafts = coordinatorOwnedCheckpointDrafts[key] ?? pending.interaction.emptyDrafts()
+                    drafts[questionID] = draft
+                    coordinatorOwnedCheckpointDrafts[key] = drafts
+                },
+                onQuestionIndexChange: { index in
+                    coordinatorOwnedCheckpointQuestionIndex[checkpoint.kind.rawValue] = index
+                },
+                onSubmit: {
+                    submitCoordinatorOwnedCheckpoint(checkpoint)
+                },
+                onSkipAll: {},
+                onUserActivity: {}
+            )
+            .disabled(isSubmittingCoordinatorDirective)
             .padding(.horizontal, metrics.cardPadding)
             .padding(.vertical, metrics.smallSpacing)
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.14))
+        }
+    }
+
+    private func coordinatorOwnedCheckpointState(
+        for checkpoint: CoordinatorModeConversationCheckpoint
+    ) -> AgentAskUserPendingState? {
+        let interaction = AgentAskUserInteraction(
+            id: checkpoint.interactionID,
+            title: checkpoint.displayName,
+            context: "Choose how the Coordinator should continue from this checkpoint.",
+            questions: [
+                AgentAskUserQuestion(
+                    id: "decision",
+                    header: "Coordinator decision",
+                    question: "What should happen next?",
+                    options: [
+                        AgentAskUserOption(
+                            label: "Proceed",
+                            description: "Run the next safe step the Coordinator proposed."
+                        ),
+                        AgentAskUserOption(
+                            label: "Revise",
+                            description: "Edit the plan or instruction before continuing."
+                        ),
+                        AgentAskUserOption(
+                            label: "Stop",
+                            description: "End this Mission here."
+                        )
+                    ],
+                    allowsMultiple: false,
+                    allowsCustom: false
+                )
+            ]
+        )
+        let key = checkpoint.kind.rawValue
+        return AgentAskUserPendingState(
+            interaction: interaction,
+            draftsByQuestionID: coordinatorOwnedCheckpointDrafts[key] ?? interaction.emptyDrafts(),
+            currentQuestionIndex: coordinatorOwnedCheckpointQuestionIndex[key] ?? 0
+        )
+    }
+
+    private func submitCoordinatorOwnedCheckpoint(_ checkpoint: CoordinatorModeConversationCheckpoint) {
+        guard let pending = coordinatorOwnedCheckpointState(for: checkpoint),
+              pending.isComplete,
+              let selected = pending.draftsByQuestionID["decision"]?.selectedOptionLabels.first
+        else { return }
+        coordinatorOwnedCheckpointDrafts[checkpoint.kind.rawValue] = nil
+        coordinatorOwnedCheckpointQuestionIndex[checkpoint.kind.rawValue] = nil
+        switch selected {
+        case "Proceed":
+            submitCoordinatorContinuation(.proceed)
+        case "Revise":
+            if coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                coordinatorDirectiveDraft = "Revise the plan: "
+            }
+            isCoordinatorComposerFocused = true
+        case "Stop":
+            submitCoordinatorContinuation(.stopHere)
+        default:
+            break
         }
     }
 
@@ -1926,64 +1977,529 @@ struct CoordinatorModeView: View {
         }
     }
 
+    private func coordinatorPendingChildInteractionCard(
+        row: CoordinatorModeRow,
+        pending: CoordinatorModePendingInteractionSummary,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            HStack(spacing: metrics.smallSpacing) {
+                Label("Child needs you", systemImage: "questionmark.bubble.fill")
+                    .font(metrics.microMedium)
+                    .foregroundStyle(CoordinatorModeStatusGroup.needsYou.accentColor)
+                Spacer(minLength: metrics.smallSpacing)
+                if let workflow = row.workflow {
+                    workflowBadge(workflow, metrics: metrics)
+                }
+            }
+
+            Text(row.title)
+                .font(metrics.bodySemibold)
+                .foregroundStyle(.primary.opacity(0.9))
+                .lineLimit(2)
+
+            if let title = pending.title, !title.isEmpty {
+                Text(title)
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let prompt = pending.prompt, !prompt.isEmpty {
+                Text(prompt)
+                    .font(metrics.body)
+                    .foregroundStyle(.primary.opacity(0.84))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !pending.details.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(pending.details, id: \.label) { detail in
+                        Text("\(detail.label): \(detail.value)")
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                .padding(.top, 2)
+            }
+
+            Text("Your next message will be sent to this child session, then the Coordinator can continue from the result.")
+                .font(metrics.micro)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(CoordinatorModeStatusGroup.needsYou.accentColor.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(CoordinatorModeStatusGroup.needsYou.accentColor.opacity(0.22), lineWidth: 0.8)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectDelegatedActionTarget(row)
+        }
+        .hoverTooltip("Show child session in inspector")
+    }
+
+    private func coordinatorStructuredPendingChildInteractionCard(
+        row: CoordinatorModeRow,
+        pending: AgentAskUserPendingState,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        coordinatorCompactCheckpointCard(
+            pending: pending,
+            badgeTitle: "Child needs you",
+            badgeSystemImage: "questionmark.bubble.fill",
+            accentColor: CoordinatorModeStatusGroup.needsYou.accentColor,
+            submitLabel: "Submit",
+            showsSkipControls: true,
+            metrics: metrics,
+            onDraftChange: { questionID, draft in
+                var drafts = coordinatorCheckpointDrafts[pending.interaction.id] ?? pending.interaction.emptyDrafts()
+                drafts[questionID] = draft
+                coordinatorCheckpointDrafts[pending.interaction.id] = drafts
+            },
+            onQuestionIndexChange: { index in
+                coordinatorCheckpointQuestionIndex[pending.interaction.id] = index
+            },
+            onSubmit: {
+                submitPendingChildStructuredInteractionResponse(to: row)
+            },
+            onSkipAll: {
+                submitPendingChildStructuredInteractionSkip(to: row, pending: pending)
+            },
+            onUserActivity: {}
+        )
+        .disabled(isSubmittingCoordinatorDirective)
+    }
+
+    private func coordinatorCompactCheckpointCard(
+        pending: AgentAskUserPendingState,
+        badgeTitle: String,
+        badgeSystemImage: String,
+        accentColor: Color,
+        submitLabel: String,
+        showsSkipControls: Bool,
+        metrics: CoordinatorVisualMetrics,
+        onDraftChange: @escaping (_ questionID: String, _ draft: AgentAskUserDraft) -> Void,
+        onQuestionIndexChange: @escaping (_ index: Int) -> Void,
+        onSubmit: @escaping () -> Void,
+        onSkipAll: @escaping () -> Void,
+        onUserActivity: @escaping () -> Void
+    ) -> some View {
+        let questionCount = pending.interaction.questions.count
+        let currentIndex = pending.currentQuestionIndex
+        let currentQuestion = pending.currentQuestion
+        let currentDraft = currentQuestion.flatMap { pending.draftsByQuestionID[$0.id] } ?? AgentAskUserDraft()
+        let canMoveForward = currentQuestion.map { question in
+            let answer = question.answer(from: currentDraft)
+            return answer.skipped || !answer.answers.isEmpty
+        } ?? false
+
+        return VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                Label(badgeTitle, systemImage: badgeSystemImage)
+                    .font(metrics.microMedium)
+                    .foregroundStyle(accentColor)
+                Spacer(minLength: metrics.smallSpacing)
+                Text("Question \(min(currentIndex + 1, questionCount)) of \(questionCount)")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let title = trimmedNonEmpty(pending.interaction.title) {
+                Text(title)
+                    .font(metrics.bodySemibold)
+                    .foregroundStyle(.primary.opacity(0.92))
+                    .lineLimit(2)
+            }
+
+            if let context = trimmedNonEmpty(pending.interaction.context) {
+                Text(context)
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let question = currentQuestion {
+                coordinatorCompactCheckpointQuestion(
+                    question,
+                    draft: currentDraft,
+                    accentColor: accentColor,
+                    metrics: metrics,
+                    onDraftChange: { draft in
+                        onDraftChange(question.id, draft)
+                        onUserActivity()
+                    },
+                    onSubmit: onSubmit
+                )
+            }
+
+            HStack(spacing: metrics.smallSpacing) {
+                if showsSkipControls {
+                    Button("Skip all") {
+                        onSkipAll()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+
+                    if let question = currentQuestion {
+                        Button(currentDraft.skipped ? "Answer" : "Skip") {
+                            if currentDraft.skipped {
+                                onDraftChange(question.id, AgentAskUserDraft())
+                            } else {
+                                onDraftChange(question.id, AgentAskUserDraft(skipped: true))
+                                if currentIndex < questionCount - 1 {
+                                    onQuestionIndexChange(currentIndex + 1)
+                                }
+                            }
+                            onUserActivity()
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                Spacer(minLength: metrics.smallSpacing)
+
+                Button("Back") {
+                    onQuestionIndexChange(currentIndex - 1)
+                    onUserActivity()
+                }
+                .disabled(currentIndex <= 0)
+
+                if currentIndex >= questionCount - 1 {
+                    Button(submitLabel) {
+                        onSubmit()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(!pending.isComplete)
+                    .keyboardShortcut(.return, modifiers: .shift)
+                } else {
+                    Button("Next") {
+                        onQuestionIndexChange(currentIndex + 1)
+                        onUserActivity()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(!canMoveForward)
+                }
+            }
+            .font(metrics.microMedium)
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(accentColor.opacity(0.075))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(accentColor.opacity(0.22), lineWidth: 0.8)
+        )
+    }
+
+    private func coordinatorCompactCheckpointQuestion(
+        _ question: AgentAskUserQuestion,
+        draft: AgentAskUserDraft,
+        accentColor: Color,
+        metrics: CoordinatorVisualMetrics,
+        onDraftChange: @escaping (AgentAskUserDraft) -> Void,
+        onSubmit: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            if let header = trimmedNonEmpty(question.header) {
+                Text(header)
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(question.question)
+                .font(metrics.body)
+                .foregroundStyle(.primary.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+
+            if let context = trimmedNonEmpty(question.context) {
+                Text(context)
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !question.options.isEmpty {
+                VStack(spacing: 4) {
+                    ForEach(question.options, id: \.label) { option in
+                        coordinatorCompactCheckpointOptionRow(
+                            option: option,
+                            question: question,
+                            draft: draft,
+                            accentColor: accentColor,
+                            metrics: metrics,
+                            onDraftChange: onDraftChange
+                        )
+                    }
+                }
+            }
+
+            if question.allowsCustom {
+                TextField(
+                    question.options.isEmpty ? "Type your response..." : "Other...",
+                    text: Binding(
+                        get: { draft.customResponse },
+                        set: { value in
+                            var updated = draft
+                            updated.customResponse = value
+                            updated.skipped = false
+                            if !question.allowsMultiple, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                updated.selectedOptionLabels = []
+                            }
+                            onDraftChange(updated)
+                        }
+                    ),
+                    axis: .vertical
+                )
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1 ... 3)
+                .disabled(draft.skipped)
+                .onSubmit {
+                    onSubmit()
+                }
+            }
+
+            if draft.skipped {
+                Label("Skipped", systemImage: "forward.fill")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(metrics.smallSpacing)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.22))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(accentColor.opacity(0.14), lineWidth: 0.8)
+        )
+    }
+
+    private func coordinatorCompactCheckpointOptionRow(
+        option: AgentAskUserOption,
+        question: AgentAskUserQuestion,
+        draft: AgentAskUserDraft,
+        accentColor: Color,
+        metrics: CoordinatorVisualMetrics,
+        onDraftChange: @escaping (AgentAskUserDraft) -> Void
+    ) -> some View {
+        let isSelected = draft.selectedOptionLabels.contains(option.label)
+
+        return Button {
+            guard !draft.skipped else { return }
+            var updated = draft
+            if question.allowsMultiple {
+                var selected = Set(updated.selectedOptionLabels)
+                if selected.contains(option.label) {
+                    selected.remove(option.label)
+                } else {
+                    selected.insert(option.label)
+                }
+                updated.selectedOptionLabels = question.optionLabels.filter { selected.contains($0) }
+            } else {
+                updated.selectedOptionLabels = isSelected ? [] : [option.label]
+                updated.customResponse = ""
+            }
+            updated.skipped = false
+            onDraftChange(updated)
+        } label: {
+            HStack(alignment: .top, spacing: metrics.smallSpacing) {
+                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                    .font(metrics.microMedium)
+                    .foregroundStyle(isSelected ? accentColor : .secondary)
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(option.label)
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.primary.opacity(draft.skipped ? 0.45 : 0.9))
+                    if let description = trimmedNonEmpty(option.description) {
+                        Text(description)
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+
+                Spacer(minLength: metrics.smallSpacing)
+            }
+            .padding(.horizontal, metrics.smallSpacing)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(isSelected ? accentColor.opacity(0.15) : Color(nsColor: .controlBackgroundColor).opacity(0.18))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(isSelected ? accentColor.opacity(0.38) : Color.white.opacity(0.04), lineWidth: 0.8)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(draft.skipped)
+    }
+
+    private func coordinatorPendingAskUserState(for row: CoordinatorModeRow) -> AgentAskUserPendingState? {
+        guard let pending = row.pendingInteraction,
+              pending.kind == .question || pending.kind == .userInput,
+              !pending.fields.isEmpty
+        else { return nil }
+        let questions = pending.fields.map { field in
+            AgentAskUserQuestion(
+                id: field.id,
+                header: field.header,
+                question: field.prompt,
+                context: field.context,
+                options: field.options.map { AgentAskUserOption(label: $0.label, description: $0.description) },
+                allowsMultiple: field.allowsMultiple ?? false,
+                allowsCustom: field.allowsCustom ?? field.allowsOther
+            )
+        }
+        let interaction = AgentAskUserInteraction(
+            id: pending.id,
+            title: pending.title,
+            context: pending.context,
+            questions: questions
+        )
+        return AgentAskUserPendingState(
+            interaction: interaction,
+            draftsByQuestionID: coordinatorCheckpointDrafts[pending.id] ?? interaction.emptyDrafts(),
+            currentQuestionIndex: coordinatorCheckpointQuestionIndex[pending.id] ?? 0
+        )
+    }
+
+    private func submitPendingChildStructuredInteractionResponse(to row: CoordinatorModeRow) {
+        guard let pending = coordinatorPendingAskUserState(for: row),
+              pending.isComplete
+        else { return }
+        let answers = pending.interaction.questions.reduce(into: [String: AgentAskUserAnswer]()) { partialResult, question in
+            partialResult[question.id] = question.answer(from: pending.draftsByQuestionID[question.id] ?? AgentAskUserDraft())
+        }
+        let displayText = coordinatorStructuredAnswerDisplayText(pending: pending, answers: answers)
+        let submission = CoordinatorModeViewModel.ChildInteractionResponseSubmission(
+            text: nil,
+            skip: false,
+            answersByQuestionID: answers,
+            displayText: displayText
+        )
+        submitPendingChildInteractionResponse(submission, to: row, clearStructuredDraftsFor: pending.interaction.id)
+    }
+
+    private func submitPendingChildStructuredInteractionSkip(to row: CoordinatorModeRow, pending: AgentAskUserPendingState) {
+        let displayText = "Skipped \(pending.interaction.title ?? "child checkpoint")"
+        let submission = CoordinatorModeViewModel.ChildInteractionResponseSubmission(
+            text: nil,
+            skip: true,
+            answersByQuestionID: [:],
+            displayText: displayText
+        )
+        submitPendingChildInteractionResponse(submission, to: row, clearStructuredDraftsFor: pending.interaction.id)
+    }
+
+    private func coordinatorStructuredAnswerDisplayText(
+        pending: AgentAskUserPendingState,
+        answers: [String: AgentAskUserAnswer]
+    ) -> String {
+        pending.interaction.questions.map { question in
+            let answer = answers[question.id] ?? question.answer(from: AgentAskUserDraft())
+            let answerText = if answer.skipped {
+                "Skipped"
+            } else {
+                answer.answers.joined(separator: ", ")
+            }
+            let title = question.header ?? question.question
+            return "\(title): \(answerText)"
+        }
+        .joined(separator: "\n")
+    }
+
     private func coordinatorComposer(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
-        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-            if rail.state == .selected, !rail.isComposerSendEnabled, viewModel.currentRailActivityText == nil {
+        let pendingChildRow = viewModel.activePendingChildInteractionRow()
+        let pendingChildStructuredState = pendingChildRow.flatMap { coordinatorPendingAskUserState(for: $0) }
+        let placeholder = pendingChildRow == nil ? "Message Coordinator..." : "Answer child question..."
+
+        return VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            if let pendingChildRow, let pendingChildStructuredState {
+                coordinatorStructuredPendingChildInteractionCard(
+                    row: pendingChildRow,
+                    pending: pendingChildStructuredState,
+                    metrics: metrics
+                )
+            } else if let pendingChildRow, let pending = pendingChildRow.pendingInteraction {
+                coordinatorPendingChildInteractionCard(row: pendingChildRow, pending: pending, metrics: metrics)
+            } else if rail.state == .selected, !rail.isComposerSendEnabled, viewModel.currentRailActivityText == nil {
                 coordinatorComposerNotice("Coordinator is working. You can send the next message when it reaches a turn boundary.", metrics: metrics)
             } else if let notice = viewModel.composerNotice, !notice.isEmpty {
                 coordinatorComposerNotice(notice, metrics: metrics)
             }
 
-            VStack(alignment: .leading, spacing: 0) {
-                ResizableTextField(
-                    text: $coordinatorDirectiveDraft,
-                    placeholder: "Message Coordinator...",
-                    onReturn: submitCoordinatorDirective,
-                    resetTrigger: $coordinatorTextFieldResetTrigger,
-                    features: coordinatorComposerFeatures(),
-                    onHeightChange: { newHeight in
-                        coordinatorTextFieldHeight = newHeight
-                    }
+            if pendingChildStructuredState == nil {
+                VStack(alignment: .leading, spacing: 0) {
+                    ResizableTextField(
+                        text: $coordinatorDirectiveDraft,
+                        placeholder: placeholder,
+                        onReturn: submitCoordinatorDirective,
+                        resetTrigger: $coordinatorTextFieldResetTrigger,
+                        features: coordinatorComposerFeatures(),
+                        onHeightChange: { newHeight in
+                            coordinatorTextFieldHeight = newHeight
+                        }
+                    )
+                    .frame(height: max(coordinatorTextFieldHeight, metrics.composerTextMinHeight))
+                    .disabled(!canEditCoordinatorDirective(rail))
+                    .focused($isCoordinatorComposerFocused)
+                    .overlay(
+                        Text(placeholder)
+                            .font(metrics.body)
+                            .foregroundStyle(.secondary)
+                            .opacity(coordinatorDirectiveDraft.isEmpty ? 1 : 0)
+                            .padding(.leading, metrics.composerHorizontalPadding + 5)
+                            .padding(.top, metrics.composerVerticalPadding + 2)
+                            .allowsHitTesting(false),
+                        alignment: .topLeading
+                    )
+                    .padding(.horizontal, metrics.composerHorizontalPadding)
+                    .padding(.vertical, metrics.composerVerticalPadding)
+
+                    Divider()
+                        .opacity(0.42)
+
+                    coordinatorComposerControlStrip(rail, metrics: metrics)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
+                        .fill(Color(nsColor: .windowBackgroundColor).opacity(0.72))
                 )
-                .frame(height: max(coordinatorTextFieldHeight, metrics.composerTextMinHeight))
-                .disabled(!canEditCoordinatorDirective(rail))
-                .focused($isCoordinatorComposerFocused)
                 .overlay(
-                    Text("Message Coordinator...")
-                        .font(metrics.body)
-                        .foregroundStyle(.secondary)
-                        .opacity(coordinatorDirectiveDraft.isEmpty ? 1 : 0)
-                        .padding(.leading, metrics.composerHorizontalPadding + 5)
-                        .padding(.top, metrics.composerVerticalPadding + 2)
-                        .allowsHitTesting(false),
-                    alignment: .topLeading
+                    RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
+                        .stroke(canSubmitCoordinatorDirective ? Color.accentColor.opacity(0.48) : CoordinatorStyle.hairline.opacity(1.2), lineWidth: 1)
                 )
-                .padding(.horizontal, metrics.composerHorizontalPadding)
-                .padding(.vertical, metrics.composerVerticalPadding)
-
-                Divider()
-                    .opacity(0.42)
-
-                coordinatorComposerControlStrip(rail, metrics: metrics)
             }
-            .background(
-                RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
-                    .fill(Color(nsColor: .windowBackgroundColor).opacity(0.72))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
-                    .stroke(canSubmitCoordinatorDirective ? Color.accentColor.opacity(0.48) : CoordinatorStyle.hairline.opacity(1.2), lineWidth: 1)
-            )
         }
     }
 
     private func coordinatorComposerControlStrip(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
-        HStack(spacing: metrics.smallSpacing) {
+        let pendingChildRow = viewModel.activePendingChildInteractionRow()
+
+        return HStack(spacing: metrics.smallSpacing) {
             HStack(spacing: metrics.miniPillIconSpacing) {
-                Image(systemName: "sparkles")
+                Image(systemName: pendingChildRow == nil ? "sparkles" : "questionmark.bubble.fill")
                     .font(.system(size: metrics.microIconSize, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
-                Text("Coordinator")
+                    .foregroundStyle(pendingChildRow == nil ? Color.accentColor : CoordinatorModeStatusGroup.needsYou.accentColor)
+                Text(pendingChildRow == nil ? "Coordinator" : "Child reply")
                     .font(metrics.microMedium)
                     .foregroundStyle(.primary.opacity(0.82))
             }
@@ -2004,7 +2520,7 @@ struct CoordinatorModeView: View {
                         .fill(rail.isLiveInCurrentWindow ? Color.green.opacity(0.82) : Color.secondary.opacity(0.55))
                         .frame(width: metrics.composerStatusDotSize, height: metrics.composerStatusDotSize)
                 }
-                Text(coordinatorComposerStatusText(rail))
+                Text(pendingChildRow == nil ? coordinatorComposerStatusText(rail) : "Needs you")
                     .font(metrics.microMedium)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -2016,12 +2532,14 @@ struct CoordinatorModeView: View {
                     .fill(Color(nsColor: .controlBackgroundColor).opacity(0.22))
             )
 
-            coordinatorComposerAutomationModeToggle(metrics: metrics)
+            if pendingChildRow == nil {
+                coordinatorComposerAutomationModeToggle(metrics: metrics)
 
-            coordinatorComposerToolsButton(metrics: metrics)
+                coordinatorComposerToolsButton(metrics: metrics)
 
-            if rail.state == .chooseCoordinator {
-                coordinatorMissionTemplatePicker(metrics: metrics)
+                if rail.state == .chooseCoordinator {
+                    coordinatorMissionTemplatePicker(metrics: metrics)
+                }
             }
 
             Spacer(minLength: metrics.smallSpacing)
@@ -2036,7 +2554,7 @@ struct CoordinatorModeView: View {
             .buttonStyle(.plain)
             .foregroundStyle(canSubmitCoordinatorDirective ? Color.accentColor : Color.secondary.opacity(0.55))
             .disabled(!canSubmitCoordinatorDirective)
-            .hoverTooltip(isSubmittingCoordinatorDirective ? "Sending" : "Send")
+            .hoverTooltip(isSubmittingCoordinatorDirective ? "Sending" : (pendingChildRow == nil ? "Send" : "Answer child"))
         }
         .frame(height: metrics.composerControlStripHeight)
         .padding(.horizontal, metrics.composerControlHorizontalPadding)
@@ -2586,17 +3104,24 @@ struct CoordinatorModeView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
+    private func trimmedNonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private var canSubmitCoordinatorDirective: Bool {
-        (
+        let pendingChildRow = viewModel.activePendingChildInteractionRow()
+        return (
             viewModel.snapshot.coordinatorRail.isComposerSendEnabled
                 || viewModel.snapshot.coordinatorRail.state == .chooseCoordinator
+                || pendingChildRow != nil
         )
             && !isSubmittingCoordinatorDirective
             && !coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func canEditCoordinatorDirective(_ rail: CoordinatorModeCoordinatorRail) -> Bool {
-        rail.state == .chooseCoordinator || rail.isComposerEnabled
+        viewModel.activePendingChildInteractionRow() != nil || rail.state == .chooseCoordinator || rail.isComposerEnabled
     }
 
     private func canSubmitChildDirective(to row: CoordinatorModeRow) -> Bool {
@@ -2611,6 +3136,10 @@ struct CoordinatorModeView: View {
         guard !trimmed.isEmpty,
               canSubmitCoordinatorDirective
         else { return }
+        if let pendingChildRow = viewModel.activePendingChildInteractionRow() {
+            submitPendingChildInteractionResponse(draft, to: pendingChildRow)
+            return
+        }
         coordinatorDirectiveDraft = ""
         isSubmittingCoordinatorDirective = true
         isCoordinatorComposerFocused = true
@@ -2618,6 +3147,32 @@ struct CoordinatorModeView: View {
             let result = await viewModel.submitCoordinatorDirective(draft)
             if result != .accepted, coordinatorDirectiveDraft.isEmpty {
                 coordinatorDirectiveDraft = draft
+            }
+            isSubmittingCoordinatorDirective = false
+            isCoordinatorComposerFocused = true
+        }
+    }
+
+    private func submitPendingChildInteractionResponse(_ draft: String, to row: CoordinatorModeRow) {
+        submitPendingChildInteractionResponse(.text(draft), to: row, fallbackDraft: draft, clearStructuredDraftsFor: nil)
+    }
+
+    private func submitPendingChildInteractionResponse(
+        _ submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission,
+        to row: CoordinatorModeRow,
+        fallbackDraft: String = "",
+        clearStructuredDraftsFor interactionID: UUID?
+    ) {
+        coordinatorDirectiveDraft = ""
+        isSubmittingCoordinatorDirective = true
+        isCoordinatorComposerFocused = true
+        Task { @MainActor in
+            let result = await viewModel.submitPendingChildInteractionResponse(submission, to: row)
+            if result == .accepted, let interactionID {
+                coordinatorCheckpointDrafts[interactionID] = nil
+                coordinatorCheckpointQuestionIndex[interactionID] = nil
+            } else if result != .accepted, coordinatorDirectiveDraft.isEmpty {
+                coordinatorDirectiveDraft = fallbackDraft
             }
             isSubmittingCoordinatorDirective = false
             isCoordinatorComposerFocused = true
@@ -3169,6 +3724,7 @@ private struct CoordinatorMissionTemplatesConfigureSheet: View {
     @State private var showNewTemplatePrompt = false
     @State private var showClonePrompt = false
     @State private var templateName = ""
+    @State private var cloneSourceTemplate: CoordinatorMissionTemplate?
     @State private var editingTemplate: CoordinatorMissionTemplate?
     @State private var editingMarkdown = ""
     @State private var editorError: String?
@@ -3240,12 +3796,15 @@ private struct CoordinatorMissionTemplatesConfigureSheet: View {
         } message: {
             Text("Create a markdown template you can edit afterwards.")
         }
-        .alert("Clone Scoped Change", isPresented: $showClonePrompt) {
+        .alert("Clone Mission Template", isPresented: $showClonePrompt) {
             TextField("Template name", text: $templateName)
-            Button("Clone") { cloneScopedChange() }
-            Button("Cancel", role: .cancel) { templateName = "" }
+            Button("Clone") { cloneSelectedBuiltIn() }
+            Button("Cancel", role: .cancel) {
+                templateName = ""
+                cloneSourceTemplate = nil
+            }
         } message: {
-            Text("Clone the built-in Scoped Change template into a custom markdown file.")
+            Text("Clone this built-in template into a custom markdown file.")
         }
         .sheet(item: $editingTemplate) { template in
             CoordinatorMissionTemplateEditorSheet(
@@ -3292,6 +3851,7 @@ private struct CoordinatorMissionTemplatesConfigureSheet: View {
 
                     Button {
                         templateName = "\(template.displayName) Copy"
+                        cloneSourceTemplate = template
                         showClonePrompt = true
                     } label: {
                         Text("Clone")
@@ -3366,16 +3926,17 @@ private struct CoordinatorMissionTemplatesConfigureSheet: View {
         templateName = ""
     }
 
-    private func cloneScopedChange() {
+    private func cloneSelectedBuiltIn() {
         let name = templateName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
+        guard !name.isEmpty, let sourceTemplate = cloneSourceTemplate else { return }
         do {
-            let template = try templateStore.cloneBuiltIn(.scopedChange, name: name)
+            let template = try templateStore.cloneBuiltIn(sourceTemplate, name: name)
             templateStore.revealInFinder(template)
         } catch {
             print("[CoordinatorMissionTemplatesConfigure] Failed to clone template: \(error)")
         }
         templateName = ""
+        cloneSourceTemplate = nil
     }
 
     private func openTemplateEditor(_ template: CoordinatorMissionTemplate) {

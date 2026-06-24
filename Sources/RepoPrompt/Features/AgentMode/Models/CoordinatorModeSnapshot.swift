@@ -255,6 +255,38 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
         """
     )
 
+    static let deepPlanOrchestrateReview = CoordinatorMissionTemplate(
+        source: .builtIn("deep-plan-orchestrate-review"),
+        displayName: "Deep Plan -> Orchestrate -> Review",
+        iconName: "text.book.closed.fill",
+        accentColorHex: "#32ADE6",
+        tooltipText: "Plan deeply, then implement and review through delegated workflows",
+        descriptionText: "Use Deep Plan first, pause on Needs you, then run Orchestrate and Review with explicit worktree boundaries.",
+        template: """
+        Run this as a staged Coordinator Mission.
+
+        Stage 1 - Deep Plan:
+        1. Start exactly one delegated child with workflow_name="Deep Plan" for the user's objective.
+        2. If the Deep Plan child asks the user a question, needs approval, or reaches any Needs you state, stop and report that the child needs the user. Do not answer for the user.
+        3. Wait for the Deep Plan child to finish after the user resolves any checkpoint.
+        4. Summarize the resulting plan and ask me whether to proceed, revise, or stop before mutable implementation.
+
+        Stage 2 - Orchestrate:
+        1. Only after I proceed, start exactly one delegated child with workflow_name="Orchestrate".
+        2. If implementation or validation may edit files, create or bind an explicit isolated child worktree before starting Orchestrate.
+        3. Wait for Orchestrate to finish and capture its worktree, branch, diff summary, and validation status.
+
+        Stage 3 - Review:
+        1. Start exactly one separate delegated child with workflow_name="Review" to inspect the Orchestrate result.
+        2. Bind Review to the same child worktree when Orchestrate created or used one.
+        3. If Review finds must-fix issues, coordinate fixes in the same worktree and repeat Review once.
+        4. Finish with a concise status summary and ask before commit, push, merge, or any irreversible action.
+
+        User objective:
+        $MISSION
+        """
+    )
+
     let source: Source
     let displayName: String
     let iconName: String
@@ -437,6 +469,27 @@ struct CoordinatorModeConversationCheckpoint: Equatable {
 
     let kind: Kind
 
+    var interactionID: UUID {
+        switch kind {
+        case .safeContinuationReady:
+            Self.deterministicID(1)
+        case .needsClarification:
+            Self.deterministicID(2)
+        case .reviewSuggested:
+            Self.deterministicID(3)
+        case .reviewRequired:
+            Self.deterministicID(4)
+        case .blocked:
+            Self.deterministicID(5)
+        case .approvalRequired:
+            Self.deterministicID(6)
+        }
+    }
+
+    private static func deterministicID(_ suffix: UInt8) -> UUID {
+        UUID(uuid: (0x1F, 0x7D, 0xE6, 0xE3, 0x1F, 0x56, 0x46, 0xD4, 0xA3, 0xDF, 0xBB, 0x74, 0x01, 0x95, 0xD0, suffix))
+    }
+
     var displayName: String {
         switch kind {
         case .safeContinuationReady:
@@ -510,8 +563,12 @@ struct CoordinatorModePendingInteractionSummary: Identifiable, Equatable {
     let id: UUID
     let sessionID: UUID
     let kind: AgentRunMCPSnapshot.Interaction.Kind
+    let responseType: AgentRunMCPSnapshot.Interaction.ResponseType
     let title: String?
     let prompt: String?
+    let context: String?
+    let options: [AgentRunMCPSnapshot.Interaction.Option]
+    let fields: [AgentRunMCPSnapshot.Interaction.Field]
     let details: [AgentRunMCPSnapshot.Interaction.Detail]
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
 }

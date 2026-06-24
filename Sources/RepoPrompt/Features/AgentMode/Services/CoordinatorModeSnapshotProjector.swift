@@ -984,8 +984,12 @@ struct CoordinatorModeSnapshotProjector {
             id: interaction.id,
             sessionID: snapshot.sessionID,
             kind: interaction.kind,
+            responseType: interaction.responseType,
             title: interaction.title,
             prompt: interaction.prompt,
+            context: interaction.context,
+            options: interaction.options,
+            fields: interaction.fields,
             details: interaction.details,
             openAgentChatRoute: route
         )

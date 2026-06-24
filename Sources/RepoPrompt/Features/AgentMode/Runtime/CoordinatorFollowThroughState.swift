@@ -7,6 +7,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
     var pendingEvents: [CoordinatorFollowThroughEvent]
     var handledEventIDs: Set<String>
     var lastResume: CoordinatorFollowThroughResumeRecord?
+    var childInteractionResponses: [CoordinatorChildInteractionResponseRecord]
 
     init(
         originalObjectiveSummary: String? = nil,
@@ -14,7 +15,8 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         observedChildPhases: [UUID: CoordinatorFollowThroughChildPhase] = [:],
         pendingEvents: [CoordinatorFollowThroughEvent] = [],
         handledEventIDs: Set<String> = [],
-        lastResume: CoordinatorFollowThroughResumeRecord? = nil
+        lastResume: CoordinatorFollowThroughResumeRecord? = nil,
+        childInteractionResponses: [CoordinatorChildInteractionResponseRecord] = []
     ) {
         self.originalObjectiveSummary = originalObjectiveSummary
         self.missionTemplate = missionTemplate
@@ -22,6 +24,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         self.pendingEvents = pendingEvents
         self.handledEventIDs = handledEventIDs
         self.lastResume = lastResume
+        self.childInteractionResponses = childInteractionResponses
     }
 
     mutating func rememberObjective(_ text: String, missionTemplate: CoordinatorMissionTemplateSummary? = nil) {
@@ -31,6 +34,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         pendingEvents.removeAll()
         handledEventIDs.removeAll()
         lastResume = nil
+        childInteractionResponses.removeAll()
     }
 
     mutating func updateObservedPhases(from rows: [CoordinatorModeRow]) {
@@ -69,12 +73,78 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         )
     }
 
+    mutating func rememberChildInteractionResponse(row: CoordinatorModeRow, text: String, at date: Date = Date()) {
+        let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedText.isEmpty else { return }
+        let interactionID = row.pendingInteraction?.id
+        if let existingIndex = childInteractionResponses.firstIndex(where: { record in
+            record.childSessionID == row.sessionID && record.interactionID == interactionID
+        }) {
+            childInteractionResponses[existingIndex] = CoordinatorChildInteractionResponseRecord(
+                id: childInteractionResponses[existingIndex].id,
+                childSessionID: row.sessionID,
+                childTitle: row.title,
+                interactionID: interactionID,
+                answeredAt: date,
+                responseText: Self.summary(from: normalizedText, maxLength: 1000)
+            )
+        } else {
+            childInteractionResponses.append(CoordinatorChildInteractionResponseRecord(
+                childSessionID: row.sessionID,
+                childTitle: row.title,
+                interactionID: interactionID,
+                answeredAt: date,
+                responseText: Self.summary(from: normalizedText, maxLength: 1000)
+            ))
+        }
+        childInteractionResponses.sort { lhs, rhs in
+            if lhs.answeredAt == rhs.answeredAt { return lhs.id.uuidString < rhs.id.uuidString }
+            return lhs.answeredAt < rhs.answeredAt
+        }
+        if childInteractionResponses.count > 50 {
+            childInteractionResponses.removeFirst(childInteractionResponses.count - 50)
+        }
+    }
+
     private static func summary(from text: String) -> String {
+        summary(from: text, maxLength: 240)
+    }
+
+    private static func summary(from text: String, maxLength: Int) -> String {
         let collapsed = text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-        guard collapsed.count > 240 else { return collapsed }
-        return "\(collapsed.prefix(237))..."
+        guard collapsed.count > maxLength else { return collapsed }
+        return "\(collapsed.prefix(maxLength - 3))..."
+    }
+}
+
+struct CoordinatorChildInteractionResponseRecord: Codable, Equatable, Identifiable {
+    let id: UUID
+    let childSessionID: UUID
+    let childTitle: String
+    let interactionID: UUID?
+    let answeredAt: Date
+    let responseText: String
+
+    init(
+        id: UUID = UUID(),
+        childSessionID: UUID,
+        childTitle: String,
+        interactionID: UUID?,
+        answeredAt: Date,
+        responseText: String
+    ) {
+        self.id = id
+        self.childSessionID = childSessionID
+        self.childTitle = childTitle
+        self.interactionID = interactionID
+        self.answeredAt = answeredAt
+        self.responseText = responseText
+    }
+
+    var transcriptText: String {
+        "You answered \(childTitle):\n\n\(responseText)"
     }
 }
 

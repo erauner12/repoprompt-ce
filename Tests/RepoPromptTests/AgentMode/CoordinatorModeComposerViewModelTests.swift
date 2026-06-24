@@ -1189,6 +1189,236 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.composerNotice, "Coordinator is not available in this window.")
     }
 
+    func testActivePendingChildInteractionUsesSelectedCoordinatorScope() {
+        let selectedCoordinatorID = uuid(1)
+        let selectedChildID = uuid(2)
+        let otherCoordinatorID = uuid(3)
+        let otherChildID = uuid(4)
+        let selectedQuestion = pendingQuestionInteraction(
+            id: uuid(900),
+            title: "Deep Plan checkpoint",
+            prompt: "How involved do you want to be?"
+        )
+        let otherQuestion = pendingQuestionInteraction(
+            id: uuid(901),
+            title: "Other checkpoint",
+            prompt: "Unrelated question"
+        )
+        let input = input(
+            live: [
+                live(id: selectedCoordinatorID, tab: uuid(101), title: "Selected mission", updatedAt: date(40), state: .idle, isMCP: true),
+                live(id: selectedChildID, tab: uuid(102), title: "Deep Plan child", updatedAt: date(10), state: .waitingForQuestion, parent: selectedCoordinatorID),
+                live(id: otherCoordinatorID, tab: uuid(103), title: "Other mission", updatedAt: date(30), state: .idle, isMCP: true),
+                live(id: otherChildID, tab: uuid(104), title: "Other child", updatedAt: date(5), state: .waitingForQuestion, parent: otherCoordinatorID)
+            ],
+            mcpSnapshots: [
+                selectedChildID: mcpSnapshot(
+                    sessionID: selectedChildID,
+                    tabID: uuid(102),
+                    sessionName: "Deep Plan child",
+                    status: .waitingForInput,
+                    statusText: "Waiting for your answer",
+                    assistantPreview: nil,
+                    parent: selectedCoordinatorID,
+                    interaction: selectedQuestion
+                ),
+                otherChildID: mcpSnapshot(
+                    sessionID: otherChildID,
+                    tabID: uuid(104),
+                    sessionName: "Other child",
+                    status: .waitingForInput,
+                    statusText: "Waiting for your answer",
+                    assistantPreview: nil,
+                    parent: otherCoordinatorID,
+                    interaction: otherQuestion
+                )
+            ],
+            selectedCoordinatorID: selectedCoordinatorID,
+            demoCoordinatorIDs: [selectedCoordinatorID, otherCoordinatorID]
+        )
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                var next = input
+                next.sortMode = sortMode
+                if let selectedCoordinatorID {
+                    next.selectedCoordinatorID = selectedCoordinatorID
+                }
+                return next
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+
+        viewModel.refresh()
+
+        let row = viewModel.activePendingChildInteractionRow()
+        XCTAssertEqual(row?.sessionID, selectedChildID)
+        XCTAssertEqual(row?.pendingInteraction?.id, selectedQuestion.id)
+        XCTAssertEqual(row?.statusGroup, .needsYou)
+    }
+
+    func testPendingChildInteractionResponseForwardsToChildAndRecordsVisibleAnswer() async throws {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let question = pendingQuestionInteraction(
+            id: uuid(900),
+            title: "Deep Plan checkpoint",
+            prompt: "How involved do you want to be?"
+        )
+        let input = input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator mission", updatedAt: date(40), state: .idle, isMCP: true),
+                live(id: childID, tab: uuid(102), title: "Deep Plan child", updatedAt: date(10), state: .waitingForQuestion, parent: coordinatorID)
+            ],
+            mcpSnapshots: [
+                childID: mcpSnapshot(
+                    sessionID: childID,
+                    tabID: uuid(102),
+                    sessionName: "Deep Plan child",
+                    status: .waitingForInput,
+                    statusText: "Waiting for your answer",
+                    assistantPreview: nil,
+                    parent: coordinatorID,
+                    interaction: question
+                )
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        )
+        var childSubmissions: [(text: String, rowID: UUID)] = []
+        var recordedChildResponses: [(text: String, rowID: UUID)] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                var next = input
+                next.sortMode = sortMode
+                if let selectedCoordinatorID {
+                    next.selectedCoordinatorID = selectedCoordinatorID
+                }
+                return next
+            },
+            dashboardVisibilityHandler: { _ in },
+            childDirectiveSubmitter: { text, row in
+                childSubmissions.append((text, row.sessionID))
+                return .accepted
+            },
+            childInteractionResponseRecorder: { text, row in
+                recordedChildResponses.append((text, row.sessionID))
+            }
+        )
+        viewModel.refresh()
+        let row = try XCTUnwrap(viewModel.activePendingChildInteractionRow())
+
+        let result = await viewModel.submitPendingChildInteractionResponse("  Keep me involved at review checkpoints.  ", to: row)
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(childSubmissions.count, 1)
+        XCTAssertEqual(childSubmissions.first?.text, "Keep me involved at review checkpoints.")
+        XCTAssertEqual(childSubmissions.first?.rowID, childID)
+        XCTAssertEqual(recordedChildResponses.count, 1)
+        XCTAssertEqual(recordedChildResponses.first?.text, "Keep me involved at review checkpoints.")
+        XCTAssertEqual(recordedChildResponses.first?.rowID, childID)
+        XCTAssertNil(viewModel.composerNotice)
+        XCTAssertTrue(viewModel.railTranscriptEntries.contains { entry in
+            entry.role == .event
+                && entry.text == "You answered Deep Plan child:\n\nKeep me involved at review checkpoints."
+        })
+
+        viewModel.refresh()
+        XCTAssertTrue(viewModel.railTranscriptEntries.contains { entry in
+            entry.role == .event
+                && entry.text == "You answered Deep Plan child:\n\nKeep me involved at review checkpoints."
+        })
+
+        var followThroughState = CoordinatorFollowThroughState(originalObjectiveSummary: "Demo")
+        followThroughState.rememberChildInteractionResponse(
+            row: row,
+            text: "  Keep me involved at review checkpoints.  ",
+            at: date(50)
+        )
+        let decodedState = try JSONDecoder().decode(
+            CoordinatorFollowThroughState.self,
+            from: JSONEncoder().encode(followThroughState)
+        )
+        XCTAssertEqual(decodedState.childInteractionResponses.count, 1)
+        XCTAssertEqual(
+            decodedState.childInteractionResponses.first?.transcriptText,
+            "You answered Deep Plan child:\n\nKeep me involved at review checkpoints."
+        )
+    }
+
+    func testStructuredPendingChildInteractionResponseForwardsSelectedOptions() async throws {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let question = pendingQuestionInteraction(
+            id: uuid(901),
+            title: "Deep Plan involvement",
+            prompt: "How involved do you want to be?"
+        )
+        let input = input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator mission", updatedAt: date(40), state: .idle, isMCP: true),
+                live(id: childID, tab: uuid(102), title: "Deep Plan child", updatedAt: date(10), state: .waitingForQuestion, parent: coordinatorID)
+            ],
+            mcpSnapshots: [
+                childID: mcpSnapshot(
+                    sessionID: childID,
+                    tabID: uuid(102),
+                    sessionName: "Deep Plan child",
+                    status: .waitingForInput,
+                    statusText: "Waiting for your answer",
+                    assistantPreview: nil,
+                    parent: coordinatorID,
+                    interaction: question
+                )
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        )
+        var childSubmissions: [(submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission, rowID: UUID)] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                var next = input
+                next.sortMode = sortMode
+                if let selectedCoordinatorID {
+                    next.selectedCoordinatorID = selectedCoordinatorID
+                }
+                return next
+            },
+            dashboardVisibilityHandler: { _ in },
+            childInteractionResponseSubmitter: { submission, row in
+                childSubmissions.append((submission, row.sessionID))
+                return .accepted
+            }
+        )
+        viewModel.refresh()
+        let row = try XCTUnwrap(viewModel.activePendingChildInteractionRow())
+
+        let result = await viewModel.submitPendingChildInteractionResponse(
+            CoordinatorModeViewModel.ChildInteractionResponseSubmission(
+                text: nil,
+                skip: false,
+                answersByQuestionID: [
+                    "involvement": AgentAskUserAnswer(
+                        answers: ["Mid-flow"],
+                        selectedOptions: ["Mid-flow"],
+                        customResponse: nil,
+                        skipped: false
+                    )
+                ],
+                displayText: "Plan involvement: Mid-flow"
+            ),
+            to: row
+        )
+
+        XCTAssertEqual(result, .accepted)
+        let submission = try XCTUnwrap(childSubmissions.first?.submission)
+        XCTAssertEqual(submission.answersByQuestionID["involvement"]?.selectedOptions, ["Mid-flow"])
+        XCTAssertEqual(childSubmissions.first?.rowID, childID)
+        XCTAssertTrue(viewModel.railTranscriptEntries.contains { entry in
+            entry.role == .event
+                && entry.text == "You answered Deep Plan child:\n\nPlan involvement: Mid-flow"
+        })
+    }
+
     private func input(
         workspaceID: UUID? = UUID(uuidString: "00000000-0000-0000-0000-000000000090"),
         persisted: [CoordinatorModeSnapshotProjector.PersistedSession] = [],
@@ -1321,7 +1551,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         status: AgentRunMCPSnapshot.Status,
         statusText: String?,
         assistantPreview: String?,
-        parent: UUID?
+        parent: UUID?,
+        interaction: AgentRunMCPSnapshot.Interaction? = nil
     ) -> AgentRunMCPSnapshot {
         AgentRunMCPSnapshot(
             sessionID: sessionID,
@@ -1334,13 +1565,49 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             status: status,
             statusText: statusText,
             latestAssistantPreview: assistantPreview,
-            interaction: nil,
+            interaction: interaction,
             transcriptItemCount: 1,
             updatedAt: date(30),
             parentSessionID: parent,
             failureReason: nil,
             worktreeBindings: [],
             activeWorktreeMerges: []
+        )
+    }
+
+    private func pendingQuestionInteraction(
+        id: UUID,
+        title: String,
+        prompt: String
+    ) -> AgentRunMCPSnapshot.Interaction {
+        AgentRunMCPSnapshot.Interaction(
+            id: id,
+            kind: .question,
+            responseType: .structured,
+            title: title,
+            prompt: prompt,
+            context: "This decides where the child pauses for input.",
+            allowsMultiple: nil,
+            options: [],
+            fields: [
+                AgentRunMCPSnapshot.Interaction.Field(
+                    id: "involvement",
+                    header: "Plan involvement",
+                    prompt: prompt,
+                    context: nil,
+                    isSecret: false,
+                    allowsOther: true,
+                    allowsMultiple: false,
+                    allowsCustom: true,
+                    options: [
+                        AgentRunMCPSnapshot.Interaction.Option(label: "Mid-flow", description: "Check in before review."),
+                        AgentRunMCPSnapshot.Interaction.Option(label: "Hands-off", description: "Surface the plan when ready.")
+                    ]
+                )
+            ],
+            details: [
+                AgentRunMCPSnapshot.Interaction.Detail(label: "Workflow", value: "Deep Plan", isCode: false)
+            ]
         )
     }
 

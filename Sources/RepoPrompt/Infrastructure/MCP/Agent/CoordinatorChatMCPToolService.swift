@@ -9,6 +9,8 @@ struct CoordinatorChatMCPToolService {
         var selectCoordinator: (_ sessionID: UUID?) -> Void
         var startNewCoordinatorRun: () -> Void
         var submitDirective: (_ text: String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
+        var activePendingChildInteractionRow: () -> CoordinatorModeRow?
+        var submitPendingChildInteractionResponse: (_ submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission, _ row: CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
     }
 
     private let toolName: String
@@ -26,7 +28,9 @@ struct CoordinatorChatMCPToolService {
                 refresh: { coordinatorViewModel.refresh() },
                 selectCoordinator: { coordinatorViewModel.selectCoordinator(sessionID: $0) },
                 startNewCoordinatorRun: { coordinatorViewModel.startNewCoordinatorRun() },
-                submitDirective: { await coordinatorViewModel.submitCoordinatorDirective($0) }
+                submitDirective: { await coordinatorViewModel.submitCoordinatorDirective($0) },
+                activePendingChildInteractionRow: { coordinatorViewModel.activePendingChildInteractionRow() },
+                submitPendingChildInteractionResponse: { await coordinatorViewModel.submitPendingChildInteractionResponse($0, to: $1) }
             )
         }
     }
@@ -67,8 +71,11 @@ struct CoordinatorChatMCPToolService {
             ])
 
         case "submit":
-            let message = try AgentMCPToolHelpers.requireNonEmptyString(args["message"], name: "message")
+            let message = normalizedString(args["message"] ?? args["response"])
             let newParent = AgentMCPToolHelpers.parseBool(args["new_parent"]) ?? false
+            if newParent, message == nil {
+                throw MCPError.invalidParams("message is required.")
+            }
 
             environment.refresh()
             if newParent {
@@ -79,17 +86,32 @@ struct CoordinatorChatMCPToolService {
                 environment.selectCoordinator(sessionID)
             }
 
-            let result = await environment.submitDirective(message)
+            let pendingChildRow = newParent ? nil : environment.activePendingChildInteractionRow()
+            let result: CoordinatorModeViewModel.DirectiveSubmissionResult
+            let routedToChildInteraction: Bool
+            if let pendingChildRow {
+                let submission = try pendingChildSubmission(args: args, message: message)
+                result = await environment.submitPendingChildInteractionResponse(submission, pendingChildRow)
+                routedToChildInteraction = true
+            } else {
+                guard let message, !message.isEmpty else {
+                    throw MCPError.invalidParams("message is required.")
+                }
+                result = await environment.submitDirective(message)
+                routedToChildInteraction = false
+            }
             environment.refresh()
 
             switch result {
             case .accepted:
                 return stateResponse(environment.snapshot(), extra: [
-                    "accepted": .bool(true)
+                    "accepted": .bool(true),
+                    "routed_to": .string(routedToChildInteraction ? "child_interaction" : "coordinator")
                 ])
             case let .rejected(message):
                 return stateResponse(environment.snapshot(), extra: [
                     "accepted": .bool(false),
+                    "routed_to": .string(routedToChildInteraction ? "child_interaction" : "coordinator"),
                     "error": .string(message)
                 ])
             }
@@ -99,12 +121,137 @@ struct CoordinatorChatMCPToolService {
         }
     }
 
+    private func pendingChildSubmission(
+        args: [String: Value],
+        message: String?
+    ) throws -> CoordinatorModeViewModel.ChildInteractionResponseSubmission {
+        let parsedAnswers = try args["answers"].map(parseAnswers)
+        let explicitSkip: Bool
+        if let skipValue = args["skip"] {
+            guard let skipBool = skipValue.boolValue else {
+                throw MCPError.invalidParams("skip must be a boolean.")
+            }
+            explicitSkip = skipBool
+        } else {
+            explicitSkip = false
+        }
+        let trimmedMessage = message?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if explicitSkip {
+            if parsedAnswers?.isEmpty == false || trimmedMessage?.isEmpty == false {
+                throw MCPError.invalidParams("skip cannot be combined with message or answers.")
+            }
+            return CoordinatorModeViewModel.ChildInteractionResponseSubmission(
+                text: nil,
+                skip: true,
+                answersByQuestionID: [:],
+                displayText: "Skipped child checkpoint"
+            )
+        }
+        let answers = parsedAnswers ?? [:]
+        let displayText = structuredAnswerDisplayText(answers, fallback: trimmedMessage)
+        guard !answers.isEmpty || !(trimmedMessage ?? "").isEmpty else {
+            throw MCPError.invalidParams("message or answers are required for the pending child interaction.")
+        }
+        return CoordinatorModeViewModel.ChildInteractionResponseSubmission(
+            text: trimmedMessage,
+            skip: false,
+            answersByQuestionID: answers,
+            displayText: displayText
+        )
+    }
+
     private func requireCoordinatorSessionID(_ value: Value?) throws -> UUID {
         let raw = try AgentMCPToolHelpers.requireNonEmptyString(value, name: "coordinator_session_id")
         guard let sessionID = UUID(uuidString: raw) else {
             throw MCPError.invalidParams("coordinator_session_id must be a UUID.")
         }
         return sessionID
+    }
+
+    private func normalizedString(_ value: Value?) -> String? {
+        guard let value = value?.stringValue else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func parseAnswers(_ value: Value) throws -> [String: AgentAskUserAnswer] {
+        guard let object = value.objectValue else {
+            throw MCPError.invalidParams("answers must be an object keyed by question ID.")
+        }
+        var answers = [String: AgentAskUserAnswer]()
+        for entry in object {
+            let questionID = entry.key.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !questionID.isEmpty else {
+                throw MCPError.invalidParams("answers cannot contain an empty question ID.")
+            }
+            answers[questionID] = try parseAnswerValue(entry.value, questionID: questionID)
+        }
+        return answers
+    }
+
+    private func parseAnswerValue(_ value: Value, questionID: String) throws -> AgentAskUserAnswer {
+        if let answer = value.stringValue {
+            return AgentAskUserAnswer(answers: [answer], selectedOptions: [], customResponse: nil, skipped: false)
+        }
+        if let answerArray = value.arrayValue {
+            let answers = try parseAnswerStringArray(answerArray, name: "answers['\(questionID)']")
+            return AgentAskUserAnswer(answers: answers, selectedOptions: [], customResponse: nil, skipped: false)
+        }
+        guard let answerObject = value.objectValue else {
+            throw MCPError.invalidParams("answers['\(questionID)'] must be a string, array of strings, or object.")
+        }
+        let skipped = answerObject["skipped"]?.boolValue == true || answerObject["skip"]?.boolValue == true
+        let selectedOptions = try parseOptionalAnswerStrings(
+            answerObject["selected_options"] ?? answerObject["selectedOptions"],
+            name: "answers['\(questionID)'].selected_options"
+        ) ?? []
+        let customResponse = normalizedString(answerObject["custom_response"] ?? answerObject["customResponse"])
+        let explicitAnswers = try parseOptionalAnswerStrings(answerObject["answers"], name: "answers['\(questionID)'].answers")
+        let resolvedAnswers = explicitAnswers ?? (selectedOptions + (customResponse.map { [$0] } ?? []))
+        if skipped {
+            guard resolvedAnswers.isEmpty, selectedOptions.isEmpty, customResponse == nil else {
+                throw MCPError.invalidParams("answers['\(questionID)'] cannot be skipped and answered at the same time.")
+            }
+            return AgentAskUserAnswer(answers: [], selectedOptions: [], customResponse: nil, skipped: true)
+        }
+        return AgentAskUserAnswer(
+            answers: resolvedAnswers,
+            selectedOptions: selectedOptions,
+            customResponse: customResponse,
+            skipped: false
+        )
+    }
+
+    private func parseOptionalAnswerStrings(_ value: Value?, name: String) throws -> [String]? {
+        guard let value else { return nil }
+        if let answer = value.stringValue {
+            return [answer]
+        }
+        guard let answerArray = value.arrayValue else {
+            throw MCPError.invalidParams("\(name) must be a string or array of strings.")
+        }
+        return try parseAnswerStringArray(answerArray, name: name)
+    }
+
+    private func parseAnswerStringArray(_ values: [Value], name: String) throws -> [String] {
+        try values.map { element -> String in
+            guard let text = element.stringValue else {
+                throw MCPError.invalidParams("\(name) must contain only strings.")
+            }
+            return text
+        }
+    }
+
+    private func structuredAnswerDisplayText(_ answers: [String: AgentAskUserAnswer], fallback: String?) -> String {
+        if !answers.isEmpty {
+            return answers.keys.sorted().map { questionID in
+                guard let answer = answers[questionID] else { return "\(questionID):" }
+                let value = answer.skipped ? "Skipped" : answer.answers.joined(separator: ", ")
+                return "\(questionID): \(value)"
+            }
+            .joined(separator: "\n")
+        }
+        return fallback ?? ""
     }
 
     private func validateCoordinatorExists(_ sessionID: UUID, in snapshot: CoordinatorModeSnapshot) throws {

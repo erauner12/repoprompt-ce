@@ -105,7 +105,7 @@ struct CoordinatorModePendingInteractionSummary {
 }
 ```
 
-If `openAgentChatRoute` is nil, the Coordinator view hides or disables `Open agent chat` / `Decide`. Coordinator-view-side responses remain follow-ups. Coordinator directives are limited to the current-window composer defined below.
+If `openAgentChatRoute` is nil, the Coordinator view hides or disables `Open agent chat` / `Decide`. General pending responses still route to Agent Mode, but a selected-Mission child pending interaction can be bridged into the Coordinator composer as a visible child checkpoint. In that case, the next user message is forwarded to the existing pending-interaction response path for that child and recorded in the Coordinator rail as "user answered the child," not as a normal Coordinator-authored directive.
 
 ### 9. Deep links use existing Agent UI routing
 
@@ -164,6 +164,10 @@ The rail conversation should also be wide and rich enough to read as a first-cla
 The Coordinator composer should share Agent Mode's composer visual vocabulary without exposing Agent Mode's normal agent-session controls. It may use a rounded command surface, separated text area, compact status/identity strip, send affordance, slash-skill/file-mention input overlays, and compact MCP/tool controls that write to the same provider preferences used by Coordinator runs. It should not add model, workflow, broad permission, attachment, or child-session controls until those controls represent real Coordinator-view behavior.
 
 Coordinator Mission Templates are the one Coordinator-specific prompt-wrapper affordance in this composer. They apply only when starting a fresh parent Mission, not to existing Mission follow-ups. The template store deliberately mirrors Agent Mode workflow markdown/frontmatter ergonomics while remaining a separate store and model because Agent workflows describe delegated child-agent behavior, whereas Mission Templates shape the parent Coordinator's initial objective. The submit path therefore carries both visible raw Mission text and provider-wrapped runtime text: the Coordinator runtime receives the wrapped prompt, while rail transcript and follow-through state remember the raw objective plus lightweight selected-template metadata.
+
+Built-in Mission Templates may demonstrate staged Coordinator control-plane patterns. For example, a Deep Plan -> Orchestrate -> Review template still wraps the parent Coordinator Mission, but its instructions tell that parent to delegate child sessions using real Agent Mode workflows, pause when Deep Plan reaches a user checkpoint, and only continue into mutable Orchestrate/Review work after the user proceeds.
+
+The staged Deep Plan checkpoint should stay conversational while preserving the child interaction shape. When the Deep Plan child enters `Needs you`, the board/card state remains observability, while the Coordinator chat shows the sourced child question with the same structured options, custom answer affordance, skip controls, and validation used by Agent Mode `ask_user`. The app forwards that structured answer to the child session that asked; it does not let the Coordinator invent the answer or ask the user to jump into Agent Mode for the happy-path demo. Auto follow-through remains held while any selected-Mission child is in `Needs you`, and resumes only after the child advances or completes. Plain text remains a fallback for non-structured pending interaction kinds.
 
 ### 13B. Demo fleet scope must become one-to-many
 
