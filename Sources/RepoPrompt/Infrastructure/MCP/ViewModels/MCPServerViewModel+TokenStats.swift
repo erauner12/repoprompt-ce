@@ -236,7 +236,7 @@ extension MCPServerViewModel {
         let entries = collections.selected.map(\.entry) + collections.codemap.map(\.entry)
         let snapshots = await PromptContextAccountingService().makePromptFileEntrySnapshots(
             from: entries,
-            codemapSnapshotBundle: collections.codemapSnapshotBundle,
+            codemapPresentation: collections.codemapPresentation,
             filePathDisplay: promptVM.filePathDisplayOption
         )
         return await TokenCalculationService().evaluatePromptEntries(snapshots)
@@ -299,7 +299,8 @@ extension MCPServerViewModel {
                 resolvedContext: resolvedContext,
                 selectedFiles: collections.selected.map(\.file),
                 codemapFiles: collections.codemap.map(\.file),
-                lookupContext: lookupContext
+                lookupContext: lookupContext,
+                codemapPresentation: collections.codemapPresentation
             )
             guard !Task.isCancelled,
                   mcpVirtualTokenRefreshGenerationByTabID[context.tabID]?[signature] == generation

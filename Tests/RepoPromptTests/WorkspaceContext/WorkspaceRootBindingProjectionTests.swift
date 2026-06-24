@@ -125,12 +125,115 @@ final class WorkspaceRootBindingProjectionTests: XCTestCase {
         let mapping = try XCTUnwrap(scope.rootMappings.first)
         XCTAssertEqual(scope.kind, "session_bound_worktree")
         XCTAssertEqual(mapping.logicalRootName, "Project")
-        XCTAssertEqual(mapping.logicalRootPath, "/repo/project")
+        XCTAssertEqual(mapping.logicalRootPath, "Project")
         XCTAssertEqual(mapping.effectiveRootName, "project-agent")
-        XCTAssertEqual(mapping.effectiveRootPath, "/tmp/worktrees/project-agent")
+        XCTAssertEqual(mapping.effectiveRootPath, "session-bound")
         XCTAssertEqual(mapping.worktreeID, "wt-1")
         XCTAssertEqual(mapping.branch, "feature/demo")
         XCTAssertEqual(mapping.label, "Demo Worktree")
+    }
+
+    func testDuplicateLogicalRootBasenamesProduceStableUniqueNonPhysicalLabels() throws {
+        let reusedRootID = try XCTUnwrap(UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000001"))
+        let firstLifetimeID = try XCTUnwrap(UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000001"))
+        let secondLifetimeID = try XCTUnwrap(UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002"))
+        let firstEpoch = WorkspaceCodemapRootEpoch(
+            rootID: reusedRootID,
+            rootLifetimeID: firstLifetimeID
+        )
+        let secondEpoch = WorkspaceCodemapRootEpoch(
+            rootID: reusedRootID,
+            rootLifetimeID: secondLifetimeID
+        )
+        let priorGeneratedLabel = WorkspaceLogicalRootIdentity.label(for: firstEpoch)
+        let firstLogical = WorkspaceRootRef(id: UUID(), name: "repo", fullPath: "/canonical/one/repo")
+        let secondLogical = WorkspaceRootRef(
+            id: UUID(),
+            name: priorGeneratedLabel,
+            fullPath: "/canonical/two/repo"
+        )
+        let firstPhysical = WorkspaceRootRef(id: UUID(), name: "secret-one", fullPath: "/private/worktrees/secret-one")
+        let secondPhysical = WorkspaceRootRef(
+            id: UUID(),
+            name: priorGeneratedLabel,
+            fullPath: "/private/worktrees/secret-two"
+        )
+        let repeatedEpochPhysical = WorkspaceRootRef(
+            id: UUID(),
+            name: "secret-three",
+            fullPath: "/private/worktrees/secret-three"
+        )
+        let descriptors = [
+            WorkspaceLogicalRootIdentity.RootDescriptor(
+                physicalRootID: firstPhysical.id,
+                rootEpoch: firstEpoch
+            ),
+            WorkspaceLogicalRootIdentity.RootDescriptor(
+                physicalRootID: secondPhysical.id,
+                rootEpoch: secondEpoch
+            ),
+            WorkspaceLogicalRootIdentity.RootDescriptor(
+                physicalRootID: repeatedEpochPhysical.id,
+                rootEpoch: firstEpoch
+            )
+        ]
+
+        let first = WorkspaceLogicalRootIdentity.labels(for: descriptors)
+        let second = WorkspaceLogicalRootIdentity.labels(for: Array(descriptors.reversed()))
+
+        XCTAssertEqual(first, second)
+        let firstLabel = "root@aaaaaaaa-0000-0000-0000-000000000001+bbbbbbbb-0000-0000-0000-000000000001"
+        let secondLabel = "root@aaaaaaaa-0000-0000-0000-000000000001+bbbbbbbb-0000-0000-0000-000000000002"
+        XCTAssertEqual(first[firstPhysical.id], firstLabel)
+        XCTAssertEqual(first[repeatedEpochPhysical.id], firstLabel)
+        XCTAssertEqual(first[secondPhysical.id], secondLabel)
+        XCTAssertNotEqual(firstLabel, secondLabel)
+        XCTAssertEqual(priorGeneratedLabel, firstLabel)
+        let logicalPaths = try [firstPhysical.id, secondPhysical.id].map { physicalRootID in
+            try XCTUnwrap(try WorkspaceCodemapLogicalPresentationPath(
+                rootDisplayName: XCTUnwrap(first[physicalRootID]),
+                standardizedRelativePath: "Sources/App.swift"
+            )).displayPath
+        }.sorted()
+        XCTAssertEqual(
+            logicalPaths,
+            [
+                "\(firstLabel)/Sources/App.swift",
+                "\(secondLabel)/Sources/App.swift"
+            ]
+        )
+        XCTAssertFalse(first.values.contains { $0.contains("/canonical/") || $0.contains("/private/") })
+
+        let projection = WorkspaceRootBindingProjection(
+            sessionID: UUID(),
+            boundRoots: [
+                .init(
+                    logicalRoot: secondLogical,
+                    physicalRoot: secondPhysical,
+                    binding: Self.binding(
+                        logicalRoot: secondLogical,
+                        physicalRoot: secondPhysical,
+                        worktreeID: "two"
+                    )
+                ),
+                .init(
+                    logicalRoot: firstLogical,
+                    physicalRoot: firstPhysical,
+                    binding: Self.binding(
+                        logicalRoot: firstLogical,
+                        physicalRoot: firstPhysical,
+                        worktreeID: "one"
+                    )
+                )
+            ]
+        )
+        let scope = try XCTUnwrap(ToolResultDTOs.WorktreeScopeDTO.sessionBound(from: projection))
+        let encoded = try XCTUnwrap(String(data: JSONEncoder().encode(scope), encoding: .utf8))
+        XCTAssertEqual(Set(scope.rootMappings.map(\.logicalRootName)).count, 2)
+        XCTAssertFalse(encoded.contains(firstPhysical.standardizedFullPath))
+        XCTAssertFalse(encoded.contains(secondPhysical.standardizedFullPath))
+        XCTAssertFalse(encoded.contains(firstLogical.standardizedFullPath))
+        XCTAssertFalse(encoded.contains(secondLogical.standardizedFullPath))
     }
 
     func testFileTreeSnapshotIsDisplayedAsLogicalRoot() {

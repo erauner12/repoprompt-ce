@@ -345,16 +345,48 @@ final class WorkspaceFileContextStoreTests: XCTestCase {
         #endif
     }
 
-    func testResolvedClipboardPackagingRendersStoreCodemaps() async throws {
+    func testResolvedClipboardPackagingRendersFrozenOperationPresentation() async throws {
         let root = try makeTemporaryRoot(name: "ResolvedClipboard")
         let fileURL = root.appendingPathComponent("A.swift")
         try write("struct A { func fullContent() {} }", to: fileURL)
 
         let store = WorkspaceFileContextStore()
         _ = try await store.loadRoot(path: root.path)
-        await store.applyObservedCodemapResults([
-            WorkspaceObservedCodemapResult(fullPath: fileURL.path, modificationDate: Date(), fileAPI: makeFileAPI(path: fileURL.path))
-        ])
+        let lookup = await store.lookupPath(fileURL.path)
+        let file = try XCTUnwrap(lookup?.file)
+        let rendered = makeFileAPI(path: fileURL.path)
+            .getFullAPIDescription(displayPath: "ResolvedClipboard/A.swift")
+        let pipeline = try SyntaxManager().pipelineIdentity(
+            for: .swift,
+            decoderPolicy: .workspaceAutomaticV1
+        )
+        let bundleID = WorkspaceCodemapFrozenPresentationBundleID()
+        let presentation = try WorkspaceCodemapOperationPresentation(
+            orderedEntries: [
+                WorkspaceCodemapOperationRenderedEntry(
+                    bundleID: bundleID,
+                    fileID: file.id,
+                    rootEpoch: WorkspaceCodemapRootEpoch(
+                        rootID: file.rootID,
+                        rootLifetimeID: UUID()
+                    ),
+                    artifactKey: CodeMapArtifactKey(
+                        rawSHA256: CodeMapRawSourceDigest(bytes: Data(repeating: 1, count: 32)),
+                        rawByteCount: UInt64(rendered.utf8.count),
+                        pipelineIdentity: pipeline
+                    ),
+                    logicalPath: XCTUnwrap(WorkspaceCodemapLogicalPresentationPath(
+                        rootDisplayName: "ResolvedClipboard",
+                        standardizedRelativePath: file.standardizedRelativePath
+                    )),
+                    text: rendered,
+                    tokenCount: TokenCalculationService.estimateTokens(for: rendered)
+                )
+            ],
+            coverage: .complete,
+            issues: [],
+            publicationReceipt: nil
+        )
 
         let service = PromptContextAccountingService()
         let selection = StoredSelection(
@@ -363,12 +395,11 @@ final class WorkspaceFileContextStoreTests: XCTestCase {
             slices: [:],
             codemapAutoEnabled: false
         )
-        let codemapSnapshotBundle = await store.codemapSnapshotBundle()
         let resolution = await service.resolveEntries(
             selection: selection,
             store: store,
             codeMapUsage: .selected,
-            codemapSnapshotBundle: codemapSnapshotBundle
+            codemapPresentation: presentation
         )
 
         let clipboard = await PromptPackagingService.generateClipboardContent(
@@ -380,14 +411,14 @@ final class WorkspaceFileContextStoreTests: XCTestCase {
             includeFiles: true,
             includeUserPrompt: true,
             filePathDisplay: .relative,
-            codemapSnapshotBundle: codemapSnapshotBundle,
+            codemapPresentation: resolution.codemapPresentation,
             promptSectionsOrder: PromptAssemblyBuilder.defaultSectionOrder,
             disabledPromptSections: [],
             duplicateUserInstructionsAtTop: false
         )
 
         XCTAssertTrue(clipboard.contains("<file_map>"))
-        XCTAssertTrue(clipboard.contains("File: A.swift"))
+        XCTAssertTrue(clipboard.contains("File: ResolvedClipboard/A.swift"))
         XCTAssertTrue(clipboard.contains("codemapOnlySymbol"))
         XCTAssertFalse(clipboard.contains("<file_contents>"))
         XCTAssertFalse(clipboard.contains("fullContent"))

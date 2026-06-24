@@ -62,7 +62,11 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         let duplicateTicket = try await pendingTicket(
             store.requestCodemapArtifact(forFileID: file.id)
         )
-        XCTAssertEqual(firstTicket, duplicateTicket)
+        XCTAssertNotEqual(firstTicket.retainID, duplicateTicket.retainID)
+        XCTAssertEqual(firstTicket.requestID, duplicateTicket.requestID)
+        XCTAssertEqual(firstTicket.rootEpoch, duplicateTicket.rootEpoch)
+        XCTAssertEqual(firstTicket.fileID, duplicateTicket.fileID)
+        XCTAssertEqual(firstTicket.requestGeneration, duplicateTicket.requestGeneration)
         let gateEntered = await gate.waitUntilEntered()
         XCTAssertTrue(gateEntered)
 
@@ -240,6 +244,512 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         let fullyReleasedAccounting = await runtime.artifactStore.accounting()
         XCTAssertEqual(fullyReleasedAccounting.activeLeaseCount, 0)
         XCTAssertEqual(fullyReleasedAccounting.activeLeaseBytes, 0)
+    }
+
+    func testOperationPresentationCoordinatesMultiRootLogicalOutputAndReleasesAllRetains() async throws {
+        let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
+        let firstRoot = try repositoryFixture.makeRepository(
+            named: "physical-first-secret",
+            files: ["Sources/First.swift": "protocol FirstProtocol { func first() -> String }\nstruct First: FirstProtocol { func first() -> String { \"first\" } }\n"]
+        )
+        let secondRoot = try repositoryFixture.makeRepository(
+            named: "physical-second-secret",
+            files: ["Sources/Second.swift": "protocol SecondProtocol { func second() -> String }\nstruct Second: SecondProtocol { func second() -> String { \"second\" } }\n"]
+        )
+        let fixture = try ModernCodemapStoreFixture(name: #function)
+        addTeardownBlock {
+            await fixture.shutdown()
+            repositoryFixture.cleanup()
+        }
+        let store = fixture.makeStore()
+        let firstLoaded = try await store.loadRoot(path: firstRoot.path)
+        let secondLoaded = try await store.loadRoot(path: secondRoot.path)
+        let firstFiles = await store.files(inRoot: firstLoaded.id)
+        let firstFile = try XCTUnwrap(firstFiles.first)
+        let secondFiles = await store.files(inRoot: secondLoaded.id)
+        let secondFile = try XCTUnwrap(secondFiles.first)
+
+        let presentation = try await WorkspaceCodemapPresentationCoordinator(store: store)
+            .presentation(
+                for: .exact(fileIDs: [secondFile.id, firstFile.id], completeRootSet: false),
+                rootScope: .allLoaded,
+                logicalRootDisplayNamesByRootID: [
+                    firstLoaded.id: "LogicalFirst",
+                    secondLoaded.id: "LogicalSecond"
+                ]
+            )
+
+        XCTAssertEqual(presentation.coverage, .complete)
+        XCTAssertEqual(presentation.orderedEntries.count, 2)
+        XCTAssertEqual(Set(presentation.orderedEntries.map(\.rootEpoch)).count, 2)
+        XCTAssertEqual(
+            presentation.orderedEntries.map(\.logicalPath.displayPath),
+            ["LogicalFirst/Sources/First.swift", "LogicalSecond/Sources/Second.swift"]
+        )
+        XCTAssertTrue(presentation.orderedEntries.allSatisfy { $0.tokenCount == TokenCalculationService.estimateTokens(for: $0.text) })
+        XCTAssertFalse(presentation.orderedEntries.contains { $0.text.contains(firstRoot.path) || $0.text.contains(secondRoot.path) })
+        let receipt = try XCTUnwrap(presentation.publicationReceipt)
+        for ticket in receipt.demandTickets {
+            let retainCount = await store.codemapArtifactDemandRetainCountForTesting(ticket)
+            XCTAssertEqual(retainCount, 0)
+        }
+        for bundle in receipt.bundles {
+            let retainCount = await store.codemapPresentationRetainCountForTesting(
+                rootEpoch: bundle.rootEpoch
+            )
+            XCTAssertEqual(retainCount, 0)
+        }
+    }
+
+    func testOperationPresentationMixedReadyAndPendingPublishesReadyReceipt() async throws {
+        let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
+        let root = try repositoryFixture.makeRepository(
+            named: "repository",
+            files: [
+                "Sources/Ready.swift": "struct Ready { func value() -> Int { 1 } }\n",
+                "Sources/Pending.swift": "struct Pending { func value() -> Int { 2 } }\n"
+            ]
+        )
+        let fixture = try ModernCodemapStoreFixture(name: #function)
+        addTeardownBlock {
+            await fixture.shutdown()
+            repositoryFixture.cleanup()
+        }
+        let pendingFileID = ModernCodemapLockedValues<UUID>()
+        let store = fixture.makeStore(demandResultHook: { ticket, result in
+            if pendingFileID.values.contains(ticket.fileID) {
+                return .busy(retryAfterMilliseconds: 1000)
+            }
+            return result
+        })
+        let loaded = try await store.loadRoot(path: root.path)
+        let files = await store.files(inRoot: loaded.id)
+        let ready = try XCTUnwrap(files.first { $0.name == "Ready.swift" })
+        let pending = try XCTUnwrap(files.first { $0.name == "Pending.swift" })
+        pendingFileID.append(pending.id)
+        let warmResult = await store.requestCodemapArtifact(forFileID: ready.id)
+        let warmReady: WorkspaceCodemapArtifactDemandReady
+        switch warmResult {
+        case let .ready(value):
+            warmReady = value
+        case let .pending(ticket):
+            warmReady = try await readyResult(
+                settledResult(store: store, ticket: ticket)
+            )
+        case let .unavailable(reason):
+            XCTFail("Expected ready warm demand, got \(reason)")
+            throw ModernCodemapStoreTestError.timedOut
+        }
+        let receipts = ModernCodemapLockedValues<WorkspaceCodemapOperationPresentationPublicationReceipt>()
+        let coordinator = WorkspaceCodemapPresentationCoordinator(
+            store: store,
+            policy: WorkspaceCodemapPresentationRequestPolicy(
+                maximumReadinessRounds: 1,
+                maximumTotalWait: .milliseconds(50)
+            ),
+            beforePublicationRevalidation: { receipts.append($0) }
+        )
+
+        let presentation = try await coordinator.presentation(
+            for: .exact(fileIDs: [pending.id, ready.id], completeRootSet: false),
+            rootScope: .allLoaded
+        )
+
+        guard case .partial = presentation.coverage else {
+            return XCTFail("A ready sibling must remain publishable while another demand is pending")
+        }
+        XCTAssertEqual(presentation.orderedEntries.map(\.fileID), [ready.id])
+        let receipt = try XCTUnwrap(receipts.values.first)
+        XCTAssertEqual(receipt.candidates.map(\.fileID), [ready.id])
+        XCTAssertEqual(receipt.demandTickets.map(\.fileID), [ready.id])
+        XCTAssertTrue(receipt.bundles.allSatisfy { bundle in
+            bundle.entries.allSatisfy { $0.ticket.fileID == ready.id }
+        })
+        _ = await store.cancelCodemapArtifactDemand(warmReady.ticket)
+    }
+
+    func testStructureSeedDemandLimitRejectsBeforeRuntimeOrBuild() async throws {
+        let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
+        let root = try repositoryFixture.makeRepository(
+            named: "repository",
+            files: [
+                "Sources/One.swift": "struct One {}\n",
+                "Sources/Two.swift": "struct Two {}\n"
+            ]
+        )
+        let fixture = try ModernCodemapStoreFixture(name: #function)
+        addTeardownBlock {
+            await fixture.shutdown()
+            repositoryFixture.cleanup()
+        }
+        let store = fixture.makeStore()
+        let loaded = try await store.loadRoot(path: root.path)
+        let files = await store.files(inRoot: loaded.id)
+        XCTAssertEqual(files.count, 2)
+        let coordinator = WorkspaceCodemapPresentationCoordinator(
+            store: store,
+            policy: WorkspaceCodemapPresentationRequestPolicy(
+                maximumCandidateDemandCount: 1
+            )
+        )
+
+        let presentation = try await coordinator.structurePresentation(
+            seedFileIDs: files.map(\.id),
+            direction: nil,
+            traversalLimits: .init(
+                maximumDepth: 0,
+                maximumNodeCount: 10,
+                maximumEdgeCount: 10,
+                maximumByteCount: 4096
+            ),
+            outputLimits: .init(maximumFileCount: 10, maximumCodemapTokenCount: 6000),
+            rootScope: .allLoaded
+        )
+
+        XCTAssertEqual(presentation.outcome, .budget)
+        XCTAssertTrue(presentation.entries.isEmpty)
+        XCTAssertEqual(presentation.resolvedSeedCount, 0)
+        XCTAssertTrue(presentation.issues.contains {
+            if case .seedDemandLimit(attempted: 2, limit: 1) = $0 { return true }
+            return false
+        })
+        XCTAssertEqual(fixture.providerAccessCount.value, 0)
+        XCTAssertEqual(fixture.runtimeFactoryCount.value, 0)
+        XCTAssertEqual(fixture.engineFactoryCount.value, 0)
+        XCTAssertEqual(fixture.manifestReadCount.value, 0)
+        XCTAssertEqual(fixture.buildCount.value, 0)
+    }
+
+    func testStructurePresentationSeedUsesPairedModernRenderAndReleasesReceiptResources() async throws {
+        let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
+        let root = try repositoryFixture.makeRepository(
+            named: "physical-secret",
+            files: [
+                "Sources/Feature.swift": "protocol FeatureProtocol { func feature() }\nstruct Feature: FeatureProtocol { func feature() {} }\n"
+            ]
+        )
+        let fixture = try ModernCodemapStoreFixture(name: #function)
+        addTeardownBlock {
+            await fixture.shutdown()
+            repositoryFixture.cleanup()
+        }
+        let releasedTickets = ModernCodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
+        let store = fixture.makeStore(cancellationCleanupHook: { ticket in
+            releasedTickets.append(ticket)
+        })
+        let loaded = try await store.loadRoot(path: root.path)
+        let loadedFiles = await store.files(inRoot: loaded.id)
+        let file = try XCTUnwrap(loadedFiles.first)
+
+        let presentation = try await WorkspaceCodemapPresentationCoordinator(store: store)
+            .structurePresentation(
+                seedFileIDs: [file.id],
+                direction: nil,
+                traversalLimits: .init(
+                    maximumDepth: 0,
+                    maximumNodeCount: 10,
+                    maximumEdgeCount: 10,
+                    maximumByteCount: 4096
+                ),
+                outputLimits: .init(
+                    maximumFileCount: 10,
+                    maximumCodemapTokenCount: 6000
+                ),
+                rootScope: .allLoaded,
+                logicalRootDisplayNamesByRootID: [loaded.id: "Logical"]
+            )
+
+        XCTAssertEqual(presentation.outcome, .ready)
+        let rendered = try XCTUnwrap(presentation.entries.first)
+        XCTAssertTrue(rendered.isSeed)
+        XCTAssertEqual(rendered.depth, 0)
+        XCTAssertEqual(rendered.entry.logicalPath.displayPath, "Logical/Sources/Feature.swift")
+        XCTAssertEqual(rendered.entry.tokenCount, TokenCalculationService.estimateTokens(for: rendered.entry.text))
+        XCTAssertFalse(rendered.entry.text.contains(root.path))
+        let ticket = try XCTUnwrap(releasedTickets.values.last)
+        let demandRetainCount = await store.codemapArtifactDemandRetainCountForTesting(ticket)
+        let presentationRetainCount = await store.codemapPresentationRetainCountForTesting(
+            rootEpoch: ticket.rootEpoch
+        )
+        XCTAssertEqual(demandRetainCount, 0)
+        XCTAssertEqual(presentationRetainCount, 0)
+    }
+
+    func testStructurePublicationRevocationRetriesThenReturnsTypedStale() async throws {
+        let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
+        let root = try repositoryFixture.makeRepository(
+            named: "repository",
+            files: [
+                "Sources/Feature.swift": "protocol FeatureProtocol { func feature() }\nstruct Feature: FeatureProtocol { func feature() {} }\n"
+            ]
+        )
+        let fixture = try ModernCodemapStoreFixture(name: #function)
+        addTeardownBlock {
+            await fixture.shutdown()
+            repositoryFixture.cleanup()
+        }
+        let store = fixture.makeStore()
+        let loaded = try await store.loadRoot(path: root.path)
+        let loadedFiles = await store.files(inRoot: loaded.id)
+        let file = try XCTUnwrap(loadedFiles.first)
+        let publicationCount = ModernCodemapLockedCounter()
+        let structureAttempts = ModernCodemapLockedValues<Int>()
+        let coordinator = WorkspaceCodemapPresentationCoordinator(
+            store: store,
+            policy: WorkspaceCodemapPresentationRequestPolicy(
+                maximumReadinessRounds: 20,
+                maximumTotalWait: .seconds(10)
+            ),
+            beforePublicationRevalidation: { _ in
+                publicationCount.increment()
+                if publicationCount.value == 1 {
+                    await store.unloadRoot(id: loaded.id)
+                }
+            },
+            structureAttemptDidBegin: { structureAttempts.append($0) }
+        )
+
+        let presentation = try await coordinator.structurePresentation(
+            seedFileIDs: [file.id],
+            direction: nil,
+            traversalLimits: .init(
+                maximumDepth: 0,
+                maximumNodeCount: 10,
+                maximumEdgeCount: 10,
+                maximumByteCount: 4096
+            ),
+            outputLimits: .init(maximumFileCount: 10, maximumCodemapTokenCount: 6000),
+            rootScope: .allLoaded
+        )
+
+        XCTAssertEqual(
+            presentation.outcome,
+            .stale,
+            "issues=\(presentation.issues), publications=\(publicationCount.value)"
+        )
+        XCTAssertTrue(presentation.entries.isEmpty)
+        XCTAssertEqual(structureAttempts.values, [0, 1])
+        XCTAssertEqual(publicationCount.value, 1)
+        XCTAssertTrue(presentation.issues.contains {
+            if case .publicationStale = $0 { return true }
+            return false
+        })
+    }
+
+    func testOperationPresentationRevocationBeforePublicationRetriesAndReturnsIncomplete() async throws {
+        let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
+        let root = try repositoryFixture.makeRepository(
+            named: "repository",
+            files: ["Sources/Feature.swift": "protocol FeatureProtocol { func feature() -> String }\nstruct Feature: FeatureProtocol { func feature() -> String { \"feature\" } }\n"]
+        )
+        let fixture = try ModernCodemapStoreFixture(name: #function)
+        addTeardownBlock {
+            await fixture.shutdown()
+            repositoryFixture.cleanup()
+        }
+        let store = fixture.makeStore()
+        let loaded = try await store.loadRoot(path: root.path)
+        let loadedFiles = await store.files(inRoot: loaded.id)
+        let file = try XCTUnwrap(loadedFiles.first)
+        let receipts = ModernCodemapLockedValues<WorkspaceCodemapOperationPresentationPublicationReceipt>()
+        let publicationCount = ModernCodemapLockedCounter()
+        let operationCount = ModernCodemapLockedCounter()
+        let coordinator = WorkspaceCodemapPresentationCoordinator(
+            store: store,
+            beforePublicationRevalidation: { receipt in
+                receipts.append(receipt)
+                publicationCount.increment()
+                if publicationCount.value == 1 {
+                    await store.unloadRoot(id: loaded.id)
+                }
+            }
+        )
+
+        let presentation = try await coordinator.withPresentation(
+            for: .exact(fileIDs: [file.id], completeRootSet: false),
+            rootScope: .allLoaded
+        ) { presentation in
+            operationCount.increment()
+            return presentation
+        }
+
+        XCTAssertTrue(presentation.orderedEntries.isEmpty)
+        guard case .unavailable = presentation.coverage else {
+            return XCTFail("Revoked publication must return typed incomplete coverage")
+        }
+        XCTAssertEqual(publicationCount.value, 1)
+        XCTAssertEqual(operationCount.value, 2)
+        let firstReceipt = try XCTUnwrap(receipts.values.first)
+        for ticket in firstReceipt.demandTickets {
+            let retainCount = await store.codemapArtifactDemandRetainCountForTesting(ticket)
+            XCTAssertEqual(retainCount, 0)
+        }
+        for bundle in firstReceipt.bundles {
+            let retainCount = await store.codemapPresentationRetainCountForTesting(
+                rootEpoch: bundle.rootEpoch
+            )
+            XCTAssertEqual(retainCount, 0)
+        }
+    }
+
+    func testOperationPresentationCancellationDuringPendingWaitReleasesOwnedDemandOnce() async throws {
+        let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
+        let root = try repositoryFixture.makeRepository(
+            named: "repository",
+            files: ["Sources/Feature.swift": "struct Feature {}\n"]
+        )
+        let resolutionGate = ModernCodemapResolutionGate()
+        let waiterGate = ModernCodemapSuspensionGate()
+        let fixture = try ModernCodemapStoreFixture(name: #function, resolutionGate: resolutionGate)
+        addTeardownBlock {
+            await waiterGate.release()
+            await resolutionGate.release()
+            await fixture.shutdown()
+            repositoryFixture.cleanup()
+        }
+        let cancelledTickets = ModernCodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
+        let store = fixture.makeStore(cancellationCleanupHook: { ticket in
+            cancelledTickets.append(ticket)
+        })
+        let loaded = try await store.loadRoot(path: root.path)
+        let loadedFiles = await store.files(inRoot: loaded.id)
+        let file = try XCTUnwrap(loadedFiles.first)
+        let coordinator = WorkspaceCodemapPresentationCoordinator(
+            store: store,
+            waiter: WorkspaceCodemapPresentationWaiter { _ in
+                await waiterGate.enterAndWait()
+                try Task.checkCancellation()
+            }
+        )
+        let task = Task {
+            try await coordinator.presentation(
+                for: .exact(fileIDs: [file.id], completeRootSet: false),
+                rootScope: .allLoaded
+            )
+        }
+
+        let waiterEntered = await waiterGate.waitUntilEntered()
+        XCTAssertTrue(waiterEntered)
+        task.cancel()
+        await waiterGate.release()
+        await resolutionGate.release()
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+            // Expected.
+        }
+
+        let cancelledTicket = try XCTUnwrap(cancelledTickets.values.first)
+        XCTAssertEqual(cancelledTickets.values.count, 1)
+        let retainCount = await store.codemapArtifactDemandRetainCountForTesting(cancelledTicket)
+        XCTAssertEqual(retainCount, 0)
+        let presentationRetainCount = await store.codemapPresentationRetainCountForTesting(
+            rootEpoch: cancelledTicket.rootEpoch
+        )
+        XCTAssertEqual(presentationRetainCount, 0)
+    }
+
+    func testScopedOperationCancellationAfterRenderReleasesDemandAndPresentationOnce() async throws {
+        let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
+        let root = try repositoryFixture.makeRepository(
+            named: "repository",
+            files: ["Sources/Feature.swift": "struct ScopedCancellationFeature { func renderable() {} }\n"]
+        )
+        let operationGate = ModernCodemapSuspensionGate()
+        let fixture = try ModernCodemapStoreFixture(name: #function)
+        addTeardownBlock {
+            await operationGate.release()
+            await fixture.shutdown()
+            repositoryFixture.cleanup()
+        }
+        let cancelledTickets = ModernCodemapLockedValues<WorkspaceCodemapArtifactDemandTicket>()
+        let store = fixture.makeStore(cancellationCleanupHook: { ticket in
+            cancelledTickets.append(ticket)
+        })
+        let loaded = try await store.loadRoot(path: root.path)
+        let loadedFiles = await store.files(inRoot: loaded.id)
+        let file = try XCTUnwrap(loadedFiles.first)
+        let coordinator = WorkspaceCodemapPresentationCoordinator(store: store)
+        let task = Task {
+            try await coordinator.withPresentation(
+                for: .exact(fileIDs: [file.id], completeRootSet: false),
+                rootScope: .allLoaded
+            ) { presentation in
+                XCTAssertEqual(presentation.orderedEntries.count, 1)
+                await operationGate.enterAndWait()
+                try Task.checkCancellation()
+                return presentation
+            }
+        }
+
+        let operationEntered = await operationGate.waitUntilEntered()
+        XCTAssertTrue(operationEntered)
+        task.cancel()
+        await operationGate.release()
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+            // Expected.
+        }
+
+        let ticket = try XCTUnwrap(cancelledTickets.values.first)
+        XCTAssertEqual(cancelledTickets.values.count, 1)
+        let demandRetainCount = await store.codemapArtifactDemandRetainCountForTesting(ticket)
+        let presentationRetainCount = await store.codemapPresentationRetainCountForTesting(
+            rootEpoch: ticket.rootEpoch
+        )
+        XCTAssertEqual(demandRetainCount, 0)
+        XCTAssertEqual(presentationRetainCount, 0)
+    }
+
+    func testOperationPresentationPendingIsTypedAndReleasedWithoutFallback() async throws {
+        let repositoryFixture = try ReviewGitRepositoryFixture(name: #function)
+        let root = try repositoryFixture.makeRepository(
+            named: "repository",
+            files: ["Sources/Feature.swift": "struct Feature {}\n"]
+        )
+        let resolutionGate = ModernCodemapResolutionGate()
+        let fixture = try ModernCodemapStoreFixture(name: #function, resolutionGate: resolutionGate)
+        addTeardownBlock {
+            await resolutionGate.release()
+            await fixture.shutdown()
+            repositoryFixture.cleanup()
+        }
+        let store = fixture.makeStore()
+        let loaded = try await store.loadRoot(path: root.path)
+        let loadedFiles = await store.files(inRoot: loaded.id)
+        let file = try XCTUnwrap(loadedFiles.first)
+        let coordinator = WorkspaceCodemapPresentationCoordinator(
+            store: store,
+            policy: WorkspaceCodemapPresentationRequestPolicy(
+                maximumReadinessRounds: 1,
+                maximumTotalWait: .milliseconds(50)
+            )
+        )
+
+        let presentation = try await coordinator.presentation(
+            for: .exact(fileIDs: [file.id], completeRootSet: false),
+            rootScope: .allLoaded
+        )
+
+        guard case let .pending(issues) = presentation.coverage else {
+            return XCTFail("Expected typed pending coverage")
+        }
+        let ticket = try XCTUnwrap(issues.compactMap { issue -> WorkspaceCodemapArtifactDemandTicket? in
+            if case let .pending(_, ticket) = issue { return ticket }
+            return nil
+        }.first)
+        XCTAssertTrue(presentation.orderedEntries.isEmpty)
+        XCTAssertNil(presentation.publicationReceipt)
+        let retainCount = await store.codemapArtifactDemandRetainCountForTesting(ticket)
+        XCTAssertEqual(retainCount, 0)
+        let presentationRetainCount = await store.codemapPresentationRetainCountForTesting(
+            rootEpoch: ticket.rootEpoch
+        )
+        XCTAssertEqual(presentationRetainCount, 0)
+        await resolutionGate.release()
     }
 
     func testPresentationFreezeRejectsPendingForeignEpochDuplicateAndLogicalPathMismatch() async throws {
@@ -1029,6 +1539,44 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         await store.unloadRoot(id: loaded.id)
     }
 
+    func testNonGitPresentationPlanStartsNoModernRuntimeDemandBuildOrCASWork() async throws {
+        let fixture = try ModernCodemapStoreFixture(name: #function)
+        addTeardownBlock { await fixture.shutdown() }
+        let root = try fixture.makePlainRoot(files: [
+            "Sources/Feature.swift": "struct Feature {}\n"
+        ])
+        let store = fixture.makeStore()
+        _ = try await store.loadRoot(path: root.path)
+
+        let plan = await WorkspaceCodemapPresentationIntentResolver.plan(
+            codeMapUsage: .selected,
+            selection: StoredSelection(
+                selectedPaths: ["Sources/Feature.swift"],
+                codemapAutoEnabled: false
+            ),
+            store: store,
+            rootScope: .allLoaded,
+            profile: .uiAssisted
+        )
+        let presentation = try await WorkspaceCodemapPresentationCoordinator(store: store)
+            .presentation(for: plan.intent, rootScope: .allLoaded)
+        let merged = WorkspaceCodemapPresentationIntentResolver.merging(
+            presentation,
+            preflightIssues: plan.preflightIssues
+        )
+
+        XCTAssertTrue(merged.orderedEntries.isEmpty)
+        XCTAssertTrue(merged.issues.contains {
+            if case .unavailable(_, .gitTerminal(.nonGit)) = $0 { return true }
+            return false
+        })
+        XCTAssertEqual(fixture.providerAccessCount.value, 0)
+        XCTAssertEqual(fixture.runtimeFactoryCount.value, 0)
+        XCTAssertEqual(fixture.engineFactoryCount.value, 0)
+        XCTAssertEqual(fixture.manifestReadCount.value, 0)
+        XCTAssertEqual(fixture.buildCount.value, 0)
+    }
+
     func testCatalogAdvanceFencesPendingTicketAndExactRegistryRoute() async throws {
         let gate = ModernCodemapResolutionGate()
         let fixture = try ModernCodemapStoreFixture(name: #function, resolutionGate: gate)
@@ -1221,7 +1769,7 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
 
         let firstCancellation = await store.cancelCodemapArtifactDemand(ticket)
         XCTAssertTrue(firstCancellation)
-        await assertCancelled(store.codemapArtifactDemandStatus(ticket))
+        await assertStale(store.codemapArtifactDemandStatus(ticket))
         XCTAssertThrowsError(try ready.handle.artifactKey()) {
             XCTAssertEqual($0 as? WorkspaceCodemapLiveOverlayBundleAccessError, .closed)
         }
@@ -1233,8 +1781,8 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         )
 
         let secondCancellation = await store.cancelCodemapArtifactDemand(ticket)
-        XCTAssertTrue(secondCancellation)
-        await assertCancelled(store.codemapArtifactDemandStatus(ticket))
+        XCTAssertFalse(secondCancellation)
+        await assertStale(store.codemapArtifactDemandStatus(ticket))
         XCTAssertThrowsError(try ready.handle.artifactKey()) {
             XCTAssertEqual($0 as? WorkspaceCodemapLiveOverlayBundleAccessError, .closed)
         }
@@ -1983,9 +2531,9 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         let pending = try await pendingTicket(store.requestCodemapArtifact(forFileID: file.id))
         let resolutionEntered = await resolutionGate.waitUntilEntered()
         XCTAssertTrue(resolutionEntered)
-        let missing = WorkspaceCodemapAutomaticSelectionSourceIdentity(
+        let missing = try WorkspaceCodemapAutomaticSelectionSourceIdentity(
             rootEpoch: identity.rootEpoch,
-            fileID: UUID(),
+            fileID: XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000000")),
             catalogGeneration: identity.catalogGeneration
         )
         let stale = WorkspaceCodemapAutomaticSelectionSourceIdentity(
@@ -1995,18 +2543,33 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         )
         let providerCount = fixture.providerAccessCount.value
 
-        let result = try await store.resolveAutomaticCodemapSelection(
+        let expectedIssues: [WorkspaceCodemapAutomaticSelectionSourceIssue] = [
+            .notCataloged(missing),
+            .pending(identity, pending),
+            .staleCatalogGeneration(
+                stale,
+                currentCatalogGeneration: identity.catalogGeneration
+            )
+        ]
+        let firstResult = try await store.resolveAutomaticCodemapSelection(
             sources: [identity, missing, stale],
             rootScope: .visibleWorkspace
         )
+        let secondResult = try await store.resolveAutomaticCodemapSelection(
+            sources: [stale, identity, missing],
+            rootScope: .visibleWorkspace
+        )
 
-        let issues = try XCTUnwrap(result.roots.first?.sourceIssues)
-        XCTAssertTrue(issues.contains(.pending(identity, pending)))
-        XCTAssertTrue(issues.contains(.notCataloged(missing)))
-        XCTAssertTrue(issues.contains(.staleCatalogGeneration(
-            stale,
-            currentCatalogGeneration: identity.catalogGeneration
-        )))
+        let expectedCoverage = WorkspaceCodemapAutomaticSelectionCoverage.stale(
+            .sourceCatalogGeneration(
+                stale,
+                currentCatalogGeneration: identity.catalogGeneration
+            )
+        )
+        XCTAssertEqual(firstResult.roots.first?.sourceIssues, expectedIssues)
+        XCTAssertEqual(secondResult.roots.first?.sourceIssues, expectedIssues)
+        XCTAssertEqual(firstResult.roots.first?.coverage, expectedCoverage)
+        XCTAssertEqual(secondResult.roots.first?.coverage, expectedCoverage)
         XCTAssertEqual(fixture.providerAccessCount.value, providerCount)
         XCTAssertEqual(graphProbe.factoryCount, 0)
         await resolutionGate.release()
@@ -3386,18 +3949,12 @@ final class WorkspaceFileContextStoreModernCodemapSeamTests: XCTestCase {
         }
         XCTAssertEqual(targets, result.targets)
 
-        let target = try XCTUnwrap(result.targets.first)
-        let targetReady = try await readyResult(
-            coldStore.requestCodemapArtifact(forFileID: target.fileID)
-        )
-        let cancelled = await coldStore.cancelCodemapArtifactDemand(targetReady.ticket)
-        XCTAssertTrue(cancelled)
+        await coldStore.unloadRoot(id: coldRoot.id)
         let stalePublication = await coldStore.revalidateAutomaticCodemapSelectionForPublication(
             receipt,
             rootScope: .visibleWorkspace
         )
         XCTAssertEqual(stalePublication, .stale(.publicationReceipt))
-        await coldStore.unloadRoot(id: coldRoot.id)
     }
 
     private func pendingTicket(

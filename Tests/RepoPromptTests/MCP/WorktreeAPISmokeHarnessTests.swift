@@ -260,7 +260,8 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
         }
 
         let logicalPath = fixture.repo.appendingPathComponent("WorktreeOnly.swift").path
-        XCTAssertEqual(try Self.selectionPaths(setValue), [logicalPath])
+        let outputPath = "\(fixture.repo.lastPathComponent)/WorktreeOnly.swift"
+        XCTAssertEqual(try Self.selectionPaths(setValue), [outputPath])
         #if DEBUG
             let canonicalSelectionRevision = window.workspaceManager.selectionRevisionForMCP(
                 workspaceID: workspaceID,
@@ -324,7 +325,7 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
                 "path_display": .string("full")
             ])
         }
-        XCTAssertEqual(try Self.selectionPaths(getValue), [logicalPath])
+        XCTAssertEqual(try Self.selectionPaths(getValue), [outputPath])
         XCTAssertEqual(window.workspaceManager.composeTab(with: tabID)?.selection.selectedPaths, [logicalPath])
         XCTAssertTrue(window.workspaceFilesViewModel.snapshotSelection().selectedPaths.isEmpty)
         window.mcpServer.removeTabContext(
@@ -360,7 +361,7 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
                 "path_display": .string("full")
             ])
         }
-        XCTAssertEqual(try Self.selectionPaths(readSelection), [logicalPath])
+        XCTAssertEqual(try Self.selectionPaths(readSelection), [outputPath])
         XCTAssertEqual(window.workspaceManager.composeTab(with: tabID)?.selection.selectedPaths, [logicalPath])
         XCTAssertEqual(
             window.promptManager.currentComposeTabs.first(where: { $0.id == tabID })?.selection.selectedPaths,
@@ -400,7 +401,7 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
                 "path_display": .string("full")
             ])
         }
-        XCTAssertEqual(try Self.selectionPaths(finalSelection), [logicalPath])
+        XCTAssertEqual(try Self.selectionPaths(finalSelection), [outputPath])
         XCTAssertEqual(window.workspaceManager.composeTab(with: tabID)?.selection.selectedPaths, [logicalPath])
         XCTAssertEqual(
             window.promptManager.currentComposeTabs.first(where: { $0.id == tabID })?.selection.selectedPaths,
@@ -649,7 +650,7 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
             worktreeID: worktreeID
         )
         let formattedTree = try Self.onlyText(ToolOutputFormatter.formatFileTree(value: treeValue))
-        XCTAssertTrue(formattedTree.contains(logicalRootPath), formattedTree)
+        XCTAssertFalse(formattedTree.contains(logicalRootPath), formattedTree)
         XCTAssertFalse(formattedTree.contains(effectiveRootPath), formattedTree)
         XCTAssertTrue(formattedTree.contains("session-bound worktree"), formattedTree)
 
@@ -661,7 +662,7 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
             worktreeID: worktreeID
         )
         let formattedRead = try Self.onlyText(ToolOutputFormatter.formatReadFile(args: ["path": .string("Tracked.txt")], value: readValue))
-        XCTAssertTrue(formattedRead.contains(logicalRootPath), formattedRead)
+        XCTAssertFalse(formattedRead.contains(logicalRootPath), formattedRead)
         XCTAssertFalse(formattedRead.contains(effectiveRootPath), formattedRead)
         XCTAssertTrue(formattedRead.contains("session-bound worktree"), formattedRead)
 
@@ -673,7 +674,7 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
             worktreeID: worktreeID
         )
         let formattedSearch = try Self.onlyText(ToolOutputFormatter.formatSearch(value: searchValue))
-        XCTAssertTrue(formattedSearch.contains(logicalRootPath), formattedSearch)
+        XCTAssertFalse(formattedSearch.contains(logicalRootPath), formattedSearch)
         XCTAssertFalse(formattedSearch.contains(effectiveRootPath), formattedSearch)
         XCTAssertTrue(formattedSearch.contains("session-bound worktree"), formattedSearch)
     }
@@ -896,8 +897,12 @@ final class WorktreeAPISmokeHarnessTests: XCTestCase {
         let scope = try XCTUnwrap(object["worktree_scope"]?.objectValue)
         let mappings = try XCTUnwrap(scope["root_mappings"]?.arrayValue)
         let first = try XCTUnwrap(mappings.first?.objectValue)
-        XCTAssertEqual(first["logical_root_path"]?.stringValue, logicalRootPath)
-        XCTAssertEqual(first["effective_root_path"]?.stringValue, effectiveRootPath)
+        XCTAssertEqual(
+            first["logical_root_path"]?.stringValue,
+            URL(fileURLWithPath: logicalRootPath).lastPathComponent
+        )
+        XCTAssertEqual(first["effective_root_path"]?.stringValue, "session-bound")
+        XCTAssertNotEqual(first["logical_root_path"]?.stringValue, effectiveRootPath)
         XCTAssertEqual(first["worktree_id"]?.stringValue, worktreeID)
     }
 

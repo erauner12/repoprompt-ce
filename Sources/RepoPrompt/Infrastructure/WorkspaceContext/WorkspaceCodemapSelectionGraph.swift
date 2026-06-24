@@ -240,6 +240,27 @@ actor WorkspaceCodemapSelectionGraph {
         return .unavailable(lastUnavailableReason ?? .notBuilt)
     }
 
+    func queryStructure(
+        _ query: WorkspaceCodemapSelectionGraphRuntimeStructureQuery
+    ) -> WorkspaceCodemapSelectionGraphRuntimeStructureDisposition {
+        if Task.isCancelled { return .unavailable(.cancelled) }
+        if let revokedReason {
+            return .unavailable(.explicitRootUnavailable(revokedReason))
+        }
+        guard let observedKey else { return .unavailable(.notBuilt) }
+        guard query.key == observedKey else {
+            return .unavailable(.staleCurrentness(currentKey: observedKey))
+        }
+        guard !hasCurrentnessConflict else { return .unavailable(.invalidSnapshot) }
+        if let shard = publishedShard, shard.key == observedKey {
+            return queryStructureShard(query, in: shard)
+        }
+        if activeOperations.values.contains(where: { $0.key == observedKey }) {
+            return .unavailable(.rebuilding)
+        }
+        return .unavailable(lastUnavailableReason ?? .notBuilt)
+    }
+
     func fenceContributionsForPathInvalidation(
         rootEpoch: WorkspaceCodemapRootEpoch
     ) -> Bool {
@@ -468,6 +489,179 @@ actor WorkspaceCodemapSelectionGraph {
         ))
     }
 
+    private func queryStructureShard(
+        _ query: WorkspaceCodemapSelectionGraphRuntimeStructureQuery,
+        in shard: ImmutableShard
+    ) -> WorkspaceCodemapSelectionGraphRuntimeStructureDisposition {
+        guard !query.seeds.isEmpty,
+              query.seeds.count <= policy.maximumSelectedSourceCountPerQuery
+        else { return .unavailable(.invalidQuery) }
+
+        var generationsByFileID: [UUID: UInt64] = [:]
+        for seed in query.seeds {
+            if let generation = generationsByFileID[seed.fileID], generation != seed.requestGeneration {
+                return .unavailable(.invalidQuery)
+            }
+            generationsByFileID[seed.fileID] = seed.requestGeneration
+        }
+        let seeds = generationsByFileID.map {
+            WorkspaceCodemapSelectionGraphRuntimeQuerySource(
+                fileID: $0.key,
+                requestGeneration: $0.value
+            )
+        }.sorted(by: querySourcePrecedes)
+
+        var seedIndices: [Int] = []
+        for seed in seeds {
+            guard let index = shard.nodeIndexByFileID[seed.fileID],
+                  shard.nodes[index].requestGeneration == seed.requestGeneration
+            else { return .unavailable(.invalidQuery) }
+            seedIndices.append(index)
+        }
+        seedIndices.sort()
+
+        var materializedByteCount = 128
+        var visitsByIndex: [Int: TraversalVisit] = [:]
+        var queue: [Int] = []
+        var examinedEdges = Set<LocalEdge>()
+        var failures: [IndexedFailure] = []
+
+        func result() -> WorkspaceCodemapSelectionGraphRuntimeStructureResult {
+            let nodes = visitsByIndex.map { index, visit in
+                WorkspaceCodemapSelectionGraphRuntimeStructureNode(
+                    endpoint: shard.endpoint(at: index),
+                    depth: visit.depth,
+                    reachedBy: visit.reachedBy
+                )
+            }.sorted {
+                if $0.depth != $1.depth { return $0.depth < $1.depth }
+                let lhsIndex = shard.nodeIndexByFileID[$0.endpoint.fileID] ?? .max
+                let rhsIndex = shard.nodeIndexByFileID[$1.endpoint.fileID] ?? .max
+                return lhsIndex < rhsIndex
+            }
+            let orderedFailures = failures.sorted {
+                if $0.sourceIndex != $1.sourceIndex { return $0.sourceIndex < $1.sourceIndex }
+                return utf8Precedes($0.record.referencedName, $1.record.referencedName)
+            }
+            return WorkspaceCodemapSelectionGraphRuntimeStructureResult(
+                key: shard.key,
+                seeds: seeds,
+                nodes: nodes,
+                examinedEdgeCount: examinedEdges.count,
+                definitionUniverseCoverage: .partial(
+                    indexedNodes: shard.summary.nodeCount,
+                    candidateCount: .unknown
+                ),
+                referenceFailures: orderedFailures.map(\.record),
+                publishedSummary: shard.summary,
+                materializedByteCount: materializedByteCount
+            )
+        }
+
+        func reserveBytes(_ count: Int) -> Bool {
+            let (next, overflow) = materializedByteCount.addingReportingOverflow(count)
+            guard !overflow, next <= query.limits.maximumByteCount else { return false }
+            materializedByteCount = next
+            return true
+        }
+
+        for index in seedIndices {
+            guard visitsByIndex[index] == nil else { continue }
+            guard visitsByIndex.count < query.limits.maximumNodeCount else {
+                return .budget(result(), .nodes)
+            }
+            guard reserveBytes(64) else { return .budget(result(), .bytes) }
+            visitsByIndex[index] = TraversalVisit(depth: 0, reachedBy: [])
+            queue.append(index)
+        }
+
+        var cursor = 0
+        while cursor < queue.count {
+            if Task.isCancelled { return .unavailable(.cancelled) }
+            let currentIndex = queue[cursor]
+            cursor += 1
+            guard let currentVisit = visitsByIndex[currentIndex],
+                  currentVisit.depth < query.limits.maximumDepth
+            else { continue }
+
+            if query.direction != .referrers {
+                for failure in shard.referenceFailures[currentIndex, default: []] {
+                    let (bytes, overflow) = failure.referencedName.utf8.count.addingReportingOverflow(64)
+                    guard !overflow, reserveBytes(bytes) else { return .budget(result(), .bytes) }
+                    failures.append(.init(
+                        sourceIndex: currentIndex,
+                        record: .init(
+                            source: shard.endpoint(at: currentIndex),
+                            referencedName: failure.referencedName,
+                            failure: failure.failure
+                        )
+                    ))
+                }
+            }
+
+            var neighbors: [TraversalNeighbor] = []
+            if query.direction != .referrers {
+                neighbors.append(contentsOf: shard.adjacency[currentIndex, default: []].map {
+                    TraversalNeighbor(
+                        index: $0,
+                        edge: LocalEdge(sourceIndex: currentIndex, targetIndex: $0),
+                        direction: .referencedDefinitions
+                    )
+                })
+            }
+            if query.direction != .referencedDefinitions {
+                neighbors.append(contentsOf: shard.reverseAdjacency[currentIndex, default: []].map {
+                    TraversalNeighbor(
+                        index: $0,
+                        edge: LocalEdge(sourceIndex: $0, targetIndex: currentIndex),
+                        direction: .referrers
+                    )
+                })
+            }
+            neighbors.sort {
+                if $0.index != $1.index { return $0.index < $1.index }
+                return $0.direction.rawValue < $1.direction.rawValue
+            }
+
+            for neighbor in neighbors {
+                guard shard.nodes.indices.contains(neighbor.index) else {
+                    return .unavailable(.invalidSnapshot)
+                }
+                if examinedEdges.insert(neighbor.edge).inserted {
+                    guard examinedEdges.count <= query.limits.maximumEdgeCount else {
+                        examinedEdges.remove(neighbor.edge)
+                        return .budget(result(), .edges)
+                    }
+                    guard reserveBytes(24) else {
+                        examinedEdges.remove(neighbor.edge)
+                        return .budget(result(), .bytes)
+                    }
+                }
+
+                let nextDepth = currentVisit.depth + 1
+                if var existing = visitsByIndex[neighbor.index] {
+                    if existing.depth == nextDepth {
+                        existing.reachedBy.insert(neighbor.direction)
+                        visitsByIndex[neighbor.index] = existing
+                    }
+                    continue
+                }
+                guard visitsByIndex.count < query.limits.maximumNodeCount else {
+                    return .budget(result(), .nodes)
+                }
+                guard reserveBytes(64) else { return .budget(result(), .bytes) }
+                visitsByIndex[neighbor.index] = TraversalVisit(
+                    depth: nextDepth,
+                    reachedBy: [neighbor.direction]
+                )
+                queue.append(neighbor.index)
+            }
+        }
+
+        increment(&materializedQueryResultCount)
+        return .readyPartial(result())
+    }
+
     private func recordRejection(
         _ reason: WorkspaceCodemapSelectionGraphRuntimeRejectionReason,
         key: WorkspaceCodemapSelectionGraphRuntimeKey
@@ -536,6 +730,7 @@ actor WorkspaceCodemapSelectionGraph {
                     nodes: [],
                     nodeIndexByFileID: [:],
                     adjacency: [:],
+                    reverseAdjacency: [:],
                     referenceFailures: [:],
                     summary: summary
                 ))
@@ -578,6 +773,7 @@ actor WorkspaceCodemapSelectionGraph {
             var lookupCache: [String: CachedLookup] = [:]
             var uniqueEdges = Set<LocalEdge>()
             var adjacency: [Int: [Int]] = [:]
+            var reverseAdjacency: [Int: [Int]] = [:]
             var referenceFailures: [Int: [ImmutableReferenceFailure]] = [:]
 
             for sourceIndex in graphNodes.indices {
@@ -618,6 +814,7 @@ actor WorkspaceCodemapSelectionGraph {
                             switch store.makeEdge(source: source.identity, target: targetIdentity) {
                             case .edge:
                                 adjacency[sourceIndex, default: []].append(targetIndex)
+                                reverseAdjacency[targetIndex, default: []].append(sourceIndex)
                             case let .rejected(.sizeLimitExceeded(rejection)):
                                 return .rejected(.graphSize(rejection))
                             case let .rejected(rejection):
@@ -630,6 +827,9 @@ actor WorkspaceCodemapSelectionGraph {
             for sourceIndex in Array(adjacency.keys) {
                 adjacency[sourceIndex]?.sort()
             }
+            for targetIndex in Array(reverseAdjacency.keys) {
+                reverseAdjacency[targetIndex]?.sort()
+            }
             for sourceIndex in Array(referenceFailures.keys) {
                 referenceFailures[sourceIndex]?.sort {
                     utf8Precedes($0.referencedName, $1.referencedName)
@@ -637,7 +837,31 @@ actor WorkspaceCodemapSelectionGraph {
             }
             try Task.checkCancellation()
 
-            let accounting = WorkspaceCodemapSelectionGraphRuntimeSizeAccounting(store.accounting)
+            let baseAccounting = WorkspaceCodemapSelectionGraphRuntimeSizeAccounting(store.accounting)
+            let (reverseBytes, reverseByteOverflow) = UInt64(uniqueEdges.count)
+                .multipliedReportingOverflow(by: 16)
+            guard !reverseByteOverflow else {
+                return .rejected(.graphSize(.arithmeticOverflow(.bytes)))
+            }
+            let (totalBytes, totalByteOverflow) = baseAccounting.bytes.addingReportingOverflow(
+                reverseBytes
+            )
+            guard !totalByteOverflow else {
+                return .rejected(.graphSize(.arithmeticOverflow(.bytes)))
+            }
+            guard totalBytes <= sizePolicy.maxBytes else {
+                return .rejected(.graphSize(.limitExceeded(
+                    dimension: .bytes,
+                    attempted: totalBytes,
+                    limit: sizePolicy.maxBytes
+                )))
+            }
+            let accounting = WorkspaceCodemapSelectionGraphRuntimeSizeAccounting(
+                nodes: baseAccounting.nodes,
+                postings: baseAccounting.postings,
+                edges: baseAccounting.edges,
+                bytes: totalBytes
+            )
             let summary = WorkspaceCodemapSelectionGraphRuntimePublishedSummary(
                 key: key,
                 nodeCount: accounting.nodes,
@@ -650,6 +874,7 @@ actor WorkspaceCodemapSelectionGraph {
                 nodes: nodes,
                 nodeIndexByFileID: nodeIndexByFileID,
                 adjacency: adjacency,
+                reverseAdjacency: reverseAdjacency,
                 referenceFailures: referenceFailures,
                 summary: summary
             ))
@@ -742,6 +967,7 @@ private struct ImmutableShard: Hashable {
     let nodes: [ImmutableNode]
     let nodeIndexByFileID: [UUID: Int]
     let adjacency: [Int: [Int]]
+    let reverseAdjacency: [Int: [Int]]
     let referenceFailures: [Int: [ImmutableReferenceFailure]]
     let summary: WorkspaceCodemapSelectionGraphRuntimePublishedSummary
 
@@ -754,6 +980,17 @@ private struct ImmutableShard: Hashable {
 private struct LocalEdge: Hashable {
     let sourceIndex: Int
     let targetIndex: Int
+}
+
+private struct TraversalVisit {
+    let depth: Int
+    var reachedBy: Set<WorkspaceCodemapStructureTraversalReachDirection>
+}
+
+private struct TraversalNeighbor {
+    let index: Int
+    let edge: LocalEdge
+    let direction: WorkspaceCodemapStructureTraversalReachDirection
 }
 
 private enum CachedLookup {

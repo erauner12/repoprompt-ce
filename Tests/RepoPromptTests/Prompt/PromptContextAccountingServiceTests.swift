@@ -156,9 +156,10 @@ final class PromptContextAccountingServiceTests: XCTestCase {
 
         let store = WorkspaceFileContextStore()
         _ = try await store.loadRoot(path: root.path)
-        await store.applyObservedCodemapResults([
-            WorkspaceObservedCodemapResult(fullPath: fileURL.path, modificationDate: Date(), fileAPI: makeFileAPI(path: fileURL.path))
-        ])
+        let fileLookup = await store.lookupPath(fileURL.path)
+        let file = try XCTUnwrap(fileLookup?.file)
+        let api = makeFileAPI(path: fileURL.path)
+        let presentation = try makePresentation(entries: [(file, api.getFullAPIDescription(displayPath: "AccountingSelectedCodemap/A.swift"))])
         let service = PromptContextAccountingService()
         let selection = StoredSelection(
             selectedPaths: [fileURL.path],
@@ -167,7 +168,12 @@ final class PromptContextAccountingServiceTests: XCTestCase {
             codemapAutoEnabled: false
         )
 
-        let resolution = await service.resolveEntries(selection: selection, store: store, codeMapUsage: .selected)
+        let resolution = await service.resolveEntries(
+            selection: selection,
+            store: store,
+            codeMapUsage: .selected,
+            codemapPresentation: presentation
+        )
 
         let entry = try XCTUnwrap(resolution.entries.first)
         XCTAssertEqual(resolution.entries.count, 1)
@@ -188,25 +194,15 @@ final class PromptContextAccountingServiceTests: XCTestCase {
 
         let store = WorkspaceFileContextStore()
         _ = try await store.loadRoot(path: root.path)
-        await store.applyObservedCodemapResults([
-            WorkspaceObservedCodemapResult(
-                fullPath: selectedURL.path,
-                modificationDate: Date(),
-                fileAPI: makeFileAPI(
-                    path: selectedURL.path,
-                    symbolName: "selectedSymbol",
-                    referencedTypes: ["TargetType"]
-                )
-            ),
-            WorkspaceObservedCodemapResult(
-                fullPath: targetURL.path,
-                modificationDate: Date(),
-                fileAPI: makeFileAPI(
-                    path: targetURL.path,
-                    symbolName: "targetCodemapSymbol",
-                    className: "TargetType"
-                )
-            )
+        let targetLookup = await store.lookupPath(targetURL.path)
+        let target = try XCTUnwrap(targetLookup?.file)
+        let targetAPI = makeFileAPI(
+            path: targetURL.path,
+            symbolName: "targetCodemapSymbol",
+            className: "TargetType"
+        )
+        let targetPresentation = try makePresentation(entries: [
+            (target, targetAPI.getFullAPIDescription(displayPath: "AccountingCanonicalAutoCodemap/Target.swift"))
         ])
         let service = PromptContextAccountingService()
         let slice = LineRange(start: 2, end: 2)
@@ -239,7 +235,8 @@ final class PromptContextAccountingServiceTests: XCTestCase {
         let canonicalResolution = await service.resolveEntries(
             selection: canonicalSelection,
             store: store,
-            codeMapUsage: .auto
+            codeMapUsage: .auto,
+            codemapPresentation: targetPresentation
         )
 
         XCTAssertEqual(canonicalResolution.entries.count, 2)
@@ -370,13 +367,10 @@ final class PromptContextAccountingServiceTests: XCTestCase {
             symbolName: "renderedTokenSentinel",
             imports: ["Foundation", "Combine"]
         )
-        await store.applyObservedCodemapResults([
-            WorkspaceObservedCodemapResult(
-                fullPath: fileURL.path,
-                modificationDate: Date(),
-                fileAPI: api
-            )
-        ])
+        let fileLookup = await store.lookupPath(fileURL.path)
+        let file = try XCTUnwrap(fileLookup?.file)
+        let rendered = api.getFullAPIDescription(displayPath: "AccountingRenderedCodemapTokens/Nested/Target.swift")
+        let presentation = try makePresentation(entries: [(file, rendered)])
 
         let result = await PromptContextAccountingService().calculatePromptStats(
             request: PromptContextAccountingRequest(
@@ -387,10 +381,10 @@ final class PromptContextAccountingServiceTests: XCTestCase {
                 codeMapUsage: .selected,
                 filePathDisplay: .relative
             ),
-            store: store
+            store: store,
+            codemapPresentation: presentation
         )
 
-        let rendered = api.getFullAPIDescription(displayPath: "Nested/Target.swift")
         let expectedTokens = TokenCalculationService.estimateTokens(for: rendered)
         let snapshot = try XCTUnwrap(result.promptFileEntrySnapshots.first)
         XCTAssertEqual(result.promptFileEntrySnapshots.count, 1)
@@ -400,59 +394,94 @@ final class PromptContextAccountingServiceTests: XCTestCase {
         XCTAssertEqual(result.tokenResult.totalTokenCountFilesOnly, 0)
     }
 
-    func testCompleteCodemapResolutionBuildsSingleStaticPathSnapshot() async throws {
-        #if DEBUG
-            let root = try makeTemporaryRoot(name: "AccountingCompleteCodemapBatch")
-            let fileCount = 24
-            var observed: [WorkspaceObservedCodemapResult] = []
-            observed.reserveCapacity(fileCount)
-            for index in 0 ..< fileCount {
-                let fileURL = root.appendingPathComponent("File\(index).swift")
-                try write("struct File\(index) {}", to: fileURL)
-                observed.append(
-                    WorkspaceObservedCodemapResult(
-                        fullPath: fileURL.path,
-                        modificationDate: Date(),
-                        fileAPI: makeFileAPI(path: fileURL.path)
-                    )
-                )
-            }
+    func testAccountingAndPackagingShareExactPresentationArtifactAndRenderedText() async throws {
+        let root = try makeTemporaryRoot(name: "AccountingPackagingIdentity")
+        let fileURL = root.appendingPathComponent("Target.swift")
+        try write("struct Target {}", to: fileURL)
 
-            let store = WorkspaceFileContextStore()
-            _ = try await store.loadRoot(path: root.path)
-            await store.applyObservedCodemapResults(observed)
-            let service = PromptContextAccountingService()
-            let selection = StoredSelection(
-                selectedPaths: [],
+        let store = WorkspaceFileContextStore()
+        _ = try await store.loadRoot(path: root.path)
+        let fileLookup = await store.lookupPath(fileURL.path)
+        let file = try XCTUnwrap(fileLookup?.file)
+        let rendered = makeFileAPI(path: fileURL.path, symbolName: "sharedArtifactSentinel")
+            .getFullAPIDescription(displayPath: "LogicalRoot/Target.swift")
+        let presentation = try makePresentation(entries: [(file, rendered)])
 
-                slices: [:],
-                codemapAutoEnabled: false
-            )
+        let result = await PromptContextAccountingService().calculatePromptStats(
+            request: PromptContextAccountingRequest(
+                selection: StoredSelection(selectedPaths: [fileURL.path], codemapAutoEnabled: false),
+                codeMapUsage: .selected
+            ),
+            store: store,
+            codemapPresentation: presentation
+        )
+        let blocks = PromptPackagingService.generatePartitionedFileBlocks(
+            result.resolvedEntries,
+            filePathDisplay: .relative,
+            codemapPresentation: result.codemapPresentation
+        )
 
-            EditFlowPerf.resetDebugCaptureForTesting()
-            defer { EditFlowPerf.resetDebugCaptureForTesting() }
-            switch EditFlowPerf.beginDebugCapture(label: "complete-codemap-batch", maxSamples: 200) {
-            case .started:
-                break
-            case .busy:
-                XCTFail("Performance capture should start")
-            }
+        let operationEntry = try XCTUnwrap(result.codemapPresentation.renderedEntriesByFileID[file.id])
+        let snapshot = try XCTUnwrap(result.promptFileEntrySnapshots.first)
+        XCTAssertEqual(result.codemapPresentation.id, presentation.id)
+        XCTAssertEqual(operationEntry.artifactKey, presentation.renderedEntriesByFileID[file.id]?.artifactKey)
+        XCTAssertEqual(blocks.codemapBlocks, [rendered])
+        XCTAssertEqual(snapshot.codeMapContent, rendered)
+        XCTAssertEqual(snapshot.availableCodeMapTokenCount, TokenCalculationService.estimateTokens(for: rendered))
+        XCTAssertEqual(result.tokenResult.codeMapTokenCount, snapshot.availableCodeMapTokenCount)
+    }
 
-            let resolution = await service.resolveEntries(
-                selection: selection,
-                store: store,
-                codeMapUsage: .complete
-            )
-            let capture = EditFlowPerf.debugCaptureSnapshot(finish: true)
-            let snapshotBuildCount = capture.stages
-                .filter { $0.stageName == String(describing: EditFlowPerf.Stage.ReadFile.pathLookupStaticSnapshotBuild) }
-                .reduce(0) { $0 + $1.sampleCount }
+    func testNonGitSelectedCodemapIsTypedUnavailableAndFallsBackToContent() async throws {
+        let root = try makeTemporaryRoot(name: "AccountingNonGitFallback")
+        let fileURL = root.appendingPathComponent("A.swift")
+        let content = "struct NonGitFallback {}"
+        try write(content, to: fileURL)
 
-            XCTAssertEqual(resolution.entries.count, fileCount)
-            XCTAssertTrue(resolution.entries.allSatisfy { $0.mode == .codemap })
-            XCTAssertEqual(snapshotBuildCount, 1)
-            XCTAssertEqual(capture.droppedSampleCount, 0)
-        #endif
+        let store = WorkspaceFileContextStore()
+        _ = try await store.loadRoot(path: root.path)
+        let resolution = await PromptContextAccountingService().resolveEntries(
+            selection: StoredSelection(selectedPaths: [fileURL.path], codemapAutoEnabled: false),
+            store: store,
+            codeMapUsage: .selected
+        )
+
+        let entry = try XCTUnwrap(resolution.entries.first)
+        XCTAssertFalse(entry.isCodemap)
+        XCTAssertEqual(entry.loadedContent, content)
+        guard case let .unavailable(issues) = resolution.codemapPresentation.coverage else {
+            return XCTFail("Expected typed unavailable presentation coverage")
+        }
+        XCTAssertTrue(issues.contains { issue in
+            if case .unavailable(_, .gitTerminal(.nonGit)) = issue { return true }
+            return false
+        })
+    }
+
+    func testCompleteCodemapResolutionUsesSingleFrozenOperationPresentation() async throws {
+        let root = try makeTemporaryRoot(name: "AccountingCompleteCodemapBatch")
+        let fileCount = 24
+        for index in 0 ..< fileCount {
+            try write("struct File\(index) {}", to: root.appendingPathComponent("File\(index).swift"))
+        }
+
+        let store = WorkspaceFileContextStore()
+        let loadedRoot = try await store.loadRoot(path: root.path)
+        let files = await store.files(inRoot: loadedRoot.id)
+        let presentation = try makePresentation(entries: files.map { file in
+            let api = makeFileAPI(path: file.standardizedFullPath)
+            return (file, api.getFullAPIDescription(displayPath: "AccountingCompleteCodemapBatch/\(file.standardizedRelativePath)"))
+        })
+
+        let resolution = await PromptContextAccountingService().resolveEntries(
+            selection: StoredSelection(codemapAutoEnabled: false),
+            store: store,
+            codeMapUsage: .complete,
+            codemapPresentation: presentation
+        )
+
+        XCTAssertEqual(resolution.codemapPresentation.id, presentation.id)
+        XCTAssertEqual(resolution.entries.count, fileCount)
+        XCTAssertTrue(resolution.entries.allSatisfy { $0.mode == .codemap })
     }
 
     private func makeTemporaryRoot(name: String) throws -> URL {
@@ -493,6 +522,47 @@ final class PromptContextAccountingServiceTests: XCTestCase {
             globalVars: [],
             macros: [],
             referencedTypes: referencedTypes
+        )
+    }
+
+    private func makePresentation(
+        entries: [(WorkspaceFileRecord, String)]
+    ) throws -> WorkspaceCodemapOperationPresentation {
+        let pipeline = try SyntaxManager().pipelineIdentity(
+            for: .swift,
+            decoderPolicy: .workspaceAutomaticV1
+        )
+        let bundleID = WorkspaceCodemapFrozenPresentationBundleID()
+        let rendered = try entries.enumerated().map { index, pair in
+            let (file, text) = pair
+            let logicalPath = try XCTUnwrap(WorkspaceCodemapLogicalPresentationPath(
+                rootDisplayName: "LogicalRoot",
+                standardizedRelativePath: file.standardizedRelativePath
+            ))
+            return WorkspaceCodemapOperationRenderedEntry(
+                bundleID: bundleID,
+                fileID: file.id,
+                rootEpoch: WorkspaceCodemapRootEpoch(
+                    rootID: file.rootID,
+                    rootLifetimeID: UUID()
+                ),
+                artifactKey: CodeMapArtifactKey(
+                    rawSHA256: CodeMapRawSourceDigest(
+                        bytes: Data(repeating: UInt8((index % 254) + 1), count: 32)
+                    ),
+                    rawByteCount: UInt64(text.utf8.count),
+                    pipelineIdentity: pipeline
+                ),
+                logicalPath: logicalPath,
+                text: text,
+                tokenCount: TokenCalculationService.estimateTokens(for: text)
+            )
+        }
+        return WorkspaceCodemapOperationPresentation(
+            orderedEntries: rendered,
+            coverage: .complete,
+            issues: [],
+            publicationReceipt: nil
         )
     }
 }

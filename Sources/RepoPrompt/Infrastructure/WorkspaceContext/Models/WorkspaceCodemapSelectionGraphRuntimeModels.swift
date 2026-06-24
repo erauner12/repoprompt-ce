@@ -228,6 +228,79 @@ struct WorkspaceCodemapSelectionGraphRuntimeQueryResult: Hashable {
     let materializedByteCount: Int
 }
 
+enum WorkspaceCodemapStructureTraversalDirection: String, Hashable {
+    case referencedDefinitions
+    case referrers
+    case both
+}
+
+enum WorkspaceCodemapStructureTraversalReachDirection: String, Hashable {
+    case referencedDefinitions
+    case referrers
+}
+
+struct WorkspaceCodemapStructureTraversalLimits: Hashable {
+    let maximumDepth: Int
+    let maximumNodeCount: Int
+    let maximumEdgeCount: Int
+    let maximumByteCount: Int
+
+    init(
+        maximumDepth: Int,
+        maximumNodeCount: Int,
+        maximumEdgeCount: Int,
+        maximumByteCount: Int
+    ) {
+        precondition(maximumDepth >= 0)
+        precondition(maximumNodeCount > 0)
+        precondition(maximumEdgeCount >= 0)
+        precondition(maximumByteCount > 0)
+        self.maximumDepth = maximumDepth
+        self.maximumNodeCount = maximumNodeCount
+        self.maximumEdgeCount = maximumEdgeCount
+        self.maximumByteCount = maximumByteCount
+    }
+}
+
+struct WorkspaceCodemapSelectionGraphRuntimeStructureQuery: Hashable {
+    let key: WorkspaceCodemapSelectionGraphRuntimeKey
+    let seeds: [WorkspaceCodemapSelectionGraphRuntimeQuerySource]
+    let direction: WorkspaceCodemapStructureTraversalDirection
+    let limits: WorkspaceCodemapStructureTraversalLimits
+}
+
+struct WorkspaceCodemapSelectionGraphRuntimeStructureNode: Hashable {
+    let endpoint: WorkspaceCodemapSelectionGraphRuntimeEndpoint
+    let depth: Int
+    let reachedBy: Set<WorkspaceCodemapStructureTraversalReachDirection>
+}
+
+struct WorkspaceCodemapSelectionGraphRuntimeStructureResult: Hashable {
+    let key: WorkspaceCodemapSelectionGraphRuntimeKey
+    let seeds: [WorkspaceCodemapSelectionGraphRuntimeQuerySource]
+    let nodes: [WorkspaceCodemapSelectionGraphRuntimeStructureNode]
+    let examinedEdgeCount: Int
+    let definitionUniverseCoverage: WorkspaceCodemapSelectionGraphDefinitionUniverseCoverage
+    let referenceFailures: [WorkspaceCodemapSelectionGraphRuntimeReferenceFailureRecord]
+    let publishedSummary: WorkspaceCodemapSelectionGraphRuntimePublishedSummary
+    let materializedByteCount: Int
+}
+
+enum WorkspaceCodemapSelectionGraphRuntimeStructureBudgetDimension: Hashable {
+    case nodes
+    case edges
+    case bytes
+}
+
+enum WorkspaceCodemapSelectionGraphRuntimeStructureDisposition: Hashable {
+    case readyPartial(WorkspaceCodemapSelectionGraphRuntimeStructureResult)
+    case budget(
+        WorkspaceCodemapSelectionGraphRuntimeStructureResult,
+        WorkspaceCodemapSelectionGraphRuntimeStructureBudgetDimension
+    )
+    case unavailable(WorkspaceCodemapSelectionGraphRuntimeQueryUnavailableReason)
+}
+
 enum WorkspaceCodemapSelectionGraphRuntimeQueryUnavailableReason: Hashable {
     case notBuilt
     case rebuilding

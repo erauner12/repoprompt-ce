@@ -12865,7 +12865,7 @@ final class AgentModeViewModel: ObservableObject {
         let workspaceBlocks = PromptPackagingService.generateFileBlocksDetailed(
             files: workspaceEntries,
             filePathDisplay: .relative,
-            codemapSnapshotBundle: .empty,
+            codemapPresentation: .empty,
             displayPathResolver: { entry in
                 if let projected = lookupContext.bindingProjection?.projectedLogicalPathComponents(
                     forPhysicalPath: entry.file.standardizedFullPath
@@ -15868,7 +15868,10 @@ final class AgentModeViewModel: ObservableObject {
     /// Build the file-contents block used by handoff payload export for the current active tab.
     /// This intentionally snapshots only the current tab selection, matching the in-app handoff path.
     @MainActor
-    func buildCurrentTabHandoffFileContentsBlock(tokenCap: Int = 60000) async -> String {
+    func buildCurrentTabHandoffFileContentsBlock(
+        tokenCap: Int = 60000,
+        overTokenCapSummaryWillBegin: (() async -> Void)? = nil
+    ) async -> String {
         guard let workspaceManager,
               let sourceTabID = currentTabID else { return "" }
         workspaceManager.publishActiveComposeTabSnapshot(commitToMemory: true)
@@ -15877,7 +15880,8 @@ final class AgentModeViewModel: ObservableObject {
         return await buildForkFileContentsBlock(
             selection: sourceSelection,
             tokenCap: tokenCap,
-            lookupContext: lookupContext
+            lookupContext: lookupContext,
+            overTokenCapSummaryWillBegin: overTokenCapSummaryWillBegin
         )
     }
 
@@ -16093,7 +16097,8 @@ final class AgentModeViewModel: ObservableObject {
     private func buildForkFileContentsBlock(
         selection: StoredSelection,
         tokenCap: Int,
-        lookupContext: WorkspaceLookupContext
+        lookupContext: WorkspaceLookupContext,
+        overTokenCapSummaryWillBegin: (() async -> Void)? = nil
     ) async -> String {
         guard let promptManager else { return "" }
 
@@ -16102,14 +16107,14 @@ final class AgentModeViewModel: ObservableObject {
             tokenCap: tokenCap,
             store: promptManager.workspaceFileContextStore,
             lookupContext: lookupContext,
-            overTokenCapSummaryProvider: { [weak self] selection, lookupContext, codemapSnapshotBundle in
+            overTokenCapSummaryProvider: { [weak self] selection, lookupContext, presentation in
                 guard let self, let mcp = mcpServer else { return nil }
-                let reply = await mcp.buildTabSelectionReply(
+                let reply = await mcp.buildBorrowedTabSelectionReply(
+                    codemapPresentation: presentation,
                     from: selection,
                     includeBlocks: false,
                     display: .relative,
-                    lookupContextOverride: lookupContext,
-                    codemapSnapshotBundle: codemapSnapshotBundle
+                    lookupContext: lookupContext
                 )
                 let summary = ToolOutputFormatter.formatSelectionReplyToString(reply)
                 return """
@@ -16117,7 +16122,8 @@ final class AgentModeViewModel: ObservableObject {
                 \(summary)
                 </selection_summary>
                 """
-            }
+            },
+            overTokenCapSummaryWillBegin: overTokenCapSummaryWillBegin
         )
     }
 }

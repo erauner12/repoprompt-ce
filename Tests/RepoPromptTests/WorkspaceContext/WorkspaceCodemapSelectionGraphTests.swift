@@ -132,6 +132,87 @@ final class WorkspaceCodemapSelectionGraphTests: XCTestCase {
         )
     }
 
+    func testStructureTraversalSupportsBoundedForwardReverseAndBothBFS() async throws {
+        let authority = try await makeAuthority(
+            name: #function,
+            files: [
+                "A.swift": "struct A {}",
+                "B.swift": "struct B {}",
+                "C.swift": "struct C {}"
+            ]
+        )
+        defer { authority.repositoryFixture.cleanup() }
+        let aID = uuid("18000000-0000-0000-0000-000000000001")
+        let bID = uuid("18000000-0000-0000-0000-000000000002")
+        let cID = uuid("18000000-0000-0000-0000-000000000003")
+        let bindings = try await [
+            makeResolvedBinding(
+                authority: authority,
+                path: "A.swift",
+                fileID: aID,
+                artifact: makeArtifact(definitions: ["A"], references: ["B"])
+            ),
+            makeResolvedBinding(
+                authority: authority,
+                path: "B.swift",
+                fileID: bID,
+                artifact: makeArtifact(definitions: ["B"], references: ["C"])
+            ),
+            makeResolvedBinding(
+                authority: authority,
+                path: "C.swift",
+                fileID: cID,
+                artifact: makeArtifact(definitions: ["C"], references: [])
+            )
+        ]
+        let graph = WorkspaceCodemapSelectionGraph(rootEpoch: authority.capability.rootEpoch)
+        let graphSnapshot = snapshot(authority: authority, bindings: bindings, generation: 19)
+        try await requirePublished(graph.rebuild(from: graphSnapshot))
+        let key = WorkspaceCodemapSelectionGraphRuntimeKey(snapshot: graphSnapshot)
+        let limits = WorkspaceCodemapStructureTraversalLimits(
+            maximumDepth: 2,
+            maximumNodeCount: 3,
+            maximumEdgeCount: 4,
+            maximumByteCount: 4096
+        )
+
+        guard case let .readyPartial(forward) = await graph.queryStructure(.init(
+            key: key,
+            seeds: [.init(fileID: aID, requestGeneration: 7)],
+            direction: .referencedDefinitions,
+            limits: limits
+        )) else { return XCTFail("Expected forward traversal") }
+        XCTAssertEqual(forward.nodes.map(\.endpoint.fileID), [aID, bID, cID])
+        XCTAssertEqual(forward.nodes.map(\.depth), [0, 1, 2])
+        XCTAssertEqual(forward.examinedEdgeCount, 2)
+        XCTAssertTrue(forward.nodes.allSatisfy { $0.endpoint.rootEpoch == authority.capability.rootEpoch })
+
+        guard case let .readyPartial(reverse) = await graph.queryStructure(.init(
+            key: key,
+            seeds: [.init(fileID: cID, requestGeneration: 7)],
+            direction: .referrers,
+            limits: limits
+        )) else { return XCTFail("Expected reverse traversal") }
+        XCTAssertEqual(reverse.nodes.map(\.endpoint.fileID), [cID, bID, aID])
+        XCTAssertEqual(reverse.nodes.map(\.depth), [0, 1, 2])
+
+        let bounded = await graph.queryStructure(.init(
+            key: key,
+            seeds: [.init(fileID: aID, requestGeneration: 7)],
+            direction: .both,
+            limits: .init(
+                maximumDepth: 2,
+                maximumNodeCount: 2,
+                maximumEdgeCount: 4,
+                maximumByteCount: 4096
+            )
+        ))
+        guard case let .budget(prefix, .nodes) = bounded else {
+            return XCTFail("Expected deterministic node budget")
+        }
+        XCTAssertEqual(prefix.nodes.map(\.endpoint.fileID), [aID, bID])
+    }
+
     func testRootIsolationAndEpochReplacementCannotResolveForeignTargets() async throws {
         let rootID = uuid("20000000-0000-0000-0000-000000000001")
         let firstAuthority = try await makeAuthority(
@@ -217,6 +298,22 @@ final class WorkspaceCodemapSelectionGraphTests: XCTestCase {
         XCTAssertEqual(firstResult.referenceFailures.map(\.failure), [.unresolvedDefinitionUniverse])
         XCTAssertEqual(secondResult.targets.map(\.fileID), [secondTargetID])
         XCTAssertFalse(firstResult.targets.contains(where: { $0.fileID == secondTargetID }))
+
+        guard case let .readyPartial(firstStructure) = await first.queryStructure(.init(
+            key: .init(snapshot: firstSnapshot),
+            seeds: [.init(fileID: firstSourceID, requestGeneration: 7)],
+            direction: .both,
+            limits: .init(
+                maximumDepth: 4,
+                maximumNodeCount: 10,
+                maximumEdgeCount: 20,
+                maximumByteCount: 4096
+            )
+        )) else { return XCTFail("Expected root-local structure traversal") }
+        XCTAssertFalse(firstStructure.nodes.contains { $0.endpoint.fileID == secondTargetID })
+        XCTAssertTrue(firstStructure.nodes.allSatisfy {
+            $0.endpoint.rootEpoch == firstAuthority.capability.rootEpoch
+        })
 
         let foreignRebuild = await first.rebuild(from: secondSnapshot)
         XCTAssertEqual(

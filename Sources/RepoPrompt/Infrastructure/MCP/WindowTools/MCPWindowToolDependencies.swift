@@ -237,7 +237,7 @@ struct MCPWindowToolDependencies {
     ) async -> MCPServerViewModel.MCPSelectionPersistenceVerification?
     typealias MakeSelectionHintError = @MainActor @Sendable (_ paths: [String], _ operation: String, _ lookupContext: WorkspaceLookupContext) async -> String
     typealias PerformFileAction = @MainActor @Sendable (_ action: String, _ path: String, _ content: String?, _ newPath: String?, _ ifExists: String?) async throws -> String?
-    typealias BuildCodeStructureDTO = @MainActor @Sendable (_ files: [WorkspaceFileRecord], _ maxResults: Int, _ includeUnmappedPaths: Bool, _ lookupContext: WorkspaceLookupContext) async throws -> ToolResultDTOs.SelectedCodeStructureDTO
+    typealias BuildCodeStructureDTO = @MainActor @Sendable (_ files: [WorkspaceFileRecord], _ request: MCPServerViewModel.CodeStructureRequest, _ includePathNotFoundIssue: Bool, _ lookupContext: WorkspaceLookupContext) async throws -> ToolResultDTOs.CodeStructureReplyDTO
     typealias ResolveFilesForCodeStructure = @MainActor @Sendable (_ paths: [String], _ lookupRootScope: WorkspaceLookupRootScope) async throws -> [WorkspaceFileRecord]
     typealias BuildStoreBackedFileTreeResult = @MainActor @Sendable (_ mode: String, _ maxDepth: Int?, _ startPath: String?, _ lookupContext: WorkspaceLookupContext) async throws -> (result: FileTreeResult, rootCount: Int)
     typealias ReadFile = @MainActor @Sendable (_ path: String, _ startLine1Based: Int?, _ lineCount: Int?, _ lookupRootScope: WorkspaceLookupRootScope) async throws -> (reply: ToolResultDTOs.ReadFileReply, shouldAutoSelect: Bool)

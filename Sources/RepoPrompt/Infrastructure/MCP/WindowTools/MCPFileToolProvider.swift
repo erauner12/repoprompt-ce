@@ -95,93 +95,210 @@ final class MCPFileToolProvider: MCPWindowToolProviding {
             name: MCPWindowToolName.getCodeStructure,
             freshnessPolicy: .providerManaged,
             description: """
-            Return code structure (function/type signatures) for files.
+            Return current, root-scoped code structure from content-addressed codemaps.
 
-            **Scopes**:
-            - `paths` (default): Analyze specific files/directories. Requires `paths` parameter.
-            - `selected`: Analyze current selection. Also reports files without codemaps.
+            Scopes:
+            - paths: Analyze explicit files/directories. paths is required.
+            - selected: Analyze the authoritative current selection. paths is forbidden.
 
-            **Parameters**:
-            - `paths`: File or directory paths (directories are recursive)
-            - `max_results`: Limit considered codemaps (default: 10). Larger values opt in to broader scans.
+            Relationship expansion:
+            - Omit expand for seed-only output.
+            - referenced_definitions: follow definitions referenced by each seed.
+            - referrers: follow resident files that reference definitions in each seed.
+            - both: traverse both root-local directions.
+            - Cold relationship discovery may be partial; no eager root scan is performed.
 
-            **Note**: Files without parseable structure are skipped. Use with get_file_tree and file_search for discovery.
-            Rendered codemap output is capped near 6k tokens even when `max_results` is larger; narrow `paths` to change which files fit.
-            Line numbers are included in the output and match `read_file` line numbering, so you can jump directly to where a function/type is declared within a file. Code structure is refreshed after file edits, so results stay current.
+            Limits:
+            - max_files (1...200, default 10)
+            - max_edges (1...10000, default 500)
+            - max_codemap_tokens (256...20000, default 6000)
+            - wait_ms (0...2000, default 350)
 
-            **Examples**:
-            - Specific files: `{"paths":["src/auth/"]}`
-            - Current selection: `{"scope":"selected"}`
+            Results report literal ready, partial, pending, unavailable, stale, or budget
+            status with stable issue codes. Cancellation remains an MCP cancellation.
+            Per-file paths are logical paths; traversal cannot cross a root epoch.
+
+            Examples:
+            - Seed only: {"scope":"paths","paths":["src/auth/"]}
+            - Selected with referrers: {"scope":"selected","expand":{"direction":"referrers","max_depth":1}}
             """,
             annotations: .repoPromptLocalReadOnly,
             inputSchema: .object(
                 properties: [
-                    "scope": .string(description: "Scope of operation: current selection or explicit paths", enum: ["paths", "selected"]),
-                    "paths": .array(description: "Array of file or directory paths (when scope='paths')", items: .string(description: "File path or directory path (absolute or relative)")),
-                    "max_results": .integer(description: "Maximum number of codemaps to consider before the ~6k-token response cap is applied (default: 10)")
+                    "scope": .string(
+                        description: "Required seed source",
+                        enum: ["paths", "selected"]
+                    ),
+                    "paths": .array(
+                        description: "One to 256 file or directory paths when scope='paths'",
+                        items: .string(description: "File or directory path")
+                    ),
+                    "expand": .object(
+                        properties: [
+                            "direction": .string(
+                                description: "Root-local relationship direction",
+                                enum: ["referenced_definitions", "referrers", "both"]
+                            ),
+                            "max_depth": .integer(
+                                description: "Maximum graph hops (1...4, default 1)"
+                            )
+                        ],
+                        required: ["direction"]
+                    ),
+                    "limits": .object(
+                        properties: [
+                            "max_files": .integer(description: "Maximum emitted seed plus related files"),
+                            "max_edges": .integer(description: "Maximum root-local graph edges examined"),
+                            "max_codemap_tokens": .integer(description: "Strict codemap-content token budget"),
+                            "wait_ms": .integer(description: "Maximum bounded demand/rebuild wait")
+                        ],
+                        required: []
+                    )
                 ],
-                required: []
+                required: ["scope"]
             )
         ) { [self] _, args in
             try Task.checkCancellation()
-            if await dependencies.promptVM.codeMapsGloballyDisabled {
-                throw MCPError.invalidParams(MCPServerViewModel.codeMapsGloballyDisabledMCPMessage)
+            let allowedRootKeys: Set = ["scope", "paths", "expand", "limits"]
+            guard Set(args.keys).isSubset(of: allowedRootKeys) else {
+                throw MCPError.invalidParams("unknown get_code_structure parameter")
             }
-            let scope = (args["scope"]?.stringValue ?? "paths").lowercased()
-            let maxResults = max(0, args["max_results"]?.intValue ?? MCPWindowWorkspaceToolHelpers.defaultCodeStructureMaxResults)
+            guard let scope = args["scope"]?.stringValue?.lowercased(),
+                  scope == "paths" || scope == "selected"
+            else {
+                throw MCPError.invalidParams("scope must be 'paths' or 'selected'")
+            }
+
+            let direction: WorkspaceCodemapStructureTraversalDirection?
+            let maximumDepth: Int
+            if let expandValue = args["expand"] {
+                guard let expand = expandValue.objectValue else {
+                    throw MCPError.invalidParams("expand must be an object")
+                }
+                guard Set(expand.keys).isSubset(of: ["direction", "max_depth"]) else {
+                    throw MCPError.invalidParams("unknown expand parameter")
+                }
+                guard let rawDirection = expand["direction"]?.stringValue else {
+                    throw MCPError.invalidParams("expand.direction is required")
+                }
+                direction = switch rawDirection {
+                case "referenced_definitions": .referencedDefinitions
+                case "referrers": .referrers
+                case "both": .both
+                default: throw MCPError.invalidParams("invalid expand.direction")
+                }
+                maximumDepth = expand["max_depth"]?.intValue ?? 1
+                guard (1 ... 4).contains(maximumDepth) else {
+                    throw MCPError.invalidParams("expand.max_depth must be between 1 and 4")
+                }
+            } else {
+                direction = nil
+                maximumDepth = 0
+            }
+
+            let limits: [String: Value]
+            if let limitsValue = args["limits"] {
+                guard let object = limitsValue.objectValue else {
+                    throw MCPError.invalidParams("limits must be an object")
+                }
+                guard Set(object.keys).isSubset(
+                    of: ["max_files", "max_edges", "max_codemap_tokens", "wait_ms"]
+                ) else {
+                    throw MCPError.invalidParams("unknown limits parameter")
+                }
+                limits = object
+            } else {
+                limits = [:]
+            }
+            let maximumFiles = limits["max_files"]?.intValue ?? 10
+            let maximumEdges = limits["max_edges"]?.intValue ?? 500
+            let maximumCodemapTokens = limits["max_codemap_tokens"]?.intValue ?? 6000
+            let waitMilliseconds = limits["wait_ms"]?.intValue ?? 350
+            guard (1 ... 200).contains(maximumFiles) else {
+                throw MCPError.invalidParams("limits.max_files must be between 1 and 200")
+            }
+            guard (1 ... 10000).contains(maximumEdges) else {
+                throw MCPError.invalidParams("limits.max_edges must be between 1 and 10000")
+            }
+            guard (256 ... 20000).contains(maximumCodemapTokens) else {
+                throw MCPError.invalidParams("limits.max_codemap_tokens must be between 256 and 20000")
+            }
+            guard (0 ... 2000).contains(waitMilliseconds) else {
+                throw MCPError.invalidParams("limits.wait_ms must be between 0 and 2000")
+            }
+            let request = MCPServerViewModel.CodeStructureRequest(
+                direction: direction,
+                maximumDepth: maximumDepth,
+                maximumFiles: maximumFiles,
+                maximumEdges: maximumEdges,
+                maximumCodemapTokens: maximumCodemapTokens,
+                waitMilliseconds: waitMilliseconds
+            )
+
             let metadata = await dependencies.captureRequestMetadata()
             try Task.checkCancellation()
             let lookupContext = await dependencies.resolveFileToolLookupContext(metadata)
             try Task.checkCancellation()
-            _ = await dependencies.promptVM.workspaceFileContextStore.awaitAppliedIngress(rootScope: lookupContext.rootScope)
+            _ = await dependencies.promptVM.workspaceFileContextStore.awaitAppliedIngress(
+                rootScope: lookupContext.rootScope
+            )
             try Task.checkCancellation()
 
+            let files: [WorkspaceFileRecord]
             switch scope {
             case "selected":
-                guard await dependencies.drainReadFileAutoSelection(metadata, .canonicalSelection) == .completed else {
+                guard args["paths"] == nil else {
+                    throw MCPError.invalidParams("paths is forbidden when scope='selected'")
+                }
+                guard await dependencies.drainReadFileAutoSelection(
+                    metadata,
+                    .canonicalSelection
+                ) == .completed else {
                     throw CancellationError()
                 }
-                try Task.checkCancellation()
-                let collections = try await dependencies.selectionCollectionsForCurrentTabContext()
-                try Task.checkCancellation()
-                var combined: [WorkspaceFileRecord] = []
-                var seenPaths = Set<String>()
-                for entry in collections.selected {
-                    try Task.checkCancellation()
-                    let abs = entry.file.standardizedFullPath
-                    if seenPaths.insert(abs).inserted { combined.append(entry.file) }
-                }
-                for entry in collections.codemap {
-                    try Task.checkCancellation()
-                    let abs = entry.file.standardizedFullPath
-                    if seenPaths.insert(abs).inserted { combined.append(entry.file) }
-                }
-                let reply = try await dependencies.buildCodeStructureDTO(combined, maxResults, true, lookupContext)
-                try Task.checkCancellation()
-                return try Value(reply)
-            default:
+                files = try await dependencies.selectedRecordsForCurrentTabContext()
+            case "paths":
                 guard let rawPaths = args["paths"]?.arrayValue else {
-                    throw MCPError.invalidParams("missing paths (required when scope='paths')")
+                    throw MCPError.invalidParams("paths is required when scope='paths'")
                 }
-                let paths = rawPaths.compactMap(\.stringValue)
-                guard !paths.isEmpty else {
-                    throw MCPError.invalidParams("paths array cannot be empty")
+                guard !rawPaths.isEmpty, rawPaths.count <= 256,
+                      rawPaths.allSatisfy({ $0.stringValue != nil })
+                else {
+                    throw MCPError.invalidParams("paths must contain one to 256 strings")
                 }
-                let lookupRootScope = lookupContext.rootScope
-                let resolvedPaths = lookupContext.translateInputPaths(paths)
-                for path in resolvedPaths {
+                let translated = lookupContext.translateInputPaths(
+                    rawPaths.compactMap(\.stringValue)
+                )
+                for path in translated {
                     try Task.checkCancellation()
-                    if let issue = await dependencies.promptVM.workspaceFileContextStore.exactPathResolutionIssue(for: path, kind: .either, rootScope: lookupRootScope) {
-                        throw MCPError.invalidParams(PathResolutionIssueRenderer.message(for: issue))
+                    if let issue = await dependencies.promptVM.workspaceFileContextStore
+                        .exactPathResolutionIssue(
+                            for: path,
+                            kind: .either,
+                            rootScope: lookupContext.rootScope
+                        )
+                    {
+                        throw MCPError.invalidParams(
+                            PathResolutionIssueRenderer.message(for: issue)
+                        )
                     }
                 }
-                try Task.checkCancellation()
-                let resolvedFiles = try await dependencies.resolveFilesForCodeStructure(resolvedPaths, lookupRootScope)
-                try Task.checkCancellation()
-                let reply = try await dependencies.buildCodeStructureDTO(resolvedFiles, maxResults, false, lookupContext)
-                try Task.checkCancellation()
-                return try Value(reply)
+                files = try await dependencies.resolveFilesForCodeStructure(
+                    translated,
+                    lookupContext.rootScope
+                )
+            default:
+                throw MCPError.invalidParams("invalid scope")
             }
+            try Task.checkCancellation()
+            let reply = try await dependencies.buildCodeStructureDTO(
+                files,
+                request,
+                true,
+                lookupContext
+            )
+            try Task.checkCancellation()
+            return try Value(reply)
         }
     }
 

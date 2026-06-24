@@ -1122,7 +1122,7 @@ class PromptViewModel: ObservableObject {
         let selectionVersion: UInt64
         let slicesVersion: UInt64
         let autoCodemapVersion: UInt64
-        let fileAPIsVersion: UInt64
+        let codemapAuthorityVersion: UInt64
     }
 
     private struct ChatPresetTokenBaselineKey: Equatable {
@@ -1186,7 +1186,7 @@ class PromptViewModel: ObservableObject {
         let selectionVersion: UInt64
         let slicesVersion: UInt64
         let autoCodemapVersion: UInt64
-        let fileAPIsVersion: UInt64
+        let codemapAuthorityVersion: UInt64
         let fileSystemDeltaVersion: UInt64
     }
 
@@ -1201,11 +1201,10 @@ class PromptViewModel: ObservableObject {
     }
 
     var chatPromptEntriesCache: (key: ChatPromptEntriesCacheKey, entries: [PromptFileEntry])?
-    var chatCodemapFileAPIs: [FileAPI] = []
     var chatSelectionVersion: UInt64 = 0
     var chatSlicesVersion: UInt64 = 0
     var chatAutoCodemapVersion: UInt64 = 0
-    var chatFileAPIsVersion: UInt64 = 0
+    var chatCodemapAuthorityVersion: UInt64 = 0
     private var chatFileSystemDeltaVersion: UInt64 = 0
     private var chatContextTokenBaselineCache: ChatContextTokenBaselineCache?
 
@@ -1245,10 +1244,6 @@ class PromptViewModel: ObservableObject {
 
     var codeMapTokenCount: Int {
         tokenCountingViewModel.codeMapTokenCount
-    }
-
-    var cachedFileAPIs: [FileAPI] {
-        tokenCountingViewModel.cachedFileAPIs
     }
 
     var fileTreeContent: String {
@@ -2157,11 +2152,11 @@ class PromptViewModel: ObservableObject {
                 self?.tokenCountingViewModel.markDirty(.codeMap)
                 self?.workspaceManager?.markWorkspaceDirty()
                 self?.updateActiveTabDirtyState()
-                self?.refreshChatCodemapFileAPIsFromStore()
+                self?.bumpChatPromptEntriesCodemapAuthorityVersion()
             }
             .store(in: &cancellables)
 
-        refreshChatCodemapFileAPIsFromStore()
+        bumpChatPromptEntriesCodemapAuthorityVersion()
 
         fileManager.fileSystemDeltasAppliedPublisher
             .receive(on: DispatchQueue.main)
@@ -2241,21 +2236,9 @@ class PromptViewModel: ObservableObject {
         invalidateChatPromptEntriesCache()
     }
 
-    private func bumpChatPromptEntriesFileAPIsVersion() {
-        chatFileAPIsVersion &+= 1
+    private func bumpChatPromptEntriesCodemapAuthorityVersion() {
+        chatCodemapAuthorityVersion &+= 1
         invalidateChatPromptEntriesCache()
-    }
-
-    private func refreshChatCodemapFileAPIsFromStore() {
-        Task { [weak self] in
-            guard let self else { return }
-            let apis = await workspaceFileContextStore.allCodemapFileAPIs()
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                chatCodemapFileAPIs = apis
-                bumpChatPromptEntriesFileAPIsVersion()
-            }
-        }
     }
 
     // MARK: - Compose Tab Management
@@ -4092,31 +4075,35 @@ class PromptViewModel: ObservableObject {
         }()
 
         Task {
-            let preAssembly = await self.preAssemblePromptContext(
-                cfg: promptContext,
-                selection: selectionSnapshot,
-                lookupContext: self.allLoadedWorkspaceLookupContext()
-            )
-            let includeFiles = includeFilesInClipboard && !preAssembly.entries.isEmpty
-
-            // Use captured values inside the Task
-            let clipboardContent = await PromptPackagingService.generateClipboardContent(
-                metaInstructions: metaInstructions,
-                userInstructions: promptText,
-                files: preAssembly.entries,
-                fileTreeContent: preAssembly.fileTreeContent,
-                gitDiff: preAssembly.gitDiff,
-                includeSavedPrompts: includeSavedPrompts,
-                includeFiles: includeFiles,
-                includeUserPrompt: includeUserPrompt,
-                filePathDisplay: filePathDisplayOption,
-                codemapSnapshotBundle: preAssembly.codemapSnapshotBundle,
-                includeDatetimeInUserInstructions: includeDatetime,
-                promptSectionsOrder: promptSectionsOrder,
-                disabledPromptSections: disabledPromptSections,
-                duplicateUserInstructionsAtTop: duplicateUserInstructions,
-                tabTitle: tabTitleForClipboard
-            )
+            let clipboardContent: String
+            do {
+                clipboardContent = try await self.withPreassembledPromptContext(
+                    cfg: promptContext,
+                    selection: selectionSnapshot,
+                    lookupContext: self.allLoadedWorkspaceLookupContext()
+                ) { preAssembly in
+                    let includeFiles = includeFilesInClipboard && !preAssembly.entries.isEmpty
+                    return await PromptPackagingService.generateClipboardContent(
+                        metaInstructions: metaInstructions,
+                        userInstructions: promptText,
+                        files: preAssembly.entries,
+                        fileTreeContent: preAssembly.fileTreeContent,
+                        gitDiff: preAssembly.gitDiff,
+                        includeSavedPrompts: includeSavedPrompts,
+                        includeFiles: includeFiles,
+                        includeUserPrompt: includeUserPrompt,
+                        filePathDisplay: filePathDisplayOption,
+                        codemapPresentation: preAssembly.codemapPresentation,
+                        includeDatetimeInUserInstructions: includeDatetime,
+                        promptSectionsOrder: promptSectionsOrder,
+                        disabledPromptSections: disabledPromptSections,
+                        duplicateUserInstructionsAtTop: duplicateUserInstructions,
+                        tabTitle: tabTitleForClipboard
+                    )
+                }
+            } catch {
+                return
+            }
 
             await MainActor.run {
                 NSPasteboard.general.clearContents()
@@ -4899,14 +4886,6 @@ class PromptViewModel: ObservableObject {
         } else {
             await freezePromptGitReviewContext(base: gitBaseOverride ?? gitViewModel.selectedDiffBranch)
         }
-        let preAssembly = await preAssemblePromptContext(
-            cfg: activeConfig,
-            selection: logicalSelection,
-            lookupContext: lookupContext,
-            reviewGitContext: frozenReviewGitContext
-        )
-        let (_, codeEntries) = PromptPackagingService.partitionPromptEntriesForGitDiff(preAssembly.entries)
-
         // Identify a stored prompt to be used as SYSTEM prompt when configured
         let idsCandidate = activeConfig.storedPromptIds ?? preset.storedPromptIds
         var systemStoredPrompt: StoredPrompt? = nil
@@ -4939,22 +4918,6 @@ class PromptViewModel: ObservableObject {
             }
         }
 
-        // Render the canonical codemap partition with the file map and full/sliced content separately.
-        let partitionedBlocks = PromptPackagingService.generatePartitionedFileBlocks(
-            codeEntries,
-            filePathDisplay: filePathDisplay,
-            codemapSnapshotBundle: preAssembly.codemapSnapshotBundle,
-            displayPathResolver: { entry in
-                preAssembly.displayPath(for: entry)
-            }
-        )
-        let fileBlocks = partitionedBlocks.contentBlocks
-        let fileTreeString = PromptPackagingService.combinedFileMapContent(
-            fileTreeContent: preAssembly.fileTreeContent,
-            codemapBlocks: partitionedBlocks.codemapBlocks
-        ) ?? ""
-        let gitDiff = preAssembly.gitDiff
-
         // Meta prompts:
         // - If override supplies stored prompts AND they are NOT used as system, use them.
         // - Otherwise, use global chat meta; when a stored prompt is used as system, exclude it from meta.
@@ -4969,18 +4932,46 @@ class PromptViewModel: ObservableObject {
             return metaInstructionsForChat
         }()
 
-        let message = PromptPackagingService.buildAIMessage(
-            systemPrompt: systemPrompt,
-            metaInstructions: metaForThisChat,
-            fileTree: fileTreeString,
-            fileContents: fileBlocks,
-            gitDiff: gitDiff,
-            conversation: conversation, // Pass conversation unchanged (no MCP metadata injection in chat history)
-            temperature: temperature,
-            promptSectionsOrder: promptSectionsOrder,
-            disabledPromptSections: disabledPromptSections,
-            duplicateUserInstructionsAtTop: duplicateUserInstructionsAtTop
-        )
+        let packaged: (message: AIMessage, preAssembly: PromptContextPreAssemblyResult)
+        do {
+            packaged = try await withPreassembledPromptContext(
+                cfg: activeConfig,
+                selection: logicalSelection,
+                lookupContext: lookupContext,
+                reviewGitContext: frozenReviewGitContext
+            ) { preAssembly in
+                let (_, codeEntries) = PromptPackagingService.partitionPromptEntriesForGitDiff(
+                    preAssembly.entries
+                )
+                let partitionedBlocks = PromptPackagingService.generatePartitionedFileBlocks(
+                    codeEntries,
+                    filePathDisplay: filePathDisplay,
+                    codemapPresentation: preAssembly.codemapPresentation,
+                    displayPathResolver: { entry in
+                        preAssembly.displayPath(for: entry)
+                    }
+                )
+                let fileTreeString = PromptPackagingService.combinedFileMapContent(
+                    fileTreeContent: preAssembly.fileTreeContent,
+                    codemapBlocks: partitionedBlocks.codemapBlocks
+                ) ?? ""
+                let message = PromptPackagingService.buildAIMessage(
+                    systemPrompt: systemPrompt,
+                    metaInstructions: metaForThisChat,
+                    fileTree: fileTreeString,
+                    fileContents: partitionedBlocks.contentBlocks,
+                    gitDiff: preAssembly.gitDiff,
+                    conversation: conversation,
+                    temperature: temperature,
+                    promptSectionsOrder: self.promptSectionsOrder,
+                    disabledPromptSections: self.disabledPromptSections,
+                    duplicateUserInstructionsAtTop: self.duplicateUserInstructionsAtTop
+                )
+                return (message, preAssembly)
+            }
+        } catch {
+            return AIMessage(systemPrompt: systemPrompt, userMessage: "")
+        }
         #if DEBUG
             OracleReviewPackagingDiagnostics.recordPreassembly(
                 mode: effectiveMode,
@@ -4989,12 +4980,12 @@ class PromptViewModel: ObservableObject {
                 config: activeConfig,
                 selectedArtifactPolicy: .includeBeforeGitInclusion,
                 logicalSelection: logicalSelection,
-                preassembly: preAssembly,
-                message: message,
+                preassembly: packaged.preAssembly,
+                message: packaged.message,
                 disabledPromptSections: disabledPromptSections
             )
         #endif
-        return message
+        return packaged.message
     }
 
     func getSystemPrompt() -> String {
@@ -5498,6 +5489,56 @@ extension PromptViewModel {
         includeLocalDefinitionsInFileTree: Bool = false,
         reviewGitContext: FrozenPromptGitReviewContext? = nil
     ) async -> PromptContextPreAssemblyResult {
+        let request = await makePromptContextPreAssemblyRequest(
+            cfg: cfg,
+            selection: selection,
+            lookupContext: lookupContext,
+            includeLocalDefinitionsInFileTree: includeLocalDefinitionsInFileTree,
+            reviewGitContext: reviewGitContext
+        )
+        return await PromptContextPreAssemblyService.resolve(request)
+    }
+
+    func withPreassembledPromptContext<Value>(
+        cfg: PromptContextResolved,
+        selection: StoredSelection,
+        lookupContext: WorkspaceLookupContext,
+        includeLocalDefinitionsInFileTree: Bool = false,
+        reviewGitContext: FrozenPromptGitReviewContext? = nil,
+		sourceTabID: UUID? = nil,
+		finalReviewAuthorization: ContextBuilderFinalReviewAuthorization? = nil,
+        operation: (PromptContextPreAssemblyResult) async throws -> Value
+    ) async throws -> Value {
+        let request = await makePromptContextPreAssemblyRequest(
+            cfg: cfg,
+            selection: selection,
+            lookupContext: lookupContext,
+            includeLocalDefinitionsInFileTree: includeLocalDefinitionsInFileTree,
+			reviewGitContext: reviewGitContext,
+			sourceTabID: sourceTabID,
+			finalReviewAuthorization: finalReviewAuthorization
+        )
+		if finalReviewAuthorization != nil {
+			return try await PromptContextPreAssemblyService.withResolvedStrict(
+				request,
+				operation: operation
+			)
+		}
+        return try await PromptContextPreAssemblyService.withResolved(
+            request,
+            operation: operation
+        )
+    }
+
+    private func makePromptContextPreAssemblyRequest(
+        cfg: PromptContextResolved,
+        selection: StoredSelection,
+        lookupContext: WorkspaceLookupContext,
+        includeLocalDefinitionsInFileTree: Bool,
+		reviewGitContext: FrozenPromptGitReviewContext?,
+		sourceTabID: UUID? = nil,
+		finalReviewAuthorization: ContextBuilderFinalReviewAuthorization? = nil
+    ) async -> PromptContextPreAssemblyRequest {
         let frozenReviewContext = if let reviewGitContext {
             reviewGitContext
         } else {
@@ -5514,31 +5555,31 @@ extension PromptViewModel {
         #if DEBUG
             let automaticReviewGitDiffProviderOverrideForTesting = automaticReviewGitDiffProviderOverrideForTesting
         #endif
-        return await PromptContextPreAssemblyService.resolve(
-            PromptContextPreAssemblyRequest(
-                cfg: cfg,
-                selection: selection,
-                store: workspaceFileContextStore,
-                lookupContext: lookupContext,
-                filePathDisplay: filePathDisplayOption,
-                onlyIncludeRootsWithSelectedFiles: onlyIncludeRootsWithSelectedFiles,
-                showCodeMapMarkers: !codeMapsGloballyDisabled,
-                selectedGitDiffFolderPolicy: .expandFolders,
-                selectedGitDiffLookupProfile: .uiAssisted,
-                includeLocalDefinitionsInFileTree: includeLocalDefinitionsInFileTree,
-                reviewGitContext: frozenReviewContext,
-                selectedGitDiffProvider: { request in
-                    #if DEBUG
-                        if let automaticReviewGitDiffProviderOverrideForTesting {
-                            return await automaticReviewGitDiffProviderOverrideForTesting(request)
-                        }
-                    #endif
-                    return await coordinator.resolve(request)
-                },
-                completeGitDiffProvider: { [gitVM] in
-                    await gitVM.getDiffUsing(inclusionMode: .all, vs: effectiveBase, forceRefreshStatus: true)
-                }
-            )
+        return PromptContextPreAssemblyRequest(
+            cfg: cfg,
+            selection: selection,
+            store: workspaceFileContextStore,
+            lookupContext: lookupContext,
+            filePathDisplay: filePathDisplayOption,
+            onlyIncludeRootsWithSelectedFiles: onlyIncludeRootsWithSelectedFiles,
+            showCodeMapMarkers: !codeMapsGloballyDisabled,
+            selectedGitDiffFolderPolicy: .expandFolders,
+            selectedGitDiffLookupProfile: .uiAssisted,
+            includeLocalDefinitionsInFileTree: includeLocalDefinitionsInFileTree,
+            reviewGitContext: frozenReviewContext,
+			sourceTabID: sourceTabID,
+			finalReviewAuthorization: finalReviewAuthorization,
+            selectedGitDiffProvider: { request in
+                #if DEBUG
+                    if let automaticReviewGitDiffProviderOverrideForTesting {
+                        return await automaticReviewGitDiffProviderOverrideForTesting(request)
+                    }
+                #endif
+                return await coordinator.resolve(request)
+            },
+            completeGitDiffProvider: { [gitVM] in
+                await gitVM.getDiffUsing(inclusionMode: .all, vs: effectiveBase, forceRefreshStatus: true)
+            }
         )
     }
 
@@ -5648,34 +5689,35 @@ extension PromptViewModel {
         let cfg = applyingGlobalCodeMapOverride(inputConfig)
         let promptText = promptTextOverride ?? promptText
         let effectiveSelection = selectionOverride ?? activeComposeTabStoredSelectionForPromptPackaging()
-        let preAssembly = await preAssemblePromptContext(
-            cfg: cfg,
-            selection: effectiveSelection,
-            lookupContext: allLoadedWorkspaceLookupContext(),
-            includeLocalDefinitionsInFileTree: includeLocalDefinitionsInFileTree
-        )
-
-        // 2.5) Meta prompts assembly.
         let combinedMeta = metaInstructions(for: cfg)
         let includeMetaBlock = !combinedMeta.isEmpty
-
-        // 3) Generate clipboard string via existing packaging service
-        return await PromptPackagingService.generateClipboardContent(
-            metaInstructions: combinedMeta,
-            userInstructions: cfg.includeUserPrompt ? promptText : "",
-            files: preAssembly.entries,
-            fileTreeContent: preAssembly.fileTreeContent,
-            gitDiff: preAssembly.gitDiff,
-            includeSavedPrompts: includeMetaBlock,
-            includeFiles: cfg.includeFiles,
-            includeUserPrompt: cfg.includeUserPrompt,
-            filePathDisplay: filePathDisplayOption,
-            codemapSnapshotBundle: preAssembly.codemapSnapshotBundle,
-            includeDatetimeInUserInstructions: includeDatetimeInUserInstructions,
-            promptSectionsOrder: promptSectionsOrder,
-            disabledPromptSections: disabledPromptSections,
-            duplicateUserInstructionsAtTop: duplicateUserInstructionsAtTop
-        )
+        do {
+            return try await withPreassembledPromptContext(
+                cfg: cfg,
+                selection: effectiveSelection,
+                lookupContext: allLoadedWorkspaceLookupContext(),
+                includeLocalDefinitionsInFileTree: includeLocalDefinitionsInFileTree
+            ) { preAssembly in
+                await PromptPackagingService.generateClipboardContent(
+                    metaInstructions: combinedMeta,
+                    userInstructions: cfg.includeUserPrompt ? promptText : "",
+                    files: preAssembly.entries,
+                    fileTreeContent: preAssembly.fileTreeContent,
+                    gitDiff: preAssembly.gitDiff,
+                    includeSavedPrompts: includeMetaBlock,
+                    includeFiles: cfg.includeFiles,
+                    includeUserPrompt: cfg.includeUserPrompt,
+                    filePathDisplay: self.filePathDisplayOption,
+                    codemapPresentation: preAssembly.codemapPresentation,
+                    includeDatetimeInUserInstructions: self.includeDatetimeInUserInstructions,
+                    promptSectionsOrder: self.promptSectionsOrder,
+                    disabledPromptSections: self.disabledPromptSections,
+                    duplicateUserInstructionsAtTop: self.duplicateUserInstructionsAtTop
+                )
+            }
+        } catch {
+            return ""
+        }
     }
 
     /// Estimates the token count for the current Copy context (what would be copied now)
@@ -5765,7 +5807,7 @@ extension PromptViewModel {
             selectionVersion: chatSelectionVersion,
             slicesVersion: chatSlicesVersion,
             autoCodemapVersion: chatAutoCodemapVersion,
-            fileAPIsVersion: chatFileAPIsVersion,
+            codemapAuthorityVersion: chatCodemapAuthorityVersion,
             fileSystemDeltaVersion: chatFileSystemDeltaVersion
         )
     }

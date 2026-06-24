@@ -19,7 +19,7 @@ extension PromptViewModel {
         case .auto:
             return selectionCount > 0 || !fileManager.autoCodemapFiles.isEmpty
         case .complete:
-            return selectionCount > 0 || !chatCodemapFileAPIs.isEmpty
+            return selectionCount > 0 || fileManager.allFilesSnapshot(sorted: false).contains(where: supportsCodemap)
         }
     }
 
@@ -31,7 +31,7 @@ extension PromptViewModel {
             selectionVersion: chatSelectionVersion,
             slicesVersion: chatSlicesVersion,
             autoCodemapVersion: chatAutoCodemapVersion,
-            fileAPIsVersion: chatFileAPIsVersion
+            codemapAuthorityVersion: chatCodemapAuthorityVersion
         )
 
         if let cache = chatPromptEntriesCache, cache.key == key {
@@ -67,7 +67,7 @@ extension PromptViewModel {
         case .selected:
             entries = entries.compactMap { entry in
                 guard selectedIDs.contains(entry.file.id) else { return nil }
-                let canCodemap = fileManager.validatedFileAPI(for: entry.file) != nil
+                let canCodemap = supportsCodemap(entry.file)
                 return PromptFileEntry(
                     file: entry.file,
                     isCodemap: canCodemap,
@@ -78,11 +78,10 @@ extension PromptViewModel {
             var existingPaths = Set(entries.map(\.file.standardizedFullPath))
             let selectedPaths = Set(selectedFiles.map(\.standardizedFullPath))
 
-            for api in fileManager.validatedCurrentFileAPIs(from: chatCodemapFileAPIs) {
-                let standardizedPath = StandardizedPath.absolute(api.filePath)
+            for file in fileManager.allFilesSnapshot() where supportsCodemap(file) {
+                let standardizedPath = file.standardizedFullPath
                 guard !selectedPaths.contains(standardizedPath),
-                      !existingPaths.contains(standardizedPath),
-                      let file = fileManager.findFileByFullPath(standardizedPath)
+                      !existingPaths.contains(standardizedPath)
                 else { continue }
 
                 entries.append(PromptFileEntry(file: file, isCodemap: true, ranges: nil))
@@ -91,6 +90,11 @@ extension PromptViewModel {
         }
 
         return entries
+    }
+
+    private func supportsCodemap(_ file: FileViewModel) -> Bool {
+        let fileExtension = (file.name as NSString).pathExtension.lowercased()
+        return !fileExtension.isEmpty && SyntaxManager.supportsCodeMap(fileExtension: fileExtension)
     }
 
     @MainActor
