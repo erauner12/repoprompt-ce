@@ -372,22 +372,12 @@ final class CoordinatorModeViewModel: ObservableObject {
     private func publishIfChanged(_ nextSnapshot: CoordinatorModeSnapshot) {
         let nextCoordinatorSessionID = nextSnapshot.coordinatorRail.coordinatorSessionID
         if displayedTranscriptCoordinatorSessionID != nextCoordinatorSessionID {
-            let previousCoordinatorSessionID = displayedTranscriptCoordinatorSessionID
             railTranscriptEntries.removeAll()
             composerNotice = nil
             displayedTranscriptCoordinatorSessionID = nextCoordinatorSessionID
             currentRailActivityText = nil
             lastDurableRailStatusEntryKey = nil
-            if previousCoordinatorSessionID == nil,
-               let coordinatorSessionID = nextCoordinatorSessionID
-            {
-                displayedDelegateActionTargetIDs = Set(directDelegatedRows(
-                    in: nextSnapshot,
-                    coordinatorSessionID: coordinatorSessionID
-                ).map(\.sessionID))
-            } else {
-                displayedDelegateActionTargetIDs.removeAll()
-            }
+            displayedDelegateActionTargetIDs.removeAll()
         }
         updateRailStatusPresentation(from: nextSnapshot.coordinatorRail)
         updateRailActionPresentation(from: nextSnapshot)

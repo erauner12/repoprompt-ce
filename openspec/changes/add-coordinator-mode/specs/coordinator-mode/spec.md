@@ -136,6 +136,12 @@ The production-demo Coordinator mode SHALL separate the selected Coordinator con
 - **AND** changing the selected Coordinator runtime SHALL swap the board/list to that runtime's eligible delegated descendants
 - **AND** this checkpoint SHALL preserve the same exclusion rules for Coordinator backing runtimes and explicitly marked Coordinator-internal housekeeping sessions.
 
+#### Scenario: Selected Mission projection stays coherent
+- **WHEN** the selected Mission has projected delegated descendants
+- **THEN** the selected-Mission board and list SHALL render the same delegated rows counted by the selected Mission history entry
+- **AND** Coordinator chat delegated event cards SHALL resolve workflow badges and lifecycle status from those same projected rows
+- **AND** MCP-submitted Coordinator starts SHALL produce the same selected-Mission projection behavior as starts submitted through the visible Coordinator UI.
+
 #### Scenario: Board projects aggregate supervised fleet
 - **WHEN** the active workspace demo fleet has multiple Coordinator runtime roots with supervised delegated descendants
 - **THEN** the board and list SHALL project eligible delegated descendants from all active fleet roots
@@ -253,6 +259,11 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **WHEN** the user submits text through the enabled Coordinator composer
 - **THEN** the Coordinator view SHALL deliver that text as an ordinary user message to the Coordinator session through the existing Agent Mode message path
 - **AND** it SHALL NOT wrap the directive in a new structured command envelope in v1.
+
+#### Scenario: Delegation events appear progressively
+- **WHEN** a Coordinator starts or selects a Mission with delegated child sessions
+- **THEN** the Coordinator chat SHOULD render delegated-session event cards as soon as those child sessions are projected
+- **AND** those event cards SHOULD update from the live board row state rather than waiting for the child to reach a terminal state.
 
 #### Scenario: Coordinator composer uses Agent Mode input affordances
 - **WHEN** the Coordinator composer is editable

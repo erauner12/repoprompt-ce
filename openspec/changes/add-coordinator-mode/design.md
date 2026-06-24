@@ -214,6 +214,10 @@ The classifier is the safety line. It holds when proactive follow-through is dis
 
 When the Coordinator chooses to pause for the human, the control belongs in the Coordinator chat. Chat-level actions such as `Proceed`, `Revise`, and `Stop here` submit ordinary visible messages to the owning Coordinator parent. Those actions are rendered from explicit Coordinator checkpoint metadata, not from ordinary assistant prose or final summaries, and the metadata is stripped from the visible rail transcript. `Proceed` means only "continue the next safe step you proposed"; it is not approval to apply, merge, commit, push, create a PR, or bypass any remaining permission prompt. Board rows and inspector cards remain observability surfaces, not workflow authority.
 
+Delegated-session cards are part of that visible conversational timeline. They should be inserted when the child Mission/session first appears in Coordinator projection, even if the child is still running or queued, and then reflect the same live status metadata used by the board. Workflow badges such as Orchestrate or Review annotate the delegated work, but the progressive event behavior applies equally to ordinary delegated agent starts.
+
+Selected-Mission board rows, Mission history child counts, and delegated-session chat cards must share the same owner-resolution projection. If those surfaces compute ownership independently, MCP-submitted starts can appear in chat while the selected board stays empty, or workflow badges/status can go stale after the child row updates. The selected-Mission projection should therefore filter the already root-resolved Coordinator owner map rather than rebuilding a separate selected-owner map.
+
 ### 14. Inspector stays sourced; full logs stay in Agent Mode
 
 The v1 inspector / trailing detail column shows sourced summaries only: status, pending interaction, blocker, worktree/merge, route, and MCP/session metadata. Full transcript, raw log, file, and diff inspection remain in Agent Mode via `Open agent chat`. A Coordinator-view-native full-log toggle is a follow-up unless backed by a sourced activity projection.

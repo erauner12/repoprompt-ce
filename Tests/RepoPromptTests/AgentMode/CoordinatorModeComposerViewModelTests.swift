@@ -134,8 +134,9 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(submissions.first?.text, "Coordinate the child session")
         XCTAssertEqual(submissions.first?.sessionID, coordinatorID)
         XCTAssertEqual(submissions.first?.forceNewRuntime, false)
-        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.user])
-        XCTAssertEqual(viewModel.railTranscriptEntries.first?.text, "Coordinate the child session")
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.event, .user])
+        XCTAssertEqual(viewModel.railTranscriptEntries.first?.action?.targetSessionID, childID)
+        XCTAssertEqual(viewModel.railTranscriptEntries.last?.text, "Coordinate the child session")
         XCTAssertEqual(viewModel.snapshot.groups, rowsBeforeSubmit)
 
         viewModel.clearCoordinatorRailTranscript()
@@ -636,6 +637,53 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.railTranscriptEntries.compactMap(\.action).count, 1)
     }
 
+    func testExistingRunningDelegateAddsCoordinatorActionEntryOnInitialSelection() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator Runtime Demo",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            isMCP: true
+                        ),
+                        self.live(
+                            id: childID,
+                            tab: self.uuid(102),
+                            title: "Delegated docs change",
+                            updatedAt: self.date(30),
+                            state: .running,
+                            parent: coordinatorID,
+                            isMCP: true
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+
+        viewModel.refresh()
+
+        let actions: [CoordinatorModeCoordinatorAction] = viewModel.railTranscriptEntries.compactMap(\.action)
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.event])
+        XCTAssertEqual(actions.map(\.targetSessionID), [childID])
+        XCTAssertEqual(actions.first?.ownerCoordinatorSessionID, coordinatorID)
+        XCTAssertEqual(actions.first?.targetTitle, "Delegated docs change")
+        XCTAssertEqual(actions.first?.verb, .delegate)
+
+        viewModel.refresh()
+
+        XCTAssertEqual(viewModel.railTranscriptEntries.compactMap(\.action).map(\.targetSessionID), [childID])
+    }
+
     func testSelectingCoordinatorRebuildsDelegateActionEntriesForSelectedParent() {
         let firstCoordinatorID = uuid(1)
         let firstChildID = uuid(2)
@@ -742,7 +790,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
 
         XCTAssertEqual(result, .rejected(message: "Coordinator is mid-run. Send directives when it reaches an ordinary turn boundary."))
         XCTAssertFalse(submitterCalled)
-        XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
+        XCTAssertEqual(viewModel.railTranscriptEntries.compactMap(\.action).map(\.targetSessionID), [childID])
     }
 
     func testForceNewCoordinatorRuntimeAddsRuntimeEvenWhenOldRuntimeIsMarked() async throws {
@@ -1015,7 +1063,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
 
         XCTAssertEqual(result, .rejected(message: "Coordinator is not available in this window."))
         XCTAssertFalse(submitterCalled)
-        XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
+        XCTAssertEqual(viewModel.railTranscriptEntries.compactMap(\.action).map(\.targetSessionID), [childID])
         XCTAssertEqual(viewModel.composerNotice, "Coordinator is not available in this window.")
     }
 

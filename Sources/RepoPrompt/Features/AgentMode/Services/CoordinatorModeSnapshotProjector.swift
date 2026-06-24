@@ -214,9 +214,8 @@ struct CoordinatorModeSnapshotProjector {
             coordinatorSessionIDs: coordinatorSessionIDs,
             selectedCoordinatorID: coordinator?.sessionID
         )
-        let selectedCoordinatorOwnerIDs = fleetOwnerIDs(
-            childrenByParent: renderedChildrenByParent,
-            coordinatorSessionIDs: coordinatorSessionIDs,
+        let selectedCoordinatorOwnerIDs = selectedFleetOwnerIDs(
+            from: allCoordinatorOwnerIDs,
             selectedCoordinatorID: coordinator?.sessionID
         )
         let boardOwnerIDs: [UUID: UUID] = input.boardScope == .allAgents
@@ -695,25 +694,14 @@ struct CoordinatorModeSnapshotProjector {
         ownerIDs[seed.id] == nil ? .directAgent : .coordinatorFleet
     }
 
-    private func fleetOwnerIDs(
-        childrenByParent: [UUID: Set<UUID>],
-        coordinatorSessionIDs: Set<UUID>,
+    private func selectedFleetOwnerIDs(
+        from ownerIDs: [UUID: UUID],
         selectedCoordinatorID: UUID?
     ) -> [UUID: UUID] {
-        guard let selectedCoordinatorID, coordinatorSessionIDs.contains(selectedCoordinatorID) else {
-            return [:]
+        guard let selectedCoordinatorID else { return [:] }
+        return ownerIDs.filter { _, ownerID in
+            ownerID == selectedCoordinatorID
         }
-        var ownerIDs: [UUID: UUID] = [:]
-        let coordinatorIDs = [selectedCoordinatorID]
-        for coordinatorID in coordinatorIDs {
-            var stack = Array(childrenByParent[coordinatorID, default: []])
-            while let sessionID = stack.popLast() {
-                guard ownerIDs[sessionID] == nil, sessionID != coordinatorID else { continue }
-                ownerIDs[sessionID] = coordinatorID
-                stack.append(contentsOf: childrenByParent[sessionID, default: []])
-            }
-        }
-        return ownerIDs
     }
 
     private func allFleetOwnerIDs(

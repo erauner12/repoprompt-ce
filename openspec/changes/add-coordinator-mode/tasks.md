@@ -144,6 +144,8 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.42 Rename Coordinator-specific parent-session rail copy to Missions and remove redundant per-row `Persisted` badges.
 - [x] 10.43 Hide empty lanes on the selected-Mission Kanban while preserving all lanes on the All Agents Board.
 - [x] 10.44 Render Coordinator worktree color indicators from the same persisted worktree identity used by Agent Mode.
+- [x] 10.45 Render delegated-session Coordinator chat event cards as soon as child Missions are projected instead of waiting for terminal status.
+- [x] 10.46 Keep selected-Mission board rows, Mission child counts, and delegated chat action cards on the same Coordinator owner projection.
 
 ## 11. Validation
 
