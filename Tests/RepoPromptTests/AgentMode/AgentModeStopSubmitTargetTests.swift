@@ -850,6 +850,34 @@ final class AgentModeStopSubmitTargetTests: XCTestCase {
         XCTAssertEqual(childSession.activeAgentSessionID, childSessionID)
     }
 
+    func testCoordinatorDirectiveSubmissionStoresVisibleObjectiveInsteadOfWrappedPrompt() async throws {
+        let vm = makeViewModel()
+        let coordinatorTabID = UUID()
+        let coordinatorSessionID = UUID()
+        vm.ensureSession(for: coordinatorTabID)
+        let coordinatorSession = try XCTUnwrap(vm.sessions[coordinatorTabID])
+        coordinatorSession.hasLoadedPersistedState = true
+        coordinatorSession.selectedAgent = .codexExec
+        coordinatorSession.isCoordinatorRuntime = true
+        coordinatorSession.testInstallPersistentSessionBinding(sessionID: coordinatorSessionID)
+
+        let template = CoordinatorMissionTemplate.scopedChange
+        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+            CoordinatorDirectiveSubmission(
+                visibleText: "fix docs",
+                providerText: template.wrap("fix docs"),
+                missionTemplate: CoordinatorMissionTemplateSummary(template),
+                coordinatorSessionID: coordinatorSessionID,
+                forceNewRuntime: false
+            )
+        )
+
+        XCTAssertEqual(result, .submitted)
+        XCTAssertTrue(coordinatorSession.items.filter { $0.kind == .user }.map(\.text).first?.contains("Run this as a scoped Coordinator change.") == true)
+        XCTAssertEqual(coordinatorSession.coordinatorFollowThroughState?.originalObjectiveSummary, "fix docs")
+        XCTAssertEqual(coordinatorSession.coordinatorFollowThroughState?.missionTemplate, CoordinatorMissionTemplateSummary(template))
+    }
+
     func testCoordinatorDirectiveRejectsActiveCoordinatorBeforeSteeringPath() async throws {
         let recorder = StopSubmitSendRecorder()
         let controller = StopSubmitNoopCodexController(recorder: recorder, hasActiveThread: true)

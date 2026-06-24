@@ -23,8 +23,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 )
             },
             dashboardVisibilityHandler: { _ in },
-            directiveSubmitter: { text, sessionID, forceNewRuntime in
-                submissions.append((text, sessionID, forceNewRuntime))
+            directiveSubmitter: { submission in
+                submissions.append((submission.providerText, submission.coordinatorSessionID, submission.forceNewRuntime))
                 liveSessions = [
                     self.live(id: coordinatorID, tab: self.uuid(101), title: "New coordinator", updatedAt: self.date(30), state: .idle, isMCP: true)
                 ]
@@ -47,7 +47,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
     }
 
     func testScopedChangeTemplateWrapsInitialCoordinatorDirectiveOnly() async {
-        var submissions: [(text: String, sessionID: UUID?, forceNewRuntime: Bool)] = []
+        var submissions: [(text: String, sessionID: UUID?, forceNewRuntime: Bool, template: CoordinatorMissionTemplateSummary?)] = []
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in
                 self.input(
@@ -57,12 +57,17 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 )
             },
             dashboardVisibilityHandler: { _ in },
-            directiveSubmitter: { text, sessionID, forceNewRuntime in
-                submissions.append((text, sessionID, forceNewRuntime))
+            directiveSubmitter: { submission in
+                submissions.append((
+                    submission.providerText,
+                    submission.coordinatorSessionID,
+                    submission.forceNewRuntime,
+                    submission.missionTemplate
+                ))
                 return .accepted
             }
         )
-        viewModel.selectedWorkflowTemplate = .scopedChange
+        viewModel.selectedMissionTemplate = .scopedChange
         viewModel.refresh()
 
         let result = await viewModel.submitCoordinatorDirective("fix flaky docs tests")
@@ -72,8 +77,61 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertTrue(submissions.first?.text.hasSuffix("fix flaky docs tests") == true)
         XCTAssertNil(submissions.first?.sessionID)
         XCTAssertEqual(submissions.first?.forceNewRuntime, true)
-        XCTAssertNil(viewModel.selectedWorkflowTemplate)
+        XCTAssertEqual(submissions.first?.template, CoordinatorMissionTemplateSummary(.scopedChange))
+        XCTAssertNil(viewModel.selectedMissionTemplate)
         XCTAssertEqual(viewModel.railTranscriptEntries.first?.text, "fix flaky docs tests")
+    }
+
+    func testCustomMissionTemplateWrapsFreshMissionOnlyAndFollowUpStaysRaw() async {
+        let coordinatorID = uuid(1)
+        var liveSessions: [CoordinatorModeSnapshotProjector.LiveSession] = []
+        var demoCoordinatorIDs: Set<UUID> = []
+        let customTemplate = CoordinatorMissionTemplate(
+            source: .custom(uuid(700)),
+            displayName: "Custom Mission",
+            iconName: "wand.and.stars",
+            accentColorHex: "#FF00AA",
+            tooltipText: nil,
+            descriptionText: nil,
+            template: "CUSTOM WRAP\n$ARGUMENTS"
+        )
+        var submissions: [CoordinatorDirectiveSubmission] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: liveSessions,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    autoSelectDemoCoordinator: false,
+                    sort: sortMode,
+                    demoCoordinatorIDs: demoCoordinatorIDs
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { submission in
+                submissions.append(submission)
+                if submission.forceNewRuntime {
+                    liveSessions = [
+                        self.live(id: coordinatorID, tab: self.uuid(101), title: "Coordinator", updatedAt: self.date(30), state: .idle, isMCP: true)
+                    ]
+                    demoCoordinatorIDs.insert(coordinatorID)
+                }
+                return .accepted
+            }
+        )
+        viewModel.selectedMissionTemplate = customTemplate
+        viewModel.refresh()
+
+        let freshResult = await viewModel.submitCoordinatorDirective("  start mission  ")
+        let followUpResult = await viewModel.submitCoordinatorDirective("  follow up  ")
+
+        XCTAssertEqual(freshResult, .accepted)
+        XCTAssertEqual(followUpResult, .accepted)
+        XCTAssertEqual(submissions.map(\.visibleText), ["start mission", "follow up"])
+        XCTAssertEqual(submissions.map(\.providerText), ["CUSTOM WRAP\nstart mission", "follow up"])
+        XCTAssertEqual(submissions.first?.missionTemplate, CoordinatorMissionTemplateSummary(customTemplate))
+        XCTAssertNil(submissions.last?.missionTemplate)
+        XCTAssertNil(viewModel.selectedMissionTemplate)
+        XCTAssertEqual(viewModel.railTranscriptEntries.filter { $0.role == .user }.map(\.text), ["start mission", "follow up"])
     }
 
     func testRejectedDraftSendPreservesTemplateSelection() async {
@@ -86,15 +144,15 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 )
             },
             dashboardVisibilityHandler: { _ in },
-            directiveSubmitter: { _, _, _ in .rejected(message: "Nope") }
+            directiveSubmitter: { _ in .rejected(message: "Nope") }
         )
-        viewModel.selectedWorkflowTemplate = .scopedChange
+        viewModel.selectedMissionTemplate = .scopedChange
         viewModel.refresh()
 
         let result = await viewModel.submitCoordinatorDirective("try this")
 
         XCTAssertEqual(result, .rejected(message: "Nope"))
-        XCTAssertEqual(viewModel.selectedWorkflowTemplate, .scopedChange)
+        XCTAssertEqual(viewModel.selectedMissionTemplate, .scopedChange)
         XCTAssertEqual(viewModel.composerNotice, "Nope")
     }
 
@@ -123,8 +181,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 return next
             },
             dashboardVisibilityHandler: { _ in },
-            directiveSubmitter: { text, sessionID, forceNewRuntime in
-                submissions.append((text, sessionID, forceNewRuntime))
+            directiveSubmitter: { submission in
+                submissions.append((submission.providerText, submission.coordinatorSessionID, submission.forceNewRuntime))
                 return .accepted
             }
         )
@@ -168,8 +226,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 return next
             },
             dashboardVisibilityHandler: { _ in },
-            directiveSubmitter: { text, sessionID, forceNewRuntime in
-                submissions.append((text, sessionID, forceNewRuntime))
+            directiveSubmitter: { submission in
+                submissions.append((submission.providerText, submission.coordinatorSessionID, submission.forceNewRuntime))
                 return .accepted
             }
         )
@@ -354,12 +412,12 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             },
             transcriptProvider: { _ in transcriptEntries },
             dashboardVisibilityHandler: { _ in },
-            directiveSubmitter: { text, _, _ in
+            directiveSubmitter: { submission in
                 transcriptEntries = [
                     self.transcriptEntry(
                         id: self.uuid(1001),
                         role: .user,
-                        text: text,
+                        text: submission.visibleText,
                         at: self.date(30)
                     )
                 ]
@@ -841,7 +899,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 return next
             },
             dashboardVisibilityHandler: { _ in },
-            directiveSubmitter: { _, _, _ in
+            directiveSubmitter: { _ in
                 submitterCalled = true
                 return .accepted
             }
@@ -965,8 +1023,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 sessionID == coordinatorID ? persistedTranscript : []
             },
             dashboardVisibilityHandler: { _ in },
-            directiveSubmitter: { text, sessionID, forceNewRuntime in
-                submissions.append((text, sessionID, forceNewRuntime))
+            directiveSubmitter: { submission in
+                submissions.append((submission.providerText, submission.coordinatorSessionID, submission.forceNewRuntime))
                 return .accepted
             }
         )
@@ -1063,8 +1121,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 )
             },
             dashboardVisibilityHandler: { _ in },
-            directiveSubmitter: { text, sessionID, forceNewRuntime in
-                submissions.append((text, sessionID, forceNewRuntime))
+            directiveSubmitter: { submission in
+                submissions.append((submission.providerText, submission.coordinatorSessionID, submission.forceNewRuntime))
                 liveSessions.append(self.live(
                     id: secondCoordinatorID,
                     tab: secondTabID,
@@ -1115,7 +1173,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 return next
             },
             dashboardVisibilityHandler: { _ in },
-            directiveSubmitter: { _, _, _ in
+            directiveSubmitter: { _ in
                 submitterCalled = true
                 return .accepted
             }

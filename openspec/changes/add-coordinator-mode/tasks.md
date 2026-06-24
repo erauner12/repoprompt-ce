@@ -97,6 +97,11 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.21 Render chat-level continuation controls only from explicit Coordinator checkpoint metadata, not from ordinary Coordinator prose.
 - [x] 9.22 Reuse Agent Mode slash-skill/file-mention input affordances and compact provider MCP/tool preference controls in the Coordinator composer for demo-ready Coordinator directives.
 - [x] 9.23 Add Coordinator runtime prompt guidance that keeps Coordinator-owned final checks and recovery on structured MCP control-plane tools instead of raw shell loops.
+- [x] 9.24 Replace the hard-coded Scoped Change composer action with Coordinator-only Mission Templates backed by built-in and custom markdown definitions.
+- [x] 9.25 Split Coordinator directive submission into raw visible Mission text and provider-wrapped runtime text so follow-through objective summaries remain user-readable.
+- [x] 9.26 Persist lightweight Mission Template metadata with Coordinator follow-through state.
+- [x] 9.27 Add focused tests for Mission Template wrapping, rejected-send preservation, accepted-send clearing, follow-up non-wrapping, and visible objective persistence.
+- [x] 9.28 Add in-app Mission Template viewing/editing so built-ins can be inspected and custom markdown can be saved without leaving the app.
 
 ## 10. Coordinator view UI shell
 
@@ -152,6 +157,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.50 Let delegated conversation cards select their projected board/list row and reveal the inspector when the target is still visible in the selected Mission scope.
 - [x] 10.51 Move compact MCP awareness into stable board header chrome, limit session filtering to the All Agents Board, and reduce the stacked inspector handle to a quiet visual affordance.
 - [x] 10.52 Preserve delegated conversation card chronology after restart using child start/delegation time rather than terminal update time.
+- [x] 10.53 Add a compact Mission Template picker and management sheet under the fresh-Mission Coordinator composer, separate from Agent Mode workflow controls.
 
 ## 11. Validation
 
@@ -162,3 +168,4 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 11.5 Re-run focused Coordinator projector/composer tests, coordinated Swift build/style checks, and OpenSpec validation after the multi-runtime fleet-scope refinement.
 - [x] 11.6 Run focused Coordinator mutable-delegation worktree policy tests.
 - [x] 11.7 Live-smoke a fresh Coordinator parent chaining Orchestrate then Review on the same app-managed worktree via MCP Coordinator chat.
+- [x] 11.8 Run focused Coordinator Mission Template store, composer, and objective-persistence tests.

@@ -2,6 +2,7 @@ import Foundation
 
 struct CoordinatorFollowThroughState: Codable, Equatable {
     var originalObjectiveSummary: String?
+    var missionTemplate: CoordinatorMissionTemplateSummary?
     var observedChildPhases: [UUID: CoordinatorFollowThroughChildPhase]
     var pendingEvents: [CoordinatorFollowThroughEvent]
     var handledEventIDs: Set<String>
@@ -9,20 +10,23 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
 
     init(
         originalObjectiveSummary: String? = nil,
+        missionTemplate: CoordinatorMissionTemplateSummary? = nil,
         observedChildPhases: [UUID: CoordinatorFollowThroughChildPhase] = [:],
         pendingEvents: [CoordinatorFollowThroughEvent] = [],
         handledEventIDs: Set<String> = [],
         lastResume: CoordinatorFollowThroughResumeRecord? = nil
     ) {
         self.originalObjectiveSummary = originalObjectiveSummary
+        self.missionTemplate = missionTemplate
         self.observedChildPhases = observedChildPhases
         self.pendingEvents = pendingEvents
         self.handledEventIDs = handledEventIDs
         self.lastResume = lastResume
     }
 
-    mutating func rememberObjective(_ text: String) {
+    mutating func rememberObjective(_ text: String, missionTemplate: CoordinatorMissionTemplateSummary? = nil) {
         originalObjectiveSummary = Self.summary(from: text)
+        self.missionTemplate = missionTemplate
         observedChildPhases.removeAll()
         pendingEvents.removeAll()
         handledEventIDs.removeAll()

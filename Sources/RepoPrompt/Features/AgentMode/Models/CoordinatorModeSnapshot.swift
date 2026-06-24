@@ -206,12 +206,43 @@ struct CoordinatorModeSessionStatusReport: Equatable {
     }
 }
 
-struct CoordinatorWorkflowTemplate: Identifiable, Equatable {
-    static let scopedChange = CoordinatorWorkflowTemplate(
-        id: "scoped-change",
+struct CoordinatorMissionTemplateSummary: Codable, Equatable, Hashable {
+    let id: String
+    let displayName: String
+    let iconName: String
+    let accentColorHex: String?
+
+    init(id: String, displayName: String, iconName: String, accentColorHex: String? = nil) {
+        self.id = id
+        self.displayName = displayName
+        self.iconName = iconName
+        self.accentColorHex = accentColorHex
+    }
+
+    init(_ template: CoordinatorMissionTemplate) {
+        self.init(
+            id: template.id,
+            displayName: template.displayName,
+            iconName: template.iconName,
+            accentColorHex: template.accentColorHex
+        )
+    }
+}
+
+struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
+    enum Source: Equatable, Hashable {
+        case builtIn(String)
+        case custom(UUID)
+    }
+
+    static let scopedChange = CoordinatorMissionTemplate(
+        source: .builtIn("scoped-change"),
         displayName: "Scoped Change",
         iconName: "scope",
-        promptPrefix: """
+        accentColorHex: "#0A84FF",
+        tooltipText: "Wrap a new Mission in scoped Coordinator guidance",
+        descriptionText: "Plan first, delegate mutable work into isolated worktrees, review results, and ask before irreversible actions.",
+        template: """
         Run this as a scoped Coordinator change.
 
         1. Deeply inspect the existing code and produce a short plan before delegating.
@@ -220,16 +251,67 @@ struct CoordinatorWorkflowTemplate: Identifiable, Equatable {
         4. Review delegated results, ask me before irreversible actions, then coordinate any needed fixes.
 
         User objective:
+        $MISSION
         """
     )
 
-    let id: String
+    let source: Source
     let displayName: String
     let iconName: String
-    let promptPrefix: String
+    let accentColorHex: String?
+    let tooltipText: String?
+    let descriptionText: String?
+    let template: String
+
+    var id: String {
+        switch source {
+        case let .builtIn(id):
+            "builtin-\(id)"
+        case let .custom(id):
+            "custom-\(id.uuidString)"
+        }
+    }
+
+    var isBuiltIn: Bool {
+        if case .builtIn = source { true } else { false }
+    }
+
+    var isCustom: Bool {
+        if case .custom = source { true } else { false }
+    }
+
+    var customID: UUID? {
+        if case let .custom(id) = source { id } else { nil }
+    }
 
     func wrap(_ text: String) -> String {
-        "\(promptPrefix)\n\(text.trimmingCharacters(in: .whitespacesAndNewlines))"
+        Self.wrap(template: template, missionText: text)
+    }
+
+    static func stripYAMLFrontmatter(_ text: String) -> String {
+        var body = text
+        if body.hasPrefix("---") {
+            let searchRange = body.index(body.startIndex, offsetBy: 3) ..< body.endIndex
+            if let closingRange = body.range(of: "\n---", range: searchRange) {
+                body = String(body[closingRange.upperBound...])
+                    .trimmingCharacters(in: .newlines)
+            }
+        }
+        return body
+    }
+
+    static func wrap(template: String, missionText: String) -> String {
+        let mission = missionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var body = stripYAMLFrontmatter(template)
+        if body.contains("$MISSION") {
+            return body.replacingOccurrences(of: "$MISSION", with: mission)
+        }
+        if body.contains("$ARGUMENTS") {
+            return body.replacingOccurrences(of: "$ARGUMENTS", with: mission)
+        }
+        let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedBody.isEmpty else { return mission }
+        return "\(trimmedBody)\n\n\(mission)"
     }
 }
 

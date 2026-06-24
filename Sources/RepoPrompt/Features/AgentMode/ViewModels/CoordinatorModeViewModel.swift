@@ -2,6 +2,14 @@ import Combine
 import Foundation
 import MCP
 
+struct CoordinatorDirectiveSubmission: Equatable {
+    let visibleText: String
+    let providerText: String
+    let missionTemplate: CoordinatorMissionTemplateSummary?
+    let coordinatorSessionID: UUID?
+    let forceNewRuntime: Bool
+}
+
 @MainActor
 final class CoordinatorModeViewModel: ObservableObject {
     enum DirectiveSubmissionResult: Equatable {
@@ -40,7 +48,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias InputProvider = @MainActor (_ sortMode: CoordinatorModeSortMode, _ selectedCoordinatorID: UUID?) -> CoordinatorModeSnapshotProjector.Input
     typealias TranscriptProvider = @MainActor (_ coordinatorSessionID: UUID?) -> [CoordinatorModeRailTranscriptEntry]
     typealias DashboardVisibilityHandler = @MainActor (_ visible: Bool) -> Void
-    typealias DirectiveSubmitter = @MainActor (_ text: String, _ coordinatorSessionID: UUID?, _ forceNewRuntime: Bool) async -> DirectiveSubmissionResult
+    typealias DirectiveSubmitter = @MainActor (_ submission: CoordinatorDirectiveSubmission) async -> DirectiveSubmissionResult
     typealias ChildDirectiveSubmitter = @MainActor (_ text: String, _ row: CoordinatorModeRow) async -> DirectiveSubmissionResult
     typealias ContinuationGateHandler = @MainActor (_ gate: CoordinatorContinuationGate, _ snapshotBeforeGateCleared: CoordinatorModeSnapshot) async -> Void
     typealias CoordinatorActivationHandler = @MainActor (_ sessionID: UUID) async -> Void
@@ -52,7 +60,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     @Published private(set) var composerNotice: String?
     @Published private(set) var isFreshCoordinatorRunPending = false
     @Published private(set) var usesAutoMode: Bool
-    @Published var selectedWorkflowTemplate: CoordinatorWorkflowTemplate?
+    @Published var selectedMissionTemplate: CoordinatorMissionTemplate?
     @Published var sortMode: CoordinatorModeSortMode = .lastUpdated {
         didSet {
             guard sortMode != oldValue else { return }
@@ -88,7 +96,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         inputProvider: @escaping InputProvider,
         transcriptProvider: @escaping TranscriptProvider = { _ in [] },
         dashboardVisibilityHandler: @escaping DashboardVisibilityHandler,
-        directiveSubmitter: @escaping DirectiveSubmitter = { _, _, _ in
+        directiveSubmitter: @escaping DirectiveSubmitter = { _ in
             .rejected(message: "Coordinator composer is unavailable.")
         },
         childDirectiveSubmitter: @escaping ChildDirectiveSubmitter = { _, _ in
@@ -223,12 +231,19 @@ final class CoordinatorModeViewModel: ObservableObject {
             }
         }
 
-        let submittedText = forceNewRuntime ? selectedWorkflowTemplate.map { $0.wrap(trimmed) } ?? trimmed : trimmed
-        let result = await directiveSubmitter(submittedText, coordinatorSessionID, forceNewRuntime)
+        let missionTemplate = forceNewRuntime ? selectedMissionTemplate : nil
+        let submission = CoordinatorDirectiveSubmission(
+            visibleText: trimmed,
+            providerText: missionTemplate.map { $0.wrap(trimmed) } ?? trimmed,
+            missionTemplate: missionTemplate.map(CoordinatorMissionTemplateSummary.init),
+            coordinatorSessionID: coordinatorSessionID,
+            forceNewRuntime: forceNewRuntime
+        )
+        let result = await directiveSubmitter(submission)
         switch result {
         case .accepted:
             isFreshCoordinatorRunPending = false
-            selectedWorkflowTemplate = nil
+            selectedMissionTemplate = nil
             composerNotice = nil
             if forceNewRuntime {
                 selectFreshCoordinatorRuntimeIfAvailable(
@@ -237,7 +252,7 @@ final class CoordinatorModeViewModel: ObservableObject {
                 )
             }
             refresh()
-            appendUserTranscriptEntryIfMissing(trimmed)
+            appendUserTranscriptEntryIfMissing(submission.visibleText)
         case let .rejected(message):
             composerNotice = message.isEmpty ? nil : message
         }
@@ -626,15 +641,11 @@ extension AgentModeViewModel {
             self?.coordinatorModeRailTranscriptEntries(for: coordinatorSessionID) ?? []
         } dashboardVisibilityHandler: { [weak self] visible in
             self?.setCoordinatorModeDashboardUpdatesVisible(visible)
-        } directiveSubmitter: { [weak self] text, coordinatorSessionID, forceNewRuntime in
+        } directiveSubmitter: { [weak self] submission in
             guard let self else {
                 return .rejected(message: "Coordinator composer is unavailable.")
             }
-            switch await submitCoordinatorDirectiveToAgentMode(
-                text,
-                coordinatorSessionID: coordinatorSessionID,
-                forceNewRuntime: forceNewRuntime
-            ) {
+            switch await submitCoordinatorDirectiveToAgentMode(submission) {
             case .submitted:
                 return .accepted
             case let .blocked(message):
@@ -719,11 +730,26 @@ extension AgentModeViewModel {
         coordinatorSessionID: UUID?,
         forceNewRuntime: Bool = false
     ) async -> UserTurnSubmissionResult {
+        await submitCoordinatorDirectiveToAgentMode(
+            CoordinatorDirectiveSubmission(
+                visibleText: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                providerText: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                missionTemplate: nil,
+                coordinatorSessionID: coordinatorSessionID,
+                forceNewRuntime: forceNewRuntime
+            )
+        )
+    }
+
+    @MainActor
+    func submitCoordinatorDirectiveToAgentMode(
+        _ submission: CoordinatorDirectiveSubmission
+    ) async -> UserTurnSubmissionResult {
         let runtime: (tabID: UUID, sessionID: UUID)
         do {
             runtime = try await resolveOrCreateCoordinatorRuntimeDemoTarget(
-                preferredSessionID: coordinatorSessionID,
-                forceNewRuntime: forceNewRuntime
+                preferredSessionID: submission.coordinatorSessionID,
+                forceNewRuntime: submission.forceNewRuntime
             )
         } catch {
             return .blocked(message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
@@ -740,13 +766,17 @@ extension AgentModeViewModel {
         else {
             return .blocked(message: "Coordinator composer is unavailable for this session state.")
         }
-        let result = await submitUserTurnCreatingSessionIfNeeded(text: text, target: target) {
+        let result = await submitUserTurnCreatingSessionIfNeeded(text: submission.providerText, target: target) {
             nil
         }
         if case .submitted = result,
-           !isCoordinatorFollowThroughResumeDirective(text)
+           !isCoordinatorFollowThroughResumeDirective(submission.providerText)
         {
-            rememberCoordinatorObjective(text, tabID: runtime.tabID)
+            rememberCoordinatorObjective(
+                submission.visibleText,
+                tabID: runtime.tabID,
+                missionTemplate: submission.missionTemplate
+            )
         }
         return result
     }
@@ -910,10 +940,14 @@ extension AgentModeViewModel {
     }
 
     @MainActor
-    private func rememberCoordinatorObjective(_ text: String, tabID: UUID) {
+    private func rememberCoordinatorObjective(
+        _ text: String,
+        tabID: UUID,
+        missionTemplate: CoordinatorMissionTemplateSummary? = nil
+    ) {
         guard let session = sessions[tabID], session.isCoordinatorRuntime else { return }
         var state = CoordinatorFollowThroughState()
-        state.rememberObjective(text)
+        state.rememberObjective(text, missionTemplate: missionTemplate)
         if let coordinatorID = session.activeAgentSessionID {
             let existingRows = coordinatorModeRows(in: coordinatorModeViewModel.snapshot)
                 .filter { $0.parentCoordinator?.sessionID == coordinatorID }

@@ -114,10 +114,13 @@ struct CoordinatorModeView: View {
     @State private var isInspectorVisible = true
     @State private var isSortMenuOpen = false
     @State private var areArchivedMissionsExpanded = false
+    @State private var isMissionTemplatePopoverPresented = false
+    @State private var isMissionTemplateConfigureSheetPresented = false
     @FocusState private var isCoordinatorComposerFocused: Bool
     @FocusState private var isChildComposerFocused: Bool
     @ObservedObject private var fontScale = FontScaleManager.shared
     @ObservedObject private var globalSettings = GlobalSettingsStore.shared
+    @ObservedObject private var missionTemplateStore = CoordinatorMissionTemplateStore.shared
 
     private var visualMetrics: CoordinatorVisualMetrics {
         CoordinatorVisualMetrics(fontPreset: fontScale.preset)
@@ -2018,26 +2021,7 @@ struct CoordinatorModeView: View {
             coordinatorComposerToolsButton(metrics: metrics)
 
             if rail.state == .chooseCoordinator {
-                Button {
-                    viewModel.selectedWorkflowTemplate = viewModel.selectedWorkflowTemplate == .scopedChange ? nil : .scopedChange
-                } label: {
-                    HStack(spacing: metrics.miniPillIconSpacing) {
-                        Image(systemName: CoordinatorWorkflowTemplate.scopedChange.iconName)
-                            .font(.system(size: metrics.microIconSize, weight: .medium))
-                        Text(CoordinatorWorkflowTemplate.scopedChange.displayName)
-                            .font(metrics.microMedium)
-                            .lineLimit(1)
-                    }
-                    .padding(.horizontal, metrics.miniPillHorizontalPadding)
-                    .padding(.vertical, metrics.miniPillVerticalPadding)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(viewModel.selectedWorkflowTemplate == .scopedChange ? Color.accentColor.opacity(0.16) : Color(nsColor: .controlBackgroundColor).opacity(0.22))
-                    )
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(viewModel.selectedWorkflowTemplate == .scopedChange ? Color.accentColor : Color.secondary)
-                .hoverTooltip(CoordinatorWorkflowTemplate.scopedChange.displayName)
+                coordinatorMissionTemplatePicker(metrics: metrics)
             }
 
             Spacer(minLength: metrics.smallSpacing)
@@ -2056,6 +2040,56 @@ struct CoordinatorModeView: View {
         }
         .frame(height: metrics.composerControlStripHeight)
         .padding(.horizontal, metrics.composerControlHorizontalPadding)
+    }
+
+    private func coordinatorMissionTemplatePicker(metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: 2) {
+            Button {
+                isMissionTemplatePopoverPresented.toggle()
+            } label: {
+                HStack(spacing: metrics.miniPillIconSpacing) {
+                    Image(systemName: viewModel.selectedMissionTemplate?.iconName ?? "wand.and.stars")
+                        .font(.system(size: metrics.microIconSize, weight: .medium))
+                    Text(viewModel.selectedMissionTemplate?.displayName ?? "Mission Template")
+                        .font(metrics.microMedium)
+                        .lineLimit(1)
+                }
+                .padding(.leading, metrics.miniPillHorizontalPadding)
+                .padding(.trailing, viewModel.selectedMissionTemplate == nil ? metrics.miniPillHorizontalPadding : 4)
+                .padding(.vertical, metrics.miniPillVerticalPadding)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(viewModel.selectedMissionTemplate?.accentColor ?? Color.secondary)
+
+            if viewModel.selectedMissionTemplate != nil {
+                Button {
+                    viewModel.selectedMissionTemplate = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: metrics.microIconSize - 1, weight: .semibold))
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .hoverTooltip("Clear Mission Template")
+            }
+        }
+        .background(
+            Capsule(style: .continuous)
+                .fill(viewModel.selectedMissionTemplate == nil ? Color(nsColor: .controlBackgroundColor).opacity(0.22) : (viewModel.selectedMissionTemplate?.accentColor ?? Color.accentColor).opacity(0.16))
+        )
+        .popover(isPresented: $isMissionTemplatePopoverPresented, arrowEdge: .bottom) {
+            CoordinatorMissionTemplatesPopoverView(
+                templateStore: missionTemplateStore,
+                selectedTemplate: $viewModel.selectedMissionTemplate,
+                isPresented: $isMissionTemplatePopoverPresented,
+                showConfigureSheet: $isMissionTemplateConfigureSheetPresented
+            )
+        }
+        .sheet(isPresented: $isMissionTemplateConfigureSheetPresented) {
+            CoordinatorMissionTemplatesConfigureSheet(templateStore: missionTemplateStore)
+        }
+        .hoverTooltip(viewModel.selectedMissionTemplate?.tooltipText ?? "Choose a Mission Template")
     }
 
     private func coordinatorComposerFeatures() -> ResizableTextFieldFeatures {
@@ -3001,6 +3035,489 @@ struct CoordinatorModeView: View {
             return
         }
         selectedRowID = allRows.first?.id
+    }
+}
+
+private struct CoordinatorMissionTemplatesPopoverView: View {
+    @ObservedObject var templateStore: CoordinatorMissionTemplateStore
+    @Binding var selectedTemplate: CoordinatorMissionTemplate?
+    @Binding var isPresented: Bool
+    @Binding var showConfigureSheet: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    if !templateStore.builtInTemplates.isEmpty {
+                        sectionHeader("Built-in")
+                        ForEach(templateStore.builtInTemplates) { template in
+                            templateRow(template)
+                        }
+                    }
+
+                    if !templateStore.customTemplates.isEmpty {
+                        sectionHeader("Custom")
+                            .padding(.top, 6)
+                        ForEach(templateStore.customTemplates) { template in
+                            templateRow(template)
+                        }
+                    }
+                }
+                .padding(10)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                if selectedTemplate != nil {
+                    Button {
+                        selectedTemplate = nil
+                        isPresented = false
+                    } label: {
+                        Label("No template", systemImage: "xmark.circle")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Button {
+                        showConfigureSheet = true
+                        isPresented = false
+                    } label: {
+                        Label("Manage Templates", systemImage: "gearshape")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+
+                    Button {
+                        templateStore.openInFinder()
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .hoverTooltip("Open template folder")
+                }
+            }
+            .padding(10)
+        }
+        .frame(width: 320, height: 360)
+        .onAppear {
+            templateStore.refresh()
+        }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+    }
+
+    private func templateRow(_ template: CoordinatorMissionTemplate) -> some View {
+        let isSelected = selectedTemplate?.id == template.id
+        return Button {
+            selectedTemplate = isSelected ? nil : template
+            isPresented = false
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: template.iconName)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(template.accentColor)
+                    .frame(width: 18)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(template.displayName)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    if let description = template.descriptionText, !description.isEmpty {
+                        Text(description)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(template.accentColor)
+                        .padding(.top, 1)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? template.accentColor.opacity(0.16) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .hoverTooltip(template.tooltipText ?? template.displayName)
+    }
+}
+
+private struct CoordinatorMissionTemplatesConfigureSheet: View {
+    @ObservedObject var templateStore: CoordinatorMissionTemplateStore
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var showNewTemplatePrompt = false
+    @State private var showClonePrompt = false
+    @State private var templateName = ""
+    @State private var editingTemplate: CoordinatorMissionTemplate?
+    @State private var editingMarkdown = ""
+    @State private var editorError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Mission Templates")
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    builtInSection
+                    if !templateStore.customTemplates.isEmpty {
+                        Divider()
+                        customSection
+                    }
+                }
+                .padding(16)
+            }
+
+            Divider()
+
+            HStack {
+                Button {
+                    templateName = ""
+                    showNewTemplatePrompt = true
+                } label: {
+                    Label("New Template", systemImage: "plus")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Button {
+                    templateStore.openInFinder()
+                } label: {
+                    Label("Open Folder", systemImage: "folder")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+        .frame(width: 440, height: 430)
+        .onAppear {
+            templateStore.refresh()
+        }
+        .alert("New Mission Template", isPresented: $showNewTemplatePrompt) {
+            TextField("Template name", text: $templateName)
+            Button("Create") { createTemplate() }
+            Button("Cancel", role: .cancel) { templateName = "" }
+        } message: {
+            Text("Create a markdown template you can edit afterwards.")
+        }
+        .alert("Clone Scoped Change", isPresented: $showClonePrompt) {
+            TextField("Template name", text: $templateName)
+            Button("Clone") { cloneScopedChange() }
+            Button("Cancel", role: .cancel) { templateName = "" }
+        } message: {
+            Text("Clone the built-in Scoped Change template into a custom markdown file.")
+        }
+        .sheet(item: $editingTemplate) { template in
+            CoordinatorMissionTemplateEditorSheet(
+                template: template,
+                markdown: $editingMarkdown,
+                error: $editorError,
+                save: template.isCustom ? { saveEditedTemplate(template) } : nil,
+                clone: template.isBuiltIn ? { cloneTemplateForEditing(template) } : nil,
+                reveal: template.isCustom ? { templateStore.revealInFinder(template) } : nil
+            )
+        }
+    }
+
+    private var builtInSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Built-in")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            ForEach(templateStore.builtInTemplates) { template in
+                HStack(spacing: 8) {
+                    Image(systemName: template.iconName)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(template.accentColor)
+                        .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(template.displayName)
+                            .font(.system(size: 12, weight: .semibold))
+                        if let description = template.descriptionText {
+                            Text(description)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                    Spacer()
+                    Button {
+                        openTemplateEditor(template)
+                    } label: {
+                        Text("View")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        templateName = "\(template.displayName) Copy"
+                        showClonePrompt = true
+                    } label: {
+                        Text("Clone")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+            }
+        }
+    }
+
+    private var customSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Custom")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            ForEach(templateStore.customTemplates) { template in
+                HStack(spacing: 8) {
+                    Image(systemName: template.iconName)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(template.accentColor)
+                        .frame(width: 18)
+                    Text(template.displayName)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer()
+                    Button {
+                        openTemplateEditor(template)
+                    } label: {
+                        Text("Edit")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        templateStore.revealInFinder(template)
+                    } label: {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .hoverTooltip("Show markdown file")
+
+                    Button {
+                        try? templateStore.deleteTemplate(template)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.red.opacity(0.75))
+                    }
+                    .buttonStyle(.plain)
+                    .hoverTooltip("Delete template")
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+            }
+        }
+    }
+
+    private func createTemplate() {
+        let name = templateName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        do {
+            let template = try templateStore.createTemplate(name: name)
+            templateStore.revealInFinder(template)
+        } catch {
+            print("[CoordinatorMissionTemplatesConfigure] Failed to create template: \(error)")
+        }
+        templateName = ""
+    }
+
+    private func cloneScopedChange() {
+        let name = templateName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        do {
+            let template = try templateStore.cloneBuiltIn(.scopedChange, name: name)
+            templateStore.revealInFinder(template)
+        } catch {
+            print("[CoordinatorMissionTemplatesConfigure] Failed to clone template: \(error)")
+        }
+        templateName = ""
+    }
+
+    private func openTemplateEditor(_ template: CoordinatorMissionTemplate) {
+        editorError = nil
+        editingMarkdown = templateStore.markdown(for: template)
+        editingTemplate = template
+    }
+
+    private func saveEditedTemplate(_ template: CoordinatorMissionTemplate) {
+        do {
+            let updated = try templateStore.updateTemplate(template, markdown: editingMarkdown)
+            editingMarkdown = templateStore.markdown(for: updated)
+            editingTemplate = updated
+            editorError = nil
+        } catch {
+            editorError = "Could not save template: \(error.localizedDescription)"
+        }
+    }
+
+    private func cloneTemplateForEditing(_ template: CoordinatorMissionTemplate) {
+        do {
+            let cloned = try templateStore.cloneBuiltIn(template, name: "\(template.displayName) Copy")
+            openTemplateEditor(cloned)
+        } catch {
+            editorError = "Could not clone template: \(error.localizedDescription)"
+        }
+    }
+}
+
+private struct CoordinatorMissionTemplateEditorSheet: View {
+    let template: CoordinatorMissionTemplate
+    @Binding var markdown: String
+    @Binding var error: String?
+    let save: (() -> Void)?
+    let clone: (() -> Void)?
+    let reveal: (() -> Void)?
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            editor
+            if let error, !error.isEmpty {
+                Divider()
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+            }
+            Divider()
+            footer
+        }
+        .frame(width: 620, height: 560)
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: template.iconName)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(template.accentColor)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(template.displayName)
+                    .font(.system(size: 15, weight: .semibold))
+                Text(template.isCustom ? "Custom Mission Template" : "Built-in Mission Template")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+
+    private var editor: some View {
+        TextEditor(text: $markdown)
+            .font(.system(size: 12, design: .monospaced))
+            .scrollContentBackground(.hidden)
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.16))
+            .disabled(!template.isCustom)
+            .padding(12)
+    }
+
+    private var footer: some View {
+        HStack(spacing: 10) {
+            if let reveal {
+                Button {
+                    reveal()
+                } label: {
+                    Label("Reveal File", systemImage: "doc.text")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.plain)
+            }
+
+            if let clone {
+                Button {
+                    clone()
+                } label: {
+                    Label("Clone to Edit", systemImage: "plus.square.on.square")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer()
+
+            Button("Close") {
+                dismiss()
+            }
+            .keyboardShortcut(.cancelAction)
+
+            if let save {
+                Button("Save") {
+                    save()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+}
+
+private extension CoordinatorMissionTemplate {
+    var accentColor: Color {
+        if let accentColorHex, let color = Color(hex: accentColorHex) {
+            return color
+        }
+        return .accentColor
     }
 }
 

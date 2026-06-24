@@ -286,6 +286,32 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **AND** it MAY expose compact provider MCP/tool preference controls for settings that affect Coordinator runtime launches or follow-up turns
 - **AND** those affordances SHALL NOT create child-session mutations, attachments, permission changes, or model switches unless a specific Coordinator-view behavior is defined.
 
+#### Scenario: Coordinator Mission Template starts a new Mission
+- **WHEN** the user selects a Coordinator Mission Template while composing a fresh Mission
+- **THEN** the Coordinator view SHALL send the template-wrapped prompt to the Coordinator runtime
+- **AND** it SHALL echo and persist the user's raw visible Mission text in the Coordinator rail and follow-through objective summary
+- **AND** it SHALL store lightweight selected-template metadata with Coordinator follow-through state
+- **AND** it SHALL clear the selected template after an accepted fresh Mission start
+- **AND** it SHALL preserve the selected template after a rejected fresh Mission send.
+
+#### Scenario: Existing Mission follow-up ignores Mission Template selection
+- **WHEN** the user sends an ordinary follow-up to an existing Coordinator Mission
+- **THEN** the Coordinator view SHALL send the raw visible follow-up text without applying any Mission Template
+- **AND** Mission Templates SHALL NOT behave as general follow-up macros.
+
+#### Scenario: Mission Templates are separate from Agent workflows
+- **WHEN** the Coordinator board, list, inspector, or delegated conversation card renders an Agent workflow badge such as Orchestrate or Review
+- **THEN** that badge SHALL remain read-only delegated child-session metadata sourced from Agent Mode workflow definitions
+- **AND** it SHALL NOT be treated as a Coordinator Mission Template
+- **AND** Coordinator Mission Templates SHALL be stored and managed separately from Agent Mode workflows.
+
+#### Scenario: User manages Coordinator Mission Templates
+- **WHEN** the user opens Mission Template management from the Coordinator composer picker
+- **THEN** the app SHALL support creating custom markdown templates, viewing built-in template markdown, cloning the built-in Scoped Change template, editing custom template markdown in-app, deleting custom templates, and revealing template files or the template folder
+- **AND** template markdown frontmatter MAY include `id`, `name`, `icon`, `accent_color`, `tooltip`, and `description`
+- **AND** template bodies SHALL support `$MISSION` and `$ARGUMENTS` placeholders
+- **AND** if a template has neither placeholder, the app SHALL append the raw Mission text after the template body.
+
 #### Scenario: External test client submits a Coordinator directive
 - **WHEN** a direct external MCP client uses the Coordinator chat control surface to list, select, create, or submit to Coordinator parents in the current window
 - **THEN** the app SHALL route accepted submissions through the same Coordinator view submission path as the visible Coordinator composer
