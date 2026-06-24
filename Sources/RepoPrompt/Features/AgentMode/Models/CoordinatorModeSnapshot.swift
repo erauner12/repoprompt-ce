@@ -418,6 +418,9 @@ struct CoordinatorModeCoordinatorAction: Equatable {
     let targetTitle: String
     let verb: Verb
     let phase: Phase
+    let statusGroup: CoordinatorModeStatusGroup?
+    let workflow: CoordinatorModeWorkflowDisplaySummary?
+    let workstream: CoordinatorModeRow.Workstream?
 }
 
 struct CoordinatorModePendingInteractionSummary: Identifiable, Equatable {

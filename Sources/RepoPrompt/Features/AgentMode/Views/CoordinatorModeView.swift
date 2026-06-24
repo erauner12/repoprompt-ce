@@ -1743,8 +1743,11 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         let targetRow = action.targetSessionID.flatMap { coordinatorRow(for: $0) }
-        let statusColor = targetRow?.statusGroup.accentColor ?? action.phase.tint
-        let statusText = targetRow?.statusGroup.displayName ?? action.phase.displayName
+        let statusGroup = targetRow?.statusGroup ?? action.statusGroup
+        let statusColor = statusGroup?.accentColor ?? action.phase.tint
+        let statusText = statusGroup?.displayName ?? action.phase.displayName
+        let workflow = targetRow?.workflow ?? action.workflow
+        let workstream = targetRow?.workstream ?? action.workstream
 
         return HStack(alignment: .top, spacing: metrics.smallSpacing) {
             Image(systemName: action.verb.systemImage)
@@ -1757,8 +1760,11 @@ struct CoordinatorModeView: View {
                     Text(action.verb.displayName)
                         .font(metrics.microMedium)
                         .foregroundStyle(action.verb.tint)
-                    if let workflow = targetRow?.workflow {
+                    if let workflow {
                         workflowBadge(workflow, metrics: metrics)
+                    }
+                    if let workstream {
+                        worktreeLabel(workstream, metrics: metrics)
                     }
                     Text(action.ownerTitle)
                         .font(metrics.microMedium)

@@ -1406,7 +1406,8 @@ final class AgentModeViewModelInactiveRefreshTests: XCTestCase {
             isMCPOriginated: false,
             isCoordinatorRuntime: isCoordinatorRuntime,
             worktreeBindingSummaries: [],
-            activeWorktreeMergeSummaries: activeWorktreeMergeSummaries
+            activeWorktreeMergeSummaries: activeWorktreeMergeSummaries,
+            workflowSummary: nil
         )
     }
 

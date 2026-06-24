@@ -456,13 +456,18 @@ actor AgentSessionDataService {
         return (size, values?.contentModificationDate)
     }
 
-    private func metadataRecord(from session: AgentSession, fileURL: URL) -> AgentSessionMetadataRecord {
+    private func metadataRecord(
+        from session: AgentSession,
+        fileURL: URL,
+        workflowSummaryOverride: AgentSessionWorkflowSummary? = nil
+    ) -> AgentSessionMetadataRecord {
         let values = metadataResourceValues(for: fileURL)
         return AgentSessionMetadataRecord.record(
             from: session,
             fileURL: fileURL,
             observedFileSize: values.size,
-            observedFileModificationDate: values.modified
+            observedFileModificationDate: values.modified,
+            workflowSummaryOverride: workflowSummaryOverride
         )
     }
 
@@ -566,10 +571,16 @@ actor AgentSessionDataService {
             } else {
                 AgentSessionMetadataIndex()
             }
+            let mergedRecord = metadataRecord(
+                record,
+                preservingWorkflowSummaryFrom: index.entries.first { existing in
+                    existing.id == record.id || existing.filename == record.filename
+                }
+            )
             index.entries.removeAll { existing in
-                existing.id == record.id || existing.filename == record.filename
+                existing.id == mergedRecord.id || existing.filename == mergedRecord.filename
             }
-            index.entries.append(record)
+            index.entries.append(mergedRecord)
             index.generatedAt = Date()
             metadataIndexCacheByFolder[key] = index
             try await writeMetadataIndex(index, folder: folder)
@@ -581,7 +592,12 @@ actor AgentSessionDataService {
     private func upsertMetadataRecordIfIndexPresent(_ session: AgentSession, fileURL: URL) async {
         let folder = fileURL.deletingLastPathComponent()
         guard var index = await readMetadataIndexIfAvailable(folder: folder) else { return }
-        let record = metadataRecord(from: session, fileURL: fileURL)
+        let record = metadataRecord(
+            metadataRecord(from: session, fileURL: fileURL),
+            preservingWorkflowSummaryFrom: index.entries.first { existing in
+                existing.id == session.id || existing.filename == fileURL.lastPathComponent
+            }
+        )
         if let existing = index.entries.first(where: { $0.id == record.id }),
            existing.matchesIndexedSessionMetadata(record)
         {
@@ -593,6 +609,27 @@ actor AgentSessionDataService {
         index.entries.append(record)
         index.generatedAt = Date()
         try? await writeMetadataIndex(index, folder: folder)
+    }
+
+    private func metadataRecord(
+        _ record: AgentSessionMetadataRecord,
+        preservingWorkflowSummaryFrom existing: AgentSessionMetadataRecord?
+    ) -> AgentSessionMetadataRecord {
+        guard record.workflowSummary == nil,
+              let workflowSummary = existing?.workflowSummary
+        else { return record }
+        var merged = record
+        merged.workflowSummary = workflowSummary
+        return merged
+    }
+
+    private func workflowSummaryFromSessionFile(_ fileURL: URL) -> AgentSessionWorkflowSummary? {
+        guard let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe),
+              let session = try? decoder.decode(AgentSession.self, from: data)
+        else {
+            return nil
+        }
+        return AgentSessionMetadataRecord.latestWorkflowSummary(in: session)
     }
 
     private func removeMetadataRecords(
@@ -679,6 +716,11 @@ actor AgentSessionDataService {
 
     private func rebuildMetadataIndex(folder: URL) async throws -> AgentSessionMetadataIndex {
         let key = canonicalMetadataFolderKey(folder)
+        let existingIndex: AgentSessionMetadataIndex? = if let cached = metadataIndexCacheByFolder[key] {
+            cached
+        } else {
+            await readMetadataIndexIfAvailable(folder: folder)
+        }
         #if DEBUG
             let rebuildStartMS = WorkspaceRestorePerfLog.timestampMSIfEnabled()
         #endif
@@ -696,13 +738,24 @@ actor AgentSessionDataService {
                     recoverMissingMetadata: false,
                     persistRecoveredMetadata: false
                 )
+                let existingRecord = existingIndex?.entries.first { existing in
+                    existing.id == stub.id || existing.filename == fileURL.lastPathComponent
+                }
+                let workflowSummary = AgentSessionMetadataRecord.latestWorkflowSummary(in: stub)
+                    ?? existingRecord?.workflowSummary
+                    ?? workflowSummaryFromSessionFile(fileURL)
+                let record = AgentSessionMetadataRecord.record(
+                    from: stub,
+                    fileURL: fileURL,
+                    observedFileSize: values.size,
+                    observedFileModificationDate: values.modified,
+                    workflowSummaryOverride: workflowSummary,
+                    lastIndexedAt: now
+                )
                 records.append(
-                    AgentSessionMetadataRecord.record(
-                        from: stub,
-                        fileURL: fileURL,
-                        observedFileSize: values.size,
-                        observedFileModificationDate: values.modified,
-                        lastIndexedAt: now
+                    metadataRecord(
+                        record,
+                        preservingWorkflowSummaryFrom: existingRecord
                     )
                 )
             } catch {
@@ -878,6 +931,11 @@ actor AgentSessionDataService {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return nil
         }
+        if let index = try await metadataIndex(for: workspace, mode: .backfillIfMissing),
+           let indexed = index.entries.first(where: { $0.id == id })
+        {
+            return indexed
+        }
         let stub = try await loadAgentSessionStub(
             from: fileURL,
             recoverMissingMetadata: false,
@@ -929,6 +987,7 @@ actor AgentSessionDataService {
         let filename = "AgentSession-\(session.id.uuidString).json"
         let fileURL = agentSessionsFolder.appendingPathComponent(filename)
 
+        let workflowSummary = AgentSessionMetadataRecord.latestWorkflowSummary(in: session)
         let sessionToSave = sessionPreparedForStorage(
             session,
             fileURL: fileURL,
@@ -939,7 +998,14 @@ actor AgentSessionDataService {
         let freshEncoder = JSONEncoder()
         let data = try freshEncoder.encode(sessionToSave)
         try await diskWriter.enqueueAndWait(data: data, url: fileURL)
-        await upsertMetadataRecord(metadataRecord(from: sessionToSave, fileURL: fileURL), folder: agentSessionsFolder)
+        await upsertMetadataRecord(
+            metadataRecord(
+                from: sessionToSave,
+                fileURL: fileURL,
+                workflowSummaryOverride: workflowSummary
+            ),
+            folder: agentSessionsFolder
+        )
         return fileURL
     }
 

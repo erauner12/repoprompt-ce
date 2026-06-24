@@ -566,7 +566,8 @@ final class AgentModeSidebarSessionBuilderTests: XCTestCase {
             isMCPOriginated: false,
             isCoordinatorRuntime: isCoordinatorRuntime,
             worktreeBindingSummaries: [],
-            activeWorktreeMergeSummaries: []
+            activeWorktreeMergeSummaries: [],
+            workflowSummary: nil
         )
     }
 

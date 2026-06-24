@@ -84,9 +84,9 @@ V1 projects active-workspace sessions. Live run-state enrichment is current-wind
 
 ### 7. Labels are structured and conservative
 
-Workflow labels are read-only display metadata in the production-demo path. The projector accepts a flat `WorkflowDisplaySummary` derived from real `AgentWorkflowDefinition` metadata (`id`, display name, SF Symbol, optional accent), not a Coordinator-only toy enum. Live rows derive the summary from the latest user-turn workflow already held in the Agent Mode transcript model, so a workflow chip can appear, change, or clear between turns without scanning transcripts per row. The label does not change grouping, sorting, filtering, action creation, or model/tool/policy selection.
+Workflow labels are read-only display metadata in the production-demo path. The projector accepts a flat `WorkflowDisplaySummary` derived from real `AgentWorkflowDefinition` metadata (`id`, display name, SF Symbol, optional accent), not a Coordinator-only toy enum. Live rows derive the summary from the latest user-turn workflow already held in the Agent Mode transcript model, so a workflow chip can appear, change, or clear between turns without scanning transcripts per row. Persisted/off-window rows use the same summary stored in the Agent session metadata index; index reconciliation must preserve or recover that summary instead of downgrading it when rebuilding from lightweight stubs. The label does not change grouping, sorting, filtering, action creation, or model/tool/policy selection.
 
-Action-chip workflow labels are render-time lookups from the current target row. The chip stores the delegated target session ID and verb/phase; the view rereads the row's current workflow/status metadata, so a later follow-up without a workflow clears the workflow affordance instead of leaving stale context on the chip.
+Action-chip workflow labels are render-time lookups from the current target row when available and fall back to stored action metadata captured from the projected row when the target is temporarily unavailable. The chip stores the delegated target session ID and verb/phase; the view rereads the row's current workflow/status metadata, so a later follow-up without a workflow clears the workflow affordance instead of leaving stale context on the chip. Restoring or opening a delegated Agent chat must not be required to bring workflow chips back after app restart.
 
 Objective labels are deferred. Workstream chips may optionally render from worktree binding/logical-root metadata when present and useful for the UI; otherwise omit them. Session-title parsing is out of scope.
 
@@ -196,7 +196,7 @@ This change preserves the rail's "talk to one Coordinator" model while letting t
 
 Board/list rows should expose a small structured workstream projection so the UI is not forced to infer work from session titles. The projection is a flat `CoordinatorWorkstream` read model derived from existing session/live-state metadata: objective summary, phase, child session ID as stable identity, owner Coordinator root when present, worktree binding, workflow label, available merge/inspection state, and next action. It is not a separate source of truth and must not mutate runtime state; it makes the current session/worktree/review state legible enough for follow-through and human gates to reason about the same item the user sees. This flat identity is intentionally DAG-friendly for future dependency edges, but v1 does not require or invent a DAG. Follow-through classification should consume this projection first, falling back to lower-level row fields only when the projection is unavailable, so the board-visible work item and supervisor decision describe the same phase and next action.
 
-Worktree identity should remain visually consistent with Agent Mode. Coordinator cards, rows, and inspector worktree fields should use the persisted worktree visual color from the session worktree binding so sibling sessions that share an app-managed worktree read as related in both Coordinator and Agent Mode.
+Worktree identity should remain visually consistent with Agent Mode. Coordinator cards, rows, delegated conversation cards, and inspector worktree fields should use the persisted worktree visual color from the session worktree binding so sibling sessions that share an app-managed worktree read as related in both Coordinator and Agent Mode.
 
 The demo should make the parent/child distinction explicit instead of relying on the prompt text to imply it. A parent Coordinator is a conversation/control loop. A delegated child is work launched by that parent, often in its own tab and worktree. Asking one Coordinator to launch three worktrees should therefore produce one Coordinator runtime root with three delegated sessions, not three parent Coordinators. Multiple Coordinator roots are appropriate when the work represents independent missions that deserve separate conversation history, decision flow, and supervision, e.g. unrelated investigations, separate PR/workstream reviews, or long-running work that should not pollute a quick side task.
 
@@ -237,7 +237,7 @@ The board header should remain a compact control lane for view and sorting contr
 - **Coordinator ambiguity** → Use precedence rules, most-recent auto-candidate fallback, and per-window user override instead of guessing from plain lineage.
 - **Multi-window stale rows** → Render stale/persisted-only state explicitly; keep live `Needs you` / `Working` counts current-window-only.
 - **Reactive firehose** → Observe coarse signals and diff snapshots before publishing.
-- **Workflow lookup cost** → Keep workflow display on cheap live request-anchor metadata; if persisted/off-window workflow labels are needed later, add index metadata or a shared cached lookup rather than loading transcripts per UI region.
+- **Workflow lookup cost** → Keep workflow display on cheap live request-anchor metadata and persisted session-index summaries. Index rebuilds may do targeted full-session decodes to recover missing workflow summaries, but UI projection must not load transcripts per row or depend on opening Agent chats to hydrate labels.
 - **Pending decision asymmetry** → Run-state waiting values still enter `Needs you`; MCP-controlled live interactions only enrich the prompt/detail payload.
 - **Route gaps** → Store nullable routes on rows/summaries and hide navigation when route prerequisites are missing.
 
@@ -253,6 +253,6 @@ Rollback is simple for v1: remove or hide the Coordinator mode entry point; Agen
 
 ## Open Questions
 
-- Should a future workflow label pass add workflow metadata to the session index, or load request-anchor/transcript metadata on demand?
+- Should future workflow label history show only the latest workflow, or a compact sequence when a delegated session changes workflows over multiple turns?
 - Should a future Coordinator view support cross-window live ownership or route-to-owning-window behavior instead of stale/persisted-only rows?
 - Should PR/check metadata wait until a separate activity/event adapter exists?

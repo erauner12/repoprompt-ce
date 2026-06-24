@@ -1,6 +1,10 @@
 @testable import RepoPrompt
 import XCTest
 
+private extension CoordinatorModeWorkflowDisplaySummary {
+    static let orchestrate = CoordinatorModeWorkflowDisplaySummary(AgentWorkflow.orchestrate.definition)
+}
+
 @MainActor
 final class CoordinatorModeComposerViewModelTests: XCTestCase {
     func testColdOpenStartsAsDraftAndFirstSendCreatesCoordinatorRuntime() async {
@@ -659,7 +663,9 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                             updatedAt: self.date(30),
                             state: .running,
                             parent: coordinatorID,
-                            isMCP: true
+                            isMCP: true,
+                            workflow: .orchestrate,
+                            bindings: [self.binding(label: "rp/agent/docs-change", color: "#22C55E")]
                         )
                     ],
                     selectedCoordinatorID: selectedCoordinatorID,
@@ -678,6 +684,10 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(actions.first?.ownerCoordinatorSessionID, coordinatorID)
         XCTAssertEqual(actions.first?.targetTitle, "Delegated docs change")
         XCTAssertEqual(actions.first?.verb, .delegate)
+        XCTAssertEqual(actions.first?.statusGroup, .working)
+        XCTAssertEqual(actions.first?.workflow, .orchestrate)
+        XCTAssertEqual(actions.first?.workstream?.label, "rp/agent/docs-change")
+        XCTAssertEqual(actions.first?.workstream?.colorHex, "#22C55E")
 
         viewModel.refresh()
 
@@ -1132,7 +1142,9 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         updatedAt: Date,
         state: AgentSessionRunState? = .idle,
         parent: UUID? = nil,
-        isMCP: Bool = false
+        isMCP: Bool = false,
+        workflow: CoordinatorModeWorkflowDisplaySummary? = nil,
+        bindings: [AgentSessionWorktreeBindingSummary] = []
     ) -> CoordinatorModeSnapshotProjector.PersistedSession {
         CoordinatorModeSnapshotProjector.PersistedSession(
             id: id,
@@ -1141,7 +1153,9 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             updatedAt: updatedAt,
             runState: state,
             parentSessionID: parent,
-            isMCPOriginated: isMCP
+            isMCPOriginated: isMCP,
+            worktreeBindingSummaries: bindings,
+            workflow: workflow
         )
     }
 
@@ -1152,7 +1166,9 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         updatedAt: Date,
         state: AgentSessionRunState,
         parent: UUID? = nil,
-        isMCP: Bool = false
+        isMCP: Bool = false,
+        workflow: CoordinatorModeWorkflowDisplaySummary? = nil,
+        bindings: [AgentSessionWorktreeBindingSummary] = []
     ) -> CoordinatorModeSnapshotProjector.LiveSession {
         CoordinatorModeSnapshotProjector.LiveSession(
             sessionID: id,
@@ -1161,7 +1177,24 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             updatedAt: updatedAt,
             runState: state,
             parentSessionID: parent,
-            isMCPOriginated: isMCP
+            isMCPOriginated: isMCP,
+            worktreeBindingSummaries: bindings,
+            workflow: workflow
+        )
+    }
+
+    private func binding(label: String, color: String) -> AgentSessionWorktreeBindingSummary {
+        AgentSessionWorktreeBindingSummary(
+            id: "binding-\(label)",
+            repositoryID: "repo",
+            repoKey: "repo",
+            logicalRootPath: "/repo",
+            worktreeID: label,
+            worktreeRootPath: "/worktrees/\(label)",
+            branch: label,
+            visualLabel: label,
+            visualColorHex: color,
+            boundAt: date(5)
         )
     }
 

@@ -18,6 +18,28 @@ struct AgentSessionIndexEntry: Identifiable, Equatable {
     var isCoordinatorRuntime: Bool = false
     var worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary]
     var activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary]
+    var workflowSummary: AgentSessionWorkflowSummary?
+}
+
+struct AgentSessionWorkflowSummary: Codable, Equatable {
+    var id: String
+    var displayName: String
+    var iconName: String
+    var accentColorHex: String?
+
+    init(id: String, displayName: String, iconName: String, accentColorHex: String?) {
+        self.id = id
+        self.displayName = displayName
+        self.iconName = iconName
+        self.accentColorHex = accentColorHex
+    }
+
+    init(_ workflow: AgentWorkflowDefinition) {
+        id = workflow.id
+        displayName = workflow.displayName
+        iconName = workflow.iconName
+        accentColorHex = workflow.accentColorHex
+    }
 }
 
 struct AgentSessionSidebarBuildRequest {

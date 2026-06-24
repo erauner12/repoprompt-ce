@@ -224,7 +224,8 @@ struct AgentModeSidebarSessionBuilder {
             isMCPOriginated: entry.isMCPOriginated,
             isCoordinatorRuntime: entry.isCoordinatorRuntime,
             worktreeBindingSummaries: entry.worktreeBindingSummaries,
-            activeWorktreeMergeSummaries: entry.activeWorktreeMergeSummaries
+            activeWorktreeMergeSummaries: entry.activeWorktreeMergeSummaries,
+            workflowSummary: entry.workflowSummary
         )
     }
 

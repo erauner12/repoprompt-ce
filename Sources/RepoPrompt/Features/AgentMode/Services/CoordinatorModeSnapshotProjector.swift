@@ -1155,6 +1155,7 @@ extension CoordinatorModeSnapshotProjector.PersistedSession {
             isMCPOriginated: entry.isMCPOriginated,
             worktreeBindingSummaries: entry.worktreeBindingSummaries,
             activeWorktreeMergeSummaries: entry.activeWorktreeMergeSummaries,
+            workflow: entry.workflowSummary.map(CoordinatorModeWorkflowDisplaySummary.init),
             isCoordinatorRuntime: entry.isCoordinatorRuntime
         )
     }
@@ -1167,6 +1168,15 @@ extension CoordinatorModeWorkflowDisplaySummary {
             displayName: workflow.displayName,
             iconName: workflow.iconName,
             accentColorHex: workflow.accentColorHex
+        )
+    }
+
+    init(_ summary: AgentSessionWorkflowSummary) {
+        self.init(
+            id: summary.id,
+            displayName: summary.displayName,
+            iconName: summary.iconName,
+            accentColorHex: summary.accentColorHex
         )
     }
 }

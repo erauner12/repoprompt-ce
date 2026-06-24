@@ -5710,7 +5710,8 @@ final class AgentModeViewModel: ObservableObject {
                 isMCPOriginated: existingEntry.isMCPOriginated || session.isMCPOriginated,
                 isCoordinatorRuntime: existingEntry.isCoordinatorRuntime || session.isCoordinatorRuntime,
                 worktreeBindingSummaries: existingEntry.worktreeBindingSummaries,
-                activeWorktreeMergeSummaries: existingEntry.activeWorktreeMergeSummaries
+                activeWorktreeMergeSummaries: existingEntry.activeWorktreeMergeSummaries,
+                workflowSummary: existingEntry.workflowSummary
             )
             guard repairedEntry != existingEntry else { return }
             applyLocalSessionIndexUpsert(repairedEntry)
@@ -9096,7 +9097,8 @@ final class AgentModeViewModel: ObservableObject {
         isMCPOriginated: Bool = false,
         isCoordinatorRuntime: Bool = false,
         worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary] = [],
-        activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary] = []
+        activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary] = [],
+        workflowSummary: AgentSessionWorkflowSummary? = nil
     ) {
         applyLocalSessionIndexUpsert(AgentSessionIndexEntry(
             id: sessionID,
@@ -9115,7 +9117,8 @@ final class AgentModeViewModel: ObservableObject {
             isMCPOriginated: isMCPOriginated,
             isCoordinatorRuntime: isCoordinatorRuntime,
             worktreeBindingSummaries: worktreeBindingSummaries,
-            activeWorktreeMergeSummaries: activeWorktreeMergeSummaries
+            activeWorktreeMergeSummaries: activeWorktreeMergeSummaries,
+            workflowSummary: workflowSummary
         ))
     }
 

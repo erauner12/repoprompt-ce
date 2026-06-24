@@ -59,14 +59,20 @@ final class AgentSessionWorktreeBindingPersistenceTests: XCTestCase {
             composeTabID: tabID,
             name: "Metadata Session",
             savedAt: Date(timeIntervalSinceReferenceDate: 20),
-            itemCount: 3,
+            items: [
+                AgentChatItemPersist(from: .user("Coordinate a README summary", workflow: AgentWorkflow.orchestrate.definition))
+            ],
+            itemCount: 1,
             autoEditEnabled: true,
             isCoordinatorRuntime: true,
             worktreeBindings: [binding]
         )
 
-        let fileURL = try await service.saveAgentSession(session, for: workspace, preparation: .alreadyCanonicalTranscript, trustedCanonicalItemCount: 3)
+        XCTAssertEqual(AgentSessionMetadataRecord.latestWorkflowSummary(in: session), AgentSessionWorkflowSummary(AgentWorkflow.orchestrate.definition))
+        let fileURL = try await service.saveAgentSession(session, for: workspace, preparation: .alreadyCanonicalTranscript, trustedCanonicalItemCount: 1)
         let stub = try await service.loadAgentSessionStub(from: fileURL)
+        let indexedRecords = try await service.indexedAgentSessionMetadataRecords(for: workspace)
+        let streamRecords = try await service.sidebarStreamMetadataRecords(for: workspace)
         let metadata = try await service.listAgentSessionsMeta(for: workspace)
         let sidebar = try await service.buildSidebarIndex(
             AgentSessionSidebarBuildRequest(
@@ -83,10 +89,13 @@ final class AgentSessionWorktreeBindingPersistenceTests: XCTestCase {
         XCTAssertEqual(stub.worktreeBindings, [binding])
 
         let summary = binding.summary
+        XCTAssertEqual(indexedRecords.first?.workflowSummary, AgentSessionWorkflowSummary(AgentWorkflow.orchestrate.definition))
+        XCTAssertEqual(streamRecords.first?.workflowSummary, AgentSessionWorkflowSummary(AgentWorkflow.orchestrate.definition))
         XCTAssertEqual(metadata.first?.isCoordinatorRuntime, true)
         XCTAssertEqual(metadata.first?.worktreeBindingSummaries, [summary])
         XCTAssertEqual(sidebar.entriesBySessionID[sessionID]?.isCoordinatorRuntime, true)
         XCTAssertEqual(sidebar.entriesBySessionID[sessionID]?.worktreeBindingSummaries, [summary])
+        XCTAssertEqual(sidebar.entriesBySessionID[sessionID]?.workflowSummary, AgentSessionWorkflowSummary(AgentWorkflow.orchestrate.definition))
         XCTAssertEqual(sidebar.preferredSessionIDByTabID[tabID], sessionID)
     }
 
@@ -119,6 +128,7 @@ final class AgentSessionWorktreeBindingPersistenceTests: XCTestCase {
         XCTAssertEqual(decoded.entries.first?.agentSessionMeta().isCoordinatorRuntime, false)
         XCTAssertEqual(decoded.entries.first?.worktreeBindingSummaries, [])
         XCTAssertEqual(decoded.entries.first?.activeWorktreeMergeSummaries, [])
+        XCTAssertNil(decoded.entries.first?.workflowSummary)
         XCTAssertEqual(decoded.entries.first?.agentSessionMeta().worktreeBindingSummaries, [])
         XCTAssertEqual(decoded.entries.first?.agentSessionMeta().activeWorktreeMergeSummaries, [])
     }

@@ -326,7 +326,8 @@ enum AgentSessionRestoreSupport {
             isMCPOriginated: session.isMCPOriginated,
             isCoordinatorRuntime: session.isCoordinatorRuntime,
             worktreeBindingSummaries: session.worktreeBindings.worktreeBindingSummaries,
-            activeWorktreeMergeSummaries: session.worktreeMergeOperations.activeWorktreeMergeSummaries
+            activeWorktreeMergeSummaries: session.worktreeMergeOperations.activeWorktreeMergeSummaries,
+            workflowSummary: AgentSessionMetadataRecord.latestWorkflowSummary(in: session)
         )
     }
 

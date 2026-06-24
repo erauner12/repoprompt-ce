@@ -140,6 +140,7 @@ The production-demo Coordinator mode SHALL separate the selected Coordinator con
 - **WHEN** the selected Mission has projected delegated descendants
 - **THEN** the selected-Mission board and list SHALL render the same delegated rows counted by the selected Mission history entry
 - **AND** Coordinator chat delegated event cards SHALL resolve workflow badges and lifecycle status from those same projected rows
+- **AND** Coordinator chat delegated event cards SHOULD render sourced worktree identity when the delegated row has a bound worktree
 - **AND** MCP-submitted Coordinator starts SHALL produce the same selected-Mission projection behavior as starts submitted through the visible Coordinator UI.
 
 #### Scenario: Board projects aggregate supervised fleet
@@ -421,6 +422,11 @@ The system SHALL project Coordinator mode session rows/cards from structured ses
 - **THEN** the card, list row, inspector, or related Coordinator action chip MAY render a compact read-only workflow label with display name, icon, and accent
 - **AND** the label SHALL NOT affect grouping, sorting, filtering, action creation, model/tool selection, permissions, or runtime behavior.
 
+#### Scenario: Persisted workflow summary survives restart
+- **WHEN** a workflow-bearing delegated Agent session is restored from persisted session metadata after app restart
+- **THEN** Coordinator rows, inspectors, and delegated conversation cards SHOULD retain the workflow label without requiring the user to open the Agent chat first
+- **AND** Agent session metadata index reconciliation SHALL preserve an existing workflow summary or recover it from the persisted session file when rebuilding from lightweight stubs.
+
 #### Scenario: Workflow metadata changes
 - **WHEN** the latest sourced user-turn workflow for a live row changes
 - **THEN** the Coordinator view SHALL update the workflow label from the new display summary.
@@ -435,7 +441,8 @@ The system SHALL project Coordinator mode session rows/cards from structured ses
 
 #### Scenario: Workstream source exists
 - **WHEN** bound worktree or logical-root metadata exists for a session and is useful for the UI
-- **THEN** the Coordinator view MAY project that structural metadata as a workstream grouping label.
+- **THEN** the Coordinator view MAY project that structural metadata as a workstream grouping label
+- **AND** delegated conversation cards SHOULD use the same worktree visual identity source as board cards and inspector fields.
 
 #### Scenario: Workstream source is absent
 - **WHEN** no structured workstream source exists
@@ -663,6 +670,7 @@ The system SHALL keep the Coordinator view calm by default and expose detail onl
 - **WHEN** a newly visible supervised delegated row appears for the current Coordinator runtime
 - **THEN** the Coordinator rail MAY show a compact delegated action chip derived from that row/result
 - **AND** the chip SHALL reread current target-row status and workflow metadata at render time
+- **AND** the chip MAY fall back to stored row metadata captured when the delegated action was created if the target row is temporarily unavailable
 - **AND** it SHALL NOT claim to represent pending dispatch, collect/review/cancel actions, multi-action batches, or a complete tool-call event stream until a sourced action/activity model exists.
 
 #### Scenario: Coordinator composer matches Agent Mode visual language

@@ -455,7 +455,10 @@ final class CoordinatorModeViewModel: ObservableObject {
                     targetSessionID: row.sessionID,
                     targetTitle: row.title,
                     verb: .delegate,
-                    phase: .resolved
+                    phase: .resolved,
+                    statusGroup: row.statusGroup,
+                    workflow: row.workflow,
+                    workstream: row.workstream
                 )
             ))
         }
