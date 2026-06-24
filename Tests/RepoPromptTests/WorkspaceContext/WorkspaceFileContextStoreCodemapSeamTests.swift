@@ -4253,6 +4253,9 @@ private final class CodemapStoreFixture: @unchecked Sendable {
     }
 
     func makeStore(
+        codemapLocalGitClassificationProbe: WorkspaceCodemapLocalGitClassificationProbe = .init { _ in
+            .requiresGitPreflight
+        },
         codemapGitEligibilityProbe: WorkspaceCodemapGitEligibilityProbe = WorkspaceCodemapGitEligibilityProbe { _ in
             .eligible
         },
@@ -4280,6 +4283,7 @@ private final class CodemapStoreFixture: @unchecked Sendable {
                 providerAccessCount.increment()
                 return try runtimeProvider.runtime()
             },
+            codemapLocalGitClassificationProbe: codemapLocalGitClassificationProbe,
             codemapGitEligibilityProbe: codemapGitEligibilityProbe,
             selectionGraphFactory: selectionGraphFactory,
             selectionGraphQueryBudgetPolicy: selectionGraphQueryBudgetPolicy,

@@ -67,7 +67,12 @@ import MCP
                         "previous_control_id": result.previousControlID.map { $0.uuidString as Any } ?? NSNull(),
                         "route": result.route.name,
                         "expires_in_seconds": expiry,
-                        "base_snapshot_prepared": prepared.baseSnapshotPrepared
+                        "base_snapshot_prepared": prepared.baseSnapshotPrepared,
+                        "base_snapshot_identity_sha256": prepared.baseSnapshotIdentity?.sha256 ?? NSNull(),
+                        "base_snapshot_search_abi_matcher_schema_version": prepared.baseSnapshotIdentity?.searchABI.matcherSchemaVersion ?? NSNull(),
+                        "base_snapshot_search_abi_projected_key_schema_version": prepared.baseSnapshotIdentity?.searchABI.projectedKeySchemaVersion ?? NSNull(),
+                        "base_snapshot_search_abi_comparator_schema_version": prepared.baseSnapshotIdentity?.searchABI.comparatorSchemaVersion ?? NSNull(),
+                        "base_snapshot_search_abi_path_normalization_schema_version": prepared.baseSnapshotIdentity?.searchABI.pathNormalizationSchemaVersion ?? NSNull()
                     ])
                 case "restore_flags":
                     let controlID = try debugRequiredUUID(arguments, key: "control_id")
@@ -162,12 +167,34 @@ import MCP
                     )
                 }
             } catch let error as DebugWorktreeStartupBenchmarkError {
-                return debugDiagnosticsError(op: op, code: error.code, message: "Worktree startup benchmark request rejected.")
+                return debugWorktreeStartupBenchmarkError(op: op, error: error)
             } catch let error as DebugWorktreeStartupBenchmarkRequestError {
                 return debugDiagnosticsError(op: op, code: error.code, message: "Invalid worktree startup benchmark request.")
             } catch {
                 return debugDiagnosticsError(op: op, code: "unavailable", message: "Worktree startup benchmark diagnostics unavailable.")
             }
+        }
+
+        private nonisolated func debugWorktreeStartupBenchmarkError(
+            op: String,
+            error: DebugWorktreeStartupBenchmarkError
+        ) -> CallTool.Result {
+            guard case let .baseSnapshotUnavailable(failure) = error else {
+                return debugDiagnosticsError(
+                    op: op,
+                    code: error.code,
+                    message: "Worktree startup benchmark request rejected."
+                )
+            }
+            return debugDiagnosticsResult([
+                "ok": false,
+                "op": op,
+                "code": error.code,
+                "error": "Worktree startup benchmark request rejected.",
+                "base_snapshot_reason": failure.reason.rawValue,
+                "base_snapshot_stage": failure.stage?.rawValue ?? NSNull(),
+                "base_snapshot_cause": failure.cause ?? NSNull()
+            ], isError: true)
         }
 
         @MainActor

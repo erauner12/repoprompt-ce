@@ -246,7 +246,10 @@ final class GitWorktreeCreationReceiptTests: XCTestCase {
         )
         await coordinator.setPreparedAdmissionHandlerForTesting(nil)
 
-        XCTAssertEqual(admission, .failed)
+        XCTAssertEqual(
+            admission,
+            .failed(.init(stage: .preparedAdmissionCurrentness, cause: .loadedRootWatcherStale))
+        )
         let cache = await authority.snapshotForTesting()
         let coverage = await monitor.snapshotForTesting()
         XCTAssertEqual(cache.reusableSnapshotCount, baselineCache.reusableSnapshotCount)
@@ -254,6 +257,57 @@ final class GitWorktreeCreationReceiptTests: XCTestCase {
         XCTAssertEqual(cache.reusableSnapshotEstimatedBytes, baselineCache.reusableSnapshotEstimatedBytes)
         XCTAssertEqual(coverage.retainTokenCount, baselineCoverage.retainTokenCount)
         XCTAssertEqual(coverage.retainedRepositoryCount, baselineCoverage.retainedRepositoryCount)
+    }
+
+    func testLoadedRootAdmissionCurrentnessClassifiesOwnerStaleness() async throws {
+        let fixture = try ReceiptFixture()
+        defer { fixture.cleanup() }
+        let store = WorkspaceFileContextStore()
+        let logicalRecord = try await store.loadRoot(path: fixture.root.path)
+        let coordinator = WorkspaceRootReusableSnapshotCoordinator.shared
+        await coordinator.setPreparedAdmissionHandlerForTesting {
+            await store.unloadRoot(id: logicalRecord.id)
+        }
+
+        let admission = try await store.admitReusableSnapshotForLoadedRoot(
+            rootID: logicalRecord.id,
+            expectedStandardizedPath: logicalRecord.standardizedFullPath
+        )
+        await coordinator.setPreparedAdmissionHandlerForTesting(nil)
+
+        XCTAssertEqual(
+            admission,
+            .failed(.init(stage: .preparedAdmissionCurrentness, cause: .loadedRootOwnerStale))
+        )
+    }
+
+    func testLoadedRootAdmissionCurrentnessClassifiesCatalogStaleness() async throws {
+        let fixture = try ReceiptFixture()
+        defer { fixture.cleanup() }
+        let store = WorkspaceFileContextStore()
+        let logicalRecord = try await store.loadRoot(path: fixture.root.path)
+        let coordinator = WorkspaceRootReusableSnapshotCoordinator.shared
+        await coordinator.setPreparedAdmissionHandlerForTesting {
+            await store.replayObservedFileSystemDeltas(
+                rootID: logicalRecord.id,
+                deltas: [.fileModified("Tracked.swift", Date())]
+            )
+        }
+        addTeardownBlock {
+            await coordinator.setPreparedAdmissionHandlerForTesting(nil)
+            await store.unloadRoot(id: logicalRecord.id)
+        }
+
+        let admission = try await store.admitReusableSnapshotForLoadedRoot(
+            rootID: logicalRecord.id,
+            expectedStandardizedPath: logicalRecord.standardizedFullPath
+        )
+        await coordinator.setPreparedAdmissionHandlerForTesting(nil)
+
+        XCTAssertEqual(
+            admission,
+            .failed(.init(stage: .preparedAdmissionCurrentness, cause: .loadedRootCatalogStale))
+        )
     }
 
     func testReceiptFallbackRestartAndConcurrentBindingIsolationMatrix() async throws {
@@ -478,7 +532,11 @@ final class GitWorktreeCreationReceiptTests: XCTestCase {
             rootURL: second.root,
             authoritativeRelativeFilePaths: second.authoritativeRelativeFilePaths
         )
-        XCTAssertEqual(secondAdmission, .failed, "bounded cache must not evict active observed coverage")
+        XCTAssertEqual(
+            secondAdmission,
+            .failed(.init(stage: .admissionCommit, cause: .admissionRejected)),
+            "bounded cache must not evict active observed coverage"
+        )
         let cache = await authority.snapshotForTesting()
         XCTAssertEqual(cache.reusableSnapshotCount, 1)
         XCTAssertLessThanOrEqual(cache.reusableSnapshotEstimatedBytes, 8 * 1024 * 1024)
@@ -751,6 +809,161 @@ final class GitWorktreeCreationReceiptTests: XCTestCase {
         XCTAssertEqual(skippedResult.initializationFallbackReason, .includeCopyFailure)
     }
 
+    func testReusableSnapshotCurrentnessFailuresRetainEveryStage() async throws {
+        let fixture = try ReceiptFixture()
+        defer { fixture.cleanup() }
+        let cases: [(failureCall: Int, stage: WorkspaceRootReusableSnapshotCoordinator.ObservationFailureStage)] = [
+            (1, .initialCurrentness),
+            (2, .discoveryObservation),
+            (3, .discoveryAuthorityCapture),
+            (4, .replacementObservation),
+            (5, .collection),
+            (7, .capturedAuthority),
+            (9, .treeInventory),
+            (10, .admissionPreparation),
+            (11, .preparedAdmissionCurrentness),
+            (13, .committedAdmissionCurrentness)
+        ]
+
+        for testCase in cases {
+            let authority = GitWorkspaceStateAuthority()
+            let coordinator = WorkspaceRootReusableSnapshotCoordinator(
+                gitService: GitService(workspaceStateAuthority: authority),
+                authority: authority
+            )
+            let currentness = CurrentnessFailureGate(failureCall: testCase.failureCall)
+            let result = await coordinator.observeAuthoritativeFullLoad(
+                rootURL: fixture.root,
+                authoritativeRelativeFilePaths: fixture.authoritativeRelativeFilePaths,
+                currentnessValidator: { await currentness.validation() }
+            )
+
+            XCTAssertEqual(
+                result,
+                .failed(.init(stage: testCase.stage, cause: .staleCurrentness)),
+                "currentness call \(testCase.failureCall)"
+            )
+            let snapshot = await authority.snapshotForTesting()
+            XCTAssertEqual(snapshot.reusableSnapshotCount, 0)
+        }
+    }
+
+    func testReusableSnapshotCurrentnessPreservesLoadedRootCauseMatrix() async throws {
+        let fixture = try ReceiptFixture()
+        defer { fixture.cleanup() }
+        let causes: [WorkspaceRootReusableSnapshotCoordinator.ObservationFailureCause] = [
+            .loadedRootOwnerStale,
+            .loadedRootCatalogStale,
+            .loadedRootWatcherStale
+        ]
+
+        for cause in causes {
+            let authority = GitWorkspaceStateAuthority()
+            let coordinator = WorkspaceRootReusableSnapshotCoordinator(
+                gitService: GitService(workspaceStateAuthority: authority),
+                authority: authority
+            )
+            let currentness = CurrentnessFailureGate(failureCall: 11, failureCause: cause)
+            let result = await coordinator.observeAuthoritativeFullLoad(
+                rootURL: fixture.root,
+                authoritativeRelativeFilePaths: fixture.authoritativeRelativeFilePaths,
+                currentnessValidator: { await currentness.validation() }
+            )
+
+            XCTAssertEqual(
+                result,
+                .failed(.init(stage: .preparedAdmissionCurrentness, cause: cause))
+            )
+            let snapshot = await authority.snapshotForTesting()
+            XCTAssertEqual(snapshot.reusableSnapshotCount, 0)
+        }
+    }
+
+    func testReusableSnapshotPreparedCurrentnessCancellationIsNotStaleness() async throws {
+        let fixture = try ReceiptFixture()
+        defer { fixture.cleanup() }
+        let authority = GitWorkspaceStateAuthority()
+        let coordinator = WorkspaceRootReusableSnapshotCoordinator(
+            gitService: GitService(workspaceStateAuthority: authority),
+            authority: authority
+        )
+        let currentness = CurrentnessFailureGate(failureCall: 11, cancelOnFailure: true)
+
+        let result = await coordinator.observeAuthoritativeFullLoad(
+            rootURL: fixture.root,
+            authoritativeRelativeFilePaths: fixture.authoritativeRelativeFilePaths,
+            currentnessValidator: { await currentness.validation() }
+        )
+
+        XCTAssertEqual(
+            result,
+            .failed(.init(stage: .preparedAdmissionCurrentness, cause: .cancelled))
+        )
+        let snapshot = await authority.snapshotForTesting()
+        XCTAssertEqual(snapshot.reusableSnapshotCount, 0)
+    }
+
+    func testReusableSnapshotPreparedAuthorityInvalidationRetainsStageAndReason() async throws {
+        let fixture = try ReceiptFixture()
+        defer { fixture.cleanup() }
+        let authority = GitWorkspaceStateAuthority()
+        let coordinator = WorkspaceRootReusableSnapshotCoordinator(
+            gitService: GitService(workspaceStateAuthority: authority),
+            authority: authority
+        )
+        let layout = try XCTUnwrap(GitRepositoryLayoutResolver.resolve(atWorkTreeRoot: fixture.root))
+        let tokenBox = MutationTokenBox()
+        await coordinator.setPreparedAdmissionHandlerForTesting {
+            let token = await authority.beginMutation(
+                repositoryKey: GitWorkspaceAuthorityRepositoryKey(layout: layout),
+                kind: .other
+            )
+            await tokenBox.set(token)
+        }
+        defer { Task { await coordinator.setPreparedAdmissionHandlerForTesting(nil) } }
+
+        let result = await coordinator.observeAuthoritativeFullLoad(
+            rootURL: fixture.root,
+            authoritativeRelativeFilePaths: fixture.authoritativeRelativeFilePaths
+        )
+        if let token = await tokenBox.take() {
+            await authority.finishMutation(token, outcome: .cancelled)
+        }
+
+        XCTAssertEqual(
+            result,
+            .authorityUnavailable(
+                stage: .preparedAdmissionCurrentness,
+                reason: .invalidatedDuringCollection
+            )
+        )
+        let snapshot = await authority.snapshotForTesting()
+        XCTAssertEqual(snapshot.reusableSnapshotCount, 0)
+    }
+
+    func testReusableSnapshotCancellationIsPathFreeAndTyped() async throws {
+        let fixture = try ReceiptFixture()
+        defer { fixture.cleanup() }
+        let authority = GitWorkspaceStateAuthority()
+        let coordinator = WorkspaceRootReusableSnapshotCoordinator(
+            gitService: GitService(workspaceStateAuthority: authority),
+            authority: authority
+        )
+        let task = Task {
+            await coordinator.observeAuthoritativeFullLoad(
+                rootURL: fixture.root,
+                authoritativeRelativeFilePaths: fixture.authoritativeRelativeFilePaths
+            )
+        }
+        task.cancel()
+
+        let result = await task.value
+        XCTAssertEqual(
+            result,
+            .failed(.init(stage: .initialCurrentness, cause: .cancelled))
+        )
+    }
+
     func testNonGitObservationDoesNotInvokeGit() async throws {
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("NonGitRootSeedIsolation-\(UUID().uuidString)", isDirectory: true)
@@ -772,6 +985,48 @@ final class GitWorktreeCreationReceiptTests: XCTestCase {
         )
         XCTAssertEqual(observation, .nonGit)
         XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+    }
+}
+
+private actor CurrentnessFailureGate {
+    private let failureCall: Int
+    private let failureCause: WorkspaceRootReusableSnapshotCoordinator.ObservationFailureCause
+    private let cancelOnFailure: Bool
+    private var callCount = 0
+
+    init(
+        failureCall: Int,
+        failureCause: WorkspaceRootReusableSnapshotCoordinator.ObservationFailureCause = .staleCurrentness,
+        cancelOnFailure: Bool = false
+    ) {
+        self.failureCall = failureCall
+        self.failureCause = failureCause
+        self.cancelOnFailure = cancelOnFailure
+    }
+
+    func validation() -> WorkspaceRootReusableSnapshotCoordinator.CurrentnessValidation {
+        callCount += 1
+        guard callCount == failureCall else { return .current }
+        if cancelOnFailure {
+            withUnsafeCurrentTask { task in
+                task?.cancel()
+            }
+            return .current
+        }
+        return .stale(failureCause)
+    }
+}
+
+private actor MutationTokenBox {
+    private var token: GitWorkspaceMutationToken?
+
+    func set(_ token: GitWorkspaceMutationToken) {
+        self.token = token
+    }
+
+    func take() -> GitWorkspaceMutationToken? {
+        defer { token = nil }
+        return token
     }
 }
 

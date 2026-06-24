@@ -65,6 +65,9 @@ import XCTest
                 expectedStandardizedRootPath: loadedRoot.standardizedFullPath
             )
             XCTAssertTrue(prepared.baseSnapshotPrepared)
+            let snapshotIdentity = try XCTUnwrap(prepared.baseSnapshotIdentity)
+            XCTAssertFalse(snapshotIdentity.sha256.isEmpty)
+            XCTAssertEqual(snapshotIdentity.searchABI, .current)
             XCTAssertEqual(prepared.control.route.name, "diffSeedServing")
             XCTAssertEqual(try diagnostics.reset(scope: exactScope)["control_count"], 1)
 
@@ -86,7 +89,14 @@ import XCTest
                 )
                 XCTFail("A mismatched loaded-root path must not create a benchmark control.")
             } catch {
-                XCTAssertEqual(error as? DebugWorktreeStartupBenchmarkError, .baseSnapshotUnavailable)
+                XCTAssertEqual(
+                    error as? DebugWorktreeStartupBenchmarkError,
+                    .baseSnapshotUnavailable(.init(
+                        reason: .failed,
+                        stage: .loadedRootValidation,
+                        cause: "stale_currentness"
+                    ))
+                )
             }
             XCTAssertEqual(try diagnostics.reset(scope: crossRootScope)["control_count"], 0)
 
@@ -109,7 +119,14 @@ import XCTest
                 )
                 XCTFail("An unloaded root must not create a benchmark control.")
             } catch {
-                XCTAssertEqual(error as? DebugWorktreeStartupBenchmarkError, .baseSnapshotUnavailable)
+                XCTAssertEqual(
+                    error as? DebugWorktreeStartupBenchmarkError,
+                    .baseSnapshotUnavailable(.init(
+                        reason: .failed,
+                        stage: .loadedRootValidation,
+                        cause: "stale_currentness"
+                    ))
+                )
             }
             XCTAssertEqual(try diagnostics.reset(scope: staleScope)["control_count"], 0)
 
@@ -129,6 +146,7 @@ import XCTest
                 expectedStandardizedRootPath: "/not-loaded"
             )
             XCTAssertFalse(forced.baseSnapshotPrepared)
+            XCTAssertNil(forced.baseSnapshotIdentity)
             XCTAssertEqual(forced.control.route.name, "forcedFullCrawl")
             XCTAssertEqual(try diagnostics.reset(scope: forcedScope)["control_count"], 1)
         }

@@ -108,15 +108,7 @@ final class MCPCodeStructureWorktreeTests: XCTestCase {
         let window = try await makeWindow(root: root)
         defer { WindowStatesManager.shared.unregisterWindowState(window) }
         let store = window.workspaceFileContextStore
-        let file = try await fileRecord(at: fileURL, store: store, rootScope: .visibleWorkspace)
-        let warmCapability = try await window.mcpServer.buildCodeStructureDTO(
-            fromRecords: [file],
-            request: request(waitMilliseconds: 2000),
-            includePathNotFoundIssue: true,
-            lookupContext: .visibleWorkspace
-        )
-        XCTAssertEqual(warmCapability.status, "unavailable")
-        XCTAssertTrue(warmCapability.issues.contains { $0.code == "git_root_unavailable" })
+        _ = try await fileRecord(at: fileURL, store: store, rootScope: .visibleWorkspace)
 
         let workspace = try XCTUnwrap(window.workspaceManager.activeWorkspace)
         let tabID = try XCTUnwrap(workspace.activeComposeTabID)
@@ -163,6 +155,32 @@ final class MCPCodeStructureWorktreeTests: XCTestCase {
         XCTAssertEqual(invocation.commandCount, 0, invocation.commands.joined(separator: "\n"))
         XCTAssertEqual(invocation.outcome, "success")
         XCTAssertEqual(invocation.requestIdentity, requestIdentity)
+
+        let repeatedRequestIdentity = MCPRequestTimelineIdentity(
+            jsonRPCRequestID: .number(8002),
+            connectionID: connectionID.uuidString,
+            connectionGeneration: 1,
+            appInvocationID: UUID().uuidString,
+            requestOrdinal: 2
+        )
+        let repeatedValue = try await MCPRequestTimelineContext.$current.withValue(repeatedRequestIdentity) {
+            try await ServerNetworkManager.withConnectionID(connectionID) {
+                try await tool([
+                    "scope": .string("paths"),
+                    "paths": .array([.string(fileURL.path)]),
+                    "limits": .object(["wait_ms": .int(2000)])
+                ])
+            }
+        }
+        let repeatedObject = try XCTUnwrap(repeatedValue.objectValue)
+        XCTAssertEqual(repeatedObject["status"]?.stringValue, "unavailable")
+        XCTAssertTrue(repeatedObject["issues"]?.arrayValue?.contains {
+            $0.objectValue?["code"]?.stringValue == "git_root_unavailable"
+        } == true)
+        let repeatedInvocations = MCPToolWorkCountDiagnostics.debugSnapshots().git
+        XCTAssertEqual(repeatedInvocations.count, 2)
+        XCTAssertEqual(repeatedInvocations.map(\.commandCount), [0, 0])
+        XCTAssertEqual(repeatedInvocations.map(\.requestIdentity), [requestIdentity, repeatedRequestIdentity])
     }
 
     func testStrictTokenBudgetNeverAdmitsOversizedFirstEntry() async throws {

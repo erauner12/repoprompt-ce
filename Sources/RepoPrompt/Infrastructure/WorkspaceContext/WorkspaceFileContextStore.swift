@@ -1779,6 +1779,7 @@ actor WorkspaceFileContextStore {
         maxPendingDeltasPerRoot: WorkspaceFileContextStore.defaultMaxPendingDeltasPerRoot
     )
     private let codemapRuntimeProvider: CodeMapArtifactRuntimeProvider.Factory
+    private let codemapLocalGitClassificationProbe: WorkspaceCodemapLocalGitClassificationProbe
     private let codemapGitEligibilityProbe: WorkspaceCodemapGitEligibilityProbe
     private let selectionGraphFactory: WorkspaceCodemapSelectionGraphFactory
     private let selectionGraphQueryBudgetPolicy: WorkspaceCodemapStoreSelectionGraphQueryBudgetPolicy
@@ -1790,8 +1791,15 @@ actor WorkspaceFileContextStore {
         WorkspaceCodemapBindingDemandResult
     ) async -> WorkspaceCodemapBindingDemandResult
     private let codemapAutomaticSelectionQueryHook: @Sendable (WorkspaceCodemapRootEpoch) async -> Void
+    private struct TerminalNonGitCodemapCacheEntry {
+        let standardizedRootPath: String
+        let proof: WorkspaceCodemapNonGitFilesystemProof
+    }
+
     private var codemapSessionsByRootEpoch: [WorkspaceCodemapRootEpoch: CodemapRootSession] = [:]
-    private var terminalNonGitCodemapRootPathsByEpoch: [WorkspaceCodemapRootEpoch: String] = [:]
+    private var terminalNonGitCodemapCacheByEpoch: [
+        WorkspaceCodemapRootEpoch: TerminalNonGitCodemapCacheEntry
+    ] = [:]
     #if DEBUG
         private var codemapArtifactDemandRequestCountForTesting = 0
         private var codemapPresentationFreezeRequestCountForTesting = 0
@@ -1861,6 +1869,7 @@ actor WorkspaceFileContextStore {
             codemapRuntimeProvider: @escaping CodeMapArtifactRuntimeProvider.Factory = {
                 try CodeMapArtifactRuntime.processWide()
             },
+            codemapLocalGitClassificationProbe: WorkspaceCodemapLocalGitClassificationProbe = .production,
             codemapGitEligibilityProbe: WorkspaceCodemapGitEligibilityProbe = .production(),
             selectionGraphFactory: WorkspaceCodemapSelectionGraphFactory = .production,
             selectionGraphQueryBudgetPolicy: WorkspaceCodemapStoreSelectionGraphQueryBudgetPolicy = .initial,
@@ -1883,6 +1892,7 @@ actor WorkspaceFileContextStore {
             self.debugNowNanoseconds = debugNowNanoseconds
             self.unloadTerminationPolicy = unloadTerminationPolicy
             self.codemapRuntimeProvider = codemapRuntimeProvider
+            self.codemapLocalGitClassificationProbe = codemapLocalGitClassificationProbe
             self.codemapGitEligibilityProbe = codemapGitEligibilityProbe
             self.selectionGraphFactory = selectionGraphFactory
             self.selectionGraphQueryBudgetPolicy = selectionGraphQueryBudgetPolicy
@@ -1913,6 +1923,7 @@ actor WorkspaceFileContextStore {
             codemapRuntimeProvider: @escaping CodeMapArtifactRuntimeProvider.Factory = {
                 try CodeMapArtifactRuntime.processWide()
             },
+            codemapLocalGitClassificationProbe: WorkspaceCodemapLocalGitClassificationProbe = .production,
             codemapGitEligibilityProbe: WorkspaceCodemapGitEligibilityProbe = .production(),
             selectionGraphFactory: WorkspaceCodemapSelectionGraphFactory = .production,
             selectionGraphQueryBudgetPolicy: WorkspaceCodemapStoreSelectionGraphQueryBudgetPolicy = .initial,
@@ -1934,6 +1945,7 @@ actor WorkspaceFileContextStore {
             storeBackedSearchLane = StoreBackedWorkspaceSearchLane(configuration: searchLaneConfiguration)
             self.unloadTerminationPolicy = unloadTerminationPolicy
             self.codemapRuntimeProvider = codemapRuntimeProvider
+            self.codemapLocalGitClassificationProbe = codemapLocalGitClassificationProbe
             self.codemapGitEligibilityProbe = codemapGitEligibilityProbe
             self.selectionGraphFactory = selectionGraphFactory
             self.selectionGraphQueryBudgetPolicy = selectionGraphQueryBudgetPolicy
@@ -4673,32 +4685,44 @@ actor WorkspaceFileContextStore {
         let acceptedServicePublicationSequence: UInt64
     }
 
-    private func loadedRootReusableSnapshotCurrentnessIsValid(
+    private func loadedRootReusableSnapshotCurrentness(
         _ currentness: LoadedRootReusableSnapshotCurrentness
-    ) -> Bool {
-        guard !Task.isCancelled,
-              let state = rootStatesByID[currentness.rootID],
+    ) -> WorkspaceRootReusableSnapshotCoordinator.CurrentnessValidation {
+        guard let state = rootStatesByID[currentness.rootID],
               state.lifetimeID == currentness.lifetimeID,
-              state.root.standardizedFullPath == currentness.standardizedPath,
-              catalogGenerationsByRootID[currentness.rootID] == currentness.catalogGeneration,
-              appliedIndexGenerationsByRootID[currentness.rootID] == currentness.appliedIndexGeneration,
-              state.service.captureAcceptedWatcherWatermark().rawValue == currentness.acceptedWatcherWatermark
-        else { return false }
+              state.root.standardizedFullPath == currentness.standardizedPath
+        else {
+            return .stale(.loadedRootOwnerStale)
+        }
+        guard catalogGenerationsByRootID[currentness.rootID] == currentness.catalogGeneration,
+              appliedIndexGenerationsByRootID[currentness.rootID] == currentness.appliedIndexGeneration
+        else {
+            return .stale(.loadedRootCatalogStale)
+        }
+        guard state.service.captureAcceptedWatcherWatermark().rawValue == currentness.acceptedWatcherWatermark else {
+            return .stale(.loadedRootWatcherStale)
+        }
         let ingress = publisherIngressCoordinator.appliedSnapshot(rootID: currentness.rootID)
-        return ingress.acceptedServicePublicationSequence == currentness.acceptedServicePublicationSequence
-            && ingress.appliedServicePublicationSequence >= currentness.acceptedServicePublicationSequence
-            && ingress.appliedWatcherWatermark.rawValue >= currentness.acceptedWatcherWatermark
+        guard ingress.acceptedServicePublicationSequence == currentness.acceptedServicePublicationSequence,
+              ingress.appliedServicePublicationSequence >= currentness.acceptedServicePublicationSequence,
+              ingress.appliedWatcherWatermark.rawValue >= currentness.acceptedWatcherWatermark
+        else {
+            return .stale(.loadedRootWatcherStale)
+        }
+        return .current
     }
 
     func admitReusableSnapshotForLoadedRoot(
         rootID: UUID,
         expectedStandardizedPath: String
     ) async throws -> WorkspaceRootReusableSnapshotCoordinator.ObservationResult {
-        try Task.checkCancellation()
+        guard !Task.isCancelled else {
+            return .failed(.init(stage: .loadedRootValidation, cause: .cancelled))
+        }
         guard let initialState = rootStatesByID[rootID],
               initialState.root.standardizedFullPath == expectedStandardizedPath
         else {
-            return .failed
+            return .failed(.init(stage: .loadedRootValidation, cause: .loadedRootOwnerStale))
         }
         let initialLifetimeID = initialState.lifetimeID
         let rootRef = WorkspaceRootRef(
@@ -4707,17 +4731,27 @@ actor WorkspaceFileContextStore {
             fullPath: initialState.root.standardizedFullPath
         )
         let ingressSamples = await awaitAppliedIngress(rootRefs: [rootRef])
-        try Task.checkCancellation()
+        guard !Task.isCancelled else {
+            return .failed(.init(stage: .initialCurrentness, cause: .cancelled))
+        }
         guard ingressSamples.count == 1,
               let ingressSample = ingressSamples.first,
               ingressSample.rootID == rootID,
-              ingressSample.rootPath == expectedStandardizedPath,
-              let state = rootStatesByID[rootID],
+              ingressSample.rootPath == expectedStandardizedPath
+        else {
+            return .failed(.init(stage: .initialCurrentness, cause: .loadedRootWatcherStale))
+        }
+        guard let state = rootStatesByID[rootID],
               state.lifetimeID == initialLifetimeID,
-              state.root.standardizedFullPath == expectedStandardizedPath,
-              let catalogGeneration = catalogGenerationsByRootID[rootID],
+              state.root.standardizedFullPath == expectedStandardizedPath
+        else {
+            return .failed(.init(stage: .initialCurrentness, cause: .loadedRootOwnerStale))
+        }
+        guard let catalogGeneration = catalogGenerationsByRootID[rootID],
               let appliedIndexGeneration = appliedIndexGenerationsByRootID[rootID]
-        else { return .failed }
+        else {
+            return .failed(.init(stage: .initialCurrentness, cause: .loadedRootCatalogStale))
+        }
 
         let acceptedWatcherWatermark = state.service.captureAcceptedWatcherWatermark().rawValue
         let ingress = publisherIngressCoordinator.appliedSnapshot(rootID: rootID)
@@ -4725,7 +4759,9 @@ actor WorkspaceFileContextStore {
               ingressSample.appliedServicePublicationSequence >= ingress.acceptedServicePublicationSequence,
               ingress.appliedWatcherWatermark.rawValue >= acceptedWatcherWatermark,
               ingress.appliedServicePublicationSequence >= ingress.acceptedServicePublicationSequence
-        else { return .failed }
+        else {
+            return .failed(.init(stage: .initialCurrentness, cause: .loadedRootWatcherStale))
+        }
 
         let currentness = LoadedRootReusableSnapshotCurrentness(
             rootID: rootID,
@@ -4736,7 +4772,12 @@ actor WorkspaceFileContextStore {
             acceptedWatcherWatermark: acceptedWatcherWatermark,
             acceptedServicePublicationSequence: ingress.acceptedServicePublicationSequence
         )
-        guard loadedRootReusableSnapshotCurrentnessIsValid(currentness) else { return .failed }
+        switch loadedRootReusableSnapshotCurrentness(currentness) {
+        case .current:
+            break
+        case let .stale(cause):
+            return .failed(.init(stage: .initialCurrentness, cause: cause))
+        }
         let rootURL = URL(fileURLWithPath: expectedStandardizedPath).standardizedFileURL
         let authoritativeRelativeFilePaths = Set(state.fileIDsByRelativePath.keys)
 
@@ -4744,19 +4785,28 @@ actor WorkspaceFileContextStore {
             rootURL: rootURL,
             authoritativeRelativeFilePaths: authoritativeRelativeFilePaths,
             currentnessValidator: { [weak self] in
-                guard let self else { return false }
-                return await loadedRootReusableSnapshotCurrentnessIsValid(currentness)
+                guard let self else { return .stale(.loadedRootOwnerStale) }
+                return await loadedRootReusableSnapshotCurrentness(currentness)
             }
         )
-        guard loadedRootReusableSnapshotCurrentnessIsValid(currentness) else {
-            if case let .admitted(snapshotIdentity) = result {
-                await workspaceStateAuthority.revokeReusableSnapshotAdmissions(
-                    snapshotIdentity: snapshotIdentity
-                )
-            }
-            return .failed
+        guard case let .admitted(snapshotIdentity) = result else {
+            return result
         }
-        return result
+        if Task.isCancelled {
+            await workspaceStateAuthority.revokeReusableSnapshotAdmissions(
+                snapshotIdentity: snapshotIdentity
+            )
+            return .failed(.init(stage: .finalLoadedRootCurrentness, cause: .cancelled))
+        }
+        switch loadedRootReusableSnapshotCurrentness(currentness) {
+        case .current:
+            return result
+        case let .stale(cause):
+            await workspaceStateAuthority.revokeReusableSnapshotAdmissions(
+                snapshotIdentity: snapshotIdentity
+            )
+            return .failed(.init(stage: .finalLoadedRootCurrentness, cause: cause))
+        }
     }
 
     func folders(inRoot rootID: UUID) -> [WorkspaceFolderRecord] {
@@ -8263,7 +8313,7 @@ actor WorkspaceFileContextStore {
                 codemapCleanupFlights.append(cleanup)
             }
             codemapAuthorityGenerationsByRootEpoch.removeValue(forKey: rootEpoch)
-            terminalNonGitCodemapRootPathsByEpoch.removeValue(forKey: rootEpoch)
+            terminalNonGitCodemapCacheByEpoch.removeValue(forKey: rootEpoch)
             codemapPathFenceTokensByID = codemapPathFenceTokensByID.filter {
                 $0.value.rootEpoch != rootEpoch
             }
@@ -10226,20 +10276,45 @@ actor WorkspaceFileContextStore {
             )
         }
 
-        if let cachedRootPath = terminalNonGitCodemapRootPathsByEpoch[rootEpoch] {
-            guard cachedRootPath == authority.standardizedRootPath,
+        var mustRunGitPreflight = false
+        if let cached = terminalNonGitCodemapCacheByEpoch[rootEpoch] {
+            guard cached.standardizedRootPath == authority.standardizedRootPath,
                   codemapPreflightAuthorityIsCurrent(authority)
             else {
-                terminalNonGitCodemapRootPathsByEpoch.removeValue(forKey: rootEpoch)
+                terminalNonGitCodemapCacheByEpoch.removeValue(forKey: rootEpoch)
                 return .init(result: .unavailable(.staleCurrentness), ownership: .notAcquired)
             }
-            return .init(result: .unavailable(.gitTerminal(.nonGit)), ownership: .notAcquired)
+            if codemapLocalGitClassificationProbe.validate(cached.proof) {
+                return .init(result: .unavailable(.gitTerminal(.nonGit)), ownership: .notAcquired)
+            }
+            terminalNonGitCodemapCacheByEpoch.removeValue(forKey: rootEpoch)
+            mustRunGitPreflight = true
         }
 
         if codemapSessionsByRootEpoch[rootEpoch] == nil {
-            let preflight = await codemapGitEligibilityProbe.resolve(
-                URL(fileURLWithPath: authority.standardizedRootPath, isDirectory: true)
-            )
+            let rootURL = URL(fileURLWithPath: authority.standardizedRootPath, isDirectory: true)
+            if !mustRunGitPreflight {
+                let localClassification = await codemapLocalGitClassificationProbe.resolve(rootURL)
+                guard codemapPreflightAuthorityIsCurrent(authority),
+                      let currentFile = filesByID[file.id],
+                      currentFile == file,
+                      rootStatesByID[file.rootID]?
+                      .fileIDsByRelativePath[file.standardizedRelativePath] == file.id
+                else {
+                    return .init(result: .unavailable(.staleCurrentness), ownership: .notAcquired)
+                }
+                if case let .definitelyNonGit(proof) = localClassification {
+                    if codemapLocalGitClassificationProbe.validate(proof) {
+                        terminalNonGitCodemapCacheByEpoch[rootEpoch] = .init(
+                            standardizedRootPath: authority.standardizedRootPath,
+                            proof: proof
+                        )
+                        return .init(result: .unavailable(.gitTerminal(.nonGit)), ownership: .notAcquired)
+                    }
+                }
+            }
+
+            let preflight = await codemapGitEligibilityProbe.resolve(rootURL)
             guard codemapPreflightAuthorityIsCurrent(authority),
                   let currentFile = filesByID[file.id],
                   currentFile == file,
@@ -10252,9 +10327,6 @@ actor WorkspaceFileContextStore {
             case .eligible:
                 break
             case let .terminalUnavailable(reason):
-                if reason == .nonGit {
-                    terminalNonGitCodemapRootPathsByEpoch[rootEpoch] = authority.standardizedRootPath
-                }
                 return .init(result: .unavailable(.gitTerminal(reason)), ownership: .notAcquired)
             case let .transientUnavailable(reason):
                 return .init(result: .unavailable(.gitTransient(reason)), ownership: .notAcquired)
@@ -13802,6 +13874,11 @@ actor WorkspaceFileContextStore {
         expectedLifetimeID: UUID? = nil,
         requiresFullResync: Bool = false
     ) async {
+        invalidateTerminalNonGitCodemapClassificationIfNeeded(
+            rootID: rootID,
+            deltas: deltas,
+            requiresFullResync: requiresFullResync
+        )
         let applicableDeltas = await preflightPreparedIndexDeltas(
             rootID: rootID,
             deltas: deltas,
@@ -13837,6 +13914,26 @@ actor WorkspaceFileContextStore {
                 deltas: applicableDeltas,
                 requiresFullResync: requiresFullResync
             )
+        }
+    }
+
+    private func invalidateTerminalNonGitCodemapClassificationIfNeeded(
+        rootID: UUID,
+        deltas: [PreparedFileSystemDelta],
+        requiresFullResync: Bool
+    ) {
+        guard let state = rootStatesByID[rootID] else { return }
+        let rootEpoch = WorkspaceCodemapRootEpoch(rootID: rootID, rootLifetimeID: state.lifetimeID)
+        let repositoryLayoutMayHaveChanged = requiresFullResync || deltas.contains { prepared in
+            let path = prepared.relativePath
+            return path == ".git" || path.hasPrefix(".git/") || path == "HEAD" ||
+                path == "objects" || path.hasPrefix("objects/") || path == "refs" || path.hasPrefix("refs/")
+        }
+        guard repositoryLayoutMayHaveChanged else { return }
+
+        terminalNonGitCodemapCacheByEpoch.removeValue(forKey: rootEpoch)
+        if let generation = codemapAuthorityGenerationsByRootEpoch[rootEpoch] {
+            codemapAuthorityGenerationsByRootEpoch[rootEpoch] = generation == .max ? 0 : generation + 1
         }
     }
 

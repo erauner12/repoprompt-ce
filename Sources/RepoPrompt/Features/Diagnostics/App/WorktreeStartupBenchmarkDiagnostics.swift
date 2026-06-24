@@ -11,7 +11,21 @@
         case invalidTransition
         case sampleNotFound
         case startIdentityMismatch
-        case baseSnapshotUnavailable
+        case baseSnapshotUnavailable(BaseSnapshotFailure)
+
+        struct BaseSnapshotFailure: Equatable {
+            enum Reason: String, Equatable {
+                case nonGit = "non_git"
+                case unsupportedRoot = "unsupported_root"
+                case authorityUnavailable = "authority_unavailable"
+                case catalogMismatch = "catalog_mismatch"
+                case failed
+            }
+
+            let reason: Reason
+            let stage: WorkspaceRootReusableSnapshotCoordinator.ObservationFailureStage?
+            let cause: String?
+        }
 
         var code: String {
             switch self {
@@ -176,6 +190,7 @@
         struct PreparedControlResult: Equatable {
             let control: ControlResult
             let baseSnapshotPrepared: Bool
+            let baseSnapshotIdentity: WorkspaceRootReusableSnapshotIdentity?
         }
 
         struct ArmResult: Equatable {
@@ -302,13 +317,45 @@
         ) async throws -> PreparedControlResult {
             try WorktreeStartupBenchmarkGate.shared.requireEnabled { _ in }
             let shouldPrepareBaseSnapshot = (observe || serve) && !forceFullCrawl
+            var baseSnapshotIdentity: WorkspaceRootReusableSnapshotIdentity?
             if shouldPrepareBaseSnapshot {
                 let observation = try await store.admitReusableSnapshotForLoadedRoot(
                     rootID: scope.rootID,
                     expectedStandardizedPath: expectedStandardizedRootPath
                 )
-                guard case .admitted = observation else {
-                    throw DebugWorktreeStartupBenchmarkError.baseSnapshotUnavailable
+                switch observation {
+                case let .admitted(identity):
+                    baseSnapshotIdentity = identity
+                case .nonGit:
+                    throw DebugWorktreeStartupBenchmarkError.baseSnapshotUnavailable(.init(
+                        reason: .nonGit,
+                        stage: nil,
+                        cause: nil
+                    ))
+                case .unsupportedRoot:
+                    throw DebugWorktreeStartupBenchmarkError.baseSnapshotUnavailable(.init(
+                        reason: .unsupportedRoot,
+                        stage: nil,
+                        cause: nil
+                    ))
+                case let .authorityUnavailable(stage, reason):
+                    throw DebugWorktreeStartupBenchmarkError.baseSnapshotUnavailable(.init(
+                        reason: .authorityUnavailable,
+                        stage: stage,
+                        cause: reason.benchmarkDiagnosticCode
+                    ))
+                case .catalogMismatch:
+                    throw DebugWorktreeStartupBenchmarkError.baseSnapshotUnavailable(.init(
+                        reason: .catalogMismatch,
+                        stage: nil,
+                        cause: nil
+                    ))
+                case let .failed(failure):
+                    throw DebugWorktreeStartupBenchmarkError.baseSnapshotUnavailable(.init(
+                        reason: .failed,
+                        stage: failure.stage,
+                        cause: failure.cause.code
+                    ))
                 }
             }
             let control = try setFlags(
@@ -320,7 +367,8 @@
             )
             return PreparedControlResult(
                 control: control,
-                baseSnapshotPrepared: shouldPrepareBaseSnapshot
+                baseSnapshotPrepared: shouldPrepareBaseSnapshot,
+                baseSnapshotIdentity: baseSnapshotIdentity
             )
         }
 
@@ -786,6 +834,20 @@
             add("first_search", .firstBenchmarkSearchStarted, .firstBenchmarkSearchCompleted)
             add("first_read", .firstBenchmarkReadStarted, .firstBenchmarkReadCompleted)
             return values
+        }
+    }
+
+    private extension GitWorkspaceAuthorityUnavailableReason {
+        var benchmarkDiagnosticCode: String {
+            switch self {
+            case .noSnapshot: "no_snapshot"
+            case .mutationInProgress: "mutation_in_progress"
+            case .metadataEventPending: "metadata_event_pending"
+            case .monitorCoverageUnavailable: "monitor_coverage_unavailable"
+            case .superseded: "superseded"
+            case .invalidatedDuringCollection: "invalidated_during_collection"
+            case .collectionScopeMismatch: "collection_scope_mismatch"
+            }
         }
     }
 #endif
