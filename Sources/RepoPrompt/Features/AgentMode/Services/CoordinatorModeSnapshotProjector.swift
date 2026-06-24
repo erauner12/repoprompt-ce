@@ -51,6 +51,7 @@ struct CoordinatorModeSnapshotProjector {
         var id: UUID
         var tabID: UUID
         var title: String
+        var startedAt: Date?
         var updatedAt: Date
         var runState: AgentSessionRunState?
         var agentKind: String?
@@ -69,6 +70,7 @@ struct CoordinatorModeSnapshotProjector {
             id: UUID,
             tabID: UUID,
             title: String,
+            startedAt: Date? = nil,
             updatedAt: Date,
             runState: AgentSessionRunState? = nil,
             agentKind: String? = nil,
@@ -86,6 +88,7 @@ struct CoordinatorModeSnapshotProjector {
             self.id = id
             self.tabID = tabID
             self.title = title
+            self.startedAt = startedAt
             self.updatedAt = updatedAt
             self.runState = runState
             self.agentKind = agentKind
@@ -106,6 +109,7 @@ struct CoordinatorModeSnapshotProjector {
         var sessionID: UUID
         var tabID: UUID
         var title: String
+        var startedAt: Date?
         var updatedAt: Date
         var runState: AgentSessionRunState
         var agentKind: String?
@@ -124,6 +128,7 @@ struct CoordinatorModeSnapshotProjector {
             sessionID: UUID,
             tabID: UUID,
             title: String,
+            startedAt: Date? = nil,
             updatedAt: Date,
             runState: AgentSessionRunState,
             agentKind: String? = nil,
@@ -141,6 +146,7 @@ struct CoordinatorModeSnapshotProjector {
             self.sessionID = sessionID
             self.tabID = tabID
             self.title = title
+            self.startedAt = startedAt
             self.updatedAt = updatedAt
             self.runState = runState
             self.agentKind = agentKind
@@ -307,6 +313,7 @@ struct CoordinatorModeSnapshotProjector {
         var id: UUID
         var tabID: UUID?
         var title: String
+        var startedAt: Date?
         var updatedAt: Date
         var runState: AgentSessionRunState
         var agentKind: String?
@@ -361,6 +368,7 @@ struct CoordinatorModeSnapshotProjector {
                 id: persisted.id,
                 tabID: persisted.tabID,
                 title: normalizedTitle(persisted.title),
+                startedAt: persisted.startedAt,
                 updatedAt: persisted.updatedAt,
                 runState: persisted.runState ?? .idle,
                 agentKind: persisted.agentKind,
@@ -384,6 +392,7 @@ struct CoordinatorModeSnapshotProjector {
                 id: live.sessionID,
                 tabID: live.tabID,
                 title: normalizedTitle(live.title),
+                startedAt: live.startedAt ?? previous?.startedAt,
                 updatedAt: live.updatedAt,
                 runState: live.runState,
                 agentKind: live.agentKind ?? previous?.agentKind,
@@ -407,6 +416,7 @@ struct CoordinatorModeSnapshotProjector {
                 id: snapshot.sessionID,
                 tabID: snapshot.tabID ?? previous?.tabID,
                 title: normalizedTitle(snapshot.sessionName ?? previous?.title ?? "Agent Session"),
+                startedAt: previous?.startedAt,
                 updatedAt: max(snapshot.updatedAt, previous?.updatedAt ?? snapshot.updatedAt),
                 runState: runState(from: snapshot),
                 agentKind: snapshot.agentRaw ?? previous?.agentKind,
@@ -479,6 +489,7 @@ struct CoordinatorModeSnapshotProjector {
             isMCPOriginated: seed.isMCPOriginated,
             isPersistedOnly: seed.isPersistedOnly,
             isCoordinator: isCoordinator,
+            startedAt: seed.startedAt,
             updatedAt: seed.updatedAt,
             priority: seed.priority,
             workstream: workstream,
@@ -1147,6 +1158,7 @@ extension CoordinatorModeSnapshotProjector.PersistedSession {
             id: entry.id,
             tabID: entry.tabID,
             title: entry.name,
+            startedAt: entry.lastUserMessageAt,
             updatedAt: updatedAt ?? AgentSessionRestoreSupport.sidebarActivityDate(for: entry),
             runState: entry.lastRunStateRaw.flatMap(AgentSessionRunState.init(rawValue:)),
             agentKind: entry.agentKindRaw,

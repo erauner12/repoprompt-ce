@@ -694,6 +694,60 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.railTranscriptEntries.compactMap(\.action).map(\.targetSessionID), [childID])
     }
 
+    func testPersistedDelegateActionEntriesUseStartChronologyAfterRestart() {
+        let coordinatorID = uuid(1)
+        let orchestrateID = uuid(2)
+        let reviewID = uuid(3)
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    persisted: [
+                        self.persisted(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator Runtime Demo",
+                            updatedAt: self.date(80),
+                            state: .completed,
+                            isMCP: true
+                        ),
+                        self.persisted(
+                            id: reviewID,
+                            tab: self.uuid(103),
+                            title: "Smoke Review README summary",
+                            startedAt: self.date(50),
+                            updatedAt: self.date(70),
+                            state: .completed,
+                            parent: coordinatorID,
+                            isMCP: true,
+                            workflow: .init(AgentWorkflow.review.definition)
+                        ),
+                        self.persisted(
+                            id: orchestrateID,
+                            tab: self.uuid(102),
+                            title: "Smoke Orchestrate README summary",
+                            startedAt: self.date(30),
+                            updatedAt: self.date(90),
+                            state: .completed,
+                            parent: coordinatorID,
+                            isMCP: true,
+                            workflow: .orchestrate
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+
+        viewModel.refresh()
+
+        let actionEntries = viewModel.railTranscriptEntries.filter { $0.action != nil }
+        XCTAssertEqual(actionEntries.map(\.action?.targetSessionID), [orchestrateID, reviewID])
+        XCTAssertEqual(actionEntries.map(\.createdAt), [date(30), date(50)])
+    }
+
     func testSelectingCoordinatorRebuildsDelegateActionEntriesForSelectedParent() {
         let firstCoordinatorID = uuid(1)
         let firstChildID = uuid(2)
@@ -1139,6 +1193,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         id: UUID,
         tab: UUID,
         title: String,
+        startedAt: Date? = nil,
         updatedAt: Date,
         state: AgentSessionRunState? = .idle,
         parent: UUID? = nil,
@@ -1150,6 +1205,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             id: id,
             tabID: tab,
             title: title,
+            startedAt: startedAt,
             updatedAt: updatedAt,
             runState: state,
             parentSessionID: parent,
@@ -1163,6 +1219,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         id: UUID,
         tab: UUID,
         title: String,
+        startedAt: Date? = nil,
         updatedAt: Date,
         state: AgentSessionRunState,
         parent: UUID? = nil,
@@ -1174,6 +1231,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             sessionID: id,
             tabID: tab,
             title: title,
+            startedAt: startedAt,
             updatedAt: updatedAt,
             runState: state,
             parentSessionID: parent,

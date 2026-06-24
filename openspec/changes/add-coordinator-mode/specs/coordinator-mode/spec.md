@@ -270,7 +270,8 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 #### Scenario: Delegation events appear progressively
 - **WHEN** a Coordinator starts or selects a Mission with delegated child sessions
 - **THEN** the Coordinator chat SHOULD render delegated-session event cards as soon as those child sessions are projected
-- **AND** those event cards SHOULD update from the live board row state rather than waiting for the child to reach a terminal state.
+- **AND** those event cards SHOULD update from the live board row state rather than waiting for the child to reach a terminal state
+- **AND** restored delegated event cards SHOULD preserve delegation/start chronology instead of reordering by terminal completion or last activity time.
 
 #### Scenario: Delegated event selects its board row
 - **WHEN** the user clicks a delegated-session event card in the Coordinator conversation

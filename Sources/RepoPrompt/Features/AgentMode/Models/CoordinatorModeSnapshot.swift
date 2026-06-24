@@ -162,6 +162,7 @@ struct CoordinatorModeRow: Identifiable, Equatable {
     let isMCPOriginated: Bool
     let isPersistedOnly: Bool
     let isCoordinator: Bool
+    let startedAt: Date?
     let updatedAt: Date
     let priority: Int?
     let workstream: Workstream?

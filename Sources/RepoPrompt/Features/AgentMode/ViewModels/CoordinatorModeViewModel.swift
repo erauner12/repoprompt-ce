@@ -436,19 +436,22 @@ final class CoordinatorModeViewModel: ObservableObject {
         let rows = directDelegatedRows(in: snapshot, coordinatorSessionID: coordinatorSessionID)
             .filter { !displayedDelegateActionTargetIDs.contains($0.sessionID) }
             .sorted { lhs, rhs in
-                if lhs.updatedAt == rhs.updatedAt {
+                let lhsDate = lhs.startedAt ?? lhs.updatedAt
+                let rhsDate = rhs.startedAt ?? rhs.updatedAt
+                if lhsDate == rhsDate {
                     return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
                 }
-                return lhs.updatedAt < rhs.updatedAt
+                return lhsDate < rhsDate
             }
 
         for row in rows {
+            let actionCreatedAt = row.startedAt ?? row.updatedAt
             displayedDelegateActionTargetIDs.insert(row.sessionID)
             railTranscriptEntries.append(CoordinatorModeRailTranscriptEntry(
                 id: row.sessionID,
                 role: .event,
                 text: "Delegated to \(row.title)",
-                createdAt: row.updatedAt,
+                createdAt: actionCreatedAt,
                 action: CoordinatorModeCoordinatorAction(
                     ownerCoordinatorSessionID: coordinatorSessionID,
                     ownerTitle: snapshot.coordinatorRail.title ?? "Coordinator",
@@ -1138,6 +1141,7 @@ extension AgentModeViewModel {
                 sessionID: sessionID,
                 tabID: session.tabID,
                 title: tab?.name ?? ownerValidatedSessionIndex[sessionID]?.name ?? "Agent Session",
+                startedAt: session.lastUserMessageAt,
                 updatedAt: session.lastUserMessageAt ?? session.lastActivityAt,
                 runState: session.runState,
                 agentKind: session.selectedAgent.rawValue,
