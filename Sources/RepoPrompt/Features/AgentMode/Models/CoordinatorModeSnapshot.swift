@@ -128,7 +128,28 @@ struct CoordinatorWorkstream: Identifiable, Equatable {
     let coordinatorSessionID: UUID?
     let worktree: CoordinatorWorkstreamBinding?
     let workflow: CoordinatorModeWorkflowDisplaySummary?
+    let declaredWorkstream: CoordinatorMissionWorkstreamSummary?
     let nextAction: NextAction?
+
+    init(
+        objective: String,
+        phase: Phase,
+        childSessionID: UUID,
+        coordinatorSessionID: UUID?,
+        worktree: CoordinatorWorkstreamBinding?,
+        workflow: CoordinatorModeWorkflowDisplaySummary?,
+        declaredWorkstream: CoordinatorMissionWorkstreamSummary? = nil,
+        nextAction: NextAction?
+    ) {
+        self.objective = objective
+        self.phase = phase
+        self.childSessionID = childSessionID
+        self.coordinatorSessionID = coordinatorSessionID
+        self.worktree = worktree
+        self.workflow = workflow
+        self.declaredWorkstream = declaredWorkstream
+        self.nextAction = nextAction
+    }
 }
 
 struct CoordinatorModeRow: Identifiable, Equatable {
@@ -245,10 +266,11 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
         template: """
         Run this as a scoped Coordinator change.
 
-        1. Deeply inspect the existing code and produce a short plan before delegating.
-        2. Delegate mutable work only into isolated worktrees.
-        3. Keep workstreams focused on user-level outcomes, not raw session mechanics.
-        4. Review delegated results, ask me before irreversible actions, then coordinate any needed fixes.
+        1. Record a Mission Plan with `coordinator_chat op=mission_plan` before delegation. Use one user-level workstream unless the objective clearly needs more. Include `default_policy` and explicit `worktree_strategy` for each workstream.
+        2. Deeply inspect the existing code and produce a short plan before delegating.
+        3. Delegate mutable work only into isolated worktrees.
+        4. Keep workstreams focused on user-level outcomes, not raw session mechanics.
+        5. Review delegated results, ask me before irreversible actions, then coordinate any needed fixes.
 
         User objective:
         $MISSION
@@ -264,6 +286,11 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
         descriptionText: "Use Deep Plan first, pause on Needs you, then run Orchestrate and Review with explicit worktree boundaries.",
         template: """
         Run this as a staged Coordinator Mission.
+
+        Mission Plan:
+        1. Record the plan with `coordinator_chat op=mission_plan` before starting children. Include `default_policy` and `worktree_strategy` for each workstream.
+        2. Use workstreams such as "Plan", "Implement", and "Review" only if each will map to distinct user-level work.
+        3. Update each workstream with `primary_session_id`, `related_session_ids`, and `worktree_strategy.worktree_id` as children are launched or bound.
 
         Stage 1 - Deep Plan:
         1. Start exactly one delegated child with workflow_name="Deep Plan" for the user's objective.
@@ -359,6 +386,8 @@ struct CoordinatorModeCoordinatorRail: Equatable {
         isPersistedOnly: false,
         isPinned: false,
         childCounts: .empty,
+        missionTemplate: nil,
+        missionPlan: nil,
         openAgentChatRoute: nil,
         statusReport: nil,
         isComposerEnabled: false,
@@ -387,10 +416,48 @@ struct CoordinatorModeCoordinatorRail: Equatable {
     let isPersistedOnly: Bool
     let isPinned: Bool
     let childCounts: CoordinatorModeCoordinatorChildCounts
+    let missionTemplate: CoordinatorMissionTemplateSummary?
+    let missionPlan: CoordinatorMissionPlan?
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
     let statusReport: CoordinatorModeSessionStatusReport?
     let isComposerEnabled: Bool
     let isComposerSendEnabled: Bool
+
+    init(
+        state: State,
+        coordinatorSessionID: UUID?,
+        coordinatorTabID: UUID?,
+        selectionSource: SelectionSource?,
+        title: String?,
+        availableCoordinators: [CoordinatorModeCoordinatorOption],
+        isLiveInCurrentWindow: Bool,
+        isPersistedOnly: Bool,
+        isPinned: Bool,
+        childCounts: CoordinatorModeCoordinatorChildCounts,
+        missionTemplate: CoordinatorMissionTemplateSummary? = nil,
+        missionPlan: CoordinatorMissionPlan? = nil,
+        openAgentChatRoute: AgentSessionDeepLinkRoute?,
+        statusReport: CoordinatorModeSessionStatusReport?,
+        isComposerEnabled: Bool,
+        isComposerSendEnabled: Bool
+    ) {
+        self.state = state
+        self.coordinatorSessionID = coordinatorSessionID
+        self.coordinatorTabID = coordinatorTabID
+        self.selectionSource = selectionSource
+        self.title = title
+        self.availableCoordinators = availableCoordinators
+        self.isLiveInCurrentWindow = isLiveInCurrentWindow
+        self.isPersistedOnly = isPersistedOnly
+        self.isPinned = isPinned
+        self.childCounts = childCounts
+        self.missionTemplate = missionTemplate
+        self.missionPlan = missionPlan
+        self.openAgentChatRoute = openAgentChatRoute
+        self.statusReport = statusReport
+        self.isComposerEnabled = isComposerEnabled
+        self.isComposerSendEnabled = isComposerSendEnabled
+    }
 }
 
 struct CoordinatorModeCoordinatorChildCounts: Equatable {
@@ -419,9 +486,45 @@ struct CoordinatorModeCoordinatorOption: Identifiable, Equatable {
     let isPinned: Bool
     let isPersistedOnly: Bool
     let childCounts: CoordinatorModeCoordinatorChildCounts
+    let missionTemplate: CoordinatorMissionTemplateSummary?
+    let missionPlan: CoordinatorMissionPlan?
     let runState: AgentSessionRunState?
     let updatedAt: Date
     let lastActivityAt: Date
+
+    init(
+        sessionID: UUID,
+        tabID: UUID?,
+        workspaceID: UUID?,
+        title: String,
+        selectionSource: CoordinatorModeCoordinatorRail.SelectionSource,
+        isSelected: Bool,
+        isLiveInCurrentWindow: Bool,
+        isPinned: Bool,
+        isPersistedOnly: Bool,
+        childCounts: CoordinatorModeCoordinatorChildCounts,
+        missionTemplate: CoordinatorMissionTemplateSummary? = nil,
+        missionPlan: CoordinatorMissionPlan? = nil,
+        runState: AgentSessionRunState?,
+        updatedAt: Date,
+        lastActivityAt: Date
+    ) {
+        self.sessionID = sessionID
+        self.tabID = tabID
+        self.workspaceID = workspaceID
+        self.title = title
+        self.selectionSource = selectionSource
+        self.isSelected = isSelected
+        self.isLiveInCurrentWindow = isLiveInCurrentWindow
+        self.isPinned = isPinned
+        self.isPersistedOnly = isPersistedOnly
+        self.childCounts = childCounts
+        self.missionTemplate = missionTemplate
+        self.missionPlan = missionPlan
+        self.runState = runState
+        self.updatedAt = updatedAt
+        self.lastActivityAt = lastActivityAt
+    }
 }
 
 struct CoordinatorModeRailTranscriptEntry: Identifiable, Equatable {

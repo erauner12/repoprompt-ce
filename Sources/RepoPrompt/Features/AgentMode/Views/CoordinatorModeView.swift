@@ -20,7 +20,7 @@ private struct CoordinatorSidebarMaterialView: NSViewRepresentable {
 struct CoordinatorModeView: View {
     enum PresentationMode: String, CaseIterable, Identifiable {
         case board
-        case list
+        case plan
 
         var id: String {
             rawValue
@@ -29,9 +29,14 @@ struct CoordinatorModeView: View {
         var displayName: String {
             switch self {
             case .board: "Board"
-            case .list: "List"
+            case .plan: "Plan"
             }
         }
+    }
+
+    private enum InspectorTarget {
+        case row(CoordinatorModeRow)
+        case planNode(CoordinatorMissionPlanNode, CoordinatorMissionWorkstreamSummary?, CoordinatorMissionPlan, CoordinatorModeRow?)
     }
 
     private enum ChildDirectiveAvailability {
@@ -98,7 +103,9 @@ struct CoordinatorModeView: View {
 
     @State private var presentationMode: PresentationMode = .board
     @State private var selectedRowID: UUID?
+    @State private var selectedPlanNodeID: UUID?
     @State private var hoveredRowID: UUID?
+    @State private var hoveredPlanNodeID: UUID?
     @State private var filterText = ""
     @State private var coordinatorDirectiveDraft = ""
     @State private var coordinatorCheckpointDrafts: [UUID: [String: AgentAskUserDraft]] = [:]
@@ -135,15 +142,17 @@ struct CoordinatorModeView: View {
             let snapshot = viewModel.snapshot
             let sections = filteredSections(from: snapshot)
             let selectedRow = selectedRow(in: sections)
+            let inspectorTarget = inspectorTarget(snapshot: snapshot, sections: sections, selectedRow: selectedRow)
             let metrics = visualMetrics
             let forceList = proxy.size.width < 540 && presentationMode == .board
-            let useList = presentationMode == .list || forceList
+            let useList = forceList
             let railIsAvailable = proxy.size.width >= metrics.railAvailableWidth
             let inspectorIsAvailable = proxy.size.width >= 1200
             coordinatorShell(
                 snapshot: snapshot,
                 sections: sections,
                 selectedRow: selectedRow,
+                inspectorTarget: inspectorTarget,
                 useList: useList,
                 forceList: forceList,
                 railIsAvailable: railIsAvailable,
@@ -160,6 +169,7 @@ struct CoordinatorModeView: View {
         }
         .onChange(of: viewModel.snapshot) { _, _ in
             reconcileSelection()
+            reconcilePlanSelection()
         }
         .onChange(of: selectedRowID) { _, _ in
             resetChildDirectiveComposer()
@@ -170,6 +180,7 @@ struct CoordinatorModeView: View {
         snapshot: CoordinatorModeSnapshot,
         sections: [CoordinatorModeStatusSection],
         selectedRow: CoordinatorModeRow?,
+        inspectorTarget: InspectorTarget?,
         useList: Bool,
         forceList: Bool,
         railIsAvailable: Bool,
@@ -204,6 +215,7 @@ struct CoordinatorModeView: View {
                             snapshot: snapshot,
                             sections: sections,
                             selectedRow: selectedRow,
+                            inspectorTarget: inspectorTarget,
                             useList: useList,
                             forceList: forceList,
                             railIsAvailable: railIsAvailable,
@@ -215,6 +227,7 @@ struct CoordinatorModeView: View {
                             snapshot: snapshot,
                             sections: sections,
                             selectedRow: selectedRow,
+                            inspectorTarget: inspectorTarget,
                             useList: useList,
                             forceList: forceList,
                             railIsAvailable: railIsAvailable,
@@ -250,7 +263,7 @@ struct CoordinatorModeView: View {
                             forceList: forceList,
                             metrics: metrics,
                             showRailToggle: false,
-                            showInspectorToggle: inspectorIsAvailable && selectedRow != nil && !isInspectorVisible
+                            showInspectorToggle: inspectorIsAvailable && inspectorTarget != nil && !isInspectorVisible
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
@@ -258,6 +271,7 @@ struct CoordinatorModeView: View {
                             snapshot: snapshot,
                             sections: sections,
                             selectedRow: selectedRow,
+                            inspectorTarget: inspectorTarget,
                             useList: useList,
                             forceList: forceList,
                             railIsAvailable: railIsAvailable,
@@ -275,6 +289,7 @@ struct CoordinatorModeView: View {
         snapshot: CoordinatorModeSnapshot,
         sections: [CoordinatorModeStatusSection],
         selectedRow: CoordinatorModeRow?,
+        inspectorTarget: InspectorTarget?,
         useList: Bool,
         forceList: Bool,
         railIsAvailable: Bool,
@@ -290,16 +305,16 @@ struct CoordinatorModeView: View {
                 showRailToggle: false,
                 showInspectorToggle: false
             )
-            .frame(maxHeight: selectedRow == nil || !isInspectorVisible ? .infinity : metrics.rightBoardHeight)
+            .frame(maxHeight: inspectorTarget == nil || !isInspectorVisible ? .infinity : metrics.rightBoardHeight)
 
-            if let selectedRow, isInspectorVisible {
+            if let inspectorTarget, isInspectorVisible {
                 Divider()
                     .opacity(0.28)
-                inspector(row: selectedRow, metrics: metrics)
+                inspector(target: inspectorTarget, metrics: metrics)
                     .frame(maxHeight: .infinity)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let selectedRow {
-                collapsedInspectorHandle(row: selectedRow, metrics: metrics)
+            } else if let inspectorTarget {
+                collapsedInspectorHandle(target: inspectorTarget, metrics: metrics)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -319,6 +334,7 @@ struct CoordinatorModeView: View {
         VStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 boardControls(
+                    snapshot: snapshot,
                     mcpAwareness: snapshot.mcpAwareness,
                     forceList: forceList,
                     metrics: metrics,
@@ -332,7 +348,9 @@ struct CoordinatorModeView: View {
             .background(.regularMaterial)
 
             Group {
-                if snapshot.isEmpty {
+                if presentationMode == .plan {
+                    missionPlanView(plan: snapshot.coordinatorRail.missionPlan, metrics: metrics)
+                } else if snapshot.isEmpty {
                     emptyState(snapshot: snapshot, metrics: metrics)
                 } else if useList {
                     listView(sections: sections, metrics: metrics)
@@ -346,13 +364,14 @@ struct CoordinatorModeView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if snapshot.boardScope == .allAgents {
+            if snapshot.boardScope == .allAgents, presentationMode == .board {
                 boardFilterBar(metrics: metrics)
             }
         }
     }
 
     private func boardControls(
+        snapshot: CoordinatorModeSnapshot,
         mcpAwareness: CoordinatorModeMCPAwareness,
         forceList: Bool,
         metrics: CoordinatorVisualMetrics,
@@ -367,10 +386,14 @@ struct CoordinatorModeView: View {
             }
 
             presentationPicker(metrics: metrics)
-            sortPicker(metrics: metrics)
+            if presentationMode == .plan {
+                planMetadataChips(plan: snapshot.coordinatorRail.missionPlan, metrics: metrics)
+            } else {
+                sortPicker(metrics: metrics)
 
-            if forceList {
-                forceListLabel(metrics: metrics)
+                if forceList {
+                    forceListLabel(metrics: metrics)
+                }
             }
 
             Spacer(minLength: 0)
@@ -611,6 +634,17 @@ struct CoordinatorModeView: View {
         Label("Board falls back to List at narrow widths", systemImage: "rectangle.split.2x1")
             .font(metrics.body)
             .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private func planMetadataChips(plan: CoordinatorMissionPlan?, metrics: CoordinatorVisualMetrics) -> some View {
+        if let plan {
+            statusChip("r\(plan.revision)", color: Color.accentColor, metrics: metrics)
+            statusChip(plan.status.displayName, color: plan.status.tint, metrics: metrics)
+            statusChip(plan.approvalState.displayName, color: plan.approvalState.tint, metrics: metrics)
+        } else {
+            statusChip("No plan", color: .secondary, metrics: metrics)
+        }
     }
 
     private func filterSearchBox(metrics: CoordinatorVisualMetrics) -> some View {
@@ -1136,6 +1170,257 @@ struct CoordinatorModeView: View {
         }
     }
 
+    private func missionPlanView(plan: CoordinatorMissionPlan?, metrics: CoordinatorVisualMetrics) -> some View {
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
+                    if let plan {
+                        missionPlanSummary(plan, metrics: metrics)
+
+                        if plan.workstreams.isEmpty, plan.nodes.isEmpty {
+                            missionPlanEmptyState(
+                                title: "No workstreams yet",
+                                subtitle: "The Coordinator can record lanes with coordinator_chat op=mission_plan.",
+                                metrics: metrics
+                            )
+                        } else if plan.nodes.isEmpty {
+                            ForEach(plan.workstreams) { workstream in
+                                missionPlanWorkstreamOutline(workstream, metrics: metrics)
+                            }
+                        } else {
+                            missionPlanNodeOutline(plan, metrics: metrics)
+                        }
+                    } else {
+                        missionPlanEmptyState(
+                            title: "No Mission Plan yet",
+                            subtitle: "When the Coordinator records a plan, workstreams and DAG-lite nodes appear here.",
+                            metrics: metrics
+                        )
+                        .frame(maxWidth: .infinity, minHeight: proxy.size.height - metrics.outerPadding * 2, alignment: .center)
+                    }
+                }
+                .padding(metrics.outerPadding)
+                .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
+            }
+        }
+    }
+
+    private func missionPlanSummary(_ plan: CoordinatorMissionPlan, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            HStack(spacing: metrics.smallSpacing) {
+                Label("Mission Plan", systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(metrics.sectionTitle)
+                    .foregroundStyle(.primary)
+                Spacer(minLength: metrics.controlSpacing)
+                statusChip("r\(plan.revision)", color: Color.accentColor, metrics: metrics)
+                statusChip(plan.status.displayName, color: plan.status.tint, metrics: metrics)
+            }
+
+            if let objective = plan.objective {
+                Text(objective)
+                    .font(metrics.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(Color.accentColor.opacity(0.045))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.12), lineWidth: 0.75)
+        )
+    }
+
+    private func missionPlanNodeOutline(_ plan: CoordinatorMissionPlan, metrics: CoordinatorVisualMetrics) -> some View {
+        let nodesByWorkstream = Dictionary(grouping: plan.nodes, by: \.workstreamID)
+        let knownWorkstreamIDs = Set(plan.workstreams.map(\.id))
+        let orphanNodes = plan.nodes.filter { !knownWorkstreamIDs.contains($0.workstreamID) }
+
+        return VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
+            ForEach(plan.workstreams) { workstream in
+                missionPlanWorkstreamSection(
+                    workstream: workstream,
+                    nodes: nodesByWorkstream[workstream.id] ?? [],
+                    plan: plan,
+                    metrics: metrics
+                )
+            }
+
+            if !orphanNodes.isEmpty {
+                missionPlanWorkstreamSection(
+                    workstream: nil,
+                    nodes: orphanNodes,
+                    plan: plan,
+                    metrics: metrics
+                )
+            }
+        }
+    }
+
+    private func missionPlanWorkstreamOutline(
+        _ workstream: CoordinatorMissionWorkstreamSummary,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            missionPlanWorkstreamHeader(workstream: workstream, metrics: metrics)
+            Text("No nodes recorded yet.")
+                .font(metrics.body)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius)
+    }
+
+    private func missionPlanWorkstreamSection(
+        workstream: CoordinatorMissionWorkstreamSummary?,
+        nodes: [CoordinatorMissionPlanNode],
+        plan: CoordinatorMissionPlan,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            if let workstream {
+                missionPlanWorkstreamHeader(workstream: workstream, metrics: metrics)
+            } else {
+                Label("Unassigned nodes", systemImage: "questionmark.square.dashed")
+                    .font(metrics.bodySemibold)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let workstream, !workstream.purpose.isEmpty {
+                Text(workstream.purpose)
+                    .font(metrics.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if nodes.isEmpty {
+                Text("No nodes recorded yet.")
+                    .font(metrics.body)
+                    .foregroundStyle(.tertiary)
+                    .padding(.vertical, metrics.tightSpacing)
+            } else {
+                ForEach(nodes) { node in
+                    missionPlanNodeRow(node, workstream: workstream, plan: plan, metrics: metrics)
+                }
+            }
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius)
+    }
+
+    private func missionPlanWorkstreamHeader(
+        workstream: CoordinatorMissionWorkstreamSummary,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+            Text(workstream.title)
+                .font(metrics.bodySemibold)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .layoutPriority(1)
+            if let role = workstream.role {
+                Text(role)
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: metrics.controlSpacing)
+            statusChip(workstream.defaultPolicy.displayName, color: Color.accentColor, metrics: metrics)
+            statusChip(workstream.worktreeStrategy.mode.displayName, color: .secondary, metrics: metrics)
+        }
+    }
+
+    private func missionPlanNodeRow(
+        _ node: CoordinatorMissionPlanNode,
+        workstream _: CoordinatorMissionWorkstreamSummary?,
+        plan _: CoordinatorMissionPlan,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                Image(systemName: node.status.systemImage)
+                    .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                    .foregroundStyle(node.status.tint)
+                    .frame(width: metrics.smallIconSize)
+                Text(node.title)
+                    .font(metrics.bodySemibold)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                Spacer(minLength: metrics.controlSpacing)
+                statusChip(node.status.displayName, color: node.status.tint, metrics: metrics)
+            }
+
+            HStack(spacing: metrics.smallSpacing) {
+                statusChip(node.executionPolicy.displayName, color: Color.accentColor, metrics: metrics)
+                if let role = node.role {
+                    statusChip(role, color: .secondary, metrics: metrics)
+                }
+                if !node.dependsOn.isEmpty {
+                    statusChip("\(node.dependsOn.count) dependencies", color: .secondary, metrics: metrics)
+                }
+                if node.boundSessionID != nil {
+                    statusChip("Bound session", color: .green, metrics: metrics)
+                }
+                if node.boundInteractionID != nil {
+                    statusChip("Interaction", color: .orange, metrics: metrics)
+                }
+            }
+
+            if let detail = node.detail {
+                Text(detail)
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(metrics.listRowHorizontalPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .coordinatorCardBackground(
+            cornerRadius: metrics.cardCornerRadius,
+            isSelected: node.id == selectedPlanNodeID,
+            isHovered: node.id == hoveredPlanNodeID,
+            fillOpacity: CoordinatorStyle.listRowFillOpacity,
+            strokeOpacity: 0.08
+        )
+        .selectedCoordinatorObjectIndicator(isSelected: node.id == selectedPlanNodeID, cornerRadius: metrics.cardCornerRadius)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedPlanNodeID = node.id
+            isInspectorVisible = true
+        }
+        .onHover { hovering in
+            hoveredPlanNodeID = hovering ? node.id : (hoveredPlanNodeID == node.id ? nil : hoveredPlanNodeID)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Plan node \(node.title)")
+    }
+
+    private func missionPlanEmptyState(title: String, subtitle: String, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(spacing: metrics.controlSpacing) {
+            Image(systemName: "point.3.connected.trianglepath.dotted")
+                .font(.system(size: metrics.emptyStateIconSize, weight: .regular))
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(metrics.headerTitle)
+                .foregroundStyle(.primary)
+            Text(subtitle)
+                .font(metrics.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(metrics.outerPadding)
+    }
+
     private func boardColumnWidth(
         for sections: [CoordinatorModeStatusSection],
         availableWidth: CGFloat,
@@ -1432,6 +1717,22 @@ struct CoordinatorModeView: View {
         }
     }
 
+    @ViewBuilder
+    private func inspector(target: InspectorTarget, metrics: CoordinatorVisualMetrics) -> some View {
+        switch target {
+        case let .row(row):
+            inspector(row: row, metrics: metrics)
+        case let .planNode(node, workstream, plan, boundRow):
+            planNodeInspector(
+                node: node,
+                workstream: workstream,
+                plan: plan,
+                boundRow: boundRow,
+                metrics: metrics
+            )
+        }
+    }
+
     private func inspector(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(spacing: 0) {
             inspectorSheetHandle(isExpanded: true, metrics: metrics) {
@@ -1540,6 +1841,135 @@ struct CoordinatorModeView: View {
         }
     }
 
+    private func planNodeInspector(
+        node: CoordinatorMissionPlanNode,
+        workstream: CoordinatorMissionWorkstreamSummary?,
+        plan: CoordinatorMissionPlan,
+        boundRow: CoordinatorModeRow?,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let nodeEvents = plan.events
+            .filter { $0.nodeID == node.id }
+            .sorted { lhs, rhs in
+                if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
+                return lhs.timestamp > rhs.timestamp
+            }
+
+        return VStack(spacing: 0) {
+            inspectorSheetHandle(isExpanded: true, metrics: metrics) {
+                isInspectorVisible = false
+            }
+            .padding(.top, metrics.tightSpacing)
+
+            planNodeInspectorHeader(node: node, boundRow: boundRow, metrics: metrics)
+                .padding(.horizontal, metrics.outerPadding)
+                .padding(.top, metrics.controlSpacing)
+                .padding(.bottom, metrics.controlSpacing)
+
+            Divider()
+                .opacity(0.28)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
+                    inspectorGroup("Plan Node", metrics: metrics) {
+                        keyValue("Status", node.status.displayName, metrics: metrics)
+                        keyValue("Policy", node.executionPolicy.displayName, metrics: metrics)
+                        if let role = node.role {
+                            keyValue("Role", role, metrics: metrics)
+                        }
+                        if let detail = node.detail {
+                            Text(detail)
+                                .font(metrics.body)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
+                    if let workstream {
+                        inspectorGroup("Workstream", metrics: metrics) {
+                            keyValue("Title", workstream.title, metrics: metrics)
+                            if !workstream.purpose.isEmpty {
+                                keyValue("Purpose", workstream.purpose, metrics: metrics)
+                            }
+                            if let role = workstream.role {
+                                keyValue("Role", role, metrics: metrics)
+                            }
+                            keyValue("Default policy", workstream.defaultPolicy.displayName, metrics: metrics)
+                            keyValue("Worktree strategy", workstream.worktreeStrategy.mode.displayName, metrics: metrics)
+                            if let reason = workstream.worktreeStrategy.reason {
+                                keyValue("Strategy reason", reason, metrics: metrics)
+                            }
+                            if let worktreeID = workstream.worktreeID {
+                                keyValue("Declared worktree", worktreeID, metrics: metrics)
+                            }
+                        }
+                    }
+
+                    inspectorGroup("Links", metrics: metrics) {
+                        if node.dependsOn.isEmpty {
+                            keyValue("Dependencies", "None", metrics: metrics)
+                        } else {
+                            ForEach(node.dependsOn, id: \.self) { dependencyID in
+                                keyValue("Depends on", dependencyTitle(dependencyID, in: plan), metrics: metrics)
+                            }
+                        }
+                        if let sessionID = node.boundSessionID {
+                            keyValue("Bound session", shortID(sessionID), metrics: metrics)
+                        }
+                        if let interactionID = node.boundInteractionID {
+                            keyValue("Interaction", shortID(interactionID), metrics: metrics)
+                        }
+                    }
+
+                    if let boundRow {
+                        inspectorGroup("Bound Session", metrics: metrics) {
+                            keyValue("Title", boundRow.title, metrics: metrics)
+                            keyValue("Run state", boundRow.runState.displayName, metrics: metrics)
+                            if let workflow = boundRow.workflow {
+                                keyValue("Workflow", workflow.displayName, metrics: metrics)
+                            }
+                            if let worktree = boundRow.workstream {
+                                keyValue("Worktree", metrics: metrics) {
+                                    worktreeLabel(worktree, metrics: metrics)
+                                }
+                                if let branch = worktree.branch {
+                                    keyValue("Branch", branch, metrics: metrics)
+                                }
+                            }
+                        }
+                    }
+
+                    if !nodeEvents.isEmpty {
+                        inspectorGroup("Recent Events", metrics: metrics) {
+                            ForEach(nodeEvents.prefix(5)) { event in
+                                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                                    HStack(spacing: metrics.smallSpacing) {
+                                        Text(event.kind.displayName)
+                                            .font(metrics.bodyMedium)
+                                        Spacer(minLength: metrics.controlSpacing)
+                                        Text(event.timestamp.formatted(date: .abbreviated, time: .shortened))
+                                            .font(metrics.micro)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    if let summary = event.summary {
+                                        Text(summary)
+                                            .font(metrics.body)
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                                .padding(.vertical, metrics.tightSpacing)
+                            }
+                        }
+                    }
+                }
+                .padding(metrics.outerPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
     private func inspectorHeader(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(alignment: .leading, spacing: metrics.controlSpacing) {
             HStack(spacing: metrics.controlSpacing) {
@@ -1570,7 +2000,40 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func collapsedInspectorHandle(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
+    private func planNodeInspectorHeader(
+        node: CoordinatorMissionPlanNode,
+        boundRow: CoordinatorModeRow?,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.controlSpacing) {
+            HStack(spacing: metrics.controlSpacing) {
+                Text("Plan Inspector")
+                    .font(metrics.bodyMedium)
+                    .coordinatorSidebarHeaderPill(cornerRadius: metrics.headerPillCornerRadius)
+
+                Spacer(minLength: metrics.controlSpacing)
+
+                if let boundRow {
+                    inspectorOpenAgentButton(route: boundRow.openAgentChatRoute, metrics: metrics)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                Text(node.title)
+                    .font(metrics.inspectorTitle)
+                    .lineLimit(3)
+
+                HStack(spacing: metrics.smallSpacing) {
+                    Label(node.status.displayName, systemImage: node.status.systemImage)
+                        .font(metrics.micro)
+                        .foregroundStyle(node.status.tint)
+                    statusChip(node.executionPolicy.displayName, color: Color.accentColor, metrics: metrics)
+                }
+            }
+        }
+    }
+
+    private func collapsedInspectorHandle(target _: InspectorTarget, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(spacing: 0) {
             Divider()
                 .opacity(0.28)
@@ -1664,7 +2127,15 @@ struct CoordinatorModeView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
-                    if viewModel.railTranscriptEntries.isEmpty {
+                    if let missionPlan = rail.missionPlan {
+                        coordinatorMissionPlanCard(
+                            missionPlan,
+                            missionTemplate: rail.missionTemplate,
+                            metrics: metrics
+                        )
+                    }
+
+                    if viewModel.railTranscriptEntries.isEmpty, rail.missionPlan == nil {
                         coordinatorEmptyConversation(rail, metrics: metrics)
                     } else {
                         ForEach(viewModel.railTranscriptEntries) { entry in
@@ -1727,6 +2198,105 @@ struct CoordinatorModeView: View {
             .padding(.horizontal, metrics.cardPadding)
             .padding(.vertical, metrics.smallSpacing)
         }
+    }
+
+    private func coordinatorMissionPlanCard(
+        _ plan: CoordinatorMissionPlan,
+        missionTemplate: CoordinatorMissionTemplateSummary?,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            HStack(spacing: metrics.smallSpacing) {
+                Label("Mission Plan", systemImage: "list.clipboard")
+                    .font(metrics.microMedium)
+                    .foregroundStyle(Color.accentColor)
+                Spacer(minLength: metrics.smallSpacing)
+                if let missionTemplate {
+                    coordinatorMissionTemplateBadge(missionTemplate, metrics: metrics)
+                }
+                Text("r\(plan.revision)")
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let objective = plan.objective {
+                Text(objective)
+                    .font(metrics.bodySemibold)
+                    .foregroundStyle(.primary.opacity(0.92))
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !plan.workstreams.isEmpty {
+                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                    ForEach(plan.workstreams.prefix(4)) { workstream in
+                        HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                            Text(workstream.title)
+                                .font(metrics.bodyMedium)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .layoutPriority(1)
+                            if let role = workstream.role {
+                                Text(role)
+                                    .font(metrics.microMedium)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Text(workstream.defaultPolicy.displayName)
+                                .font(metrics.microMedium)
+                                .foregroundStyle(Color.accentColor)
+                                .padding(.horizontal, metrics.miniPillHorizontalPadding)
+                                .padding(.vertical, metrics.miniPillVerticalPadding)
+                                .background(Capsule().fill(Color.accentColor.opacity(0.10)))
+                            Text(workstream.worktreeStrategy.mode.displayName)
+                                .font(metrics.microMedium)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        if !workstream.purpose.isEmpty {
+                            Text(workstream.purpose)
+                                .font(metrics.micro)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    if plan.workstreams.count > 4 {
+                        Text("+ \(plan.workstreams.count - 4) more workstreams")
+                            .font(metrics.micro)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(Color.accentColor.opacity(0.055))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.16), lineWidth: 0.8)
+        )
+    }
+
+    private func coordinatorMissionTemplateBadge(
+        _ template: CoordinatorMissionTemplateSummary,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let accentColor = template.accentColorHex.flatMap { Color(hex: $0) } ?? Color.accentColor
+        return Label(template.displayName, systemImage: template.iconName)
+            .font(metrics.microMedium)
+            .foregroundStyle(accentColor)
+            .lineLimit(1)
+            .padding(.horizontal, metrics.miniPillHorizontalPadding)
+            .padding(.vertical, metrics.miniPillVerticalPadding)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(accentColor.opacity(0.12))
+            )
     }
 
     private func coordinatorOwnedCheckpointState(
@@ -3436,6 +4006,25 @@ struct CoordinatorModeView: View {
             if let parentCoordinator = row.parentCoordinator {
                 keyValue("Coordinator", parentCoordinator.title, metrics: metrics)
             }
+            if let declared = summary.declaredWorkstream {
+                if !declared.purpose.isEmpty {
+                    keyValue("Purpose", declared.purpose, metrics: metrics)
+                }
+                if let role = declared.role {
+                    keyValue("Role", role, metrics: metrics)
+                }
+                keyValue("Policy", declared.defaultPolicy.displayName, metrics: metrics)
+                keyValue("Worktree strategy", declared.worktreeStrategy.mode.displayName, metrics: metrics)
+                if let reason = declared.worktreeStrategy.reason {
+                    keyValue("Strategy reason", reason, metrics: metrics)
+                }
+                if !declared.relatedSessionIDs.isEmpty {
+                    keyValue("Linked sessions", "\(declared.linkedSessionIDs.count)", metrics: metrics)
+                }
+                if let worktreeID = declared.worktreeID {
+                    keyValue("Declared worktree", worktreeID, metrics: metrics)
+                }
+            }
             if let workflow = summary.workflow {
                 keyValue("Workflow", workflow.displayName, metrics: metrics)
             }
@@ -3584,12 +4173,63 @@ struct CoordinatorModeView: View {
         return sections.flatMap(\.rows).first { $0.id == selectedRowID }
     }
 
+    private func inspectorTarget(
+        snapshot: CoordinatorModeSnapshot,
+        sections: [CoordinatorModeStatusSection],
+        selectedRow: CoordinatorModeRow?
+    ) -> InspectorTarget? {
+        if presentationMode == .plan,
+           let selectedPlanNode = selectedPlanNode(in: snapshot.coordinatorRail.missionPlan, sections: sections)
+        {
+            return .planNode(
+                selectedPlanNode.node,
+                selectedPlanNode.workstream,
+                selectedPlanNode.plan,
+                selectedPlanNode.boundRow
+            )
+        }
+        return selectedRow.map(InspectorTarget.row)
+    }
+
+    private func selectedPlanNode(
+        in plan: CoordinatorMissionPlan?,
+        sections: [CoordinatorModeStatusSection]
+    ) -> (node: CoordinatorMissionPlanNode, workstream: CoordinatorMissionWorkstreamSummary?, plan: CoordinatorMissionPlan, boundRow: CoordinatorModeRow?)? {
+        guard let plan, let selectedPlanNodeID else { return nil }
+        guard let node = plan.nodes.first(where: { $0.id == selectedPlanNodeID }) else { return nil }
+        let workstream = plan.workstreams.first { $0.id == node.workstreamID }
+        let rows = sections.flatMap(\.rows)
+        let boundRow = node.boundSessionID.flatMap { sessionID in
+            rows.first { $0.sessionID == sessionID }
+        }
+        return (node, workstream, plan, boundRow)
+    }
+
     private func reconcileSelection() {
         let allRows = filteredSections(from: viewModel.snapshot).flatMap(\.rows)
         if let selectedRowID, allRows.contains(where: { $0.id == selectedRowID }) {
             return
         }
         selectedRowID = allRows.first?.id
+    }
+
+    private func reconcilePlanSelection() {
+        guard let selectedPlanNodeID else { return }
+        let nodeIDs = Set(viewModel.snapshot.coordinatorRail.missionPlan?.nodes.map(\.id) ?? [])
+        if !nodeIDs.contains(selectedPlanNodeID) {
+            self.selectedPlanNodeID = nil
+        }
+    }
+
+    private func dependencyTitle(_ id: UUID, in plan: CoordinatorMissionPlan) -> String {
+        if let node = plan.nodes.first(where: { $0.id == id }) {
+            return node.title
+        }
+        return shortID(id)
+    }
+
+    private func shortID(_ id: UUID) -> String {
+        String(id.uuidString.prefix(8))
     }
 }
 
@@ -4881,6 +5521,100 @@ private extension CoordinatorModeCoordinatorAction.Phase {
     }
 }
 
+private extension CoordinatorMissionPlanStatus {
+    var displayName: String {
+        switch self {
+        case .draft: "Draft"
+        case .approved: "Approved"
+        case .running: "Running"
+        case .blocked: "Blocked"
+        case .completed: "Completed"
+        case .stopped: "Stopped"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .draft: .secondary
+        case .approved: .green
+        case .running: .blue
+        case .blocked: .red
+        case .completed: .green
+        case .stopped: .orange
+        }
+    }
+}
+
+private extension CoordinatorMissionPlanApprovalState {
+    var displayName: String {
+        switch self {
+        case .notRequired: "No approval"
+        case .awaitingApproval: "Awaiting approval"
+        case .approved: "Approved"
+        case .revisionRequested: "Revision requested"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .notRequired: .secondary
+        case .awaitingApproval: .orange
+        case .approved: .green
+        case .revisionRequested: .purple
+        }
+    }
+}
+
+private extension CoordinatorMissionPlanNodeStatus {
+    var displayName: String {
+        switch self {
+        case .pending: "Pending"
+        case .running: "Running"
+        case .completed: "Completed"
+        case .blocked: "Blocked"
+        case .skipped: "Skipped"
+        case .cancelled: "Cancelled"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .pending: "circle"
+        case .running: "circle.dotted"
+        case .completed: "checkmark.circle.fill"
+        case .blocked: "exclamationmark.triangle.fill"
+        case .skipped: "forward.end.circle"
+        case .cancelled: "xmark.circle.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .pending: .secondary
+        case .running: .blue
+        case .completed: .green
+        case .blocked: .red
+        case .skipped: .orange
+        case .cancelled: .red
+        }
+    }
+}
+
+private extension CoordinatorMissionPlanEventKind {
+    var displayName: String {
+        switch self {
+        case .created: "Created"
+        case .revised: "Revised"
+        case .approved: "Approved"
+        case .nodeStarted: "Node started"
+        case .nodeCompleted: "Node completed"
+        case .nodeBlocked: "Node blocked"
+        case .sessionBound: "Session bound"
+        case .gateCleared: "Gate cleared"
+        }
+    }
+}
+
 private extension CoordinatorModeStatusGroup {
     var accentColor: Color {
         switch self {
@@ -5062,6 +5796,8 @@ private extension AgentSessionRunState {
                     isPersistedOnly: false,
                     isPinned: false,
                     childCounts: .empty,
+                    missionTemplate: nil,
+                    missionPlan: nil,
                     openAgentChatRoute: nil,
                     statusReport: CoordinatorModeSessionStatusReport(
                         status: .running,

@@ -84,6 +84,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias ContinuationGateHandler = @MainActor (_ gate: CoordinatorContinuationGate, _ snapshotBeforeGateCleared: CoordinatorModeSnapshot) async -> Void
     typealias CoordinatorActivationHandler = @MainActor (_ sessionID: UUID) async -> Void
     typealias CoordinatorPinHandler = @MainActor (_ option: CoordinatorModeCoordinatorOption, _ isPinned: Bool) -> Void
+    typealias MissionPlanUpdater = @MainActor (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
     @Published private(set) var railTranscriptEntries: [CoordinatorModeRailTranscriptEntry] = []
@@ -116,6 +117,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let continuationGateHandler: ContinuationGateHandler
     private let coordinatorActivationHandler: CoordinatorActivationHandler
     private let coordinatorPinHandler: CoordinatorPinHandler
+    private let missionPlanUpdater: MissionPlanUpdater
     private let projector: CoordinatorModeSnapshotProjector
     private let userDefaults: UserDefaults
     private var coordinatorSelectionByWorkspaceID: [UUID: CoordinatorSelectionState] = [:]
@@ -140,6 +142,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         continuationGateHandler: @escaping ContinuationGateHandler = { _, _ in },
         coordinatorActivationHandler: @escaping CoordinatorActivationHandler = { _ in },
         coordinatorPinHandler: @escaping CoordinatorPinHandler = { _, _ in },
+        missionPlanUpdater: @escaping MissionPlanUpdater = { _, _ in },
         projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector(),
         userDefaults: UserDefaults = .standard
     ) {
@@ -155,6 +158,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.continuationGateHandler = continuationGateHandler
         self.coordinatorActivationHandler = coordinatorActivationHandler
         self.coordinatorPinHandler = coordinatorPinHandler
+        self.missionPlanUpdater = missionPlanUpdater
         self.projector = projector
         self.userDefaults = userDefaults
         usesAutoMode = CoordinatorModeAutomationPreference.isEnabled(defaults: userDefaults)
@@ -180,6 +184,17 @@ final class CoordinatorModeViewModel: ObservableObject {
         let isNewDraft = selectionState == .newDraft
         isFreshCoordinatorRunPending = isNewDraft
         publishIfChanged(isNewDraft ? pendingFreshCoordinatorSnapshot(from: projected) : projected)
+    }
+
+    func updateMissionPlan(
+        coordinatorSessionID: UUID,
+        update: CoordinatorMissionPlanUpdate
+    ) throws {
+        guard snapshot.coordinatorRail.availableCoordinators.contains(where: { $0.sessionID == coordinatorSessionID }) else {
+            throw MCPError.invalidParams("Coordinator session \(coordinatorSessionID.uuidString) is not available in this window.")
+        }
+        try missionPlanUpdater(coordinatorSessionID, update)
+        refresh()
     }
 
     @discardableResult
@@ -363,6 +378,8 @@ final class CoordinatorModeViewModel: ObservableObject {
                 isPinned: option.isPinned,
                 isPersistedOnly: option.isPersistedOnly,
                 childCounts: option.childCounts,
+                missionTemplate: option.missionTemplate,
+                missionPlan: option.missionPlan,
                 runState: option.runState,
                 updatedAt: option.updatedAt,
                 lastActivityAt: option.lastActivityAt
@@ -379,6 +396,8 @@ final class CoordinatorModeViewModel: ObservableObject {
             isPersistedOnly: false,
             isPinned: false,
             childCounts: .empty,
+            missionTemplate: nil,
+            missionPlan: nil,
             openAgentChatRoute: nil,
             statusReport: nil,
             isComposerEnabled: false,
@@ -812,6 +831,14 @@ extension AgentModeViewModel {
             await self?.activateCoordinatorRuntimeSession(sessionID)
         } coordinatorPinHandler: { [weak self] option, isPinned in
             self?.setCoordinatorRuntimePinned(isPinned, option: option)
+        } missionPlanUpdater: { [weak self] coordinatorSessionID, update in
+            guard let self else {
+                throw MCPError.invalidParams("Coordinator Mission Plan state is unavailable.")
+            }
+            try updateCoordinatorMissionPlan(
+                coordinatorSessionID: coordinatorSessionID,
+                update: update
+            )
         }
     }
 
@@ -1123,6 +1150,24 @@ extension AgentModeViewModel {
         scheduleSave(for: tabID)
     }
 
+    @MainActor
+    private func updateCoordinatorMissionPlan(
+        coordinatorSessionID: UUID,
+        update: CoordinatorMissionPlanUpdate
+    ) throws {
+        guard let match = sessions.first(where: { _, session in
+            session.activeAgentSessionID == coordinatorSessionID && session.isCoordinatorRuntime
+        }) else {
+            throw MCPError.invalidParams("Coordinator session \(coordinatorSessionID.uuidString) is not live in this window.")
+        }
+        let tabID = match.key
+        let session = match.value
+        var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        state.updateMissionPlan(update)
+        session.coordinatorFollowThroughState = state
+        scheduleSave(for: tabID)
+    }
+
     private func isCoordinatorFollowThroughResumeDirective(_ text: String) -> Bool {
         text.contains("<coordinator_follow_through_resume")
     }
@@ -1411,7 +1456,9 @@ extension AgentModeViewModel {
                 workflow: workflow.map(CoordinatorModeWorkflowDisplaySummary.init),
                 isCoordinatorInternal: session.isCoordinatorInternalSession,
                 isCoordinatorRuntime: session.isCoordinatorRuntime,
-                isPinned: tab?.isPinned ?? false
+                isPinned: tab?.isPinned ?? false,
+                coordinatorMissionTemplate: session.coordinatorFollowThroughState?.missionTemplate,
+                coordinatorMissionPlan: session.coordinatorFollowThroughState?.missionPlan
             )
         }
         var mcpSnapshotsBySessionID: [UUID: AgentRunMCPSnapshot] = [:]

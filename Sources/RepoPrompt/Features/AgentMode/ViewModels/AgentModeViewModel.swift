@@ -5709,6 +5709,8 @@ final class AgentModeViewModel: ObservableObject {
                 hasUnknownConversationContent: existingEntry.hasUnknownConversationContent,
                 isMCPOriginated: existingEntry.isMCPOriginated || session.isMCPOriginated,
                 isCoordinatorRuntime: existingEntry.isCoordinatorRuntime || session.isCoordinatorRuntime,
+                coordinatorMissionTemplate: existingEntry.coordinatorMissionTemplate,
+                coordinatorMissionPlan: existingEntry.coordinatorMissionPlan,
                 worktreeBindingSummaries: existingEntry.worktreeBindingSummaries,
                 activeWorktreeMergeSummaries: existingEntry.activeWorktreeMergeSummaries,
                 workflowSummary: existingEntry.workflowSummary
@@ -9096,6 +9098,8 @@ final class AgentModeViewModel: ObservableObject {
         hasUnknownConversationContent: Bool = false,
         isMCPOriginated: Bool = false,
         isCoordinatorRuntime: Bool = false,
+        coordinatorMissionTemplate: CoordinatorMissionTemplateSummary? = nil,
+        coordinatorMissionPlan: CoordinatorMissionPlan? = nil,
         worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary] = [],
         activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary] = [],
         workflowSummary: AgentSessionWorkflowSummary? = nil
@@ -9116,6 +9120,8 @@ final class AgentModeViewModel: ObservableObject {
             hasUnknownConversationContent: hasUnknownConversationContent,
             isMCPOriginated: isMCPOriginated,
             isCoordinatorRuntime: isCoordinatorRuntime,
+            coordinatorMissionTemplate: coordinatorMissionTemplate,
+            coordinatorMissionPlan: coordinatorMissionPlan,
             worktreeBindingSummaries: worktreeBindingSummaries,
             activeWorktreeMergeSummaries: activeWorktreeMergeSummaries,
             workflowSummary: workflowSummary

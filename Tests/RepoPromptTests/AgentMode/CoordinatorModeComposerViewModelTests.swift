@@ -134,6 +134,61 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.railTranscriptEntries.filter { $0.role == .user }.map(\.text), ["start mission", "follow up"])
     }
 
+    func testMissionPlanUpdaterRefreshesSelectedCoordinatorSnapshot() throws {
+        let coordinatorID = uuid(1)
+        let workstream = CoordinatorMissionWorkstreamSummary(
+            title: "Docs implementation",
+            purpose: "Update README wording.",
+            defaultPolicy: .freshWorktree,
+            worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+        )
+        var missionPlan: CoordinatorMissionPlan?
+        var updaterCalls: [(UUID, CoordinatorMissionPlanUpdate)] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            coordinatorRuntime: true,
+                            missionPlan: missionPlan
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            missionPlanUpdater: { sessionID, update in
+                updaterCalls.append((sessionID, update))
+                missionPlan = CoordinatorMissionPlan(
+                    objective: update.objective,
+                    workstreams: update.workstreams ?? []
+                )
+            }
+        )
+        viewModel.selectCoordinator(sessionID: coordinatorID)
+
+        try viewModel.updateMissionPlan(
+            coordinatorSessionID: coordinatorID,
+            update: CoordinatorMissionPlanUpdate(
+                objective: "Ship docs",
+                workstreams: [workstream]
+            )
+        )
+
+        XCTAssertEqual(updaterCalls.first?.0, coordinatorID)
+        XCTAssertEqual(updaterCalls.first?.1.objective, "Ship docs")
+        XCTAssertEqual(updaterCalls.first?.1.workstreams, [workstream])
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.missionPlan?.objective, "Ship docs")
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.missionPlan?.workstreams.first?.title, "Docs implementation")
+    }
+
     func testRejectedDraftSendPreservesTemplateSelection() async {
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in
@@ -1513,7 +1568,9 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         parent: UUID? = nil,
         isMCP: Bool = false,
         workflow: CoordinatorModeWorkflowDisplaySummary? = nil,
-        bindings: [AgentSessionWorktreeBindingSummary] = []
+        coordinatorRuntime: Bool = false,
+        bindings: [AgentSessionWorktreeBindingSummary] = [],
+        missionPlan: CoordinatorMissionPlan? = nil
     ) -> CoordinatorModeSnapshotProjector.LiveSession {
         CoordinatorModeSnapshotProjector.LiveSession(
             sessionID: id,
@@ -1525,7 +1582,9 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             parentSessionID: parent,
             isMCPOriginated: isMCP,
             worktreeBindingSummaries: bindings,
-            workflow: workflow
+            workflow: workflow,
+            isCoordinatorRuntime: coordinatorRuntime,
+            coordinatorMissionPlan: missionPlan
         )
     }
 

@@ -1,7 +1,7 @@
 import Foundation
 
 struct AgentSessionMetadataIndex: Codable, Equatable {
-    static let currentSchemaVersion = 3
+    static let currentSchemaVersion = 4
 
     var schemaVersion: Int
     var generatedAt: Date
@@ -60,6 +60,8 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
     var parentSessionID: UUID?
     var isMCPOriginated: Bool
     var isCoordinatorRuntime: Bool
+    var coordinatorMissionTemplate: CoordinatorMissionTemplateSummary?
+    var coordinatorMissionPlan: CoordinatorMissionPlan?
     var worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary]
     var activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary]
     var workflowSummary: AgentSessionWorkflowSummary?
@@ -91,6 +93,8 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
         parentSessionID: UUID?,
         isMCPOriginated: Bool,
         isCoordinatorRuntime: Bool = false,
+        coordinatorMissionTemplate: CoordinatorMissionTemplateSummary? = nil,
+        coordinatorMissionPlan: CoordinatorMissionPlan? = nil,
         worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary] = [],
         activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary] = [],
         workflowSummary: AgentSessionWorkflowSummary? = nil,
@@ -117,6 +121,8 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
         self.parentSessionID = parentSessionID
         self.isMCPOriginated = isMCPOriginated
         self.isCoordinatorRuntime = isCoordinatorRuntime
+        self.coordinatorMissionTemplate = coordinatorMissionTemplate
+        self.coordinatorMissionPlan = coordinatorMissionPlan
         self.worktreeBindingSummaries = worktreeBindingSummaries
         self.activeWorktreeMergeSummaries = activeWorktreeMergeSummaries
         self.workflowSummary = workflowSummary
@@ -145,6 +151,8 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
         case parentSessionID
         case isMCPOriginated
         case isCoordinatorRuntime
+        case coordinatorMissionTemplate
+        case coordinatorMissionPlan
         case worktreeBindingSummaries
         case activeWorktreeMergeSummaries
         case workflowSummary
@@ -174,6 +182,8 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
         parentSessionID = try container.decodeIfPresent(UUID.self, forKey: .parentSessionID)
         isMCPOriginated = try container.decodeIfPresent(Bool.self, forKey: .isMCPOriginated) ?? false
         isCoordinatorRuntime = try container.decodeIfPresent(Bool.self, forKey: .isCoordinatorRuntime) ?? false
+        coordinatorMissionTemplate = try container.decodeIfPresent(CoordinatorMissionTemplateSummary.self, forKey: .coordinatorMissionTemplate)
+        coordinatorMissionPlan = try container.decodeIfPresent(CoordinatorMissionPlan.self, forKey: .coordinatorMissionPlan)
         worktreeBindingSummaries = try container.decodeIfPresent([AgentSessionWorktreeBindingSummary].self, forKey: .worktreeBindingSummaries) ?? []
         activeWorktreeMergeSummaries = try container.decodeIfPresent([AgentSessionWorktreeMergeSummary].self, forKey: .activeWorktreeMergeSummaries) ?? []
         workflowSummary = try container.decodeIfPresent(AgentSessionWorkflowSummary.self, forKey: .workflowSummary)
@@ -201,6 +211,8 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
             hasUnknownConversationContent: hasUnknownConversationContent,
             isMCPOriginated: isMCPOriginated,
             isCoordinatorRuntime: isCoordinatorRuntime,
+            coordinatorMissionTemplate: coordinatorMissionTemplate,
+            coordinatorMissionPlan: coordinatorMissionPlan,
             worktreeBindingSummaries: worktreeBindingSummaries,
             activeWorktreeMergeSummaries: activeWorktreeMergeSummaries,
             workflowSummary: workflowSummary
@@ -244,6 +256,8 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
             && parentSessionID == other.parentSessionID
             && isMCPOriginated == other.isMCPOriginated
             && isCoordinatorRuntime == other.isCoordinatorRuntime
+            && coordinatorMissionTemplate == other.coordinatorMissionTemplate
+            && coordinatorMissionPlan == other.coordinatorMissionPlan
             && worktreeBindingSummaries == other.worktreeBindingSummaries
             && activeWorktreeMergeSummaries == other.activeWorktreeMergeSummaries
             && workflowSummary == other.workflowSummary
@@ -279,6 +293,8 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
             parentSessionID: session.parentSessionID,
             isMCPOriginated: session.isMCPOriginated,
             isCoordinatorRuntime: session.isCoordinatorRuntime,
+            coordinatorMissionTemplate: session.coordinatorFollowThroughState?.missionTemplate,
+            coordinatorMissionPlan: session.coordinatorFollowThroughState?.missionPlan,
             worktreeBindingSummaries: session.worktreeBindings.worktreeBindingSummaries,
             activeWorktreeMergeSummaries: session.worktreeMergeOperations.activeWorktreeMergeSummaries,
             workflowSummary: workflowSummaryOverride ?? latestWorkflowSummary(in: session),

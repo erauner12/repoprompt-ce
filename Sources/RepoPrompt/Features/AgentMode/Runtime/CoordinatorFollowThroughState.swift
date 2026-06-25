@@ -3,6 +3,7 @@ import Foundation
 struct CoordinatorFollowThroughState: Codable, Equatable {
     var originalObjectiveSummary: String?
     var missionTemplate: CoordinatorMissionTemplateSummary?
+    var missionPlan: CoordinatorMissionPlan?
     var observedChildPhases: [UUID: CoordinatorFollowThroughChildPhase]
     var pendingEvents: [CoordinatorFollowThroughEvent]
     var handledEventIDs: Set<String>
@@ -12,6 +13,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
     init(
         originalObjectiveSummary: String? = nil,
         missionTemplate: CoordinatorMissionTemplateSummary? = nil,
+        missionPlan: CoordinatorMissionPlan? = nil,
         observedChildPhases: [UUID: CoordinatorFollowThroughChildPhase] = [:],
         pendingEvents: [CoordinatorFollowThroughEvent] = [],
         handledEventIDs: Set<String> = [],
@@ -20,6 +22,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
     ) {
         self.originalObjectiveSummary = originalObjectiveSummary
         self.missionTemplate = missionTemplate
+        self.missionPlan = missionPlan
         self.observedChildPhases = observedChildPhases
         self.pendingEvents = pendingEvents
         self.handledEventIDs = handledEventIDs
@@ -30,11 +33,62 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
     mutating func rememberObjective(_ text: String, missionTemplate: CoordinatorMissionTemplateSummary? = nil) {
         originalObjectiveSummary = Self.summary(from: text)
         self.missionTemplate = missionTemplate
+        missionPlan = nil
         observedChildPhases.removeAll()
         pendingEvents.removeAll()
         handledEventIDs.removeAll()
         lastResume = nil
         childInteractionResponses.removeAll()
+    }
+
+    mutating func updateMissionPlan(
+        objective: String?,
+        workstreams incomingWorkstreams: [CoordinatorMissionWorkstreamSummary],
+        updatedAt: Date = Date()
+    ) {
+        updateMissionPlan(
+            CoordinatorMissionPlanUpdate(
+                objective: objective,
+                workstreams: incomingWorkstreams,
+                updatedAt: updatedAt
+            )
+        )
+    }
+
+    mutating func updateMissionPlan(_ update: CoordinatorMissionPlanUpdate) {
+        let existingByID = Dictionary(uniqueKeysWithValues: (missionPlan?.workstreams ?? []).map { ($0.id, $0) })
+        let existingByTitle = Dictionary(
+            (missionPlan?.workstreams ?? []).map { ($0.title.normalizedMissionPlanTitleKey, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let workstreams = (update.workstreams ?? missionPlan?.workstreams ?? []).map { incoming -> CoordinatorMissionWorkstreamSummary in
+            if let existing = existingByID[incoming.id] {
+                return incoming.reusingStableID(existing.id)
+            }
+            if let existing = existingByTitle[incoming.title.normalizedMissionPlanTitleKey] {
+                return incoming.reusingStableID(existing.id)
+            }
+            return incoming
+        }
+        missionPlan = CoordinatorMissionPlan(
+            id: missionPlan?.id ?? UUID(),
+            revision: (missionPlan?.revision ?? 0) + 1,
+            objective: update.objective?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                ?? missionPlan?.objective,
+            status: update.status ?? missionPlan?.status ?? .draft,
+            approvalState: update.approvalState ?? missionPlan?.approvalState ?? .notRequired,
+            template: missionTemplate,
+            workstreams: workstreams,
+            nodes: update.nodes ?? missionPlan?.nodes ?? [],
+            events: (missionPlan?.events ?? []) + [
+                CoordinatorMissionPlanEvent(
+                    kind: missionPlan == nil ? .created : .revised,
+                    timestamp: update.updatedAt,
+                    summary: "Mission plan updated"
+                )
+            ] + update.events,
+            updatedAt: update.updatedAt
+        )
     }
 
     mutating func updateObservedPhases(from rows: [CoordinatorModeRow]) {
@@ -116,6 +170,286 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         guard collapsed.count > maxLength else { return collapsed }
         return "\(collapsed.prefix(maxLength - 3))..."
+    }
+}
+
+struct CoordinatorMissionPlanUpdate: Equatable {
+    var objective: String?
+    var status: CoordinatorMissionPlanStatus?
+    var approvalState: CoordinatorMissionPlanApprovalState?
+    var workstreams: [CoordinatorMissionWorkstreamSummary]?
+    var nodes: [CoordinatorMissionPlanNode]?
+    var events: [CoordinatorMissionPlanEvent]
+    var updatedAt: Date
+
+    init(
+        objective: String? = nil,
+        status: CoordinatorMissionPlanStatus? = nil,
+        approvalState: CoordinatorMissionPlanApprovalState? = nil,
+        workstreams: [CoordinatorMissionWorkstreamSummary]? = nil,
+        nodes: [CoordinatorMissionPlanNode]? = nil,
+        events: [CoordinatorMissionPlanEvent] = [],
+        updatedAt: Date = Date()
+    ) {
+        self.objective = objective
+        self.status = status
+        self.approvalState = approvalState
+        self.workstreams = workstreams
+        self.nodes = nodes
+        self.events = events
+        self.updatedAt = updatedAt
+    }
+}
+
+struct CoordinatorMissionPlan: Codable, Equatable {
+    var id: UUID
+    var revision: Int
+    var objective: String?
+    var status: CoordinatorMissionPlanStatus
+    var approvalState: CoordinatorMissionPlanApprovalState
+    var template: CoordinatorMissionTemplateSummary?
+    var workstreams: [CoordinatorMissionWorkstreamSummary]
+    var nodes: [CoordinatorMissionPlanNode]
+    var events: [CoordinatorMissionPlanEvent]
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        revision: Int = 1,
+        objective: String? = nil,
+        status: CoordinatorMissionPlanStatus = .draft,
+        approvalState: CoordinatorMissionPlanApprovalState = .notRequired,
+        template: CoordinatorMissionTemplateSummary? = nil,
+        workstreams: [CoordinatorMissionWorkstreamSummary] = [],
+        nodes: [CoordinatorMissionPlanNode] = [],
+        events: [CoordinatorMissionPlanEvent] = [],
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.revision = max(1, revision)
+        self.objective = objective?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.status = status
+        self.approvalState = approvalState
+        self.template = template
+        self.workstreams = workstreams
+        self.nodes = nodes
+        self.events = events
+        self.updatedAt = updatedAt
+    }
+}
+
+struct CoordinatorMissionWorkstreamSummary: Codable, Equatable, Identifiable {
+    let id: UUID
+    var title: String
+    var purpose: String
+    var role: String?
+    var defaultPolicy: CoordinatorMissionExecutionPolicy
+    var worktreeStrategy: CoordinatorMissionWorktreeStrategy
+    var primarySessionID: UUID?
+    var relatedSessionIDs: [UUID]
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        purpose: String,
+        role: String? = nil,
+        defaultPolicy: CoordinatorMissionExecutionPolicy,
+        worktreeStrategy: CoordinatorMissionWorktreeStrategy,
+        primarySessionID: UUID? = nil,
+        relatedSessionIDs: [UUID] = []
+    ) {
+        self.id = id
+        self.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.purpose = purpose.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.role = role?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.defaultPolicy = defaultPolicy
+        self.worktreeStrategy = worktreeStrategy
+        self.primarySessionID = primarySessionID
+        self.relatedSessionIDs = relatedSessionIDs
+    }
+
+    var worktreeID: String? {
+        worktreeStrategy.worktreeID
+    }
+
+    var linkedSessionIDs: Set<UUID> {
+        Set(([primarySessionID].compactMap(\.self)) + relatedSessionIDs)
+    }
+
+    fileprivate func reusingStableID(_ stableID: UUID) -> CoordinatorMissionWorkstreamSummary {
+        CoordinatorMissionWorkstreamSummary(
+            id: stableID,
+            title: title,
+            purpose: purpose,
+            role: role,
+            defaultPolicy: defaultPolicy,
+            worktreeStrategy: worktreeStrategy,
+            primarySessionID: primarySessionID,
+            relatedSessionIDs: relatedSessionIDs
+        )
+    }
+}
+
+struct CoordinatorMissionWorktreeStrategy: Codable, Equatable {
+    var mode: CoordinatorMissionWorktreeMode
+    var worktreeID: String?
+    var reason: String?
+
+    init(
+        mode: CoordinatorMissionWorktreeMode,
+        worktreeID: String? = nil,
+        reason: String? = nil
+    ) {
+        self.mode = mode
+        self.worktreeID = worktreeID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.reason = reason?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+}
+
+enum CoordinatorMissionWorktreeMode: String, Codable, Equatable, CaseIterable {
+    case noneReadOnly
+    case createIsolated
+    case reuseExisting
+    case reuseWorkstream
+    case askUser
+
+    var displayName: String {
+        switch self {
+        case .noneReadOnly: "Read-only"
+        case .createIsolated: "New isolated worktree"
+        case .reuseExisting: "Existing worktree"
+        case .reuseWorkstream: "Same workstream worktree"
+        case .askUser: "Needs decision"
+        }
+    }
+}
+
+enum CoordinatorMissionPlanStatus: String, Codable, Equatable, CaseIterable {
+    case draft
+    case approved
+    case running
+    case blocked
+    case completed
+    case stopped
+}
+
+enum CoordinatorMissionPlanApprovalState: String, Codable, Equatable, CaseIterable {
+    case notRequired = "not_required"
+    case awaitingApproval = "awaiting_approval"
+    case approved
+    case revisionRequested = "revision_requested"
+}
+
+struct CoordinatorMissionPlanNode: Codable, Equatable, Identifiable {
+    let id: UUID
+    var title: String
+    var detail: String?
+    var workstreamID: UUID
+    var dependsOn: [UUID]
+    var role: String?
+    var executionPolicy: CoordinatorMissionExecutionPolicy
+    var status: CoordinatorMissionPlanNodeStatus
+    var boundSessionID: UUID?
+    var boundInteractionID: UUID?
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        detail: String? = nil,
+        workstreamID: UUID,
+        dependsOn: [UUID] = [],
+        role: String? = nil,
+        executionPolicy: CoordinatorMissionExecutionPolicy,
+        status: CoordinatorMissionPlanNodeStatus = .pending,
+        boundSessionID: UUID? = nil,
+        boundInteractionID: UUID? = nil
+    ) {
+        self.id = id
+        self.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.detail = detail?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.workstreamID = workstreamID
+        self.dependsOn = dependsOn
+        self.role = role?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.executionPolicy = executionPolicy
+        self.status = status
+        self.boundSessionID = boundSessionID
+        self.boundInteractionID = boundInteractionID
+    }
+}
+
+enum CoordinatorMissionPlanNodeStatus: String, Codable, Equatable, CaseIterable {
+    case pending
+    case running
+    case completed
+    case blocked
+    case skipped
+    case cancelled
+}
+
+struct CoordinatorMissionPlanEvent: Codable, Equatable, Identifiable {
+    let id: UUID
+    var kind: CoordinatorMissionPlanEventKind
+    var nodeID: UUID?
+    var sessionID: UUID?
+    var interactionID: UUID?
+    var timestamp: Date
+    var summary: String?
+
+    init(
+        id: UUID = UUID(),
+        kind: CoordinatorMissionPlanEventKind,
+        nodeID: UUID? = nil,
+        sessionID: UUID? = nil,
+        interactionID: UUID? = nil,
+        timestamp: Date = Date(),
+        summary: String? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.nodeID = nodeID
+        self.sessionID = sessionID
+        self.interactionID = interactionID
+        self.timestamp = timestamp
+        self.summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+}
+
+enum CoordinatorMissionPlanEventKind: String, Codable, Equatable, CaseIterable {
+    case created
+    case revised
+    case approved
+    case nodeStarted = "node_started"
+    case nodeCompleted = "node_completed"
+    case nodeBlocked = "node_blocked"
+    case sessionBound = "session_bound"
+    case gateCleared = "gate_cleared"
+}
+
+enum CoordinatorMissionExecutionPolicy: String, Codable, Equatable, CaseIterable {
+    case coordinatorOnly = "coordinator_only"
+    case steerPrimary = "steer_primary"
+    case freshSiblingOnSameWorktree = "fresh_sibling_on_same_worktree"
+    case freshWorktree = "fresh_worktree"
+    case askUser = "ask_user"
+
+    var displayName: String {
+        switch self {
+        case .coordinatorOnly: "Coordinator only"
+        case .steerPrimary: "Steer primary"
+        case .freshSiblingOnSameWorktree: "Sibling on same worktree"
+        case .freshWorktree: "Fresh worktree"
+        case .askUser: "Ask user"
+        }
+    }
+}
+
+private extension String {
+    var normalizedMissionPlanTitleKey: String {
+        trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
 

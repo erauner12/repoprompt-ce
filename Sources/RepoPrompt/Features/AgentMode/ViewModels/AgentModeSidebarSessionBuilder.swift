@@ -223,6 +223,8 @@ struct AgentModeSidebarSessionBuilder {
             hasUnknownConversationContent: entry.hasUnknownConversationContent,
             isMCPOriginated: entry.isMCPOriginated,
             isCoordinatorRuntime: entry.isCoordinatorRuntime,
+            coordinatorMissionTemplate: entry.coordinatorMissionTemplate,
+            coordinatorMissionPlan: entry.coordinatorMissionPlan,
             worktreeBindingSummaries: entry.worktreeBindingSummaries,
             activeWorktreeMergeSummaries: entry.activeWorktreeMergeSummaries,
             workflowSummary: entry.workflowSummary

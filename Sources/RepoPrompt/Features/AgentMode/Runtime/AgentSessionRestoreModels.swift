@@ -16,6 +16,8 @@ struct AgentSessionIndexEntry: Identifiable, Equatable {
     var hasUnknownConversationContent: Bool
     var isMCPOriginated: Bool
     var isCoordinatorRuntime: Bool = false
+    var coordinatorMissionTemplate: CoordinatorMissionTemplateSummary?
+    var coordinatorMissionPlan: CoordinatorMissionPlan?
     var worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary]
     var activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary]
     var workflowSummary: AgentSessionWorkflowSummary?

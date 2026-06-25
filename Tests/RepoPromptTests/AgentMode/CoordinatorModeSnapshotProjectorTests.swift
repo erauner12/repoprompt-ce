@@ -70,6 +70,60 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(snapshot.coordinatorRail.availableCoordinators.map(\.isPinned), [true, false])
     }
 
+    func testMissionPlanProjectsToRailAndDeclaredWorkstreams() throws {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let reviewID = uuid(3)
+        let plan = CoordinatorMissionPlan(
+            objective: "Ship docs flow",
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: uuid(10),
+                    title: "Docs implementation",
+                    purpose: "Apply the README wording change.",
+                    role: "Implement",
+                    defaultPolicy: .freshWorktree,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                        mode: .createIsolated,
+                        worktreeID: "wt-docs",
+                        reason: "Mutable docs work should stay off the parent checkout."
+                    ),
+                    primarySessionID: childID,
+                    relatedSessionIDs: [reviewID]
+                )
+            ],
+            updatedAt: date(50)
+        )
+
+        let snapshot = projector.project(input(
+            live: [
+                live(
+                    id: coordinatorID,
+                    tab: uuid(101),
+                    title: "Coordinator Runtime Demo",
+                    updatedAt: date(100),
+                    state: .idle,
+                    coordinatorRuntime: true,
+                    missionTemplate: CoordinatorMissionTemplateSummary(.scopedChange),
+                    missionPlan: plan
+                ),
+                live(id: childID, tab: uuid(102), title: "Implement docs", updatedAt: date(90), state: .running, parent: coordinatorID),
+                live(id: reviewID, tab: uuid(103), title: "Review docs", updatedAt: date(80), state: .completed, parent: coordinatorID)
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        XCTAssertEqual(snapshot.coordinatorRail.missionPlan, plan)
+        XCTAssertEqual(snapshot.coordinatorRail.missionTemplate, CoordinatorMissionTemplateSummary(.scopedChange))
+        let childSummary = try XCTUnwrap(allRows(in: snapshot).first { $0.sessionID == childID }?.workstreamSummary)
+        XCTAssertEqual(childSummary.declaredWorkstream?.title, "Docs implementation")
+        XCTAssertEqual(childSummary.declaredWorkstream?.defaultPolicy, .freshWorktree)
+        XCTAssertEqual(childSummary.declaredWorkstream?.worktreeStrategy.mode, .createIsolated)
+        let reviewSummary = try XCTUnwrap(allRows(in: snapshot).first { $0.sessionID == reviewID }?.workstreamSummary)
+        XCTAssertEqual(reviewSummary.declaredWorkstream?.id, uuid(10))
+    }
+
     func testBoardIncludesOnlyCurrentDemoCoordinatorDescendants() {
         let coordinatorID = uuid(1)
         let directChildID = uuid(2)
@@ -980,7 +1034,9 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         pinned: Bool = false,
         priority: Int? = nil,
         bindings: [AgentSessionWorktreeBindingSummary] = [],
-        merges: [AgentSessionWorktreeMergeSummary] = []
+        merges: [AgentSessionWorktreeMergeSummary] = [],
+        missionTemplate: CoordinatorMissionTemplateSummary? = nil,
+        missionPlan: CoordinatorMissionPlan? = nil
     ) -> CoordinatorModeSnapshotProjector.PersistedSession {
         CoordinatorModeSnapshotProjector.PersistedSession(
             id: id,
@@ -996,6 +1052,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             isCoordinatorInternal: internalSession,
             isCoordinatorRuntime: coordinatorRuntime,
             isPinned: pinned,
+            coordinatorMissionTemplate: missionTemplate,
+            coordinatorMissionPlan: missionPlan,
             priority: priority
         )
     }
@@ -1014,7 +1072,9 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         pinned: Bool = false,
         priority: Int? = nil,
         bindings: [AgentSessionWorktreeBindingSummary] = [],
-        merges: [AgentSessionWorktreeMergeSummary] = []
+        merges: [AgentSessionWorktreeMergeSummary] = [],
+        missionTemplate: CoordinatorMissionTemplateSummary? = nil,
+        missionPlan: CoordinatorMissionPlan? = nil
     ) -> CoordinatorModeSnapshotProjector.LiveSession {
         CoordinatorModeSnapshotProjector.LiveSession(
             sessionID: id,
@@ -1030,6 +1090,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             isCoordinatorInternal: internalSession,
             isCoordinatorRuntime: coordinatorRuntime,
             isPinned: pinned,
+            coordinatorMissionTemplate: missionTemplate,
+            coordinatorMissionPlan: missionPlan,
             priority: priority
         )
     }
@@ -1043,7 +1105,9 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         workflow: CoordinatorModeWorkflowDisplaySummary? = nil,
         internalSession: Bool = false,
         coordinatorRuntime: Bool = false,
-        pinned: Bool = false
+        pinned: Bool = false,
+        missionTemplate: CoordinatorMissionTemplateSummary? = nil,
+        missionPlan: CoordinatorMissionPlan? = nil
     ) -> CoordinatorModeSnapshotProjector.CoordinatorDetectionSession {
         CoordinatorModeSnapshotProjector.CoordinatorDetectionSession(
             id: id,
@@ -1054,7 +1118,9 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             workflow: workflow,
             isCoordinatorInternal: internalSession,
             isCoordinatorRuntime: coordinatorRuntime,
-            isPinned: pinned
+            isPinned: pinned,
+            coordinatorMissionTemplate: missionTemplate,
+            coordinatorMissionPlan: missionPlan
         )
     }
 

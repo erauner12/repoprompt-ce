@@ -105,6 +105,12 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.29 Add a built-in Deep Plan -> Orchestrate -> Review Mission Template that pauses on Deep Plan user checkpoints before mutable delegation.
 - [x] 9.30 Render selected-Mission child Needs-you checkpoints in the Coordinator composer and hold ordinary Coordinator submissions while the child answer is pending.
 - [x] 9.31 Render structured selected-Mission child `ask_user` checkpoints with their original options/custom-answer controls and route selected answers through the child interaction response path.
+- [x] 9.32 Persist a DAG-lite `CoordinatorMissionPlan` foundation with parent Mission follow-through state.
+- [x] 9.33 Add a `coordinator_chat op=mission_plan` update path for objective and declared workstream lane summaries without submitting a chat turn.
+- [x] 9.34 Add explicit worktree strategy to Mission Plan workstreams so execution lanes are defined before DAG nodes inherit them.
+- [x] 9.35 Teach built-in Mission Templates and Coordinator runtime guidance to record/update Mission Plan workstreams before and during delegation.
+- [x] 9.36 Extend `coordinator_chat op=mission_plan` updates to accept status, approval state, DAG-lite nodes, and appended events while preserving omitted fields.
+- [x] 9.37 Add read-only `coordinator_chat op=mission_status` output for external Coordinator debugging with node counts, dependencies, recent events, and row bindings.
 
 ## 10. Coordinator view UI shell
 
@@ -161,6 +167,9 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.51 Move compact MCP awareness into stable board header chrome, limit session filtering to the All Agents Board, and reduce the stacked inspector handle to a quiet visual affordance.
 - [x] 10.52 Preserve delegated conversation card chronology after restart using child start/delegation time rather than terminal update time.
 - [x] 10.53 Add a compact Mission Template picker and management sheet under the fresh-Mission Coordinator composer, separate from Agent Mode workflow controls.
+- [x] 10.54 Render the selected Mission Plan in the Coordinator conversation and project declared workstreams into matching row/inspector details.
+- [x] 10.55 Replace the visible right-panel List toggle with a read-only Plan presentation while retaining List as the narrow Board fallback.
+- [x] 10.56 Add a shared inspector target for Board rows and Plan nodes so DAG-lite node/workstream details can be inspected without creating phantom board cards.
 
 ## 11. Validation
 
@@ -172,3 +181,4 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 11.6 Run focused Coordinator mutable-delegation worktree policy tests.
 - [x] 11.7 Live-smoke a fresh Coordinator parent chaining Orchestrate then Review on the same app-managed worktree via MCP Coordinator chat.
 - [x] 11.8 Run focused Coordinator Mission Template store, composer, and objective-persistence tests.
+- [x] 11.9 Run focused Mission Plan persistence, worktree-strategy, projection, composer, and MCP control-surface tests.

@@ -64,6 +64,8 @@ struct CoordinatorModeSnapshotProjector {
         var isCoordinatorInternal: Bool
         var isCoordinatorRuntime: Bool
         var isPinned: Bool
+        var coordinatorMissionTemplate: CoordinatorMissionTemplateSummary?
+        var coordinatorMissionPlan: CoordinatorMissionPlan?
         var priority: Int?
 
         init(
@@ -83,6 +85,8 @@ struct CoordinatorModeSnapshotProjector {
             isCoordinatorInternal: Bool = false,
             isCoordinatorRuntime: Bool = false,
             isPinned: Bool = false,
+            coordinatorMissionTemplate: CoordinatorMissionTemplateSummary? = nil,
+            coordinatorMissionPlan: CoordinatorMissionPlan? = nil,
             priority: Int? = nil
         ) {
             self.id = id
@@ -101,6 +105,8 @@ struct CoordinatorModeSnapshotProjector {
             self.isCoordinatorInternal = isCoordinatorInternal
             self.isCoordinatorRuntime = isCoordinatorRuntime
             self.isPinned = isPinned
+            self.coordinatorMissionTemplate = coordinatorMissionTemplate
+            self.coordinatorMissionPlan = coordinatorMissionPlan
             self.priority = priority
         }
     }
@@ -122,6 +128,8 @@ struct CoordinatorModeSnapshotProjector {
         var isCoordinatorInternal: Bool
         var isCoordinatorRuntime: Bool
         var isPinned: Bool
+        var coordinatorMissionTemplate: CoordinatorMissionTemplateSummary?
+        var coordinatorMissionPlan: CoordinatorMissionPlan?
         var priority: Int?
 
         init(
@@ -141,6 +149,8 @@ struct CoordinatorModeSnapshotProjector {
             isCoordinatorInternal: Bool = false,
             isCoordinatorRuntime: Bool = false,
             isPinned: Bool = false,
+            coordinatorMissionTemplate: CoordinatorMissionTemplateSummary? = nil,
+            coordinatorMissionPlan: CoordinatorMissionPlan? = nil,
             priority: Int? = nil
         ) {
             self.sessionID = sessionID
@@ -159,6 +169,8 @@ struct CoordinatorModeSnapshotProjector {
             self.isCoordinatorInternal = isCoordinatorInternal
             self.isCoordinatorRuntime = isCoordinatorRuntime
             self.isPinned = isPinned
+            self.coordinatorMissionTemplate = coordinatorMissionTemplate
+            self.coordinatorMissionPlan = coordinatorMissionPlan
             self.priority = priority
         }
     }
@@ -175,6 +187,8 @@ struct CoordinatorModeSnapshotProjector {
         var tabID: UUID?
         var isPinned: Bool
         var isPersistedOnly: Bool
+        var coordinatorMissionTemplate: CoordinatorMissionTemplateSummary?
+        var coordinatorMissionPlan: CoordinatorMissionPlan?
 
         init(
             id: UUID,
@@ -187,7 +201,9 @@ struct CoordinatorModeSnapshotProjector {
             isCoordinatorRuntime: Bool = false,
             tabID: UUID? = nil,
             isPinned: Bool = false,
-            isPersistedOnly: Bool = true
+            isPersistedOnly: Bool = true,
+            coordinatorMissionTemplate: CoordinatorMissionTemplateSummary? = nil,
+            coordinatorMissionPlan: CoordinatorMissionPlan? = nil
         ) {
             self.id = id
             self.title = title
@@ -200,6 +216,8 @@ struct CoordinatorModeSnapshotProjector {
             self.tabID = tabID
             self.isPinned = isPinned
             self.isPersistedOnly = isPersistedOnly
+            self.coordinatorMissionTemplate = coordinatorMissionTemplate
+            self.coordinatorMissionPlan = coordinatorMissionPlan
         }
     }
 
@@ -227,6 +245,11 @@ struct CoordinatorModeSnapshotProjector {
         let boardOwnerIDs: [UUID: UUID] = input.boardScope == .allAgents
             ? allCoordinatorOwnerIDs
             : selectedCoordinatorOwnerIDs
+        let missionPlansByCoordinatorID = Dictionary(
+            uniqueKeysWithValues: rowSeeds.compactMap { seed in
+                seed.coordinatorMissionPlan.map { (seed.id, $0) }
+            }
+        )
         let selectedCoordinatorFleetSeeds = delegatedFleetSeeds(
             from: rowSeeds,
             ownerIDs: selectedCoordinatorOwnerIDs,
@@ -260,6 +283,11 @@ struct CoordinatorModeSnapshotProjector {
                     coordinatorTitlesByID: coordinatorTitlesByID,
                     selectedCoordinatorID: coordinator?.sessionID
                 ),
+                declaredWorkstream: declaredWorkstream(
+                    for: seed.id,
+                    ownerID: boardOwnerIDs[seed.id],
+                    missionPlansByCoordinatorID: missionPlansByCoordinatorID
+                ),
                 origin: rowOrigin(for: seed, ownerIDs: boardOwnerIDs),
                 input: input,
                 routeBuilder: routeBuilder
@@ -271,6 +299,11 @@ struct CoordinatorModeSnapshotProjector {
                 childSessionIDs: Array(renderedChildrenByParent[seed.id, default: []]).sorted { $0.uuidString < $1.uuidString },
                 isCoordinator: seed.id == coordinator?.sessionID,
                 parentCoordinator: nil,
+                declaredWorkstream: declaredWorkstream(
+                    for: seed.id,
+                    ownerID: allCoordinatorOwnerIDs[seed.id],
+                    missionPlansByCoordinatorID: missionPlansByCoordinatorID
+                ),
                 origin: rowOrigin(for: seed, ownerIDs: boardOwnerIDs),
                 input: input,
                 routeBuilder: routeBuilder
@@ -326,6 +359,8 @@ struct CoordinatorModeSnapshotProjector {
         var isCoordinatorInternal: Bool
         var isCoordinatorRuntime: Bool
         var isPinned: Bool
+        var coordinatorMissionTemplate: CoordinatorMissionTemplateSummary?
+        var coordinatorMissionPlan: CoordinatorMissionPlan?
         var priority: Int?
         var isPersistedOnly: Bool
     }
@@ -342,6 +377,8 @@ struct CoordinatorModeSnapshotProjector {
         var tabID: UUID?
         var isPinned: Bool
         var isPersistedOnly: Bool
+        var coordinatorMissionTemplate: CoordinatorMissionTemplateSummary?
+        var coordinatorMissionPlan: CoordinatorMissionPlan?
     }
 
     private struct CoordinatorSelection: Equatable {
@@ -381,6 +418,8 @@ struct CoordinatorModeSnapshotProjector {
                 isCoordinatorInternal: persisted.isCoordinatorInternal || input.coordinatorInternalSessionIDs.contains(persisted.id),
                 isCoordinatorRuntime: persisted.isCoordinatorRuntime || input.demoCoordinatorSessionIDs.contains(persisted.id),
                 isPinned: persisted.isPinned,
+                coordinatorMissionTemplate: persisted.coordinatorMissionTemplate,
+                coordinatorMissionPlan: persisted.coordinatorMissionPlan,
                 priority: persisted.priority,
                 isPersistedOnly: true
             )
@@ -405,6 +444,8 @@ struct CoordinatorModeSnapshotProjector {
                 isCoordinatorInternal: live.isCoordinatorInternal || input.coordinatorInternalSessionIDs.contains(live.sessionID),
                 isCoordinatorRuntime: live.isCoordinatorRuntime || previous?.isCoordinatorRuntime == true || input.demoCoordinatorSessionIDs.contains(live.sessionID),
                 isPinned: live.isPinned || previous?.isPinned == true,
+                coordinatorMissionTemplate: live.coordinatorMissionTemplate ?? previous?.coordinatorMissionTemplate,
+                coordinatorMissionPlan: live.coordinatorMissionPlan ?? previous?.coordinatorMissionPlan,
                 priority: live.priority ?? previous?.priority,
                 isPersistedOnly: false
             )
@@ -433,6 +474,8 @@ struct CoordinatorModeSnapshotProjector {
                 isCoordinatorInternal: previous?.isCoordinatorInternal ?? input.coordinatorInternalSessionIDs.contains(snapshot.sessionID),
                 isCoordinatorRuntime: previous?.isCoordinatorRuntime ?? input.demoCoordinatorSessionIDs.contains(snapshot.sessionID),
                 isPinned: previous?.isPinned ?? false,
+                coordinatorMissionTemplate: previous?.coordinatorMissionTemplate,
+                coordinatorMissionPlan: previous?.coordinatorMissionPlan,
                 priority: previous?.priority,
                 isPersistedOnly: false
             )
@@ -452,6 +495,7 @@ struct CoordinatorModeSnapshotProjector {
         childSessionIDs: [UUID],
         isCoordinator: Bool,
         parentCoordinator: CoordinatorModeRow.ParentCoordinator?,
+        declaredWorkstream: CoordinatorMissionWorkstreamSummary?,
         origin: CoordinatorModeRowOrigin,
         input: Input,
         routeBuilder: RouteBuilder
@@ -471,6 +515,7 @@ struct CoordinatorModeSnapshotProjector {
             statusGroup: statusGroup,
             parentCoordinator: parentCoordinator,
             workstream: workstream,
+            declaredWorkstream: declaredWorkstream,
             mergeAttention: mergeAttention,
             pendingInteraction: pendingInteraction
         )
@@ -509,6 +554,7 @@ struct CoordinatorModeSnapshotProjector {
         statusGroup: CoordinatorModeStatusGroup,
         parentCoordinator: CoordinatorModeRow.ParentCoordinator?,
         workstream: CoordinatorModeRow.Workstream?,
+        declaredWorkstream: CoordinatorMissionWorkstreamSummary?,
         mergeAttention: CoordinatorModeRow.MergeAttention?,
         pendingInteraction: CoordinatorModePendingInteractionSummary?
     ) -> CoordinatorModeRow.WorkstreamSummary? {
@@ -521,6 +567,7 @@ struct CoordinatorModeSnapshotProjector {
             coordinatorSessionID: parentCoordinator?.sessionID,
             worktree: workstream,
             workflow: seed.workflow,
+            declaredWorkstream: declaredWorkstream,
             nextAction: nextAction(
                 statusGroup: statusGroup,
                 mergeAttention: mergeAttention,
@@ -528,6 +575,17 @@ struct CoordinatorModeSnapshotProjector {
                 parentCoordinator: parentCoordinator
             )
         )
+    }
+
+    private func declaredWorkstream(
+        for sessionID: UUID,
+        ownerID: UUID?,
+        missionPlansByCoordinatorID: [UUID: CoordinatorMissionPlan]
+    ) -> CoordinatorMissionWorkstreamSummary? {
+        guard let ownerID, let brief = missionPlansByCoordinatorID[ownerID] else { return nil }
+        return brief.workstreams.first { workstream in
+            workstream.linkedSessionIDs.contains(sessionID)
+        }
     }
 
     private func nextAction(
@@ -796,7 +854,9 @@ struct CoordinatorModeSnapshotProjector {
                     isCoordinatorRuntime: seed.isCoordinatorRuntime || input.demoCoordinatorSessionIDs.contains(seed.id),
                     tabID: seed.tabID,
                     isPinned: seed.isPinned,
-                    isPersistedOnly: seed.isPersistedOnly
+                    isPersistedOnly: seed.isPersistedOnly,
+                    coordinatorMissionTemplate: seed.coordinatorMissionTemplate,
+                    coordinatorMissionPlan: seed.coordinatorMissionPlan
                 )
             )
         })
@@ -814,7 +874,9 @@ struct CoordinatorModeSnapshotProjector {
                 isCoordinatorRuntime: session.isCoordinatorRuntime || (previous?.isCoordinatorRuntime ?? false) || input.demoCoordinatorSessionIDs.contains(session.id),
                 tabID: session.tabID ?? previous?.tabID,
                 isPinned: session.isPinned || (previous?.isPinned ?? false),
-                isPersistedOnly: previous?.isPersistedOnly ?? session.isPersistedOnly
+                isPersistedOnly: previous?.isPersistedOnly ?? session.isPersistedOnly,
+                coordinatorMissionTemplate: session.coordinatorMissionTemplate ?? previous?.coordinatorMissionTemplate,
+                coordinatorMissionPlan: session.coordinatorMissionPlan ?? previous?.coordinatorMissionPlan
             )
         }
 
@@ -883,6 +945,8 @@ struct CoordinatorModeSnapshotProjector {
                     isPinned: row?.isCoordinator == true ? seed.isPinned : seed.isPinned,
                     isPersistedOnly: row?.isPersistedOnly ?? seed.isPersistedOnly,
                     childCounts: childCounts(for: seed.id, ownerIDs: ownerIDs, rowsByID: rowsByID),
+                    missionTemplate: seed.coordinatorMissionTemplate,
+                    missionPlan: seed.coordinatorMissionPlan,
                     runState: row?.runState,
                     updatedAt: row?.updatedAt ?? seed.updatedAt,
                     lastActivityAt: row?.updatedAt ?? seed.updatedAt
@@ -909,6 +973,8 @@ struct CoordinatorModeSnapshotProjector {
                     isPersistedOnly: false,
                     isPinned: false,
                     childCounts: .empty,
+                    missionTemplate: nil,
+                    missionPlan: nil,
                     openAgentChatRoute: nil,
                     statusReport: nil,
                     isComposerEnabled: false,
@@ -931,6 +997,8 @@ struct CoordinatorModeSnapshotProjector {
                 isPersistedOnly: false,
                 isPinned: false,
                 childCounts: .empty,
+                missionTemplate: nil,
+                missionPlan: nil,
                 openAgentChatRoute: nil,
                 statusReport: nil,
                 isComposerEnabled: false,
@@ -949,6 +1017,8 @@ struct CoordinatorModeSnapshotProjector {
             isPersistedOnly: row.isPersistedOnly,
             isPinned: selectedOption.isPinned,
             childCounts: selectedOption.childCounts,
+            missionTemplate: selectedOption.missionTemplate,
+            missionPlan: selectedOption.missionPlan,
             openAgentChatRoute: nil,
             statusReport: row.statusReport,
             isComposerEnabled: isLiveInCurrentWindow,
@@ -1151,7 +1221,9 @@ extension CoordinatorModeSnapshotProjector.CoordinatorDetectionSession {
             isCoordinatorRuntime: persisted.isCoordinatorRuntime,
             tabID: persisted.tabID,
             isPinned: persisted.isPinned,
-            isPersistedOnly: true
+            isPersistedOnly: true,
+            coordinatorMissionTemplate: persisted.coordinatorMissionTemplate,
+            coordinatorMissionPlan: persisted.coordinatorMissionPlan
         )
     }
 }
@@ -1172,7 +1244,9 @@ extension CoordinatorModeSnapshotProjector.PersistedSession {
             worktreeBindingSummaries: entry.worktreeBindingSummaries,
             activeWorktreeMergeSummaries: entry.activeWorktreeMergeSummaries,
             workflow: entry.workflowSummary.map(CoordinatorModeWorkflowDisplaySummary.init),
-            isCoordinatorRuntime: entry.isCoordinatorRuntime
+            isCoordinatorRuntime: entry.isCoordinatorRuntime,
+            coordinatorMissionTemplate: entry.coordinatorMissionTemplate,
+            coordinatorMissionPlan: entry.coordinatorMissionPlan
         )
     }
 }

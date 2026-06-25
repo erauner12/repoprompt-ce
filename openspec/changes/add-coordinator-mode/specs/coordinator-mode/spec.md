@@ -319,6 +319,61 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **AND** after the user proceeds, the template guidance MAY continue with workflow-bearing `Orchestrate` and `Review` delegated children through the normal Agent Mode control-plane paths
 - **AND** mutable Orchestrate work SHALL still require explicit child worktree isolation before launch.
 
+#### Scenario: Coordinator records a Mission Plan
+- **WHEN** a Coordinator starts or revises a Mission with one or more intended workstreams
+- **THEN** it MAY update the selected Mission's Mission Plan through the external `coordinator_chat` control surface using `op: "mission_plan"`
+- **AND** the Mission Plan SHALL record a stable plan ID, revision, visible Mission objective, status, approval state, template summary when present, declared workstreams, future DAG-lite nodes, and execution events
+- **AND** each declared workstream SHALL record title, purpose, role, default execution policy, explicit worktree strategy, optional primary child session ID, optional related child session IDs, and optional worktree ID
+- **AND** the update MAY include optional status, approval state, DAG-lite nodes, and appended execution events
+- **AND** omitted objective, status, approval state, workstreams, or nodes SHALL preserve their previous stored values
+- **AND** updating the Mission Plan SHALL update Coordinator-mode projection metadata without submitting an ordinary Coordinator chat turn
+- **AND** it SHALL NOT create child sessions, mutate child run state, change status groups, or grant approval for mutable work.
+
+#### Scenario: Coordinator queries Mission status
+- **WHEN** an external Coordinator/debugging client calls `coordinator_chat` with `op: "mission_status"` for the selected or requested Mission
+- **THEN** the response SHALL be read-only and SHALL NOT submit a Coordinator chat turn or mutate Mission state
+- **AND** it SHALL include the Mission's plan revision, status, approval state, objective, workstreams, DAG-lite nodes, dependency satisfaction, node counts by status, and recent events when a Mission Plan exists
+- **AND** it SHOULD include board/session bindings for nodes or workstreams that resolve to projected delegated rows
+- **AND** it SHALL include a concise debug summary suitable for external coordinator chats.
+
+#### Scenario: Mission Plan workstream declares worktree strategy
+- **WHEN** a Coordinator records a Mission Plan workstream
+- **THEN** it SHALL declare the lane's worktree strategy as one of read-only/no worktree, create isolated worktree, reuse existing worktree, reuse the same workstream worktree, or ask the user
+- **AND** read-only workstreams SHOULD use the read-only/no-worktree strategy
+- **AND** independent parallel mutable workstreams SHOULD use separate create-isolated strategies
+- **AND** fresh review of the same mutable result SHOULD use the same-workstream strategy
+- **AND** overlapping mutable work SHOULD ask the user or serialize by default.
+
+#### Scenario: Mission Plan projects into Coordinator conversation
+- **WHEN** the selected Mission has a stored Mission Plan
+- **THEN** the Coordinator conversation MAY render a compact Mission Plan card ahead of the ordinary transcript
+- **AND** that card SHALL show the declared objective and workstream summaries as Mission context
+- **AND** it SHALL NOT render a declared workstream as a board card unless a matching projected child session row exists.
+
+#### Scenario: Mission Plan renders in right-panel Plan presentation
+- **WHEN** the selected Mission has a stored Mission Plan
+- **THEN** the right work panel SHALL offer a read-only `Plan` presentation beside `Board`
+- **AND** the Plan presentation SHALL show plan revision, status, approval state, objective, declared workstreams, DAG-lite nodes, and recent node events when present
+- **AND** when no Mission Plan is stored, the Plan presentation SHALL show an empty state instead of board rows
+- **AND** the former full List presentation SHALL remain available only as the responsive fallback when the Board cannot fit.
+
+#### Scenario: Plan node uses shared inspector surface
+- **WHEN** the user selects a DAG-lite node in the selected Mission Plan
+- **THEN** the stacked inspector SHALL show node title, status, role/detail, execution policy, declared workstream, dependencies, bound session or interaction IDs, and recent node events
+- **AND** it MAY show an Open Agent affordance only when the node's bound session resolves to a routeable projected row
+- **AND** it SHALL NOT show child reply controls for a plan node because the Plan tab is an observability surface.
+
+#### Scenario: Mission Plan enriches projected workstreams
+- **WHEN** a projected delegated row's session ID matches a Mission Plan workstream's primary or related child session IDs
+- **THEN** the row's `CoordinatorWorkstream` summary MAY include the declared title, purpose, role, default execution policy, worktree strategy, and declared worktree from that Mission Plan entry
+- **AND** the inspector MAY show those declared fields alongside sourced live/session state
+- **AND** the declared fields SHALL NOT override sourced lifecycle state, workflow metadata, routeability, or worktree identity from the actual child session.
+
+#### Scenario: Mission Plan persists with Coordinator session metadata
+- **WHEN** the app refreshes the Coordinator session index or restarts
+- **THEN** persisted Coordinator Mission entries SHALL preserve lightweight Mission Plan metadata
+- **AND** selecting that Mission after restore SHOULD recover the Mission Plan card and declared workstream enrichment without requiring the Coordinator backing chat or delegated child chats to be opened first.
+
 #### Scenario: Coordinator chat answers an owned child checkpoint
 - **WHEN** a delegated child session owned by the selected Mission has a live pending interaction
 - **THEN** the selected-Mission board SHALL classify that child under `Needs you`
@@ -510,6 +565,12 @@ The system SHALL project Coordinator mode session rows/cards from structured ses
 - **AND** the summary ID SHALL be stable for the child session it describes
 - **AND** the summary SHALL remain a flat read model that can later receive dependency edges without requiring a DAG in v1
 - **AND** the summary SHALL NOT mutate runtime state, approve actions, apply/merge/commit changes, or parse assistant prose as authoritative state.
+
+#### Scenario: Declared Mission workstream source exists
+- **WHEN** a Coordinator Mission Plan declares a workstream that references the row's child session ID
+- **THEN** the row's workstream summary MAY retain the declared Mission workstream as supplemental metadata
+- **AND** the declared metadata SHALL be treated as Mission plan intent rather than authoritative live session state
+- **AND** row grouping, sorting, workflow badges, and routeability SHALL still come from structured session/live-state projection.
 
 ### Requirement: Status grouping and sorting
 The system SHALL group Coordinator view rows by testable, structured status rules.

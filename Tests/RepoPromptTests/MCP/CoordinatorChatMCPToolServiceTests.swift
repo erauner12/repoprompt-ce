@@ -48,6 +48,231 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(object["selected_coordinator_session_id"]?.stringValue, secondID.uuidString)
     }
 
+    func testMissionPlanUpdatesStateWithoutSubmittingChatTurn() async throws {
+        let coordinatorID = UUID()
+        let childID = UUID()
+        var submittedMessages: [String] = []
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submit: {
+                submittedMessages.append($0)
+                return .accepted
+            },
+            missionPlans: { missionPlans },
+            updateMissionPlan: { sessionID, update in
+                missionPlans[sessionID] = CoordinatorMissionPlan(
+                    objective: update.objective,
+                    status: update.status ?? .draft,
+                    approvalState: update.approvalState ?? .notRequired,
+                    workstreams: update.workstreams ?? [],
+                    nodes: update.nodes ?? [],
+                    events: update.events,
+                    updatedAt: Date(timeIntervalSince1970: 10)
+                )
+            }
+        )
+
+        let args: [String: Value] = [
+            "op": .string("mission_plan"),
+            "objective": .string("Ship docs"),
+            "workstreams": .array([
+                .object([
+                    "title": .string("Docs implementation"),
+                    "purpose": .string("Apply the README wording change."),
+                    "role": .string("Implement"),
+                    "default_policy": .string("fresh_worktree"),
+                    "worktree_strategy": .object([
+                        "mode": .string("createIsolated"),
+                        "worktree_id": .string("wt-docs"),
+                        "reason": .string("Mutable docs work should stay isolated.")
+                    ]),
+                    "primary_session_id": .string(childID.uuidString)
+                ])
+            ])
+        ]
+        let response = try await service.execute(args: args)
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertTrue(submittedMessages.isEmpty)
+        XCTAssertEqual(object["updated"]?.boolValue, true)
+        let plan = try XCTUnwrap(object["mission_plan"]?.objectValue)
+        XCTAssertEqual(plan["objective"]?.stringValue, "Ship docs")
+        XCTAssertEqual(plan["revision"]?.intValue, 1)
+        let workstream = try XCTUnwrap(plan["workstreams"]?.arrayValue?.first?.objectValue)
+        XCTAssertEqual(workstream["title"]?.stringValue, "Docs implementation")
+        XCTAssertEqual(workstream["default_policy"]?.stringValue, "fresh_worktree")
+        let strategy = try XCTUnwrap(workstream["worktree_strategy"]?.objectValue)
+        XCTAssertEqual(strategy["mode"]?.stringValue, "createIsolated")
+        XCTAssertEqual(strategy["display_name"]?.stringValue, "New isolated worktree")
+        XCTAssertEqual(strategy["worktree_id"]?.stringValue, "wt-docs")
+        XCTAssertEqual(workstream["primary_session_id"]?.stringValue, childID.uuidString)
+    }
+
+    func testMissionPlanAcceptsNodesStatusAndEvents() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let childID = UUID()
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { missionPlans },
+            updateMissionPlan: { sessionID, update in
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(update)
+                missionPlans[sessionID] = state.missionPlan
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "objective": .string("Ship DAG"),
+            "status": .string("running"),
+            "approval_state": .string("approved"),
+            "workstreams": .array([
+                .object([
+                    "id": .string(workstreamID.uuidString),
+                    "title": .string("Implement"),
+                    "purpose": .string("Make the docs change."),
+                    "default_policy": .string("fresh_worktree"),
+                    "worktree_strategy": .object([
+                        "mode": .string("createIsolated")
+                    ])
+                ])
+            ]),
+            "nodes": .array([
+                .object([
+                    "id": .string(nodeID.uuidString),
+                    "title": .string("Docs edit"),
+                    "workstream_title": .string("Implement"),
+                    "execution_policy": .string("fresh_worktree"),
+                    "status": .string("running"),
+                    "bound_session_id": .string(childID.uuidString)
+                ])
+            ]),
+            "events": .array([
+                .object([
+                    "kind": .string("node_started"),
+                    "node_title": .string("Docs edit"),
+                    "session_id": .string(childID.uuidString),
+                    "summary": .string("Child started.")
+                ])
+            ])
+        ])
+
+        let plan = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue)
+        XCTAssertEqual(plan["status"]?.stringValue, "running")
+        XCTAssertEqual(plan["approval_state"]?.stringValue, "approved")
+        let node = try XCTUnwrap(plan["nodes"]?.arrayValue?.first?.objectValue)
+        XCTAssertEqual(node["id"]?.stringValue, nodeID.uuidString)
+        XCTAssertEqual(node["workstream_id"]?.stringValue, workstreamID.uuidString)
+        XCTAssertEqual(node["bound_session_id"]?.stringValue, childID.uuidString)
+        let events = try XCTUnwrap(plan["events"]?.arrayValue)
+        XCTAssertEqual(events.last?.objectValue?["kind"]?.stringValue, "node_started")
+        XCTAssertEqual(events.last?.objectValue?["node_id"]?.stringValue, nodeID.uuidString)
+    }
+
+    func testMissionStatusReturnsCompactDagStatus() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let planNodeID = UUID()
+        let reviewNodeID = UUID()
+        let plan = CoordinatorMissionPlan(
+            revision: 3,
+            objective: "Ship DAG",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Implement",
+                    purpose: "Make the docs change.",
+                    defaultPolicy: .freshWorktree,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: planNodeID,
+                    title: "Plan",
+                    workstreamID: workstreamID,
+                    executionPolicy: .coordinatorOnly,
+                    status: .completed
+                ),
+                CoordinatorMissionPlanNode(
+                    id: reviewNodeID,
+                    title: "Review",
+                    workstreamID: workstreamID,
+                    dependsOn: [planNodeID],
+                    executionPolicy: .freshSiblingOnSameWorktree,
+                    status: .pending
+                )
+            ],
+            events: [
+                CoordinatorMissionPlanEvent(
+                    kind: .nodeCompleted,
+                    nodeID: planNodeID,
+                    timestamp: Date(timeIntervalSince1970: 20),
+                    summary: "Plan complete."
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 30)
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_status")
+        ])
+        let status = try XCTUnwrap(response.objectValue?["mission_status"]?.objectValue)
+
+        XCTAssertEqual(status["has_plan"]?.boolValue, true)
+        XCTAssertTrue(status["debug_summary"]?.stringValue?.contains("1/2 terminal nodes") == true)
+        let nodeCounts = try XCTUnwrap(status["node_counts"]?.objectValue)
+        XCTAssertEqual(nodeCounts["completed"]?.intValue, 1)
+        XCTAssertEqual(nodeCounts["pending"]?.intValue, 1)
+        let nodes = try XCTUnwrap(status["nodes"]?.arrayValue)
+        let review = try XCTUnwrap(nodes.first { element in
+            element.objectValue?["id"]?.stringValue == reviewNodeID.uuidString
+        }?.objectValue)
+        XCTAssertEqual(review["dependencies_satisfied"]?.boolValue, true)
+        XCTAssertEqual(review["workstream_title"]?.stringValue, "Implement")
+        let recentEvents = try XCTUnwrap(status["recent_events"]?.arrayValue)
+        XCTAssertEqual(recentEvents.first?.objectValue?["kind"]?.stringValue, "node_completed")
+    }
+
+    func testMissionPlanRejectsInvalidWorktreeStrategy() async throws {
+        let coordinatorID = UUID()
+        let service = makeService(coordinatorIDs: [coordinatorID], selectedID: coordinatorID)
+
+        let args: [String: Value] = [
+            "op": .string("mission_plan"),
+            "workstreams": .array([
+                .object([
+                    "title": .string("Docs implementation"),
+                    "purpose": .string("Apply the README wording change."),
+                    "default_policy": .string("fresh_worktree"),
+                    "worktree_strategy": .object([
+                        "mode": .string("maybeLater")
+                    ])
+                ])
+            ])
+        ]
+
+        do {
+            _ = try await service.execute(args: args)
+            XCTFail("Expected invalid worktree strategy to be rejected.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("workstreams[].worktree_strategy.mode"))
+        }
+    }
+
     func testSubmitWithNewParentStartsFreshContextAndSubmits() async throws {
         let coordinatorID = UUID()
         var startNewCount = 0
@@ -188,7 +413,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         startNew: @escaping () -> Void = {},
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
-        submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted }
+        submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
+        missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },
+        updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in }
     ) -> CoordinatorChatMCPToolService {
         makeService(
             coordinatorIDs: coordinatorIDs,
@@ -196,7 +423,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             startNew: startNew,
             submit: submit,
             pendingChild: pendingChild,
-            submitPendingChild: submitPendingChild
+            submitPendingChild: submitPendingChild,
+            missionPlans: missionPlans,
+            updateMissionPlan: updateMissionPlan
         )
     }
 
@@ -207,14 +436,17 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         startNew: @escaping () -> Void = {},
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
-        submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted }
+        submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
+        missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },
+        updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in }
     ) -> CoordinatorChatMCPToolService {
         CoordinatorChatMCPToolService(toolName: MCPWindowToolName.coordinatorChat) {
             CoordinatorChatMCPToolService.Environment(
                 snapshot: {
                     Self.snapshot(
                         coordinatorIDs: coordinatorIDs,
-                        selectedID: selectedID()
+                        selectedID: selectedID(),
+                        missionPlans: missionPlans()
                     )
                 },
                 refresh: {},
@@ -222,14 +454,16 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 startNewCoordinatorRun: startNew,
                 submitDirective: submit,
                 activePendingChildInteractionRow: pendingChild,
-                submitPendingChildInteractionResponse: submitPendingChild
+                submitPendingChildInteractionResponse: submitPendingChild,
+                updateMissionPlan: updateMissionPlan
             )
         }
     }
 
     private static func snapshot(
         coordinatorIDs: [UUID],
-        selectedID: UUID
+        selectedID: UUID,
+        missionPlans: [UUID: CoordinatorMissionPlan] = [:]
     ) -> CoordinatorModeSnapshot {
         let options = coordinatorIDs.enumerated().map { index, id in
             CoordinatorModeCoordinatorOption(
@@ -243,6 +477,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 isPinned: false,
                 isPersistedOnly: false,
                 childCounts: .empty,
+                missionTemplate: nil,
+                missionPlan: missionPlans[id],
                 runState: .idle,
                 updatedAt: Date(timeIntervalSince1970: TimeInterval(index + 1)),
                 lastActivityAt: Date(timeIntervalSince1970: TimeInterval(index + 1))
@@ -266,6 +502,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 isPersistedOnly: false,
                 isPinned: false,
                 childCounts: .empty,
+                missionTemplate: nil,
+                missionPlan: missionPlans[selectedID],
                 openAgentChatRoute: nil,
                 statusReport: nil,
                 isComposerEnabled: true,
