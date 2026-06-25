@@ -15480,6 +15480,70 @@ final class AgentModeViewModel: ObservableObject {
     }
 
     @discardableResult
+    func cleanupProviderConversationForDeletedAgentSession(_ session: TabSession) async -> ProviderConversationCleanupOutcome? {
+        let action = GlobalSettingsStore.shared.providerConversationCleanupAction()
+        let handle = providerCleanupHandle(
+            provider: session.selectedAgent.rawValue,
+            providerSessionID: session.providerSessionID,
+            codexConversationID: session.codexConversationID,
+            codexRolloutPath: session.codexRolloutPath
+        )
+        guard let handle else { return nil }
+
+        let outcome: ProviderConversationCleanupOutcome = if let controller = session.codexController {
+            await controller.cleanupConversation(handle, action: action)
+        } else if let controller = session.claudeController {
+            await controller.cleanupConversation(handle, action: action)
+        } else if let provider = session.provider {
+            await provider.cleanupConversation(handle, action: action)
+        } else {
+            .unsupported(message: "No live provider controller was available for conversation cleanup.")
+        }
+        logProviderConversationCleanupOutcome(outcome, action: action, handle: handle)
+        return outcome
+    }
+
+    @discardableResult
+    func cleanupProviderConversationForPersistedAgentSession(_ agentSession: AgentSession) async -> ProviderConversationCleanupOutcome? {
+        let action = GlobalSettingsStore.shared.providerConversationCleanupAction()
+        let handle = providerCleanupHandle(
+            provider: agentSession.agentKind ?? AgentProviderKind.claudeCode.rawValue,
+            providerSessionID: agentSession.providerSessionID,
+            codexConversationID: agentSession.codexConversationID,
+            codexRolloutPath: agentSession.codexRolloutPath
+        )
+        guard let handle else { return nil }
+        let outcome: ProviderConversationCleanupOutcome = .unsupported(message: "Persisted session has provider metadata, but no live provider cleanup controller is available.")
+        logProviderConversationCleanupOutcome(outcome, action: action, handle: handle)
+        return outcome
+    }
+
+    private func providerCleanupHandle(
+        provider: String,
+        providerSessionID: String?,
+        codexConversationID: String?,
+        codexRolloutPath: String?
+    ) -> ProviderConversationCleanupHandle? {
+        let handle = ProviderConversationCleanupHandle(
+            provider: provider,
+            conversationID: codexConversationID,
+            sessionID: providerSessionID,
+            rolloutPath: codexRolloutPath
+        )
+        return handle.hasProviderIdentifier ? handle : nil
+    }
+
+    private func logProviderConversationCleanupOutcome(
+        _ outcome: ProviderConversationCleanupOutcome,
+        action: ProviderConversationCleanupAction,
+        handle: ProviderConversationCleanupHandle
+    ) {
+        #if DEBUG
+            print("[AgentModeVM] provider conversation cleanup action=\(action.rawValue) provider=\(handle.provider) status=\(outcome.status) message=\(outcome.message ?? "")")
+        #endif
+    }
+
+    @discardableResult
     func finalizeDeletedAgentSessionReferences(
         sessionID: UUID,
         workspaceID: UUID?,
@@ -15570,6 +15634,7 @@ final class AgentModeViewModel: ObservableObject {
             session.pendingCommandRunningFlushTask = nil
             session.pendingCommandRunningByKey.removeAll()
             session.agentTask?.cancel()
+            await cleanupProviderConversationForDeletedAgentSession(session)
             if let provider = session.provider {
                 await provider.dispose()
             }
@@ -15620,7 +15685,8 @@ final class AgentModeViewModel: ObservableObject {
     }
 
     /// Delete a session completely (clear chat and close tab)
-    func deleteSession(tabID: UUID) async {
+    @discardableResult
+    func deleteSession(tabID: UUID) async -> ProviderConversationCleanupOutcome? {
         #if DEBUG
             let deleteSessionStartMS = AgentModePerfDiagnostics.timestampMSIfEnabled()
         #endif
@@ -15630,6 +15696,7 @@ final class AgentModeViewModel: ObservableObject {
         if wasCurrentTab {
             lastProcessedTabID = nil
         }
+        var providerCleanupOutcome: ProviderConversationCleanupOutcome?
         if let session = liveSession {
             removePendingUIRefresh(for: tabID)
             cancelPersistedLoad(for: session)
@@ -15644,6 +15711,7 @@ final class AgentModeViewModel: ObservableObject {
             session.pendingCommandRunningFlushTask = nil
             session.pendingCommandRunningByKey.removeAll()
             session.agentTask?.cancel()
+            providerCleanupOutcome = await cleanupProviderConversationForDeletedAgentSession(session)
             if let provider = session.provider {
                 await provider.dispose()
             }
@@ -15692,6 +15760,7 @@ final class AgentModeViewModel: ObservableObject {
                 ]
             )
         #endif
+        return providerCleanupOutcome
     }
 
     /// Last activity timestamp for sorting tabs in the UI
