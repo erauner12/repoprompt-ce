@@ -30,12 +30,69 @@ final class CoordinatorModeViewModel: ObservableObject {
 
     enum ContinuationAction: Equatable {
         case proceed
+        case runLightweightDiscovery
+        case runDeepPlan
+        case runDesignCritique
+        case startSmaller
         case stopHere
 
         var directiveText: String {
             switch self {
             case .proceed:
-                "Approved to proceed with the next safe step you proposed. Do not merge, apply, commit, push, create a PR, or perform irreversible actions unless I explicitly request that next."
+                "Approved to proceed with the current Mission Plan phase you proposed. Proceed advances the next planned phase, not necessarily implementation. If the current phase is evidence gathering or planning, run only that phase and ask again after updating the Mission Plan. If the current phase is mutable implementation, update the Mission Plan to approval_state:\"approved\" before launching implementation. If this mission is investigation-only or issue-drafting-only, do not invent an implementation phase. Do not merge, apply, commit, push, create a PR, or perform irreversible actions unless I explicitly request that next."
+            case .runLightweightDiscovery:
+                """
+                Gather evidence before approval using visible Mission Plan nodes.
+
+                First call coordinator_chat op=mission_status and inspect the current Mission Plan. Keep approval_state:"awaiting_approval".
+
+                Add or update one or more evidence nodes with execution_policy:"fresh_readonly_child", concrete titles, and completion_evidence. For narrow disposable probes, leave workflow metadata absent and record routing_decisions before launch with operation "agent_explore.start", the relevant node_id/workstream_id, and reason "user requested pre-approval evidence gathering". For durable formal investigation, use the built-in workflow_name:"Investigate" and record operation "agent_run.start" with workflow_name "Investigate" plus the chosen model_id.
+
+                Launch each evidence-gathering probe with agent_explore.start using mission_node_id set to the planned node ID. Keep the child prompt narrow, read-only, and disposable. Do not edit files and do not launch further agents.
+
+                Launch each formal investigation node with agent_run.start using workflow_name:"Investigate", mission_node_id set to the planned node ID, worktree_create:true, detach:true, and worktree_base_ref from the planned/default base when available.
+
+                After the evidence returns, fold findings into the Mission Plan, keep approval_state:"awaiting_approval", and ask again with the phase-aware checkpoint.
+                """
+            case .runDeepPlan:
+                """
+                Deepen the current Mission Plan before approval using a visible planning child session.
+
+                First call coordinator_chat op=mission_status and inspect the current Mission Plan. Keep approval_state:"awaiting_approval".
+
+                Add or update a concrete planning node with workflow_name:"Deep Plan", execution_policy:"fresh_readonly_child", status pending/running as appropriate, and completion_evidence describing the planning evidence needed. Record a routing_decision before launch with operation "agent_run.start", workflow_name "Deep Plan", the planning node_id/workstream_id, and reason "user requested deeper pre-approval planning".
+
+                Launch the planning pass with agent_run.start using workflow_name:"Deep Plan", mission_node_id set to that planning node ID, worktree_create:true, detach:true, a session_name like "Deep Plan: <mission>", and worktree_base_ref from the planned/default base when available.
+
+                Treat the Deep Plan output as evidence for the Mission Plan, not as a replacement source of truth. After it returns, revise the Mission Plan, keep approval_state:"awaiting_approval", and ask again with the phase-aware checkpoint.
+                """
+            case .runDesignCritique:
+                """
+                Get independent critique of the current Mission Plan before approval using a visible design-agent child session.
+
+                First call coordinator_chat op=mission_status and inspect the current Mission Plan. Keep approval_state:"awaiting_approval".
+
+                Add or update a Mission Plan node titled "Critique Mission Plan from a design session" with execution_policy:"plan_critique", role "design", and status pending/running as appropriate. Record a routing_decision before launch with operation "agent_run.start", model_id "design", the critique node_id/workstream_id, and reason "user requested bounded pre-approval plan critique".
+
+                Launch the critique with agent_run.start using model_id:"design", mission_node_id set to that critique node ID, worktree_create:true, detach:true, a session_name like "Plan critique: <mission>", and worktree_base_ref from the planned/default base when available.
+
+                Child prompt:
+                Critique this RepoPrompt Coordinator Mission Plan. You are a critic, not a co-author.
+                Do not implement. Do not launch agents. Do not rewrite the plan wholesale.
+                Review under-specified seams, contradictions or missing dependencies, over-planning or under-decomposition, unsafe or mismatched execution policies, worktree/base strategy risks, missing evidence/tests/proof obligations, and questions whose answers would change execution order.
+                Use sparse context if needed, but label any repo-specific claim that lacks file evidence.
+                Return blockers before approval, recommended revisions, open questions, and a safe-to-approve verdict.
+
+                After the design critique returns, fold actionable findings into the Mission Plan, keep approval_state:"awaiting_approval", and ask again with the phase-aware checkpoint.
+                """
+            case .startSmaller:
+                """
+                Start smaller before approval.
+
+                First call coordinator_chat op=mission_status and inspect the current Mission Plan. Keep approval_state:"awaiting_approval".
+
+                Revise the Mission Plan to the smallest useful first phase. Prefer one or two narrow evidence-gathering/planning nodes over broad implementation. Do not launch mutable implementation. Ask again with the smaller phase-aware plan.
+                """
             case .stopHere:
                 "Stop here. Do not continue this objective unless I ask again."
             }

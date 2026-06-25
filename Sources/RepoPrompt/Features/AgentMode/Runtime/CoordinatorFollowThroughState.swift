@@ -774,6 +774,7 @@ enum CoordinatorMissionExecutionPolicy: String, Codable, Equatable, CaseIterable
     case steerPrimary = "steer_primary"
     case freshSiblingOnSameWorktree = "fresh_sibling_on_same_worktree"
     case freshWorktree = "fresh_worktree"
+    case planCritique = "plan_critique"
     case askUser = "ask_user"
 
     var displayName: String {
@@ -783,6 +784,7 @@ enum CoordinatorMissionExecutionPolicy: String, Codable, Equatable, CaseIterable
         case .steerPrimary: "Steer primary"
         case .freshSiblingOnSameWorktree: "Sibling on same worktree"
         case .freshWorktree: "Fresh worktree"
+        case .planCritique: "Plan critique"
         case .askUser: "Ask user"
         }
     }

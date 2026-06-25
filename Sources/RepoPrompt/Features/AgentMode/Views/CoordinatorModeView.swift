@@ -1407,6 +1407,15 @@ struct CoordinatorModeView: View {
                 policy: node.executionPolicy,
                 nodes: []
             )
+        case .planCritique:
+            return MissionPlanExecutionLane(
+                id: "\(workstreamKey)-plan-critique",
+                title: "Plan critique lane",
+                subtitle: "Pre-approval design review",
+                systemImage: "text.magnifyingglass",
+                policy: node.executionPolicy,
+                nodes: []
+            )
         case .askUser:
             return MissionPlanExecutionLane(
                 id: "\(workstreamKey)-ask-user",
@@ -2577,6 +2586,38 @@ struct CoordinatorModeView: View {
     private func coordinatorOwnedCheckpointState(
         for checkpoint: CoordinatorModeConversationCheckpoint
     ) -> AgentAskUserPendingState? {
+        var options = [
+            AgentAskUserOption(
+                label: "Proceed",
+                description: "Run the next safe step the Coordinator proposed."
+            ),
+            AgentAskUserOption(
+                label: "Revise",
+                description: "Edit the plan or instruction before continuing."
+            )
+        ]
+        if offersPlanCritiqueDecision(for: checkpoint) {
+            options.append(AgentAskUserOption(
+                label: "Gather evidence",
+                description: "Run narrow read-only probes before approval."
+            ))
+            options.append(AgentAskUserOption(
+                label: "Deepen plan",
+                description: "Run a visible planning pass for broad uncertainty."
+            ))
+            options.append(AgentAskUserOption(
+                label: "Get independent critique",
+                description: "Ask a separate design session to review the plan."
+            ))
+            options.append(AgentAskUserOption(
+                label: "Start smaller",
+                description: "Revise to a smaller first phase."
+            ))
+        }
+        options.append(AgentAskUserOption(
+            label: "Stop",
+            description: "End this Mission here."
+        ))
         let interaction = AgentAskUserInteraction(
             id: checkpoint.interactionID,
             title: checkpoint.displayName,
@@ -2586,20 +2627,7 @@ struct CoordinatorModeView: View {
                     id: "decision",
                     header: "Coordinator decision",
                     question: "What should happen next?",
-                    options: [
-                        AgentAskUserOption(
-                            label: "Proceed",
-                            description: "Run the next safe step the Coordinator proposed."
-                        ),
-                        AgentAskUserOption(
-                            label: "Revise",
-                            description: "Edit the plan or instruction before continuing."
-                        ),
-                        AgentAskUserOption(
-                            label: "Stop",
-                            description: "End this Mission here."
-                        )
-                    ],
+                    options: options,
                     allowsMultiple: false,
                     allowsCustom: false
                 )
@@ -2628,11 +2656,26 @@ struct CoordinatorModeView: View {
                 coordinatorDirectiveDraft = "Revise the plan: "
             }
             isCoordinatorComposerFocused = true
+        case "Gather evidence":
+            submitCoordinatorContinuation(.runLightweightDiscovery)
+        case "Deepen plan":
+            submitCoordinatorContinuation(.runDeepPlan)
+        case "Get independent critique":
+            submitCoordinatorContinuation(.runDesignCritique)
+        case "Start smaller":
+            submitCoordinatorContinuation(.startSmaller)
         case "Stop":
             submitCoordinatorContinuation(.stopHere)
         default:
             break
         }
+    }
+
+    private func offersPlanCritiqueDecision(for checkpoint: CoordinatorModeConversationCheckpoint) -> Bool {
+        guard checkpoint.kind == .approvalRequired,
+              let missionPlan = viewModel.snapshot.coordinatorRail.missionPlan
+        else { return false }
+        return missionPlan.approvalState == .awaitingApproval && !missionPlan.nodes.isEmpty
     }
 
     private func activeCoordinatorContinuationCheckpoint(

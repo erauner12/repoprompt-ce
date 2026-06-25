@@ -35,7 +35,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
 
             Explore children inherit the caller's worktree bindings by default; pass `inherit_worktree=false` to opt out. Start-only worktree controls can bind an existing worktree or create one before provider startup, overriding an inherited primary-root binding. Multi-message creates produce one worktree per child when branch/path are implicit and reject a shared explicit branch or path.
 
-            Valid for workflow-less Coordinator Mission Plan probe nodes when the work is narrow, read-only, and disposable. Do not use `agent_explore` for workflow-bearing nodes: it cannot attach `workflow_name`/`workflow_id`; planned Investigate/Deep Plan/Orchestrate/Review nodes must use `agent_run.start` or `agent_run.steer` with the same workflow metadata recorded in the Mission Plan.
+            Valid for workflow-less Coordinator Mission Plan probe nodes when the work is narrow, read-only, and disposable. For Coordinator pre-approval lightweight discovery, pass the planned node's `mission_node_id`. Do not use `agent_explore` for workflow-bearing nodes: it cannot attach `workflow_name`/`workflow_id`; planned Investigate/Deep Plan/Orchestrate/Review nodes must use `agent_run.start` or `agent_run.steer` with the same workflow metadata recorded in the Mission Plan.
 
             **Operations**: start | poll | wait | cancel
 
@@ -51,7 +51,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 description: """
                 Provide `op` plus operation-specific fields.
 
-                **start**: message or messages (required, mutually exclusive), detach?, timeout?, inherit_worktree?, worktree|worktree_id|worktree_create? and worktree_* args
+                **start**: message or messages (required, mutually exclusive), mission_node_id?, detach?, timeout?, inherit_worktree?, worktree|worktree_id|worktree_create? and worktree_* args
                 **poll / wait**: session_id or session_ids (mutually exclusive), timeout? (wait only)
                 **cancel**: session_id (required)
                 """,
@@ -59,6 +59,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                     "op": .string(description: "Operation.", enum: ["start", "poll", "wait", "cancel"]),
                     "message": .string(description: "[start] Exploration instruction text for one fresh explore child. Mutually exclusive with messages."),
                     "messages": .array(description: "[start] Array of exploration instruction strings. Mutually exclusive with message. Starts one fresh explore child per entry.", items: .string()),
+                    "mission_node_id": .string(description: "[start] Optional Coordinator Mission Plan node UUID for policy checks. Required for the pre-approval lightweight discovery exception."),
                     "detach": .boolean(description: "[start] Return immediately instead of waiting. Default false."),
                     "timeout": .number(description: "[start, wait] Max wait seconds. 0 = poll. Default \(defaultWaitSeconds)."),
                     "worktree": .string(description: "[start] Existing worktree selector to bind before provider startup: @current, @main, @branch:<name>, name, branch, path, or @id:<worktree_id>. Mutually exclusive with worktree_id and worktree_create."),
@@ -121,7 +122,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 description: """
                 Provide `op` plus operation-specific fields.
 
-                **start**: message (required), model_id? (defaults to pair), session_name?, workflow_id|workflow_name?, detach?, timeout?, inherit_worktree?, coordinator_internal?, worktree|worktree_id|worktree_create? and worktree_* args. Use workflow_name="orchestrate" to plan, decompose, and dispatch sub-agents.
+                **start**: message (required), model_id? (defaults to pair), session_name?, mission_node_id?, workflow_id|workflow_name?, detach?, timeout?, inherit_worktree?, coordinator_internal?, worktree|worktree_id|worktree_create? and worktree_* args. Use workflow_name="orchestrate" to plan, decompose, and dispatch sub-agents.
                 **poll / wait**: session_id or session_ids (mutually exclusive), timeout? (wait only)
                 **cancel**: session_id (required)
                 **steer**: session_id (required, from a prior `start`/`steer` response), message (required), wait?, timeout_seconds?, workflow_id|workflow_name?
@@ -134,6 +135,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                     "session_id": .string(description: "[poll, wait, cancel, steer, respond] Session UUID returned by a prior start/steer response. Do not fabricate it. Not accepted by start — use steer to continue an existing session."),
                     "session_ids": .array(description: "[wait, poll] Array of session UUIDs. For wait: returns when first session reaches interesting state. For poll: returns all current snapshots. Mutually exclusive with session_id.", items: .string()),
                     "session_name": .string(description: "[start] Display name for a new session."),
+                    "mission_node_id": .string(description: "[start] Optional Coordinator Mission Plan node UUID for policy checks and later Coordinator-side binding. Required for pre-approval Investigate, Deep Plan, and plan_critique exceptions."),
                     "workflow_id": .string(description: "[start, steer, respond] Workflow ID. Mutually exclusive with workflow_name."),
                     "workflow_name": .string(description: "[start, steer, respond] Workflow name. Mutually exclusive with workflow_id."),
                     "coordinator_internal": .boolean(description: "[start] Coordinator-internal housekeeping session. Hides the child from Coordinator board/action-chip surfaces while preserving parentage and Agent Mode state. Default false."),
@@ -303,7 +305,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                                 "workstream_title": .string(description: "Workstream title alternative."),
                                 "depends_on": .array(description: "Dependency node UUIDs.", items: .string()),
                                 "role": .string(description: "Optional role label."),
-                                "execution_policy": .string(description: "How this node should execute.", enum: ["coordinator_only", "fresh_readonly_child", "steer_primary", "fresh_sibling_on_same_worktree", "fresh_worktree", "ask_user"]),
+                                "execution_policy": .string(description: "How this node should execute.", enum: ["coordinator_only", "fresh_readonly_child", "steer_primary", "fresh_sibling_on_same_worktree", "fresh_worktree", "plan_critique", "ask_user"]),
                                 "status": .string(description: "Node status.", enum: ["pending", "running", "completed", "blocked", "skipped", "cancelled"]),
                                 "bound_session_id": .string(description: "Optional delegated session UUID."),
                                 "bound_interaction_id": .string(description: "Optional interaction UUID.")

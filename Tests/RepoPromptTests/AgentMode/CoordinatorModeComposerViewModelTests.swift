@@ -418,6 +418,93 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.railTranscriptEntries.first?.text, CoordinatorModeViewModel.ContinuationAction.proceed.directiveText)
     }
 
+    func testLightweightDiscoveryContinuationSubmitsDiscoveryDirective() async throws {
+        let text = try await submittedContinuationText(.runLightweightDiscovery)
+
+        XCTAssertTrue(text.contains("coordinator_chat op=mission_status"))
+        XCTAssertTrue(text.contains("approval_state:\"awaiting_approval\""))
+        XCTAssertTrue(text.contains("execution_policy:\"fresh_readonly_child\""))
+        XCTAssertTrue(text.contains("agent_explore.start"))
+        XCTAssertTrue(text.contains("workflow_name:\"Investigate\""))
+        XCTAssertTrue(text.contains("chosen model_id"))
+        XCTAssertTrue(text.contains("agent_run.start"))
+        XCTAssertTrue(text.contains("mission_node_id"))
+        XCTAssertTrue(text.contains("worktree_create:true"))
+        XCTAssertFalse(text.contains("model_id:\"explore\""))
+        XCTAssertTrue(text.contains("read-only"))
+    }
+
+    func testDeepPlanContinuationSubmitsDeepPlanDirective() async throws {
+        let text = try await submittedContinuationText(.runDeepPlan)
+
+        XCTAssertTrue(text.contains("coordinator_chat op=mission_status"))
+        XCTAssertTrue(text.contains("approval_state:\"awaiting_approval\""))
+        XCTAssertTrue(text.contains("workflow_name:\"Deep Plan\""))
+        XCTAssertTrue(text.contains("agent_run.start"))
+        XCTAssertTrue(text.contains("mission_node_id"))
+        XCTAssertTrue(text.contains("worktree_create:true"))
+        XCTAssertTrue(text.contains("not as a replacement source of truth"))
+    }
+
+    func testDesignCritiqueContinuationSubmitsDesignCritiqueDirective() async throws {
+        let text = try await submittedContinuationText(.runDesignCritique)
+
+        XCTAssertTrue(text.contains("coordinator_chat op=mission_status"))
+        XCTAssertTrue(text.contains("approval_state:\"awaiting_approval\""))
+        XCTAssertTrue(text.contains("execution_policy:\"plan_critique\""))
+        XCTAssertTrue(text.contains("agent_run.start"))
+        XCTAssertTrue(text.contains("model_id:\"design\""))
+        XCTAssertTrue(text.contains("mission_node_id"))
+        XCTAssertTrue(text.contains("worktree_create:true"))
+        XCTAssertTrue(text.contains("Critique this RepoPrompt Coordinator Mission Plan"))
+        XCTAssertFalse(text.contains("ask_oracle"))
+    }
+
+    func testStartSmallerContinuationSubmitsRevisionDirective() async throws {
+        let text = try await submittedContinuationText(.startSmaller)
+
+        XCTAssertTrue(text.contains("Start smaller before approval"))
+        XCTAssertTrue(text.contains("coordinator_chat op=mission_status"))
+        XCTAssertTrue(text.contains("approval_state:\"awaiting_approval\""))
+        XCTAssertTrue(text.contains("smallest useful first phase"))
+    }
+
+    private func submittedContinuationText(_ action: CoordinatorModeViewModel.ContinuationAction) async throws -> String {
+        let coordinatorID = uuid(1)
+        let coordinatorTab = uuid(101)
+        let input = input(
+            live: [
+                live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(20), state: .idle, isMCP: true)
+            ],
+            demoCoordinatorIDs: [coordinatorID]
+        )
+        var submissions: [CoordinatorDirectiveSubmission] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                var next = input
+                next.sortMode = sortMode
+                if let selectedCoordinatorID {
+                    next.selectedCoordinatorID = selectedCoordinatorID
+                }
+                return next
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { submission in
+                submissions.append(submission)
+                return .accepted
+            }
+        )
+        viewModel.refresh()
+
+        let result = await viewModel.submitCoordinatorContinuation(action)
+
+        XCTAssertEqual(result, .accepted)
+        let text = try XCTUnwrap(submissions.first?.providerText)
+        XCTAssertEqual(submissions.first?.coordinatorSessionID, coordinatorID)
+        XCTAssertEqual(submissions.first?.forceNewRuntime, false)
+        return text
+    }
+
     func testCoordinatorCheckpointMarkerIsStrippedAndProjected() {
         let parsed = CoordinatorModeConversationCheckpointParser.parse("""
         I finished the safe part and can continue if you want.

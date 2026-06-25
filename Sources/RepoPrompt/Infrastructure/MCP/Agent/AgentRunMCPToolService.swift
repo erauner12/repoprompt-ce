@@ -261,6 +261,7 @@ struct AgentRunMCPToolService {
         if normalizedString(args["session_id"]) != nil {
             throw MCPError.invalidParams("agent_run.start always creates a new session. Use agent_run op=steer with session_id to continue an existing session.")
         }
+        let missionNodeID = try optionalUUID(args["mission_node_id"], name: "mission_node_id")
         let detach = parseBool(args["detach"]) ?? false
         let coordinatorInternal = parseBool(args["coordinator_internal"]) ?? false
         let timeoutSeconds = try Self.resolvedStartTimeoutSeconds(args["timeout"])
@@ -317,7 +318,13 @@ struct AgentRunMCPToolService {
         let coordinatorMissionPlan = await agentModeVM.mcpCoordinatorMissionPlan(sessionID: spawnParentSessionID)
         let coordinatorMissionPlanDecision = AgentRunCoordinatorMissionPlanPolicy.decision(
             isCoordinatorParent: isCoordinatorParent,
-            missionPlan: coordinatorMissionPlan
+            missionPlan: coordinatorMissionPlan,
+            operation: .agentRunStart,
+            missionNodeID: missionNodeID,
+            requestedModelID: normalizedString(args["model_id"]),
+            requestedWorkflowID: workflow?.id,
+            requestedWorkflowName: workflow?.displayName,
+            usesCreatedWorktree: worktreeStartRequest.mode == .create
         )
         if case let .requireApprovedMissionPlan(reason) = coordinatorMissionPlanDecision {
             throw MCPError.invalidParams(reason)
@@ -2073,6 +2080,14 @@ struct AgentRunMCPToolService {
 
     private func requireUUID(_ value: Value?, name: String) throws -> UUID {
         guard let raw = normalizedString(value), let uuid = UUID(uuidString: raw) else {
+            throw MCPError.invalidParams("\(name) must be a UUID string.")
+        }
+        return uuid
+    }
+
+    private func optionalUUID(_ value: Value?, name: String) throws -> UUID? {
+        guard let raw = normalizedString(value) else { return nil }
+        guard let uuid = UUID(uuidString: raw) else {
             throw MCPError.invalidParams("\(name) must be a UUID string.")
         }
         return uuid

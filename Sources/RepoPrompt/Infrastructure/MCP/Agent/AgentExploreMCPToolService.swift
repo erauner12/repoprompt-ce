@@ -56,11 +56,15 @@ struct AgentExploreMCPToolService {
         let messages = startMessages.messages
         let worktreeStartRequest = try startWorktreeCoordinator.parseRequest(args: args)
         try validateBatchWorktreeRequest(worktreeStartRequest, messageCount: messages.count)
+        let missionNodeID = try optionalUUID(args["mission_node_id"], name: "mission_node_id")
+        if missionNodeID != nil, messages.count > 1 {
+            throw MCPError.invalidParams("agent_explore.start with mission_node_id supports one message. Start separate node-bound probes so each child maps to one Mission Plan node.")
+        }
         let detach = AgentMCPToolHelpers.parseBool(args["detach"]) ?? false
         let timeoutSeconds = try Self.resolvedStartTimeoutSeconds(args["timeout"])
 
         let metadata = await captureRequestMetadata()
-        let context = try await resolveStartContext(metadata: metadata)
+        let context = try await resolveStartContext(metadata: metadata, missionNodeID: missionNodeID)
         let started = try await startExploreRuns(
             messages: messages,
             context: context,
@@ -192,7 +196,7 @@ struct AgentExploreMCPToolService {
         return .batch(messages)
     }
 
-    private func resolveStartContext(metadata: RequestMetadata) async throws -> ExploreStartContext {
+    private func resolveStartContext(metadata: RequestMetadata, missionNodeID: UUID?) async throws -> ExploreStartContext {
         let targetWindow = try requireTargetWindow()
         guard let workspace = targetWindow.workspaceManager.activeWorkspace else {
             throw MCPError.invalidParams("No active workspace available for agent_explore.start.")
@@ -208,7 +212,9 @@ struct AgentExploreMCPToolService {
         let coordinatorMissionPlan = agentModeVM.mcpCoordinatorMissionPlan(sessionID: caller.sourceSessionID)
         let coordinatorMissionPlanDecision = AgentRunCoordinatorMissionPlanPolicy.decision(
             isCoordinatorParent: isCoordinatorParent,
-            missionPlan: coordinatorMissionPlan
+            missionPlan: coordinatorMissionPlan,
+            operation: .agentExploreStart,
+            missionNodeID: missionNodeID
         )
         if case let .requireApprovedMissionPlan(reason) = coordinatorMissionPlanDecision {
             throw MCPError.invalidParams(reason)
@@ -507,7 +513,15 @@ struct AgentExploreMCPToolService {
         }
     }
 
-    private static let startKeys = Set(["op", "message", "messages", "detach", "timeout"])
+    private func optionalUUID(_ value: Value?, name: String) throws -> UUID? {
+        guard let raw = AgentMCPToolHelpers.normalizedString(value) else { return nil }
+        guard let uuid = UUID(uuidString: raw) else {
+            throw MCPError.invalidParams("\(name) must be a UUID string.")
+        }
+        return uuid
+    }
+
+    private static let startKeys = Set(["op", "message", "messages", "mission_node_id", "detach", "timeout"])
         .union(AgentMCPStartWorktreeCoordinator.Request.argumentKeys)
     private static let pollKeys: Set<String> = ["op", "session_id", "session_ids"]
     private static let waitKeys: Set<String> = ["op", "session_id", "session_ids", "timeout"]

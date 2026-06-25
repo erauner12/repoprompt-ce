@@ -100,6 +100,15 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(decoded.nodes.first?.completionEvidence, "Downloaded CSV matches the currently visible filtered data.")
     }
 
+    func testPlanCritiqueExecutionPolicyCodableAndDisplayName() throws {
+        let data = try JSONEncoder().encode(CoordinatorMissionExecutionPolicy.planCritique)
+        XCTAssertEqual(String(data: data, encoding: .utf8), "\"plan_critique\"")
+
+        let decoded = try JSONDecoder().decode(CoordinatorMissionExecutionPolicy.self, from: data)
+        XCTAssertEqual(decoded, .planCritique)
+        XCTAssertEqual(decoded.displayName, "Plan critique")
+    }
+
     func testMissionPlanRoutingDecisionsCodableRoundTripAndDefaultEmpty() throws {
         let planPayloadMissingRoutingDecisions = """
         {
