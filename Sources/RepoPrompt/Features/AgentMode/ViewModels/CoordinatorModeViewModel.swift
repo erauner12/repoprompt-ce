@@ -155,13 +155,17 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias CoordinatorPinHandler = @MainActor (_ option: CoordinatorModeCoordinatorOption, _ isPinned: Bool) -> Void
     typealias MissionPlanUpdater = @MainActor (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
     typealias MissionStopper = @MainActor (_ request: CoordinatorMissionStopRequest) async -> CoordinatorMissionStopResult
+    typealias PendingFollowThroughEventProvider = @MainActor (_ coordinatorSessionID: UUID?) -> CoordinatorFollowThroughEvent?
+    typealias FollowThroughEventSubmitter = @MainActor (_ event: CoordinatorFollowThroughEvent) async -> DirectiveSubmissionResult
+    typealias FollowThroughEventResolver = @MainActor (_ event: CoordinatorFollowThroughEvent) async -> Void
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
     @Published private(set) var railTranscriptEntries: [CoordinatorModeRailTranscriptEntry] = []
     @Published private(set) var currentRailActivityText: String?
     @Published private(set) var composerNotice: String?
     @Published private(set) var isFreshCoordinatorRunPending = false
-    @Published private(set) var usesAutoMode: Bool
+    @Published private(set) var executionPace: CoordinatorExecutionPace
+    @Published private(set) var pendingFollowThroughEvent: CoordinatorFollowThroughEvent?
     @Published var selectedMissionTemplate: CoordinatorMissionTemplate?
     @Published var sortMode: CoordinatorModeSortMode = .lastUpdated {
         didSet {
@@ -190,6 +194,9 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let coordinatorPinHandler: CoordinatorPinHandler
     private let missionPlanUpdater: MissionPlanUpdater
     private let missionStopper: MissionStopper
+    private let pendingFollowThroughEventProvider: PendingFollowThroughEventProvider
+    private let followThroughEventSubmitter: FollowThroughEventSubmitter
+    private let followThroughEventResolver: FollowThroughEventResolver
     private let projector: CoordinatorModeSnapshotProjector
     private let userDefaults: UserDefaults
     private var coordinatorSelectionByWorkspaceID: [UUID: CoordinatorSelectionState] = [:]
@@ -225,6 +232,11 @@ final class CoordinatorModeViewModel: ObservableObject {
                 skippedSessionIDs: request.sessionIDs
             )
         },
+        pendingFollowThroughEventProvider: @escaping PendingFollowThroughEventProvider = { _ in nil },
+        followThroughEventSubmitter: @escaping FollowThroughEventSubmitter = { _ in
+            .rejected(message: "Coordinator follow-through is unavailable.")
+        },
+        followThroughEventResolver: @escaping FollowThroughEventResolver = { _ in },
         projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector(),
         userDefaults: UserDefaults = .standard
     ) {
@@ -243,9 +255,16 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.coordinatorPinHandler = coordinatorPinHandler
         self.missionPlanUpdater = missionPlanUpdater
         self.missionStopper = missionStopper
+        self.pendingFollowThroughEventProvider = pendingFollowThroughEventProvider
+        self.followThroughEventSubmitter = followThroughEventSubmitter
+        self.followThroughEventResolver = followThroughEventResolver
         self.projector = projector
         self.userDefaults = userDefaults
-        usesAutoMode = CoordinatorModeAutomationPreference.isEnabled(defaults: userDefaults)
+        executionPace = CoordinatorModeAutomationPreference.executionPace(defaults: userDefaults)
+    }
+
+    var usesAutoMode: Bool {
+        executionPace.usesAutoMode
     }
 
     func setVisible(_ visible: Bool) {
@@ -404,9 +423,25 @@ final class CoordinatorModeViewModel: ObservableObject {
     }
 
     func setUsesAutoMode(_ usesAutoMode: Bool) {
-        guard self.usesAutoMode != usesAutoMode else { return }
-        self.usesAutoMode = usesAutoMode
-        CoordinatorModeAutomationPreference.setEnabled(usesAutoMode, defaults: userDefaults)
+        setExecutionPace(usesAutoMode ? .auto : .step)
+    }
+
+    func setExecutionPace(_ executionPace: CoordinatorExecutionPace) {
+        guard self.executionPace != executionPace else { return }
+        let pendingEventBeforeChange = pendingFollowThroughEvent
+        self.executionPace = executionPace
+        CoordinatorModeAutomationPreference.setExecutionPace(executionPace, defaults: userDefaults)
+        pendingFollowThroughEvent = executionPace.usesAutoMode
+            ? nil
+            : pendingFollowThroughEventProvider(snapshot.coordinatorRail.coordinatorSessionID)
+        if executionPace == .auto,
+           snapshot.coordinatorRail.isComposerSendEnabled,
+           let pendingEventBeforeChange
+        {
+            Task { @MainActor in
+                await submitPendingFollowThroughEvent(pendingEventBeforeChange)
+            }
+        }
     }
 
     @discardableResult
@@ -464,6 +499,29 @@ final class CoordinatorModeViewModel: ObservableObject {
     @discardableResult
     func submitCoordinatorContinuation(_ action: ContinuationAction) async -> DirectiveSubmissionResult {
         await submitCoordinatorDirective(action.directiveText)
+    }
+
+    func activePendingFollowThroughEvent() -> CoordinatorFollowThroughEvent? {
+        guard !usesAutoMode else { return nil }
+        return pendingFollowThroughEvent
+    }
+
+    @discardableResult
+    func submitPendingFollowThroughEvent(_ event: CoordinatorFollowThroughEvent) async -> DirectiveSubmissionResult {
+        let result = await followThroughEventSubmitter(event)
+        switch result {
+        case .accepted:
+            composerNotice = nil
+        case let .rejected(message):
+            composerNotice = message.isEmpty ? nil : message
+        }
+        refresh()
+        return result
+    }
+
+    func resolvePendingFollowThroughEvent(_ event: CoordinatorFollowThroughEvent) async {
+        await followThroughEventResolver(event)
+        refresh()
     }
 
     private func selectFreshCoordinatorRuntimeIfAvailable(
@@ -677,6 +735,12 @@ final class CoordinatorModeViewModel: ObservableObject {
         updateRailStatusPresentation(from: nextSnapshot.coordinatorRail)
         updateRailActionPresentation(from: nextSnapshot)
         syncRailConversationTranscript(for: nextCoordinatorSessionID)
+        let nextPendingFollowThroughEvent = usesAutoMode
+            ? nil
+            : pendingFollowThroughEventProvider(nextCoordinatorSessionID)
+        if pendingFollowThroughEvent != nextPendingFollowThroughEvent {
+            pendingFollowThroughEvent = nextPendingFollowThroughEvent
+        }
         let nextFingerprint = nextSnapshot.fingerprint
         guard lastPublishedFingerprint != nextFingerprint else { return }
         lastPublishedFingerprint = nextFingerprint
@@ -1085,6 +1149,15 @@ extension AgentModeViewModel {
                 )
             }
             return await stopCoordinatorMissionRuntime(request)
+        } pendingFollowThroughEventProvider: { [weak self] coordinatorSessionID in
+            self?.pendingCoordinatorFollowThroughEvent(coordinatorSessionID: coordinatorSessionID)
+        } followThroughEventSubmitter: { [weak self] event in
+            guard let self else {
+                return .rejected(message: "Coordinator follow-through is unavailable.")
+            }
+            return await submitPendingCoordinatorFollowThroughEvent(event)
+        } followThroughEventResolver: { [weak self] event in
+            self?.resolvePendingCoordinatorFollowThroughEvent(event)
         }
     }
 
@@ -1214,7 +1287,6 @@ extension AgentModeViewModel {
         trigger: CoordinatorAutoModeBoundaryClassifier.Trigger,
         snapshot explicitSnapshot: CoordinatorModeSnapshot? = nil
     ) async {
-        guard coordinatorModeViewModel.usesAutoMode else { return }
         let snapshot = explicitSnapshot ?? coordinatorModeViewModel.snapshot
         let rows = coordinatorModeRows(in: snapshot)
         let coordinatorIDs = Set(
@@ -1236,7 +1308,6 @@ extension AgentModeViewModel {
         snapshot explicitSnapshot: CoordinatorModeSnapshot,
         trigger: CoordinatorAutoModeBoundaryClassifier.Trigger
     ) async {
-        guard coordinatorModeViewModel.usesAutoMode else { return }
         await evaluateCoordinatorFollowThrough(
             coordinatorSessionID: coordinatorSessionID,
             rows: coordinatorModeRows(in: explicitSnapshot),
@@ -1258,6 +1329,7 @@ extension AgentModeViewModel {
         var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
         guard state.originalObjectiveSummary?.isEmpty == false else { return }
         guard state.missionPlan?.status != .stopped else { return }
+        let shouldAutoSubmit = coordinatorModeViewModel.usesAutoMode
 
         let ownedRows = rows.filter { $0.parentCoordinator?.sessionID == coordinatorSessionID }
         defer {
@@ -1269,7 +1341,7 @@ extension AgentModeViewModel {
         if case .gateCleared = trigger {
             let classifier = CoordinatorAutoModeBoundaryClassifier()
             let input = CoordinatorAutoModeBoundaryClassifier.Input(
-                autoModeEnabled: coordinatorModeViewModel.usesAutoMode,
+                autoModeEnabled: true,
                 coordinatorSessionID: coordinatorSessionID,
                 coordinatorRunState: session.runState,
                 rows: rows,
@@ -1286,7 +1358,13 @@ extension AgentModeViewModel {
                         )
                 }
                 persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
-                await submitCoordinatorFollowThroughEvent(event, tabID: tabID, session: session)
+                if shouldAutoSubmit {
+                    await submitCoordinatorFollowThroughEvent(event, tabID: tabID, session: session)
+                } else {
+                    state.enqueue(event)
+                    persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+                    coordinatorModeViewModel.refreshIfVisible()
+                }
             case .hold(.coordinatorActive):
                 var idleInput = input
                 idleInput.coordinatorRunState = .idle
@@ -1308,13 +1386,15 @@ extension AgentModeViewModel {
         }
 
         if !session.runState.isActive, let pending = state.pendingEvents.first {
-            await submitCoordinatorFollowThroughEvent(pending, tabID: tabID, session: session)
+            if shouldAutoSubmit {
+                await submitCoordinatorFollowThroughEvent(pending, tabID: tabID, session: session)
+            }
             return
         }
 
         let classifier = CoordinatorAutoModeBoundaryClassifier()
         var input = CoordinatorAutoModeBoundaryClassifier.Input(
-            autoModeEnabled: coordinatorModeViewModel.usesAutoMode,
+            autoModeEnabled: true,
             coordinatorSessionID: coordinatorSessionID,
             coordinatorRunState: session.runState,
             rows: rows,
@@ -1324,7 +1404,13 @@ extension AgentModeViewModel {
         let decision = classifier.classify(input)
         switch decision {
         case let .resume(event):
-            await submitCoordinatorFollowThroughEvent(event, tabID: tabID, session: session)
+            if shouldAutoSubmit {
+                await submitCoordinatorFollowThroughEvent(event, tabID: tabID, session: session)
+            } else {
+                state.enqueue(event)
+                persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+                coordinatorModeViewModel.refreshIfVisible()
+            }
         case .hold(.coordinatorActive):
             input.coordinatorRunState = .idle
             if case let .resume(event) = classifier.classify(input) {
@@ -1337,16 +1423,18 @@ extension AgentModeViewModel {
     }
 
     @MainActor
+    @discardableResult
     private func submitCoordinatorFollowThroughEvent(
         _ event: CoordinatorFollowThroughEvent,
         tabID: UUID,
         session: TabSession
-    ) async {
+    ) async -> CoordinatorModeViewModel.DirectiveSubmissionResult {
         guard !session.runState.isActive else {
             var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
             state.enqueue(event)
+            state.markDeferred(event)
             persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
-            return
+            return .rejected(message: "Coordinator is mid-run. Continue when it reaches an ordinary turn boundary.")
         }
         let result = await submitCoordinatorDirectiveToAgentMode(
             event.resumeDirective,
@@ -1357,11 +1445,14 @@ extension AgentModeViewModel {
         switch result {
         case .submitted:
             state.markSubmitted(event)
-        case .blocked:
+            persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+            return .accepted
+        case let .blocked(message):
             state.enqueue(event)
             state.markDeferred(event)
+            persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+            return .rejected(message: message)
         }
-        persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
     }
 
     @MainActor
@@ -1473,6 +1564,38 @@ extension AgentModeViewModel {
 
     private func coordinatorModeRows(in snapshot: CoordinatorModeSnapshot) -> [CoordinatorModeRow] {
         snapshot.groups.flatMap(\.rows)
+    }
+
+    @MainActor
+    private func pendingCoordinatorFollowThroughEvent(coordinatorSessionID: UUID?) -> CoordinatorFollowThroughEvent? {
+        guard let coordinatorSessionID,
+              let session = sessions.values.first(where: { session in
+                  session.activeAgentSessionID == coordinatorSessionID && session.isCoordinatorRuntime
+              })
+        else { return nil }
+        return session.coordinatorFollowThroughState?.pendingEvents.first
+    }
+
+    @MainActor
+    private func submitPendingCoordinatorFollowThroughEvent(
+        _ event: CoordinatorFollowThroughEvent
+    ) async -> CoordinatorModeViewModel.DirectiveSubmissionResult {
+        guard let match = sessions.first(where: { _, session in
+            session.activeAgentSessionID == event.coordinatorSessionID && session.isCoordinatorRuntime
+        }) else {
+            return .rejected(message: "Coordinator follow-through is unavailable.")
+        }
+        return await submitCoordinatorFollowThroughEvent(event, tabID: match.key, session: match.value)
+    }
+
+    @MainActor
+    private func resolvePendingCoordinatorFollowThroughEvent(_ event: CoordinatorFollowThroughEvent) {
+        guard let match = sessions.first(where: { _, session in
+            session.activeAgentSessionID == event.coordinatorSessionID && session.isCoordinatorRuntime
+        }) else { return }
+        var state = match.value.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        state.markSubmitted(event)
+        persistCoordinatorFollowThroughState(state, tabID: match.key, session: match.value)
     }
 
     @MainActor

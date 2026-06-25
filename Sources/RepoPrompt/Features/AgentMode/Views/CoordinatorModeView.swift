@@ -558,11 +558,11 @@ struct CoordinatorModeView: View {
     private func automationModePicker(metrics: CoordinatorVisualMetrics) -> some View {
         HStack(spacing: metrics.headerSegmentSpacing) {
             headerSegmentButton(
-                title: "Manual",
+                title: "Step",
                 isSelected: !viewModel.usesAutoMode,
                 metrics: metrics
             ) {
-                viewModel.setUsesAutoMode(false)
+                viewModel.setExecutionPace(.step)
             }
 
             headerSegmentButton(
@@ -570,7 +570,7 @@ struct CoordinatorModeView: View {
                 isSelected: viewModel.usesAutoMode,
                 metrics: metrics
             ) {
-                viewModel.setUsesAutoMode(true)
+                viewModel.setExecutionPace(.auto)
             }
         }
         .padding(metrics.headerControlInset)
@@ -2481,6 +2481,37 @@ struct CoordinatorModeView: View {
             .disabled(isSubmittingCoordinatorDirective)
             .padding(.horizontal, metrics.cardPadding)
             .padding(.vertical, metrics.smallSpacing)
+        } else if rail.state == .selected,
+                  rail.isComposerSendEnabled,
+                  !isSubmittingCoordinatorDirective,
+                  let event = viewModel.activePendingFollowThroughEvent(),
+                  let pending = coordinatorFollowThroughCheckpointState(for: event)
+        {
+            coordinatorCompactCheckpointCard(
+                pending: pending,
+                badgeTitle: "Step checkpoint",
+                badgeSystemImage: "pause.circle.fill",
+                accentColor: Color.accentColor,
+                submitLabel: "Continue",
+                showsSkipControls: false,
+                metrics: metrics,
+                onDraftChange: { questionID, draft in
+                    var drafts = coordinatorOwnedCheckpointDrafts[event.id] ?? pending.interaction.emptyDrafts()
+                    drafts[questionID] = draft
+                    coordinatorOwnedCheckpointDrafts[event.id] = drafts
+                },
+                onQuestionIndexChange: { index in
+                    coordinatorOwnedCheckpointQuestionIndex[event.id] = index
+                },
+                onSubmit: {
+                    submitCoordinatorFollowThroughCheckpoint(event)
+                },
+                onSkipAll: {},
+                onUserActivity: {}
+            )
+            .disabled(isSubmittingCoordinatorDirective)
+            .padding(.horizontal, metrics.cardPadding)
+            .padding(.vertical, metrics.smallSpacing)
         }
     }
 
@@ -2641,6 +2672,45 @@ struct CoordinatorModeView: View {
         )
     }
 
+    private func coordinatorFollowThroughCheckpointState(
+        for event: CoordinatorFollowThroughEvent
+    ) -> AgentAskUserPendingState? {
+        let options = [
+            AgentAskUserOption(
+                label: "Continue",
+                description: "Resume the Coordinator with this observed boundary."
+            ),
+            AgentAskUserOption(
+                label: "Revise",
+                description: "Edit the plan or instruction before continuing."
+            ),
+            AgentAskUserOption(
+                label: "Stop",
+                description: "End this Mission here."
+            )
+        ]
+        let interaction = AgentAskUserInteraction(
+            id: event.stepCheckpointID,
+            title: event.stepCheckpointTitle,
+            context: event.stepCheckpointContext,
+            questions: [
+                AgentAskUserQuestion(
+                    id: "decision",
+                    header: "Coordinator decision",
+                    question: "What should happen next?",
+                    options: options,
+                    allowsMultiple: false,
+                    allowsCustom: false
+                )
+            ]
+        )
+        return AgentAskUserPendingState(
+            interaction: interaction,
+            draftsByQuestionID: coordinatorOwnedCheckpointDrafts[event.id] ?? interaction.emptyDrafts(),
+            currentQuestionIndex: coordinatorOwnedCheckpointQuestionIndex[event.id] ?? 0
+        )
+    }
+
     private func submitCoordinatorOwnedCheckpoint(_ checkpoint: CoordinatorModeConversationCheckpoint) {
         guard let pending = coordinatorOwnedCheckpointState(for: checkpoint),
               pending.isComplete,
@@ -2671,6 +2741,35 @@ struct CoordinatorModeView: View {
         }
     }
 
+    private func submitCoordinatorFollowThroughCheckpoint(_ event: CoordinatorFollowThroughEvent) {
+        guard let pending = coordinatorFollowThroughCheckpointState(for: event),
+              pending.isComplete,
+              let selected = pending.draftsByQuestionID["decision"]?.selectedOptionLabels.first
+        else { return }
+        coordinatorOwnedCheckpointDrafts[event.id] = nil
+        coordinatorOwnedCheckpointQuestionIndex[event.id] = nil
+        switch selected {
+        case "Continue":
+            submitPendingFollowThroughEvent(event)
+        case "Revise":
+            if coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                coordinatorDirectiveDraft = """
+                Revise before processing this observed boundary:
+
+                \(event.stepCheckpointContext)
+
+                """
+            }
+            isCoordinatorComposerFocused = true
+        case "Stop":
+            resolvePendingFollowThroughEvent(event) {
+                stopCoordinatorMission()
+            }
+        default:
+            break
+        }
+    }
+
     private func offersPlanCritiqueDecision(for checkpoint: CoordinatorModeConversationCheckpoint) -> Bool {
         guard checkpoint.kind == .approvalRequired,
               let missionPlan = viewModel.snapshot.coordinatorRail.missionPlan
@@ -2681,11 +2780,20 @@ struct CoordinatorModeView: View {
     private func activeCoordinatorContinuationCheckpoint(
         _ rail: CoordinatorModeCoordinatorRail
     ) -> CoordinatorModeConversationCheckpoint? {
-        guard viewModel.usesAutoMode,
-              rail.state == .selected,
+        guard rail.state == .selected,
               rail.isComposerSendEnabled,
               !isSubmittingCoordinatorDirective
         else { return nil }
+
+        if let missionPlan = rail.missionPlan,
+           missionPlan.approvalState == .awaitingApproval,
+           !missionPlan.nodes.isEmpty,
+           missionPlan.status != .stopped,
+           missionPlan.status != .completed
+        {
+            return CoordinatorModeConversationCheckpoint(kind: .approvalRequired)
+        }
+
         guard let entry = viewModel.railTranscriptEntries.last(where: { $0.action == nil }),
               entry.role == .coordinator
         else { return nil }
@@ -3812,11 +3920,11 @@ struct CoordinatorModeView: View {
     private func coordinatorComposerAutomationModeToggle(metrics: CoordinatorVisualMetrics) -> some View {
         HStack(spacing: metrics.headerSegmentSpacing) {
             coordinatorComposerAutomationModeButton(
-                title: "Manual",
+                title: "Step",
                 isSelected: !viewModel.usesAutoMode,
                 metrics: metrics
             ) {
-                viewModel.setUsesAutoMode(false)
+                viewModel.setExecutionPace(.step)
             }
 
             coordinatorComposerAutomationModeButton(
@@ -3824,7 +3932,7 @@ struct CoordinatorModeView: View {
                 isSelected: viewModel.usesAutoMode,
                 metrics: metrics
             ) {
-                viewModel.setUsesAutoMode(true)
+                viewModel.setExecutionPace(.auto)
             }
         }
         .padding(metrics.composerToggleInset)
@@ -4126,6 +4234,31 @@ struct CoordinatorModeView: View {
             _ = await viewModel.submitCoordinatorContinuation(action)
             isSubmittingCoordinatorDirective = false
             isCoordinatorComposerFocused = true
+        }
+    }
+
+    private func submitPendingFollowThroughEvent(_ event: CoordinatorFollowThroughEvent) {
+        guard viewModel.snapshot.coordinatorRail.state == .selected,
+              viewModel.snapshot.coordinatorRail.isComposerSendEnabled,
+              !isSubmittingCoordinatorDirective
+        else { return }
+        coordinatorDirectiveDraft = ""
+        isSubmittingCoordinatorDirective = true
+        isCoordinatorComposerFocused = true
+        Task { @MainActor in
+            _ = await viewModel.submitPendingFollowThroughEvent(event)
+            isSubmittingCoordinatorDirective = false
+            isCoordinatorComposerFocused = true
+        }
+    }
+
+    private func resolvePendingFollowThroughEvent(
+        _ event: CoordinatorFollowThroughEvent,
+        then continuation: @escaping @MainActor () -> Void
+    ) {
+        Task { @MainActor in
+            await viewModel.resolvePendingFollowThroughEvent(event)
+            continuation()
         }
     }
 
@@ -6156,6 +6289,45 @@ private extension AgentSessionRunState {
         case .completed: "Completed"
         case .cancelled: "Cancelled"
         case .failed: "Failed"
+        }
+    }
+}
+
+private extension CoordinatorFollowThroughEvent {
+    var stepCheckpointID: UUID {
+        childSessionID ?? coordinatorSessionID
+    }
+
+    var stepCheckpointTitle: String {
+        switch kind {
+        case .childTerminal:
+            "Delegated work reached a boundary"
+        case .gateCleared:
+            "Coordinator gate cleared"
+        }
+    }
+
+    var stepCheckpointContext: String {
+        var parts = [detail]
+        if let childTitle {
+            parts.append("Child session: \(childTitle)")
+        }
+        if let phase {
+            parts.append("Observed phase: \(phase.displayName)")
+        }
+        return parts.joined(separator: "\n")
+    }
+}
+
+private extension CoordinatorFollowThroughChildPhase {
+    var displayName: String {
+        switch self {
+        case .delegated: "Delegated"
+        case .running: "Running"
+        case .needsUser: "Needs you"
+        case .review: "Review"
+        case .blocked: "Blocked"
+        case .done: "Done"
         }
     }
 }

@@ -625,7 +625,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.railTranscriptEntries.map(\.text), ["first directive", "first answer"])
     }
 
-    func testAutoModeDefaultsManualAndPersistsChanges() throws {
+    func testExecutionPaceDefaultsStepAndPersistsChanges() throws {
         let suiteName = "CoordinatorModeComposerViewModelTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
@@ -636,9 +636,11 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             dashboardVisibilityHandler: { _ in },
             userDefaults: defaults
         )
+        XCTAssertEqual(initial.executionPace, .step)
         XCTAssertFalse(initial.usesAutoMode)
 
-        initial.setUsesAutoMode(true)
+        initial.setExecutionPace(.auto)
+        XCTAssertEqual(initial.executionPace, .auto)
         XCTAssertTrue(initial.usesAutoMode)
 
         let restored = CoordinatorModeViewModel(
@@ -646,7 +648,119 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             dashboardVisibilityHandler: { _ in },
             userDefaults: defaults
         )
+        XCTAssertEqual(restored.executionPace, .auto)
         XCTAssertTrue(restored.usesAutoMode)
+    }
+
+    func testStepPaceExposesPendingFollowThroughEventAndAutoHidesIt() throws {
+        let suiteName = "CoordinatorModeComposerViewModelTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let event = CoordinatorFollowThroughEvent(
+            id: "child:\(childID.uuidString):terminal:completed",
+            kind: .childTerminal,
+            coordinatorSessionID: coordinatorID,
+            childSessionID: childID,
+            childTitle: "Discovery child",
+            gate: nil,
+            phase: .done,
+            detail: "Delegated child reached terminal state completed."
+        )
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            coordinatorRuntime: true
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            pendingFollowThroughEventProvider: { selectedCoordinatorID in
+                selectedCoordinatorID == coordinatorID ? event : nil
+            },
+            userDefaults: defaults
+        )
+
+        viewModel.refresh()
+        XCTAssertEqual(viewModel.executionPace, .step)
+        XCTAssertEqual(viewModel.activePendingFollowThroughEvent(), event)
+
+        viewModel.setExecutionPace(.auto)
+        XCTAssertNil(viewModel.activePendingFollowThroughEvent())
+
+        viewModel.setExecutionPace(.step)
+        XCTAssertEqual(viewModel.activePendingFollowThroughEvent(), event)
+    }
+
+    func testSwitchingStepToAutoSubmitsPendingFollowThroughEvent() async throws {
+        let suiteName = "CoordinatorModeComposerViewModelTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let event = CoordinatorFollowThroughEvent(
+            id: "child:\(childID.uuidString):terminal:completed",
+            kind: .childTerminal,
+            coordinatorSessionID: coordinatorID,
+            childSessionID: childID,
+            childTitle: "Discovery child",
+            gate: nil,
+            phase: .done,
+            detail: "Delegated child reached terminal state completed."
+        )
+        var submittedEvents: [CoordinatorFollowThroughEvent] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            coordinatorRuntime: true
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            pendingFollowThroughEventProvider: { selectedCoordinatorID in
+                selectedCoordinatorID == coordinatorID ? event : nil
+            },
+            followThroughEventSubmitter: { event in
+                submittedEvents.append(event)
+                return .accepted
+            },
+            userDefaults: defaults
+        )
+
+        viewModel.refresh()
+        XCTAssertEqual(viewModel.activePendingFollowThroughEvent(), event)
+
+        viewModel.setExecutionPace(.auto)
+        await Task.yield()
+
+        XCTAssertEqual(submittedEvents, [event])
     }
 
     func testAcceptedDirectiveDoesNotDuplicateRuntimeBackedUserTranscriptEntry() async {

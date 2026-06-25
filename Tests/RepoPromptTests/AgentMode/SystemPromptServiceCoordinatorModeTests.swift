@@ -2,14 +2,17 @@
 import XCTest
 
 final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
-    func testCoordinatorPromptOmitsAutoModeByDefault() {
+    func testCoordinatorPromptOmitsAutoPaceByDefault() {
         let prompt = SystemPromptService.agentModePrompt(
             agentKind: .codexExec,
             coordinatorRuntimeDemo: true
         )
 
         XCTAssertTrue(prompt.contains("Coordinator runtime demo mode"))
-        XCTAssertFalse(prompt.contains("Coordinator auto mode"))
+        XCTAssertFalse(prompt.contains("Coordinator Auto pace"))
+        XCTAssertTrue(prompt.contains("Coordinator execution pace is app-controlled"))
+        XCTAssertTrue(prompt.contains("In Step pace, pause at Mission Plan"))
+        XCTAssertTrue(prompt.contains("In Auto pace, the app may send follow-through resume events"))
         XCTAssertTrue(prompt.contains("Do not use raw shell/bash from the Coordinator turn"))
         XCTAssertTrue(prompt.contains("raw shell can block the control plane"))
         XCTAssertTrue(prompt.contains("Workflow fidelity rule"))
@@ -75,7 +78,7 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
         XCTAssertTrue(CoordinatorMissionTemplate.deepPlanOrchestrateReview.template.contains("fix loop"))
     }
 
-    func testCoordinatorPromptIncludesAutoModeWhenEnabled() {
+    func testCoordinatorPromptIncludesAutoPaceWhenEnabled() {
         let prompt = SystemPromptService.agentModePrompt(
             agentKind: .codexExec,
             coordinatorRuntimeDemo: true,
@@ -83,19 +86,20 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
         )
 
         XCTAssertTrue(prompt.contains("Coordinator runtime demo mode"))
-        XCTAssertTrue(prompt.contains("Coordinator auto mode"))
+        XCTAssertTrue(prompt.contains("Coordinator Auto pace"))
+        XCTAssertTrue(prompt.contains("Auto execution pace is enabled"))
         XCTAssertTrue(prompt.contains("Respect boundaries"))
         XCTAssertTrue(prompt.contains("If a delegated child or workflow appears stuck"))
         XCTAssertTrue(prompt.contains("wait once with a bounded timeout"))
         XCTAssertTrue(prompt.contains("Do not enter a raw shell loop in the Coordinator"))
     }
 
-    func testAutoModeRequiresCoordinatorRuntimeDemoMode() {
+    func testAutoPaceRequiresCoordinatorRuntimeDemoMode() {
         let prompt = SystemPromptService.agentModePrompt(
             agentKind: .codexExec,
             coordinatorRuntimeAutoMode: true
         )
 
-        XCTAssertFalse(prompt.contains("Coordinator auto mode"))
+        XCTAssertFalse(prompt.contains("Coordinator Auto pace"))
     }
 }
