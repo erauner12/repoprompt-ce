@@ -163,15 +163,20 @@ struct CoordinatorChatMCPToolService {
             ? parseMissionPlanNodes(args["nodes"], workstreams: effectiveWorkstreams, existingPlan: existingPlan)
             : nil
         let effectiveNodes = nodes ?? existingPlan?.nodes ?? []
+        let hasRoutingDecisions = args.keys.contains("routing_decisions") || args.keys.contains("routingDecisions")
+        let routingDecisions = try hasRoutingDecisions
+            ? parseMissionRoutingDecisions(args["routing_decisions"] ?? args["routingDecisions"], nodes: effectiveNodes, workstreams: effectiveWorkstreams)
+            : nil
         let events = try parseMissionPlanEvents(args["events"], nodes: effectiveNodes)
         if objective == nil,
            status == nil,
            approvalState == nil,
            workstreams == nil,
            nodes == nil,
+           routingDecisions == nil,
            events.isEmpty
         {
-            throw MCPError.invalidParams("mission_plan requires at least one of objective, status, approval_state, workstreams, nodes, or events.")
+            throw MCPError.invalidParams("mission_plan requires at least one of objective, status, approval_state, workstreams, nodes, routing_decisions, or events.")
         }
         return try CoordinatorMissionPlanUpdate(
             objective: objective,
@@ -179,6 +184,7 @@ struct CoordinatorChatMCPToolService {
             approvalState: approvalState,
             workstreams: workstreams,
             nodes: nodes,
+            routingDecisions: routingDecisions,
             events: events,
             updatedAt: parseOptionalDate(args["updated_at"] ?? args["updatedAt"], name: "updated_at") ?? Date()
         )
@@ -505,6 +511,74 @@ struct CoordinatorChatMCPToolService {
         return node.id
     }
 
+    private func parseMissionRoutingDecisions(
+        _ value: Value?,
+        nodes: [CoordinatorMissionPlanNode],
+        workstreams: [CoordinatorMissionWorkstreamSummary]
+    ) throws -> [CoordinatorMissionRoutingDecision] {
+        guard let array = value?.arrayValue else {
+            throw MCPError.invalidParams("routing_decisions must be an array.")
+        }
+        return try array.map { element in
+            guard let object = element.objectValue else {
+                throw MCPError.invalidParams("Each routing_decisions entry must be an object.")
+            }
+            let decisionRaw = try AgentMCPToolHelpers.requireNonEmptyString(object["decision"], name: "routing_decisions[].decision")
+            guard let decision = CoordinatorMissionRoutingDecisionKind(rawValue: decisionRaw) else {
+                throw MCPError.invalidParams("routing_decisions[].decision must be one of: \(CoordinatorMissionRoutingDecisionKind.allCases.map(\.rawValue).joined(separator: ", ")).")
+            }
+            let operationRaw = try AgentMCPToolHelpers.requireNonEmptyString(object["operation"], name: "routing_decisions[].operation")
+            guard let operation = CoordinatorMissionRoutingOperation(rawValue: operationRaw) else {
+                throw MCPError.invalidParams("routing_decisions[].operation must be one of: \(CoordinatorMissionRoutingOperation.allCases.map(\.rawValue).joined(separator: ", ")).")
+            }
+            let reason = try AgentMCPToolHelpers.requireNonEmptyString(object["reason"], name: "routing_decisions[].reason")
+            return try CoordinatorMissionRoutingDecision(
+                id: optionalUUID(object["id"], name: "routing_decisions[].id") ?? UUID(),
+                timestamp: parseOptionalDate(object["timestamp"], name: "routing_decisions[].timestamp") ?? Date(),
+                nodeID: parseRoutingDecisionNodeID(object, nodes: nodes),
+                workstreamID: parseRoutingDecisionWorkstreamID(object, workstreams: workstreams),
+                decision: decision,
+                operation: operation,
+                sessionID: optionalUUID(object["session_id"] ?? object["sessionID"], name: "routing_decisions[].session_id"),
+                priorSessionID: optionalUUID(object["prior_session_id"] ?? object["priorSessionID"], name: "routing_decisions[].prior_session_id"),
+                worktreeID: normalizedString(object["worktree_id"] ?? object["worktreeID"]),
+                workflowName: normalizedString(object["workflow_name"] ?? object["workflowName"]),
+                modelID: normalizedString(object["model_id"] ?? object["modelID"]),
+                role: normalizedString(object["role"]),
+                reason: reason,
+                contextSummary: normalizedString(object["context_summary"] ?? object["contextSummary"])
+            )
+        }
+    }
+
+    private func parseRoutingDecisionNodeID(
+        _ object: [String: Value],
+        nodes: [CoordinatorMissionPlanNode]
+    ) throws -> UUID? {
+        if let nodeID = try optionalUUID(object["node_id"] ?? object["nodeID"], name: "routing_decisions[].node_id") {
+            return nodeID
+        }
+        guard let title = normalizedString(object["node_title"] ?? object["nodeTitle"]) else { return nil }
+        guard let node = nodes.first(where: { $0.title.normalizedMissionPlanKey == title.normalizedMissionPlanKey }) else {
+            throw MCPError.invalidParams("routing_decisions[].node_title must match a declared node title.")
+        }
+        return node.id
+    }
+
+    private func parseRoutingDecisionWorkstreamID(
+        _ object: [String: Value],
+        workstreams: [CoordinatorMissionWorkstreamSummary]
+    ) throws -> UUID? {
+        if let workstreamID = try optionalUUID(object["workstream_id"] ?? object["workstreamID"], name: "routing_decisions[].workstream_id") {
+            return workstreamID
+        }
+        guard let title = normalizedString(object["workstream_title"] ?? object["workstreamTitle"]) else { return nil }
+        guard let workstream = workstreams.first(where: { $0.title.normalizedMissionPlanKey == title.normalizedMissionPlanKey }) else {
+            throw MCPError.invalidParams("routing_decisions[].workstream_title must match a declared workstream title.")
+        }
+        return workstream.id
+    }
+
     private func parseOptionalMissionPlanStatus(_ value: Value?) throws -> CoordinatorMissionPlanStatus? {
         guard let raw = normalizedString(value) else { return nil }
         guard let status = CoordinatorMissionPlanStatus(rawValue: raw) else {
@@ -781,6 +855,15 @@ struct CoordinatorChatMCPToolService {
                     }
                     .prefix(10)
                     .map(missionPlanEventValue)
+            ),
+            "routing_decisions_recent": .array(
+                plan.routingDecisions
+                    .sorted { lhs, rhs in
+                        if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
+                        return lhs.timestamp > rhs.timestamp
+                    }
+                    .prefix(20)
+                    .map(missionRoutingDecisionValue)
             )
         ])
     }
@@ -894,6 +977,7 @@ struct CoordinatorChatMCPToolService {
             "updated_at": .string(AgentMCPToolHelpers.timestamp(plan.updatedAt)),
             "workstreams": .array(plan.workstreams.map(missionWorkstreamValue)),
             "nodes": .array(plan.nodes.map(missionPlanNodeValue)),
+            "routing_decisions": .array(plan.routingDecisions.map(missionRoutingDecisionValue)),
             "events": .array(plan.events.map(missionPlanEventValue))
         ])
     }
@@ -956,6 +1040,27 @@ struct CoordinatorChatMCPToolService {
             "interaction_id": AgentMCPToolHelpers.stringOrNull(event.interactionID?.uuidString),
             "timestamp": .string(AgentMCPToolHelpers.timestamp(event.timestamp)),
             "summary": AgentMCPToolHelpers.stringOrNull(event.summary)
+        ])
+    }
+
+    private func missionRoutingDecisionValue(_ decision: CoordinatorMissionRoutingDecision) -> Value {
+        .object([
+            "id": .string(decision.id.uuidString),
+            "timestamp": .string(AgentMCPToolHelpers.timestamp(decision.timestamp)),
+            "node_id": AgentMCPToolHelpers.stringOrNull(decision.nodeID?.uuidString),
+            "workstream_id": AgentMCPToolHelpers.stringOrNull(decision.workstreamID?.uuidString),
+            "decision": .string(decision.decision.rawValue),
+            "decision_display_name": .string(decision.decision.displayName),
+            "operation": .string(decision.operation.rawValue),
+            "operation_display_name": .string(decision.operation.displayName),
+            "session_id": AgentMCPToolHelpers.stringOrNull(decision.sessionID?.uuidString),
+            "prior_session_id": AgentMCPToolHelpers.stringOrNull(decision.priorSessionID?.uuidString),
+            "worktree_id": AgentMCPToolHelpers.stringOrNull(decision.worktreeID),
+            "workflow_name": AgentMCPToolHelpers.stringOrNull(decision.workflowName),
+            "model_id": AgentMCPToolHelpers.stringOrNull(decision.modelID),
+            "role": AgentMCPToolHelpers.stringOrNull(decision.role),
+            "reason": .string(decision.reason),
+            "context_summary": AgentMCPToolHelpers.stringOrNull(decision.contextSummary)
         ])
     }
 

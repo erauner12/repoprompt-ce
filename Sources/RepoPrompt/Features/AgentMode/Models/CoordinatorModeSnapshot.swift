@@ -272,9 +272,10 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
         4. If repo evidence is needed, make discovery visible plan nodes with workflow_name="Investigate" or workflow_name="Deep Plan" and execution_policy="fresh_readonly_child"; ask before launching those read-only children.
         5. After discovery, revise the same Mission Plan with grounded details before mutable implementation.
         6. Delegate mutable work only into isolated worktrees. Use fresh_worktree for the first primary implementation node, then steer_primary for later same-session nodes in that workstream.
-        7. Keep only the node currently being executed as running; downstream same-lane nodes should remain pending until reached.
-        8. Keep workstreams focused on user-level outcomes, not raw session mechanics.
-        9. Review delegated results, ask me before irreversible actions, then coordinate any needed fixes.
+        7. Record routing_decisions before or alongside each start, steer, respond, cancel, or hold choice so the inspector can show why that path was chosen.
+        8. Keep only the node currently being executed as running; downstream same-lane nodes should remain pending until reached.
+        9. Keep workstreams focused on user-level outcomes, not raw session mechanics.
+        10. Review delegated results, ask me before irreversible actions, then coordinate any needed fixes.
 
         User objective:
         $MISSION
@@ -298,7 +299,8 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
         4. Treat the first plan as a visible draft when repo evidence is still missing. Add discovery/grounding nodes with workflow_name="Investigate" or workflow_name="Deep Plan" and execution_policy="fresh_readonly_child" before implementation nodes.
         5. Use workstreams such as "Discovery", "Implementation", and "Quality" only when each maps to distinct user-level work.
         6. Update each workstream with `primary_session_id`, `related_session_ids`, and `worktree_strategy.worktree_id` as children are launched or bound. When updating one workstream or node, omit unrelated entries; the app preserves them.
-        7. In one mutable workstream, use fresh_worktree for the first primary implementation node and steer_primary for later same-session nodes. Keep downstream same-lane nodes pending until the primary session reaches them.
+        7. Record routing_decisions before or alongside each start, steer, respond, cancel, or hold choice. Use operation values such as `agent_run.start`, `agent_run.steer`, and `coordinator_hold`.
+        8. In one mutable workstream, use fresh_worktree for the first primary implementation node and steer_primary for later same-session nodes. Keep downstream same-lane nodes pending until the primary session reaches them.
 
         Stage 1 - Grounding:
         1. Ask me to approve the visible draft plan before starting the discovery child.

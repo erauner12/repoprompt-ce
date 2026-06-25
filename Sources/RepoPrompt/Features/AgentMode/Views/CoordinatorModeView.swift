@@ -1995,6 +1995,16 @@ struct CoordinatorModeView: View {
                 if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
                 return lhs.timestamp > rhs.timestamp
             }
+        let routingDecisions = plan.routingDecisions
+            .filter { decision in
+                decision.nodeID == node.id
+                    || (decision.nodeID == nil && decision.workstreamID == node.workstreamID)
+                    || (node.boundSessionID != nil && decision.sessionID == node.boundSessionID)
+            }
+            .sorted { lhs, rhs in
+                if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
+                return lhs.timestamp > rhs.timestamp
+            }
 
         return VStack(spacing: 0) {
             inspectorSheetHandle(isExpanded: true, metrics: metrics) {
@@ -2087,6 +2097,14 @@ struct CoordinatorModeView: View {
                         }
                     }
 
+                    if !routingDecisions.isEmpty {
+                        inspectorGroup("Routing Decisions", metrics: metrics) {
+                            ForEach(routingDecisions.prefix(5)) { decision in
+                                routingDecisionRow(decision, metrics: metrics)
+                            }
+                        }
+                    }
+
                     if !nodeEvents.isEmpty {
                         inspectorGroup("Recent Events", metrics: metrics) {
                             ForEach(nodeEvents.prefix(5)) { event in
@@ -2115,6 +2133,42 @@ struct CoordinatorModeView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    private func routingDecisionRow(
+        _ decision: CoordinatorMissionRoutingDecision,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            HStack(spacing: metrics.smallSpacing) {
+                Text(decision.decision.displayName)
+                    .font(metrics.bodyMedium)
+                Spacer(minLength: metrics.controlSpacing)
+                Text(decision.timestamp.formatted(date: .abbreviated, time: .shortened))
+                    .font(metrics.micro)
+                    .foregroundStyle(.tertiary)
+            }
+            HStack(spacing: metrics.smallSpacing) {
+                statusChip(decision.operation.displayName, color: Color.accentColor, metrics: metrics)
+                if let workflowName = decision.workflowName {
+                    statusChip(workflowName, color: .secondary, metrics: metrics)
+                }
+                if let modelID = decision.modelID {
+                    statusChip(modelID, color: .secondary, metrics: metrics)
+                }
+            }
+            Text(decision.reason)
+                .font(metrics.body)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let contextSummary = decision.contextSummary {
+                Text(contextSummary)
+                    .font(metrics.micro)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, metrics.tightSpacing)
     }
 
     private func inspectorHeader(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {

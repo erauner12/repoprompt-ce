@@ -187,6 +187,92 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(events.last?.objectValue?["node_id"]?.stringValue, nodeID.uuidString)
     }
 
+    func testMissionPlanAcceptsRoutingDecisionsAndUpsertsByID() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let decisionID = UUID()
+        let childID = UUID()
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { missionPlans },
+            updateMissionPlan: { sessionID, update in
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(update)
+                missionPlans[sessionID] = state.missionPlan
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "objective": .string("Issue 298 provider cleanup"),
+            "workstreams": .array([
+                .object([
+                    "id": .string(workstreamID.uuidString),
+                    "title": .string("Discovery"),
+                    "purpose": .string("Map cleanup paths."),
+                    "default_policy": .string("fresh_readonly_child"),
+                    "worktree_strategy": .object(["mode": .string("noneReadOnly")])
+                ])
+            ]),
+            "nodes": .array([
+                .object([
+                    "id": .string(nodeID.uuidString),
+                    "title": .string("Map provider cleanup entry points"),
+                    "workstream_id": .string(workstreamID.uuidString),
+                    "workflow_name": .string("Investigate"),
+                    "execution_policy": .string("fresh_readonly_child")
+                ])
+            ]),
+            "routing_decisions": .array([
+                .object([
+                    "id": .string(decisionID.uuidString),
+                    "timestamp": .string("2026-06-25T10:00:00Z"),
+                    "node_title": .string("Map provider cleanup entry points"),
+                    "workstream_title": .string("Discovery"),
+                    "decision": .string("start_fresh_readonly_child"),
+                    "operation": .string("agent_run.start"),
+                    "session_id": .string(childID.uuidString),
+                    "workflow_name": .string("Investigate"),
+                    "model_id": .string("explore"),
+                    "role": .string("explore"),
+                    "reason": .string("The implementation surface is unknown, so start read-only discovery first."),
+                    "context_summary": .string("Need to map MCP session cleanup, provider metadata, and Oracle finalization.")
+                ])
+            ])
+        ])
+
+        let plan = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue)
+        let decisions = try XCTUnwrap(plan["routing_decisions"]?.arrayValue)
+        XCTAssertEqual(decisions.count, 1)
+        let decision = try XCTUnwrap(decisions.first?.objectValue)
+        XCTAssertEqual(decision["id"]?.stringValue, decisionID.uuidString)
+        XCTAssertEqual(decision["node_id"]?.stringValue, nodeID.uuidString)
+        XCTAssertEqual(decision["workstream_id"]?.stringValue, workstreamID.uuidString)
+        XCTAssertEqual(decision["decision"]?.stringValue, "start_fresh_readonly_child")
+        XCTAssertEqual(decision["operation"]?.stringValue, "agent_run.start")
+        XCTAssertEqual(decision["session_id"]?.stringValue, childID.uuidString)
+        XCTAssertEqual(decision["model_id"]?.stringValue, "explore")
+
+        let updated = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "routing_decisions": .array([
+                .object([
+                    "id": .string(decisionID.uuidString),
+                    "timestamp": .string("2026-06-25T10:00:00Z"),
+                    "decision": .string("start_fresh_readonly_child"),
+                    "operation": .string("agent_run.start"),
+                    "reason": .string("Corrected route rationale.")
+                ])
+            ])
+        ])
+        let updatedDecisions = try XCTUnwrap(updated.objectValue?["mission_plan"]?.objectValue?["routing_decisions"]?.arrayValue)
+        XCTAssertEqual(updatedDecisions.count, 1)
+        XCTAssertEqual(updatedDecisions.first?.objectValue?["reason"]?.stringValue, "Corrected route rationale.")
+    }
+
     func testMissionPlanSubsetUpdatePreservesExistingDagEntries() async throws {
         let coordinatorID = UUID()
         let discoveryWorkstreamID = UUID()
@@ -339,6 +425,18 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let workstreamID = UUID()
         let planNodeID = UUID()
         let reviewNodeID = UUID()
+        let routingDecisions = (0 ..< 25).map { index in
+            CoordinatorMissionRoutingDecision(
+                id: UUID(uuidString: "00000000-0000-0000-0000-\(String(format: "%012d", index))")!,
+                timestamp: Date(timeIntervalSince1970: TimeInterval(index)),
+                nodeID: reviewNodeID,
+                workstreamID: workstreamID,
+                decision: .steerPrimary,
+                operation: .agentRunSteer,
+                modelID: "engineer",
+                reason: "Decision \(index)."
+            )
+        }
         let plan = CoordinatorMissionPlan(
             revision: 3,
             objective: "Ship DAG",
@@ -377,6 +475,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     status: .pending
                 )
             ],
+            routingDecisions: routingDecisions,
             events: [
                 CoordinatorMissionPlanEvent(
                     kind: .nodeCompleted,
@@ -413,6 +512,11 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(review["completion_evidence"]?.stringValue, "Review reports no must-fix issues.")
         let recentEvents = try XCTUnwrap(status["recent_events"]?.arrayValue)
         XCTAssertEqual(recentEvents.first?.objectValue?["kind"]?.stringValue, "node_completed")
+        let recentRouting = try XCTUnwrap(status["routing_decisions_recent"]?.arrayValue)
+        XCTAssertEqual(recentRouting.count, 20)
+        XCTAssertEqual(recentRouting.first?.objectValue?["reason"]?.stringValue, "Decision 24.")
+        XCTAssertEqual(recentRouting.last?.objectValue?["reason"]?.stringValue, "Decision 5.")
+        XCTAssertNil(status["routing_decisions_recent"]?.arrayValue?.first?.objectValue?["context_summary"]?.stringValue)
     }
 
     func testMissionPlanRejectsInvalidWorktreeStrategy() async throws {

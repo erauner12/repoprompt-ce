@@ -77,6 +77,10 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             existing: missionPlan?.nodes ?? [],
             incoming: update.nodes
         )
+        let routingDecisions = mergeRoutingDecisions(
+            existing: missionPlan?.routingDecisions ?? [],
+            incoming: update.routingDecisions
+        )
         missionPlan = CoordinatorMissionPlan(
             id: missionPlan?.id ?? UUID(),
             revision: (missionPlan?.revision ?? 0) + 1,
@@ -87,6 +91,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             template: missionTemplate,
             workstreams: workstreams,
             nodes: nodes,
+            routingDecisions: routingDecisions,
             events: (missionPlan?.events ?? []) + [
                 CoordinatorMissionPlanEvent(
                     kind: missionPlan == nil ? .created : .revised,
@@ -153,6 +158,21 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         }
         merged.append(contentsOf: normalizedIncoming.filter { updatesByID[$0.id] != nil })
         return merged
+    }
+
+    private func mergeRoutingDecisions(
+        existing: [CoordinatorMissionRoutingDecision],
+        incoming: [CoordinatorMissionRoutingDecision]?
+    ) -> [CoordinatorMissionRoutingDecision] {
+        guard let incoming, !incoming.isEmpty else { return existing }
+        var mergedByID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        for decision in incoming {
+            mergedByID[decision.id] = decision
+        }
+        return mergedByID.values.sorted { lhs, rhs in
+            if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
+            return lhs.timestamp < rhs.timestamp
+        }
     }
 
     @discardableResult
@@ -281,6 +301,7 @@ struct CoordinatorMissionPlanUpdate: Equatable {
     var approvalState: CoordinatorMissionPlanApprovalState?
     var workstreams: [CoordinatorMissionWorkstreamSummary]?
     var nodes: [CoordinatorMissionPlanNode]?
+    var routingDecisions: [CoordinatorMissionRoutingDecision]?
     var events: [CoordinatorMissionPlanEvent]
     var updatedAt: Date
 
@@ -290,6 +311,7 @@ struct CoordinatorMissionPlanUpdate: Equatable {
         approvalState: CoordinatorMissionPlanApprovalState? = nil,
         workstreams: [CoordinatorMissionWorkstreamSummary]? = nil,
         nodes: [CoordinatorMissionPlanNode]? = nil,
+        routingDecisions: [CoordinatorMissionRoutingDecision]? = nil,
         events: [CoordinatorMissionPlanEvent] = [],
         updatedAt: Date = Date()
     ) {
@@ -298,6 +320,7 @@ struct CoordinatorMissionPlanUpdate: Equatable {
         self.approvalState = approvalState
         self.workstreams = workstreams
         self.nodes = nodes
+        self.routingDecisions = routingDecisions
         self.events = events
         self.updatedAt = updatedAt
     }
@@ -312,6 +335,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
     var template: CoordinatorMissionTemplateSummary?
     var workstreams: [CoordinatorMissionWorkstreamSummary]
     var nodes: [CoordinatorMissionPlanNode]
+    var routingDecisions: [CoordinatorMissionRoutingDecision]
     var events: [CoordinatorMissionPlanEvent]
     var updatedAt: Date
 
@@ -324,6 +348,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         template: CoordinatorMissionTemplateSummary? = nil,
         workstreams: [CoordinatorMissionWorkstreamSummary] = [],
         nodes: [CoordinatorMissionPlanNode] = [],
+        routingDecisions: [CoordinatorMissionRoutingDecision] = [],
         events: [CoordinatorMissionPlanEvent] = [],
         updatedAt: Date = Date()
     ) {
@@ -335,8 +360,43 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         self.template = template
         self.workstreams = workstreams
         self.nodes = nodes
+        self.routingDecisions = routingDecisions.sorted { lhs, rhs in
+            if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
+            return lhs.timestamp < rhs.timestamp
+        }
         self.events = events
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case revision
+        case objective
+        case status
+        case approvalState
+        case template
+        case workstreams
+        case nodes
+        case routingDecisions
+        case events
+        case updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            id: container.decode(UUID.self, forKey: .id),
+            revision: container.decode(Int.self, forKey: .revision),
+            objective: container.decodeIfPresent(String.self, forKey: .objective),
+            status: container.decode(CoordinatorMissionPlanStatus.self, forKey: .status),
+            approvalState: container.decode(CoordinatorMissionPlanApprovalState.self, forKey: .approvalState),
+            template: container.decodeIfPresent(CoordinatorMissionTemplateSummary.self, forKey: .template),
+            workstreams: container.decode([CoordinatorMissionWorkstreamSummary].self, forKey: .workstreams),
+            nodes: container.decode([CoordinatorMissionPlanNode].self, forKey: .nodes),
+            routingDecisions: container.decodeIfPresent([CoordinatorMissionRoutingDecision].self, forKey: .routingDecisions) ?? [],
+            events: container.decode([CoordinatorMissionPlanEvent].self, forKey: .events),
+            updatedAt: container.decode(Date.self, forKey: .updatedAt)
+        )
     }
 }
 
@@ -518,6 +578,95 @@ struct CoordinatorMissionPlanNodeWorkflowHint: Codable, Equatable {
         self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         self.iconName = iconName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.accentColorHex = accentColorHex?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+}
+
+struct CoordinatorMissionRoutingDecision: Codable, Equatable, Identifiable {
+    let id: UUID
+    var timestamp: Date
+    var nodeID: UUID?
+    var workstreamID: UUID?
+    var decision: CoordinatorMissionRoutingDecisionKind
+    var operation: CoordinatorMissionRoutingOperation
+    var sessionID: UUID?
+    var priorSessionID: UUID?
+    var worktreeID: String?
+    var workflowName: String?
+    var modelID: String?
+    var role: String?
+    var reason: String
+    var contextSummary: String?
+
+    init(
+        id: UUID = UUID(),
+        timestamp: Date = Date(),
+        nodeID: UUID? = nil,
+        workstreamID: UUID? = nil,
+        decision: CoordinatorMissionRoutingDecisionKind,
+        operation: CoordinatorMissionRoutingOperation,
+        sessionID: UUID? = nil,
+        priorSessionID: UUID? = nil,
+        worktreeID: String? = nil,
+        workflowName: String? = nil,
+        modelID: String? = nil,
+        role: String? = nil,
+        reason: String,
+        contextSummary: String? = nil
+    ) {
+        self.id = id
+        self.timestamp = timestamp
+        self.nodeID = nodeID
+        self.workstreamID = workstreamID
+        self.decision = decision
+        self.operation = operation
+        self.sessionID = sessionID
+        self.priorSessionID = priorSessionID
+        self.worktreeID = worktreeID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.workflowName = workflowName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.modelID = modelID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.role = role?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.reason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.contextSummary = contextSummary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+}
+
+enum CoordinatorMissionRoutingDecisionKind: String, Codable, Equatable, CaseIterable {
+    case startFreshReadOnlyChild = "start_fresh_readonly_child"
+    case startFreshWorktree = "start_fresh_worktree"
+    case steerPrimary = "steer_primary"
+    case startFreshSiblingOnSameWorktree = "start_fresh_sibling_on_same_worktree"
+    case respondToInteraction = "respond_to_interaction"
+    case holdForUser = "hold_for_user"
+    case cancelOrReplace = "cancel_or_replace"
+
+    var displayName: String {
+        switch self {
+        case .startFreshReadOnlyChild: "Start read-only child"
+        case .startFreshWorktree: "Start fresh worktree"
+        case .steerPrimary: "Steer primary"
+        case .startFreshSiblingOnSameWorktree: "Start sibling review"
+        case .respondToInteraction: "Respond to checkpoint"
+        case .holdForUser: "Hold for user"
+        case .cancelOrReplace: "Cancel or replace"
+        }
+    }
+}
+
+enum CoordinatorMissionRoutingOperation: String, Codable, Equatable, CaseIterable {
+    case agentRunStart = "agent_run.start"
+    case agentRunSteer = "agent_run.steer"
+    case agentRunRespond = "agent_run.respond"
+    case agentRunCancel = "agent_run.cancel"
+    case coordinatorHold = "coordinator_hold"
+
+    var displayName: String {
+        switch self {
+        case .agentRunStart: "agent_run.start"
+        case .agentRunSteer: "agent_run.steer"
+        case .agentRunRespond: "agent_run.respond"
+        case .agentRunCancel: "agent_run.cancel"
+        case .coordinatorHold: "Coordinator hold"
+        }
     }
 }
 

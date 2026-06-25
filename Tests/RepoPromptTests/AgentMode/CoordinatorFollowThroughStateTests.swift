@@ -100,6 +100,105 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(decoded.nodes.first?.completionEvidence, "Downloaded CSV matches the currently visible filtered data.")
     }
 
+    func testMissionPlanRoutingDecisionsCodableRoundTripAndDefaultEmpty() throws {
+        let planPayloadMissingRoutingDecisions = """
+        {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "revision": 1,
+          "objective": "Ship docs",
+          "status": "draft",
+          "approvalState": "not_required",
+          "workstreams": [],
+          "nodes": [],
+          "events": [],
+          "updatedAt": 0
+        }
+        """
+        let oldPlan = try JSONDecoder().decode(
+            CoordinatorMissionPlan.self,
+            from: Data(planPayloadMissingRoutingDecisions.utf8)
+        )
+        XCTAssertEqual(oldPlan.routingDecisions, [])
+
+        let nodeID = UUID()
+        let workstreamID = UUID()
+        let decision = CoordinatorMissionRoutingDecision(
+            timestamp: Date(timeIntervalSince1970: 10),
+            nodeID: nodeID,
+            workstreamID: workstreamID,
+            decision: .startFreshWorktree,
+            operation: .agentRunStart,
+            sessionID: UUID(),
+            worktreeID: "wt-docs",
+            workflowName: "Orchestrate",
+            modelID: "engineer",
+            role: "engineer",
+            reason: "Mutable docs work needs an isolated worktree.",
+            contextSummary: "README wording change."
+        )
+        let plan = CoordinatorMissionPlan(
+            objective: "Ship docs",
+            routingDecisions: [decision]
+        )
+
+        let data = try JSONEncoder().encode(plan)
+        let decoded = try JSONDecoder().decode(CoordinatorMissionPlan.self, from: data)
+
+        XCTAssertEqual(decoded.routingDecisions, [decision])
+        XCTAssertEqual(decoded.routingDecisions.first?.modelID, "engineer")
+    }
+
+    func testMissionPlanRoutingDecisionUpsertPreservesOmittedAndSortsChronologically() throws {
+        let firstID = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+        let secondID = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000002"))
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Ship docs",
+            routingDecisions: [
+                CoordinatorMissionRoutingDecision(
+                    id: secondID,
+                    timestamp: Date(timeIntervalSince1970: 20),
+                    decision: .startFreshReadOnlyChild,
+                    operation: .agentRunStart,
+                    reason: "Initial discovery."
+                )
+            ]
+        ))
+
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            routingDecisions: [
+                CoordinatorMissionRoutingDecision(
+                    id: firstID,
+                    timestamp: Date(timeIntervalSince1970: 10),
+                    decision: .holdForUser,
+                    operation: .coordinatorHold,
+                    reason: "Ask before discovery."
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 30)
+        ))
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            status: .running,
+            updatedAt: Date(timeIntervalSince1970: 40)
+        ))
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            routingDecisions: [
+                CoordinatorMissionRoutingDecision(
+                    id: secondID,
+                    timestamp: Date(timeIntervalSince1970: 20),
+                    decision: .startFreshReadOnlyChild,
+                    operation: .agentRunStart,
+                    reason: "Updated discovery route."
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 50)
+        ))
+
+        let decisions = try XCTUnwrap(state.missionPlan?.routingDecisions)
+        XCTAssertEqual(decisions.map(\.id), [firstID, secondID])
+        XCTAssertEqual(decisions.map(\.reason), ["Ask before discovery.", "Updated discovery route."])
+        XCTAssertEqual(state.missionPlan?.status, .running)
+    }
+
     func testMissionPlanUpsertReusesWorkstreamIDByTitle() {
         let existingID = UUID()
         let nodeID = UUID()

@@ -237,8 +237,8 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             - `select`: Select an existing Coordinator parent by `coordinator_session_id`.
             - `new`: Mirror New Coordinator. The rail switches to a blank parent context; the next submit creates the parent runtime.
             - `submit`: Send a directive to the selected parent, to `coordinator_session_id`, or to a fresh parent when `new_parent=true`.
-            - `mission_plan`: Create or update the selected Coordinator Mission's DAG-lite plan. Use this before `agent_run.start` delegation. Workstream and node arrays are upserts: include only changed entries for existing IDs/titles; omitted entries are preserved.
-            - `mission_status`: Read back the selected Coordinator Mission's current plan and node status.
+            - `mission_plan`: Create or update the selected Coordinator Mission's DAG-lite plan. Use this before `agent_run.start` delegation. Workstream and node arrays are upserts: include only changed entries for existing IDs/titles; omitted entries are preserved. Routing decisions append/upsert by id.
+            - `mission_status`: Read back the selected Coordinator Mission's current plan, node status, and newest 20 routing decisions.
 
             Coordinator-role agents should use `mission_plan` to record concrete user-specific deliverables before delegating child Agent Mode sessions. Workflows such as Investigate, Deep Plan, Orchestrate, and Review belong in node workflow metadata, not as generic node titles.
             """,
@@ -251,8 +251,8 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 **select**: coordinator_session_id (required)
                 **new**: no additional fields
                 **submit**: message (required), coordinator_session_id? or new_parent?
-                **mission_plan**: coordinator_session_id? plus one or more of objective, status, approval_state, workstreams, nodes, events
-                **mission_status**: coordinator_session_id?; returns current plan state
+                **mission_plan**: coordinator_session_id? plus one or more of objective, status, approval_state, workstreams, nodes, routing_decisions, events
+                **mission_status**: coordinator_session_id?; returns current plan state and routing_decisions_recent newest-first, max 20
                 """,
                 properties: [
                     "op": .string(description: "Operation.", enum: ["list", "select", "new", "submit", "mission_plan", "mission_status"]),
@@ -324,6 +324,31 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                                 "summary": .string(description: "Event summary.")
                             ],
                             required: ["kind"]
+                        )
+                    ),
+                    "routing_decisions": .array(
+                        description: "[mission_plan] Optional Coordinator routing decision log entries. Entries append/upsert by id; omitted decisions are preserved. Record these before/with start, steer, respond, cancel, or hold choices.",
+                        items: .object(
+                            description: "Coordinator routing decision.",
+                            properties: [
+                                "id": .string(description: "Optional stable decision UUID. Reuse id to replace a previous decision."),
+                                "timestamp": .string(description: "Optional ISO 8601 timestamp."),
+                                "node_id": .string(description: "Optional Mission Plan node UUID."),
+                                "node_title": .string(description: "Optional node title alternative."),
+                                "workstream_id": .string(description: "Optional workstream UUID."),
+                                "workstream_title": .string(description: "Optional workstream title alternative."),
+                                "decision": .string(description: "Routing decision kind.", enum: ["start_fresh_readonly_child", "start_fresh_worktree", "steer_primary", "start_fresh_sibling_on_same_worktree", "respond_to_interaction", "hold_for_user", "cancel_or_replace"]),
+                                "operation": .string(description: "Concrete operation chosen.", enum: ["agent_run.start", "agent_run.steer", "agent_run.respond", "agent_run.cancel", "coordinator_hold"]),
+                                "session_id": .string(description: "Optional target/new child session UUID."),
+                                "prior_session_id": .string(description: "Optional previous/replaced session UUID."),
+                                "worktree_id": .string(description: "Optional worktree identifier."),
+                                "workflow_name": .string(description: "Optional workflow label such as Investigate, Orchestrate, or Review."),
+                                "model_id": .string(description: "Optional model_id target used for this route."),
+                                "role": .string(description: "Optional role label used for this route."),
+                                "reason": .string(description: "Why this route was chosen."),
+                                "context_summary": .string(description: "Compact handoff context used to make the routing decision.")
+                            ],
+                            required: ["decision", "operation", "reason"]
                         )
                     )
                 ],
