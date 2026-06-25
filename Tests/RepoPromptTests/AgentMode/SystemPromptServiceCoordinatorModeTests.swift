@@ -24,12 +24,42 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
         XCTAssertTrue(prompt.contains("workflow_name:\"Investigate\""))
         XCTAssertTrue(prompt.contains("node with `workflow_name` or `workflow_id`"))
         XCTAssertTrue(prompt.contains("revise the Mission Plan to the real workflow"))
+        XCTAssertTrue(prompt.contains("coordinator_chat op=mission_plan"))
+        XCTAssertTrue(prompt.contains("approval_state:\"awaiting_approval\""))
         XCTAssertTrue(prompt.contains("For `createIsolated` mutable workstreams"))
         XCTAssertTrue(prompt.contains("worktree_strategy.base_ref"))
         XCTAssertTrue(prompt.contains("issue/PR-style implementation work"))
         XCTAssertTrue(prompt.contains("repository default branch/ref"))
         XCTAssertTrue(prompt.contains("use the actual repo default"))
         XCTAssertTrue(prompt.contains("worktree_base_ref"))
+        XCTAssertTrue(prompt.contains("operation values must be `agent_explore.start`, `agent_run.start`, `agent_run.steer`, `agent_run.respond`, `agent_run.cancel`, or `coordinator_hold`"))
+    }
+
+    func testBuiltInMissionTemplatesAvoidCoordinatorProtocolDetails() {
+        let templates = [
+            CoordinatorMissionTemplate.scopedChange,
+            CoordinatorMissionTemplate.deepPlanOrchestrateReview
+        ]
+        for template in templates {
+            for forbidden in CoordinatorMissionTemplate.coordinatorProtocolDetailTerms {
+                XCTAssertFalse(
+                    template.template.contains(forbidden),
+                    "\(template.displayName) should not include Coordinator protocol detail: \(forbidden)"
+                )
+            }
+        }
+    }
+
+    func testBuiltInMissionTemplatesKeepUserFacingMissionPreferences() {
+        XCTAssertTrue(CoordinatorMissionTemplate.scopedChange.template.contains("visible plan"))
+        XCTAssertTrue(CoordinatorMissionTemplate.scopedChange.template.contains("read-only discovery"))
+        XCTAssertTrue(CoordinatorMissionTemplate.scopedChange.template.contains("isolated worktree"))
+        XCTAssertTrue(CoordinatorMissionTemplate.scopedChange.template.contains("independent Review"))
+
+        XCTAssertTrue(CoordinatorMissionTemplate.deepPlanOrchestrateReview.template.contains("Deep Plan"))
+        XCTAssertTrue(CoordinatorMissionTemplate.deepPlanOrchestrateReview.template.contains("Orchestrate"))
+        XCTAssertTrue(CoordinatorMissionTemplate.deepPlanOrchestrateReview.template.contains("independent Review"))
+        XCTAssertTrue(CoordinatorMissionTemplate.deepPlanOrchestrateReview.template.contains("fix loop"))
     }
 
     func testCoordinatorPromptIncludesAutoModeWhenEnabled() {

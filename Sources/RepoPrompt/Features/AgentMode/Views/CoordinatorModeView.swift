@@ -5038,6 +5038,11 @@ private struct CoordinatorMissionTemplateEditorSheet: View {
             header
             Divider()
             editor
+            templateGuidance
+            if !protocolDetailMatches.isEmpty {
+                Divider()
+                protocolDetailWarning
+            }
             if let error, !error.isEmpty {
                 Divider()
                 Text(error)
@@ -5050,6 +5055,12 @@ private struct CoordinatorMissionTemplateEditorSheet: View {
             footer
         }
         .frame(width: 620, height: 560)
+    }
+
+    private var protocolDetailMatches: [String] {
+        CoordinatorMissionTemplate.coordinatorProtocolDetailTerms.filter { term in
+            markdown.localizedCaseInsensitiveContains(term)
+        }
     }
 
     private var header: some View {
@@ -5086,6 +5097,25 @@ private struct CoordinatorMissionTemplateEditorSheet: View {
             .background(Color(nsColor: .textBackgroundColor).opacity(0.16))
             .disabled(!template.isCustom)
             .padding(12)
+    }
+
+    private var templateGuidance: some View {
+        Text("Templates should describe mission shape and preferences. Coordinator runtime behavior, tool calls, schema fields, and safety gates are applied automatically.")
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 8)
+    }
+
+    private var protocolDetailWarning: some View {
+        Label(
+            "This template mentions Coordinator runtime protocol: \(protocolDetailMatches.joined(separator: ", ")). Custom templates usually should avoid tool names and schema fields.",
+            systemImage: "exclamationmark.triangle"
+        )
+        .font(.system(size: 11))
+        .foregroundStyle(.orange)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
     }
 
     private var footer: some View {

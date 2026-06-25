@@ -256,6 +256,16 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
         case custom(UUID)
     }
 
+    static let coordinatorProtocolDetailTerms = [
+        "coordinator_chat op=mission_plan",
+        "worktree_strategy.base_ref",
+        "routing_decisions",
+        "agent_run.start",
+        "agent_explore.start",
+        "approval_state",
+        "worktree_base_ref"
+    ]
+
     static let scopedChange = CoordinatorMissionTemplate(
         source: .builtIn("scoped-change"),
         displayName: "Scoped Change",
@@ -266,16 +276,15 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
         template: """
         Run this as a scoped Coordinator change.
 
-        1. Record a Mission Plan with `coordinator_chat op=mission_plan` before delegation. Use one user-level workstream unless the objective clearly needs more. Include `default_policy` and explicit `worktree_strategy` for each workstream. For mutable `createIsolated` workstreams, include `worktree_strategy.base_ref` and `base_reason` so I can see whether the new worktree starts from the repository default branch, the current branch, or another ref before approval.
-        2. Decompose the user's objective into concrete DAG-lite nodes. Node titles must name user-specific deliverables or decisions, not generic phases such as "Plan", "Orchestrate", or "Review" unless this is only a smoke test.
-        3. Attach workflow choices as node metadata by default for real workflow nodes: workflow_name="Orchestrate" for mutable implementation, workflow_name="Review" for independent review, and workflow_name="Investigate" or workflow_name="Deep Plan" for formal discovery/planning deliverables. Omit workflow metadata only for disposable read-only probe nodes launched with `agent_explore.start` or coordinator-only bookkeeping/reporting nodes. Include `completion_evidence` for each nontrivial node.
-        4. If repo evidence is needed, make discovery visible plan nodes with execution_policy="fresh_readonly_child"; use workflow-less probe nodes for narrow read-only questions and workflow_name="Investigate" or workflow_name="Deep Plan" only for formal discovery/planning deliverables. Ask before launching those read-only children.
-        5. After discovery, revise the same Mission Plan with grounded details before mutable implementation.
-        6. Delegate mutable work only into isolated worktrees. Use fresh_worktree for the first primary implementation node, then steer_primary for later same-session nodes in that workstream. For issue/PR-style work with no requested dependency on this branch, resolve and use the repository default branch/ref as the mutable workstream base; if the base is ambiguous, ask in the approval checkpoint.
-        7. Record routing_decisions before or alongside each start, steer, respond, cancel, or hold choice so the inspector can show why that path was chosen.
-        8. Keep only the node currently being executed as running; downstream same-lane nodes should remain pending until reached.
-        9. Keep workstreams focused on user-level outcomes, not raw session mechanics.
-        10. Review delegated results, ask me before irreversible actions, then coordinate any needed fixes.
+        Prefer:
+        - one visible plan before delegation
+        - narrow read-only discovery before edits when the implementation surface is uncertain
+        - one primary implementation lane in an isolated worktree
+        - concrete deliverable names instead of generic phase names
+        - independent Review before handoff
+        - a concise final summary of changes, validation, and remaining risks
+
+        Ask before irreversible actions such as commit, push, merge, or PR creation.
 
         User objective:
         $MISSION
@@ -292,33 +301,16 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
         template: """
         Run this as a staged Coordinator Mission.
 
-        Mission Plan:
-        1. Record the plan with `coordinator_chat op=mission_plan` before starting children. Include `default_policy` and `worktree_strategy` for each workstream. For mutable `createIsolated` workstreams, include `worktree_strategy.base_ref` and `base_reason`.
-        2. Decompose the user's objective into concrete deliverable nodes. Use workflow metadata for "Deep Plan", "Orchestrate", and "Review"; do not make those words the whole node title unless this is only a smoke test.
-        3. Include `completion_evidence` on each nontrivial node, and make review nodes depend on the implementation or verification nodes they review.
-        4. Treat the first plan as a visible draft when repo evidence is still missing. Add workflow-less probe nodes with execution_policy="fresh_readonly_child" for narrow read-only questions, or use workflow_name="Investigate" / workflow_name="Deep Plan" when the discovery/planning node is a formal workflow deliverable. Mutable implementation nodes should still carry workflow_name="Orchestrate"; independent review nodes should carry workflow_name="Review".
-        5. Use workstreams such as "Discovery", "Implementation", and "Quality" only when each maps to distinct user-level work.
-        6. Update each workstream with `primary_session_id`, `related_session_ids`, and `worktree_strategy.worktree_id` as children are launched or bound. When updating one workstream or node, omit unrelated entries; the app preserves them.
-        7. Record routing_decisions before or alongside each start, steer, respond, cancel, or hold choice. Use operation values such as `agent_explore.start`, `agent_run.start`, `agent_run.steer`, and `coordinator_hold`.
-        8. In one mutable workstream, use fresh_worktree for the first primary implementation node and steer_primary for later same-session nodes. Keep downstream same-lane nodes pending until the primary session reaches them. For issue/PR-style work with no requested dependency on this branch, resolve and use the repository default branch/ref as the mutable workstream base; if the user asks to continue the current branch/worktree, state that explicitly in `base_reason`.
+        Preferred shape:
+        - Deep Plan or grounding first when the solution needs architectural context
+        - Orchestrate implementation only after the plan is grounded and approved
+        - one primary implementation lane in an isolated worktree
+        - focused validation before review
+        - independent Review on the implementation result
+        - one fix loop if Review finds must-fix issues
+        - a concise final summary of decisions, changes, validation, and remaining risks
 
-        Stage 1 - Grounding:
-        1. Ask me to approve the visible draft plan before starting the discovery child.
-        2. Start narrow workflow-less probe nodes with `agent_explore.start`; start formal Investigate/Deep Plan discovery nodes with `agent_run.start` and the matching workflow metadata.
-        3. If the discovery child asks the user a question, needs approval, or reaches any Needs you state, stop and report that the child needs the user. Do not answer for the user.
-        4. Wait for the discovery child to finish after the user resolves any checkpoint.
-        5. Revise the Mission Plan with evidence-grounded implementation details and ask me whether to proceed, revise, or stop before mutable implementation.
-
-        Stage 2 - Orchestrate:
-        1. Only after I proceed, start exactly one delegated child with workflow_name="Orchestrate".
-        2. If implementation or validation may edit files, create or bind an explicit isolated child worktree before starting Orchestrate, passing the planned base as `worktree_base_ref` when creating a worktree.
-        3. Wait for Orchestrate to finish and capture its worktree, branch, diff summary, and validation status.
-
-        Stage 3 - Review:
-        1. Start exactly one separate delegated child with workflow_name="Review" to inspect the Orchestrate result.
-        2. Bind Review to the same child worktree when Orchestrate created or used one.
-        3. If Review finds must-fix issues, coordinate fixes in the same worktree and repeat Review once.
-        4. Finish with a concise status summary and ask before commit, push, merge, or any irreversible action.
+        Pause for user input when scope, safety, or irreversible actions need confirmation.
 
         User objective:
         $MISSION
