@@ -24,6 +24,12 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
         XCTAssertTrue(prompt.contains("workflow_name:\"Investigate\""))
         XCTAssertTrue(prompt.contains("node with `workflow_name` or `workflow_id`"))
         XCTAssertTrue(prompt.contains("revise the Mission Plan to the real workflow"))
+        XCTAssertTrue(prompt.contains("For `createIsolated` mutable workstreams"))
+        XCTAssertTrue(prompt.contains("worktree_strategy.base_ref"))
+        XCTAssertTrue(prompt.contains("issue/PR-style implementation work"))
+        XCTAssertTrue(prompt.contains("repository default branch/ref"))
+        XCTAssertTrue(prompt.contains("use the actual repo default"))
+        XCTAssertTrue(prompt.contains("worktree_base_ref"))
     }
 
     func testCoordinatorPromptIncludesAutoModeWhenEnabled() {

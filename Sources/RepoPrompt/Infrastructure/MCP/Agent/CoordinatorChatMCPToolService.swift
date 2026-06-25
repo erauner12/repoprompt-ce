@@ -267,7 +267,7 @@ struct CoordinatorChatMCPToolService {
             }
             throw MCPError.invalidParams("workstreams[].worktree_strategy is required for new workstreams.")
         }
-        return try parseWorktreeStrategy(value, name: "workstreams[].worktree_strategy")
+        return try parseWorktreeStrategy(value, name: "workstreams[].worktree_strategy", existing: existing?.worktreeStrategy)
     }
 
     private func parseMissionWorkstreamPrimarySessionID(
@@ -290,7 +290,11 @@ struct CoordinatorChatMCPToolService {
         return try optionalUUIDArray(object["related_session_ids"] ?? object["relatedSessionIDs"], name: "workstreams[].related_session_ids") ?? []
     }
 
-    private func parseWorktreeStrategy(_ value: Value?, name: String) throws -> CoordinatorMissionWorktreeStrategy {
+    private func parseWorktreeStrategy(
+        _ value: Value?,
+        name: String,
+        existing: CoordinatorMissionWorktreeStrategy?
+    ) throws -> CoordinatorMissionWorktreeStrategy {
         guard let object = value?.objectValue else {
             throw MCPError.invalidParams("\(name) must be an object with mode.")
         }
@@ -300,9 +304,48 @@ struct CoordinatorChatMCPToolService {
         }
         return CoordinatorMissionWorktreeStrategy(
             mode: mode,
-            worktreeID: normalizedString(object["worktree_id"] ?? object["worktreeID"]),
-            reason: normalizedString(object["reason"])
+            worktreeID: strategyString(
+                object,
+                snakeKey: "worktree_id",
+                camelKey: "worktreeID",
+                fallback: existing?.worktreeID
+            ),
+            baseRef: strategyString(
+                object,
+                snakeKey: "base_ref",
+                camelKey: "baseRef",
+                alternateSnakeKey: "worktree_base_ref",
+                alternateCamelKey: "worktreeBaseRef",
+                fallback: existing?.baseRef
+            ),
+            baseReason: strategyString(
+                object,
+                snakeKey: "base_reason",
+                camelKey: "baseReason",
+                alternateSnakeKey: "worktree_base_reason",
+                alternateCamelKey: "worktreeBaseReason",
+                fallback: existing?.baseReason
+            ),
+            reason: object.keys.contains("reason") ? normalizedString(object["reason"]) : existing?.reason
         )
+    }
+
+    private func strategyString(
+        _ object: [String: Value],
+        snakeKey: String,
+        camelKey: String,
+        alternateSnakeKey: String? = nil,
+        alternateCamelKey: String? = nil,
+        fallback: String?
+    ) -> String? {
+        let keys = [snakeKey, camelKey, alternateSnakeKey, alternateCamelKey].compactMap(\.self)
+        guard keys.contains(where: { object.keys.contains($0) }) else { return fallback }
+        for key in keys {
+            if let parsed = normalizedString(object[key]) {
+                return parsed
+            }
+        }
+        return nil
     }
 
     private func parseMissionPlanNodes(
@@ -1042,6 +1085,8 @@ struct CoordinatorChatMCPToolService {
                 "mode": .string(workstream.worktreeStrategy.mode.rawValue),
                 "display_name": .string(workstream.worktreeStrategy.mode.displayName),
                 "worktree_id": AgentMCPToolHelpers.stringOrNull(workstream.worktreeStrategy.worktreeID),
+                "base_ref": AgentMCPToolHelpers.stringOrNull(workstream.worktreeStrategy.baseRef),
+                "base_reason": AgentMCPToolHelpers.stringOrNull(workstream.worktreeStrategy.baseReason),
                 "reason": AgentMCPToolHelpers.stringOrNull(workstream.worktreeStrategy.reason)
             ]),
             "primary_session_id": AgentMCPToolHelpers.stringOrNull(workstream.primarySessionID?.uuidString),

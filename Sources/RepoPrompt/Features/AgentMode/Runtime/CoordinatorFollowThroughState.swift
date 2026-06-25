@@ -488,15 +488,21 @@ struct CoordinatorMissionWorkstreamSummary: Codable, Equatable, Identifiable {
 struct CoordinatorMissionWorktreeStrategy: Codable, Equatable {
     var mode: CoordinatorMissionWorktreeMode
     var worktreeID: String?
+    var baseRef: String?
+    var baseReason: String?
     var reason: String?
 
     init(
         mode: CoordinatorMissionWorktreeMode,
         worktreeID: String? = nil,
+        baseRef: String? = nil,
+        baseReason: String? = nil,
         reason: String? = nil
     ) {
         self.mode = mode
         self.worktreeID = worktreeID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.baseRef = baseRef?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.baseReason = baseReason?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.reason = reason?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }
 }

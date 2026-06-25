@@ -1384,7 +1384,7 @@ struct CoordinatorModeView: View {
             return MissionPlanExecutionLane(
                 id: "\(workstreamKey)-primary-worktree",
                 title: "Primary implementation lane",
-                subtitle: workstream?.worktreeStrategy.mode.displayName ?? "Fresh isolated worktree",
+                subtitle: missionPlanWorktreeStrategySubtitle(workstream?.worktreeStrategy, fallback: "Fresh isolated worktree"),
                 systemImage: "arrow.triangle.branch",
                 policy: node.executionPolicy,
                 nodes: []
@@ -1472,7 +1472,21 @@ struct CoordinatorModeView: View {
             Spacer(minLength: metrics.controlSpacing)
             statusChip(workstream.defaultPolicy.displayName, color: Color.accentColor, metrics: metrics)
             statusChip(workstream.worktreeStrategy.mode.displayName, color: .secondary, metrics: metrics)
+            if let baseRef = workstream.worktreeStrategy.baseRef {
+                statusChip("Base \(baseRef)", color: .secondary, metrics: metrics)
+            }
         }
+    }
+
+    private func missionPlanWorktreeStrategySubtitle(
+        _ strategy: CoordinatorMissionWorktreeStrategy?,
+        fallback: String
+    ) -> String {
+        guard let strategy else { return fallback }
+        if let baseRef = strategy.baseRef {
+            return "\(strategy.mode.displayName) from \(baseRef)"
+        }
+        return strategy.mode.displayName
     }
 
     private func missionPlanNodeRow(
@@ -2056,6 +2070,12 @@ struct CoordinatorModeView: View {
                             }
                             keyValue("Default policy", workstream.defaultPolicy.displayName, metrics: metrics)
                             keyValue("Worktree strategy", workstream.worktreeStrategy.mode.displayName, metrics: metrics)
+                            if let baseRef = workstream.worktreeStrategy.baseRef {
+                                keyValue("Worktree base", baseRef, metrics: metrics)
+                            }
+                            if let baseReason = workstream.worktreeStrategy.baseReason {
+                                keyValue("Base reason", baseReason, metrics: metrics)
+                            }
                             if let reason = workstream.worktreeStrategy.reason {
                                 keyValue("Strategy reason", reason, metrics: metrics)
                             }
@@ -4406,6 +4426,12 @@ struct CoordinatorModeView: View {
                 }
                 keyValue("Policy", declared.defaultPolicy.displayName, metrics: metrics)
                 keyValue("Worktree strategy", declared.worktreeStrategy.mode.displayName, metrics: metrics)
+                if let baseRef = declared.worktreeStrategy.baseRef {
+                    keyValue("Worktree base", baseRef, metrics: metrics)
+                }
+                if let baseReason = declared.worktreeStrategy.baseReason {
+                    keyValue("Base reason", baseReason, metrics: metrics)
+                }
                 if let reason = declared.worktreeStrategy.reason {
                     keyValue("Strategy reason", reason, metrics: metrics)
                 }
