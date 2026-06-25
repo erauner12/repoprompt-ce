@@ -30,10 +30,16 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         self.childInteractionResponses = childInteractionResponses
     }
 
-    mutating func rememberObjective(_ text: String, missionTemplate: CoordinatorMissionTemplateSummary? = nil) {
+    mutating func rememberObjective(
+        _ text: String,
+        missionTemplate: CoordinatorMissionTemplateSummary? = nil,
+        resetMissionPlan: Bool = true
+    ) {
         originalObjectiveSummary = Self.summary(from: text)
         self.missionTemplate = missionTemplate
-        missionPlan = nil
+        if resetMissionPlan {
+            missionPlan = nil
+        }
         observedChildPhases.removeAll()
         pendingEvents.removeAll()
         handledEventIDs.removeAll()
@@ -89,6 +95,44 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             ] + update.events,
             updatedAt: update.updatedAt
         )
+    }
+
+    @discardableResult
+    mutating func completeSatisfiedCoordinatorOnlyRunningMissionPlanNodes(at date: Date = Date()) -> Bool {
+        guard let plan = missionPlan,
+              plan.status != .completed,
+              !plan.nodes.isEmpty
+        else { return false }
+
+        let nodeByID = Dictionary(uniqueKeysWithValues: plan.nodes.map { ($0.id, $0) })
+        var nodes = plan.nodes
+        var completedNodes: [CoordinatorMissionPlanNode] = []
+        for index in nodes.indices {
+            let node = nodes[index]
+            guard node.status == .running,
+                  node.executionPolicy == .coordinatorOnly,
+                  node.dependsOn.allSatisfy({ nodeByID[$0]?.status.isTerminal == true })
+            else { continue }
+            nodes[index].status = .completed
+            completedNodes.append(nodes[index])
+        }
+        guard !completedNodes.isEmpty else { return false }
+
+        let status: CoordinatorMissionPlanStatus = nodes.allSatisfy(\.status.isTerminal) ? .completed : plan.status
+        updateMissionPlan(CoordinatorMissionPlanUpdate(
+            status: status,
+            nodes: nodes,
+            events: completedNodes.map { node in
+                CoordinatorMissionPlanEvent(
+                    kind: .nodeCompleted,
+                    nodeID: node.id,
+                    timestamp: date,
+                    summary: "\(node.title) node completed."
+                )
+            },
+            updatedAt: date
+        ))
+        return true
     }
 
     mutating func updateObservedPhases(from rows: [CoordinatorModeRow]) {
@@ -384,6 +428,15 @@ enum CoordinatorMissionPlanNodeStatus: String, Codable, Equatable, CaseIterable 
     case blocked
     case skipped
     case cancelled
+
+    var isTerminal: Bool {
+        switch self {
+        case .completed, .skipped, .cancelled:
+            true
+        case .pending, .running, .blocked:
+            false
+        }
+    }
 }
 
 struct CoordinatorMissionPlanEvent: Codable, Equatable, Identifiable {

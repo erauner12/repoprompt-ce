@@ -111,6 +111,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 9.35 Teach built-in Mission Templates and Coordinator runtime guidance to record/update Mission Plan workstreams before and during delegation.
 - [x] 9.36 Extend `coordinator_chat op=mission_plan` updates to accept status, approval state, DAG-lite nodes, and appended events while preserving omitted fields.
 - [x] 9.37 Add read-only `coordinator_chat op=mission_status` output for external Coordinator debugging with node counts, dependencies, recent events, and row bindings.
+- [x] 9.38 Complete explicit state-only Mission Plan continuation directives without leaving satisfied coordinator-only DAG nodes stale.
 
 ## 10. Coordinator view UI shell
 
@@ -182,3 +183,4 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 11.7 Live-smoke a fresh Coordinator parent chaining Orchestrate then Review on the same app-managed worktree via MCP Coordinator chat.
 - [x] 11.8 Run focused Coordinator Mission Template store, composer, and objective-persistence tests.
 - [x] 11.9 Run focused Mission Plan persistence, worktree-strategy, projection, composer, and MCP control-surface tests.
+- [x] 11.10 Record the DAG-lite Mission status smoke scenario with expected `mission_status` debug summary, node counts, dependency satisfaction, and no-child/no-edit constraints.

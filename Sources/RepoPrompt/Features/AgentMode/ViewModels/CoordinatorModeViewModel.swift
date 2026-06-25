@@ -955,6 +955,10 @@ extension AgentModeViewModel {
                 tabID: runtime.tabID,
                 missionTemplate: submission.missionTemplate
             )
+            completeStateOnlyMissionPlanIfRequested(
+                by: submission.visibleText,
+                tabID: runtime.tabID
+            )
         }
         return result
     }
@@ -1012,8 +1016,7 @@ extension AgentModeViewModel {
         defer {
             var latest = session.coordinatorFollowThroughState ?? state
             latest.updateObservedPhases(from: ownedRows)
-            session.coordinatorFollowThroughState = latest
-            scheduleSave(for: tabID)
+            persistCoordinatorFollowThroughState(latest, tabID: tabID, session: session)
         }
 
         if case .gateCleared = trigger {
@@ -1035,7 +1038,7 @@ extension AgentModeViewModel {
                                 || (event.gate?.subjectID != nil && pending.gate?.subjectID == event.gate?.subjectID)
                         )
                 }
-                session.coordinatorFollowThroughState = state
+                persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
                 await submitCoordinatorFollowThroughEvent(event, tabID: tabID, session: session)
             case .hold(.coordinatorActive):
                 var idleInput = input
@@ -1049,8 +1052,7 @@ extension AgentModeViewModel {
                             )
                     }
                     state.enqueue(event)
-                    session.coordinatorFollowThroughState = state
-                    scheduleSave(for: tabID)
+                    persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
                 }
             case .hold:
                 break
@@ -1080,7 +1082,7 @@ extension AgentModeViewModel {
             input.coordinatorRunState = .idle
             if case let .resume(event) = classifier.classify(input) {
                 state.enqueue(event)
-                session.coordinatorFollowThroughState = state
+                persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
             }
         case .hold:
             break
@@ -1096,8 +1098,7 @@ extension AgentModeViewModel {
         guard !session.runState.isActive else {
             var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
             state.enqueue(event)
-            session.coordinatorFollowThroughState = state
-            scheduleSave(for: tabID)
+            persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
             return
         }
         let result = await submitCoordinatorDirectiveToAgentMode(
@@ -1113,8 +1114,7 @@ extension AgentModeViewModel {
             state.enqueue(event)
             state.markDeferred(event)
         }
-        session.coordinatorFollowThroughState = state
-        scheduleSave(for: tabID)
+        persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
     }
 
     @MainActor
@@ -1128,8 +1128,7 @@ extension AgentModeViewModel {
         let session = match.value
         var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
         state.rememberChildInteractionResponse(row: row, text: text)
-        session.coordinatorFollowThroughState = state
-        scheduleSave(for: tabID)
+        persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
     }
 
     @MainActor
@@ -1139,15 +1138,14 @@ extension AgentModeViewModel {
         missionTemplate: CoordinatorMissionTemplateSummary? = nil
     ) {
         guard let session = sessions[tabID], session.isCoordinatorRuntime else { return }
-        var state = CoordinatorFollowThroughState()
-        state.rememberObjective(text, missionTemplate: missionTemplate)
+        var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        state.rememberObjective(text, missionTemplate: missionTemplate, resetMissionPlan: false)
         if let coordinatorID = session.activeAgentSessionID {
             let existingRows = coordinatorModeRows(in: coordinatorModeViewModel.snapshot)
                 .filter { $0.parentCoordinator?.sessionID == coordinatorID }
             state.updateObservedPhases(from: existingRows)
         }
-        session.coordinatorFollowThroughState = state
-        scheduleSave(for: tabID)
+        persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
     }
 
     @MainActor
@@ -1164,12 +1162,37 @@ extension AgentModeViewModel {
         let session = match.value
         var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
         state.updateMissionPlan(update)
+        persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+    }
+
+    @MainActor
+    private func persistCoordinatorFollowThroughState(
+        _ state: CoordinatorFollowThroughState,
+        tabID: UUID,
+        session: TabSession
+    ) {
         session.coordinatorFollowThroughState = state
+        session.isDirty = true
         scheduleSave(for: tabID)
     }
 
     private func isCoordinatorFollowThroughResumeDirective(_ text: String) -> Bool {
         text.contains("<coordinator_follow_through_resume")
+    }
+
+    @MainActor
+    private func completeStateOnlyMissionPlanIfRequested(by text: String, tabID: UUID) {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard normalized.contains("complete"),
+              normalized.contains("mission plan"),
+              normalized.contains("review.dependencies_satisfied is true")
+        else { return }
+        guard let session = sessions[tabID], session.isCoordinatorRuntime else { return }
+        var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        guard state.completeSatisfiedCoordinatorOnlyRunningMissionPlanNodes() else { return }
+        persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
     }
 
     private func coordinatorModeRows(in snapshot: CoordinatorModeSnapshot) -> [CoordinatorModeRow] {

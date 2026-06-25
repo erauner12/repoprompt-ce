@@ -158,6 +158,47 @@ Expected result:
 - The follow-up attaches to Parent A and does not affect Parent B's conversation.
 - In aggregate mode, children from both parents remain visible with parent attribution.
 
+## 6. DAG-Lite Mission Status Smoke
+
+Facet: external Mission Plan control surface, Plan tab projection, and unified node inspector without delegated child behavior.
+
+Checkpoint required: `coordinator_chat` `mission_plan` write, `mission_status` readback, Plan presentation, and inspector projection.
+
+Gesture:
+
+1. Start or select a fresh Coordinator Mission named `DAG-lite status smoke`.
+2. Use `coordinator_chat` `op=mission_plan` to write one read-only Mission Plan revision.
+3. Use `coordinator_chat` `op=mission_status` to read the Mission state back.
+4. Open the Plan presentation and select `Orchestrate` or `Review`.
+
+Prompt:
+
+```text
+DAG-lite mission status smoke. Start a fresh Coordinator Mission. Record a Mission Plan with objective "Validate DAG-lite status surface", one workstream named "Status surface", and three nodes: Plan, Orchestrate, Review. Mark Plan completed, Orchestrate running, Review pending and dependent on Orchestrate. Then summarize the Mission status: debug summary, node counts, and whether Review dependencies are satisfied. Do not edit files or launch child agents.
+```
+
+Expected readback:
+
+- `debug_summary` is `DAG-lite status smoke: running, r1, 1/3 terminal nodes, 1 active/blocking.`
+- Node counts include `completed: 1`, `running: 1`, and `pending: 1`.
+- `Review.dependencies_satisfied == false` because `Orchestrate` is still running.
+- The Plan presentation renders revision `r1`, status `Running`, approval `Approved`, workstream `Status surface`, and nodes `Plan`, `Orchestrate`, and `Review`.
+- Selecting a node opens the unified inspector with its status, role/workflow metadata, dependency state, and recent node event.
+- The scenario does not edit files, launch child agents, or rely on app-side hidden mutation beyond the explicit Mission Plan state written through `mission_plan`.
+
+Coordinator-owned completion checkpoint:
+
+1. Update the same Mission Plan so `Plan` and `Orchestrate` are `completed`, `Review` is `running`, and `Review.dependencies_satisfied == true`.
+2. Send a Coordinator chat directive to complete the current state-only Mission Plan.
+3. Read `mission_status` again.
+
+Expected completion readback:
+
+- `debug_summary` is completed with `3/3 terminal nodes` and `0 active/blocking`.
+- Node counts include `completed: 3`, `running: 0`, and `pending: 0`.
+- `Plan`, `Orchestrate`, and `Review` are all `completed`.
+- No delegated child rows are created.
+
 ## Non-Example: Three Worktrees Is Not Three Parents
 
 Prompt:
