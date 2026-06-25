@@ -325,6 +325,88 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(plan.events.suffix(2).map(\.kind), [.revised, .nodeStarted])
     }
 
+    func testStoppedMissionPlanCancelsActiveNodesAndClearsPendingFollowThroughEvents() throws {
+        let workstreamID = UUID()
+        let runningNodeID = UUID()
+        let blockedNodeID = UUID()
+        let pendingNodeID = UUID()
+        let cancelledSessionID = UUID()
+        let skippedSessionID = UUID()
+        var state = CoordinatorFollowThroughState(
+            missionPlan: CoordinatorMissionPlan(
+                objective: "Issue 298 provider cleanup",
+                status: .running,
+                approvalState: .approved,
+                workstreams: [
+                    CoordinatorMissionWorkstreamSummary(
+                        id: workstreamID,
+                        title: "Implementation",
+                        purpose: "Make provider cleanup changes.",
+                        defaultPolicy: .freshWorktree,
+                        worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+                    )
+                ],
+                nodes: [
+                    CoordinatorMissionPlanNode(
+                        id: runningNodeID,
+                        title: "Implement cleanup hook",
+                        workstreamID: workstreamID,
+                        executionPolicy: .freshWorktree,
+                        status: .running,
+                        boundSessionID: cancelledSessionID
+                    ),
+                    CoordinatorMissionPlanNode(
+                        id: blockedNodeID,
+                        title: "Answer cleanup question",
+                        workstreamID: workstreamID,
+                        executionPolicy: .coordinatorOnly,
+                        status: .blocked
+                    ),
+                    CoordinatorMissionPlanNode(
+                        id: pendingNodeID,
+                        title: "Review cleanup behavior",
+                        workstreamID: workstreamID,
+                        executionPolicy: .freshSiblingOnSameWorktree,
+                        status: .pending,
+                        boundSessionID: skippedSessionID
+                    )
+                ],
+                updatedAt: Date(timeIntervalSince1970: 10)
+            ),
+            pendingEvents: [
+                CoordinatorFollowThroughEvent(
+                    id: "resume-1",
+                    kind: .childTerminal,
+                    coordinatorSessionID: UUID(),
+                    childSessionID: cancelledSessionID,
+                    childTitle: "Cleanup child",
+                    gate: nil,
+                    phase: .done,
+                    detail: "Child completed."
+                )
+            ]
+        )
+        var plan = try XCTUnwrap(state.missionPlan)
+        plan.stopMission(
+            cancelledSessionIDs: [cancelledSessionID],
+            at: Date(timeIntervalSince1970: 20)
+        )
+
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            status: plan.status,
+            nodes: plan.nodes,
+            routingDecisions: plan.routingDecisions,
+            updatedAt: plan.updatedAt
+        ))
+
+        let stoppedPlan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(stoppedPlan.status, .stopped)
+        XCTAssertEqual(stoppedPlan.nodes.map(\.status), [.cancelled, .cancelled, .pending])
+        XCTAssertEqual(stoppedPlan.routingDecisions.last?.operation, .agentRunCancel)
+        XCTAssertEqual(stoppedPlan.routingDecisions.last?.sessionID, cancelledSessionID)
+        XCTAssertTrue(state.pendingEvents.isEmpty)
+    }
+
     func testMissionPlanSubsetNodeAndWorkstreamUpdatePreservesOmittedPlanEntries() throws {
         let discoveryWorkstreamID = UUID()
         let implementationWorkstreamID = UUID()

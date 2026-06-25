@@ -125,6 +125,7 @@ struct CoordinatorModeView: View {
     @State private var childDirectiveNotice: String?
     @State private var isSubmittingCoordinatorDirective = false
     @State private var isSubmittingChildDirective = false
+    @State private var isStoppingCoordinatorMission = false
     @State private var coordinatorTextFieldResetTrigger = false
     @State private var coordinatorTextFieldHeight = ResizableTextField.height(forPresetIndex: 1, preset: .normal)
     @State private var isCoordinatorToolsPopoverPresented = false
@@ -2318,6 +2319,16 @@ struct CoordinatorModeView: View {
                     .font(metrics.cardTitle)
                     .foregroundStyle(.secondary)
                 Spacer()
+                Button {
+                    stopCoordinatorMission()
+                } label: {
+                    Label("Stop", systemImage: "stop.circle.fill")
+                }
+                .buttonStyle(.link)
+                .font(metrics.micro)
+                .foregroundStyle(Color.red.opacity(viewModel.canStopSelectedCoordinatorMission ? 0.95 : 0.45))
+                .disabled(!viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission)
+                .hoverTooltip("Stop the selected Coordinator Mission and cancel its live linked sessions without archiving or deleting them.")
                 Button("Clear") {
                     viewModel.clearCoordinatorRailTranscript()
                 }
@@ -4041,6 +4052,16 @@ struct CoordinatorModeView: View {
         Task { @MainActor in
             _ = await viewModel.submitCoordinatorContinuation(action)
             isSubmittingCoordinatorDirective = false
+            isCoordinatorComposerFocused = true
+        }
+    }
+
+    private func stopCoordinatorMission() {
+        guard viewModel.canStopSelectedCoordinatorMission, !isStoppingCoordinatorMission else { return }
+        isStoppingCoordinatorMission = true
+        Task { @MainActor in
+            _ = await viewModel.stopSelectedCoordinatorMission()
+            isStoppingCoordinatorMission = false
             isCoordinatorComposerFocused = true
         }
     }

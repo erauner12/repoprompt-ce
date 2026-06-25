@@ -189,6 +189,125 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.missionPlan?.workstreams.first?.title, "Docs implementation")
     }
 
+    func testStopSelectedCoordinatorMissionCancelsLinkedSessionsAndMarksPlanStopped() async throws {
+        let coordinatorID = uuid(1)
+        let visibleChildID = uuid(2)
+        let planBoundChildID = uuid(3)
+        let unrelatedChildID = uuid(4)
+        let workstreamID = uuid(20)
+        let runningNodeID = uuid(30)
+        let blockedNodeID = uuid(31)
+        let pendingNodeID = uuid(32)
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Issue 298 provider cleanup",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Discovery",
+                    purpose: "Map cleanup paths.",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly),
+                    primarySessionID: planBoundChildID
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: runningNodeID,
+                    title: "Map cleanup entry points",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .running,
+                    boundSessionID: visibleChildID
+                ),
+                CoordinatorMissionPlanNode(
+                    id: blockedNodeID,
+                    title: "Resolve cleanup decision",
+                    workstreamID: workstreamID,
+                    executionPolicy: .coordinatorOnly,
+                    status: .blocked,
+                    boundSessionID: planBoundChildID
+                ),
+                CoordinatorMissionPlanNode(
+                    id: pendingNodeID,
+                    title: "Review cleanup implementation",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshSiblingOnSameWorktree,
+                    status: .pending
+                )
+            ]
+        ))
+        var stopRequests: [CoordinatorMissionStopRequest] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(50),
+                            state: .running,
+                            coordinatorRuntime: true,
+                            missionPlan: state.missionPlan
+                        ),
+                        self.live(
+                            id: visibleChildID,
+                            tab: self.uuid(102),
+                            title: "Visible child",
+                            updatedAt: self.date(40),
+                            state: .running,
+                            parent: coordinatorID
+                        ),
+                        self.live(
+                            id: unrelatedChildID,
+                            tab: self.uuid(103),
+                            title: "Unrelated child",
+                            updatedAt: self.date(30),
+                            state: .running
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            missionPlanUpdater: { _, update in
+                state.updateMissionPlan(update)
+            },
+            missionStopper: { request in
+                stopRequests.append(request)
+                return CoordinatorMissionStopResult(
+                    requestedSessionIDs: request.sessionIDs,
+                    cancelledSessionIDs: [coordinatorID],
+                    skippedSessionIDs: [visibleChildID, planBoundChildID]
+                )
+            }
+        )
+        viewModel.selectCoordinator(sessionID: coordinatorID)
+
+        XCTAssertTrue(viewModel.canStopSelectedCoordinatorMission)
+        let result = await viewModel.stopSelectedCoordinatorMission()
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(stopRequests.first?.coordinatorSessionID, coordinatorID)
+        XCTAssertEqual(stopRequests.first?.sessionIDs, [coordinatorID, visibleChildID, planBoundChildID])
+        let stoppedPlan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(stoppedPlan.status, .stopped)
+        XCTAssertEqual(stoppedPlan.nodes.map(\.status), [.cancelled, .cancelled, .pending])
+        XCTAssertEqual(stoppedPlan.routingDecisions.suffix(1).map(\.operation), [.agentRunCancel])
+        XCTAssertEqual(
+            Set(stoppedPlan.routingDecisions.suffix(1).compactMap(\.sessionID)),
+            Set([coordinatorID])
+        )
+        XCTAssertTrue(viewModel.railTranscriptEntries.contains { entry in
+            entry.role == .event
+                && entry.text == "Mission stopped. Requested cancellation for 1 active session; skipped 2 inactive or unavailable linked sessions."
+        })
+    }
+
     func testRejectedDraftSendPreservesTemplateSelection() async {
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in

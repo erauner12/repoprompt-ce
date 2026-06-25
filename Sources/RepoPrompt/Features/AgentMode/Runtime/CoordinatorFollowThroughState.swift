@@ -101,6 +101,9 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             ] + update.events,
             updatedAt: update.updatedAt
         )
+        if missionPlan?.status == .stopped {
+            pendingEvents.removeAll()
+        }
     }
 
     private func mergeWorkstreams(
@@ -366,6 +369,36 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         }
         self.events = events
         self.updatedAt = updatedAt
+    }
+
+    mutating func stopMission(cancelledSessionIDs: Set<UUID>, at date: Date = Date()) {
+        status = .stopped
+        updatedAt = date
+        nodes = nodes.map { node in
+            var next = node
+            let boundSessionWasCancelled = next.boundSessionID.map(cancelledSessionIDs.contains) ?? false
+            if next.status == .running || next.status == .blocked || boundSessionWasCancelled {
+                next.status = .cancelled
+            }
+            return next
+        }
+        let routingDecisions = cancelledSessionIDs
+            .sorted { $0.uuidString < $1.uuidString }
+            .map { sessionID in
+                CoordinatorMissionRoutingDecision(
+                    timestamp: date,
+                    decision: .cancelOrReplace,
+                    operation: .agentRunCancel,
+                    sessionID: sessionID,
+                    reason: "User stopped the Coordinator Mission."
+                )
+            }
+        self.routingDecisions.append(contentsOf: routingDecisions)
+        events.append(CoordinatorMissionPlanEvent(
+            kind: .revised,
+            timestamp: date,
+            summary: "Mission stopped by user."
+        ))
     }
 
     private enum CodingKeys: String, CodingKey {

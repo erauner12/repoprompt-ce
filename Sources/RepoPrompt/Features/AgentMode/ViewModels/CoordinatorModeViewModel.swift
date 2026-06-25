@@ -10,6 +10,17 @@ struct CoordinatorDirectiveSubmission: Equatable {
     let forceNewRuntime: Bool
 }
 
+struct CoordinatorMissionStopRequest: Equatable {
+    let coordinatorSessionID: UUID
+    let sessionIDs: [UUID]
+}
+
+struct CoordinatorMissionStopResult: Equatable {
+    let requestedSessionIDs: [UUID]
+    let cancelledSessionIDs: [UUID]
+    let skippedSessionIDs: [UUID]
+}
+
 @MainActor
 final class CoordinatorModeViewModel: ObservableObject {
     enum DirectiveSubmissionResult: Equatable {
@@ -86,6 +97,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias CoordinatorActivationHandler = @MainActor (_ sessionID: UUID) async -> Void
     typealias CoordinatorPinHandler = @MainActor (_ option: CoordinatorModeCoordinatorOption, _ isPinned: Bool) -> Void
     typealias MissionPlanUpdater = @MainActor (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
+    typealias MissionStopper = @MainActor (_ request: CoordinatorMissionStopRequest) async -> CoordinatorMissionStopResult
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
     @Published private(set) var railTranscriptEntries: [CoordinatorModeRailTranscriptEntry] = []
@@ -120,6 +132,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let coordinatorActivationHandler: CoordinatorActivationHandler
     private let coordinatorPinHandler: CoordinatorPinHandler
     private let missionPlanUpdater: MissionPlanUpdater
+    private let missionStopper: MissionStopper
     private let projector: CoordinatorModeSnapshotProjector
     private let userDefaults: UserDefaults
     private var coordinatorSelectionByWorkspaceID: [UUID: CoordinatorSelectionState] = [:]
@@ -148,6 +161,13 @@ final class CoordinatorModeViewModel: ObservableObject {
         coordinatorActivationHandler: @escaping CoordinatorActivationHandler = { _ in },
         coordinatorPinHandler: @escaping CoordinatorPinHandler = { _, _ in },
         missionPlanUpdater: @escaping MissionPlanUpdater = { _, _ in },
+        missionStopper: @escaping MissionStopper = { request in
+            CoordinatorMissionStopResult(
+                requestedSessionIDs: request.sessionIDs,
+                cancelledSessionIDs: [],
+                skippedSessionIDs: request.sessionIDs
+            )
+        },
         projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector(),
         userDefaults: UserDefaults = .standard
     ) {
@@ -165,6 +185,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.coordinatorActivationHandler = coordinatorActivationHandler
         self.coordinatorPinHandler = coordinatorPinHandler
         self.missionPlanUpdater = missionPlanUpdater
+        self.missionStopper = missionStopper
         self.projector = projector
         self.userDefaults = userDefaults
         usesAutoMode = CoordinatorModeAutomationPreference.isEnabled(defaults: userDefaults)
@@ -201,6 +222,70 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
         try missionPlanUpdater(coordinatorSessionID, update)
         refresh()
+    }
+
+    var canStopSelectedCoordinatorMission: Bool {
+        guard snapshot.coordinatorRail.state == .selected,
+              snapshot.coordinatorRail.isLiveInCurrentWindow,
+              snapshot.coordinatorRail.missionPlan?.status != .stopped
+        else { return false }
+        return !coordinatorMissionStopTargetSessionIDs().isEmpty
+    }
+
+    @discardableResult
+    func stopSelectedCoordinatorMission() async -> DirectiveSubmissionResult {
+        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID else {
+            let message = "No Coordinator Mission is selected."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        let targetSessionIDs = coordinatorMissionStopTargetSessionIDs()
+        guard !targetSessionIDs.isEmpty else {
+            let message = "No live Coordinator-linked sessions were found to stop."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+
+        let result = await missionStopper(CoordinatorMissionStopRequest(
+            coordinatorSessionID: coordinatorSessionID,
+            sessionIDs: targetSessionIDs
+        ))
+        let message = coordinatorMissionStopMessage(result)
+        composerNotice = message
+        appendCoordinatorEventTranscriptEntry(message)
+
+        if var plan = snapshot.coordinatorRail.missionPlan {
+            plan.stopMission(cancelledSessionIDs: Set(result.cancelledSessionIDs))
+            try? missionPlanUpdater(
+                coordinatorSessionID,
+                CoordinatorMissionPlanUpdate(
+                    status: plan.status,
+                    nodes: plan.nodes,
+                    routingDecisions: plan.routingDecisions,
+                    events: [
+                        CoordinatorMissionPlanEvent(
+                            kind: .revised,
+                            timestamp: plan.updatedAt,
+                            summary: message
+                        )
+                    ],
+                    updatedAt: plan.updatedAt
+                )
+            )
+        }
+        refresh()
+        return .accepted
+    }
+
+    private func coordinatorMissionStopMessage(_ result: CoordinatorMissionStopResult) -> String {
+        let cancelledCount = result.cancelledSessionIDs.count
+        let skippedCount = result.skippedSessionIDs.count
+        let cancelledText = "\(cancelledCount) active \(cancelledCount == 1 ? "session" : "sessions")"
+        guard skippedCount > 0 else {
+            return "Mission stopped. Requested cancellation for \(cancelledText)."
+        }
+        let skippedText = "\(skippedCount) inactive or unavailable linked \(skippedCount == 1 ? "session" : "sessions")"
+        return "Mission stopped. Requested cancellation for \(cancelledText); skipped \(skippedText)."
     }
 
     @discardableResult
@@ -578,6 +663,57 @@ final class CoordinatorModeViewModel: ObservableObject {
         ))
     }
 
+    private func appendCoordinatorEventTranscriptEntry(_ text: String) {
+        let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedText.isEmpty else { return }
+        guard !railTranscriptEntries.contains(where: { entry in
+            entry.role == .event
+                && entry.action == nil
+                && entry.text.trimmingCharacters(in: .whitespacesAndNewlines) == normalizedText
+        }) else { return }
+        railTranscriptEntries.append(CoordinatorModeRailTranscriptEntry(
+            id: UUID(),
+            role: .event,
+            text: normalizedText,
+            createdAt: Date(),
+            action: nil
+        ))
+    }
+
+    private func coordinatorMissionStopTargetSessionIDs() -> [UUID] {
+        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID else { return [] }
+        var ids: [UUID] = []
+        func append(_ id: UUID?) {
+            guard let id, !ids.contains(id) else { return }
+            ids.append(id)
+        }
+
+        append(coordinatorSessionID)
+
+        for row in snapshot.groups.flatMap(\.rows) {
+            let belongsToCoordinator = row.parentCoordinator?.sessionID == coordinatorSessionID
+                || row.parentSessionID == coordinatorSessionID
+            guard belongsToCoordinator else { continue }
+            append(row.sessionID)
+            for childSessionID in row.childSessionIDs {
+                append(childSessionID)
+            }
+        }
+
+        if let missionPlan = snapshot.coordinatorRail.missionPlan {
+            for workstream in missionPlan.workstreams {
+                for sessionID in workstream.linkedSessionIDs {
+                    append(sessionID)
+                }
+            }
+            for node in missionPlan.nodes {
+                append(node.boundSessionID)
+            }
+        }
+
+        return ids
+    }
+
     private func syncRailConversationTranscript(for coordinatorSessionID: UUID?) {
         let transcriptEntries = transcriptProvider(coordinatorSessionID)
         guard !transcriptEntries.isEmpty else { return }
@@ -883,6 +1019,15 @@ extension AgentModeViewModel {
                 coordinatorSessionID: coordinatorSessionID,
                 update: update
             )
+        } missionStopper: { [weak self] request in
+            guard let self else {
+                return CoordinatorMissionStopResult(
+                    requestedSessionIDs: request.sessionIDs,
+                    cancelledSessionIDs: [],
+                    skippedSessionIDs: request.sessionIDs
+                )
+            }
+            return await stopCoordinatorMissionRuntime(request)
         }
     }
 
@@ -1055,6 +1200,7 @@ extension AgentModeViewModel {
         let session = match.value
         var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
         guard state.originalObjectiveSummary?.isEmpty == false else { return }
+        guard state.missionPlan?.status != .stopped else { return }
 
         let ownedRows = rows.filter { $0.parentCoordinator?.sessionID == coordinatorSessionID }
         defer {
@@ -1207,6 +1353,35 @@ extension AgentModeViewModel {
         var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
         state.updateMissionPlan(update)
         persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+    }
+
+    @MainActor
+    private func stopCoordinatorMissionRuntime(
+        _ request: CoordinatorMissionStopRequest
+    ) async -> CoordinatorMissionStopResult {
+        var cancelledSessionIDs: [UUID] = []
+        var skippedSessionIDs: [UUID] = []
+        for sessionID in request.sessionIDs {
+            guard let match = sessions.first(where: { _, session in
+                session.activeAgentSessionID == sessionID
+            }) else {
+                skippedSessionIDs.append(sessionID)
+                continue
+            }
+            let tabID = match.key
+            let session = match.value
+            guard session.runState.isActive else {
+                skippedSessionIDs.append(sessionID)
+                continue
+            }
+            await cancelAgentRun(tabID: tabID, completion: .terminalPublished)
+            cancelledSessionIDs.append(sessionID)
+        }
+        return CoordinatorMissionStopResult(
+            requestedSessionIDs: request.sessionIDs,
+            cancelledSessionIDs: cancelledSessionIDs,
+            skippedSessionIDs: skippedSessionIDs
+        )
     }
 
     @MainActor
