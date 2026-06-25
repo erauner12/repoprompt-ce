@@ -580,6 +580,7 @@ enum CoordinatorMissionPlanEventKind: String, Codable, Equatable, CaseIterable {
 
 enum CoordinatorMissionExecutionPolicy: String, Codable, Equatable, CaseIterable {
     case coordinatorOnly = "coordinator_only"
+    case freshReadOnlyChild = "fresh_readonly_child"
     case steerPrimary = "steer_primary"
     case freshSiblingOnSameWorktree = "fresh_sibling_on_same_worktree"
     case freshWorktree = "fresh_worktree"
@@ -588,6 +589,7 @@ enum CoordinatorMissionExecutionPolicy: String, Codable, Equatable, CaseIterable
     var displayName: String {
         switch self {
         case .coordinatorOnly: "Coordinator only"
+        case .freshReadOnlyChild: "Read-only child"
         case .steerPrimary: "Steer primary"
         case .freshSiblingOnSameWorktree: "Sibling on same worktree"
         case .freshWorktree: "Fresh worktree"

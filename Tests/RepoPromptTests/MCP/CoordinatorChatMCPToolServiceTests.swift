@@ -219,7 +219,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     "id": .string(discoveryWorkstreamID.uuidString),
                     "title": .string("Discovery"),
                     "purpose": .string("Map cleanup code paths."),
-                    "default_policy": .string("coordinator_only"),
+                    "default_policy": .string("fresh_readonly_child"),
                     "worktree_strategy": .object(["mode": .string("noneReadOnly")])
                 ]),
                 .object([
@@ -242,7 +242,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     "id": .string(discoveryNodeID.uuidString),
                     "title": .string("Map cleanup entry points"),
                     "workstream_id": .string(discoveryWorkstreamID.uuidString),
-                    "execution_policy": .string("coordinator_only"),
+                    "workflow_name": .string("Investigate"),
+                    "execution_policy": .string("fresh_readonly_child"),
                     "status": .string("completed")
                 ]),
                 .object([
@@ -313,6 +314,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             implementationWorkstreamID.uuidString,
             reviewWorkstreamID.uuidString
         ])
+        XCTAssertEqual(workstreams[0].objectValue?["default_policy"]?.stringValue, "fresh_readonly_child")
         XCTAssertEqual(workstreams[1].objectValue?["purpose"]?.stringValue, "Make provider cleanup changes.")
         XCTAssertEqual(workstreams[1].objectValue?["default_policy"]?.stringValue, "fresh_worktree")
         let nodes = try XCTUnwrap(plan["nodes"]?.arrayValue)
@@ -323,6 +325,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             settingNodeID.uuidString,
             reviewNodeID.uuidString
         ])
+        XCTAssertEqual(nodes[0].objectValue?["execution_policy"]?.stringValue, "fresh_readonly_child")
+        XCTAssertEqual(nodes[0].objectValue?["workflow_name"]?.stringValue, "Investigate")
         XCTAssertEqual(nodes[1].objectValue?["status"]?.stringValue, "running")
         XCTAssertEqual(nodes[1].objectValue?["bound_session_id"]?.stringValue, childID.uuidString)
         XCTAssertEqual(nodes[1].objectValue?["detail"]?.stringValue, "Implement cleanup contract.")

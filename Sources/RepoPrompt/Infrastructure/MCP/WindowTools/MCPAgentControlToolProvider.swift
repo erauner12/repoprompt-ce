@@ -271,7 +271,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                                 "title": .string(description: "User-level workstream title."),
                                 "purpose": .string(description: "Why this workstream exists."),
                                 "role": .string(description: "Optional role label."),
-                                "default_policy": .string(description: "Default execution policy.", enum: ["coordinator_only", "steer_primary", "fresh_sibling_on_same_worktree", "fresh_worktree", "ask_user"]),
+                                "default_policy": .string(description: "Default execution policy.", enum: ["coordinator_only", "fresh_readonly_child", "steer_primary", "fresh_sibling_on_same_worktree", "fresh_worktree", "ask_user"]),
                                 "worktree_strategy": .object(
                                     description: "Worktree strategy.",
                                     properties: [
@@ -301,7 +301,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                                 "workstream_title": .string(description: "Workstream title alternative."),
                                 "depends_on": .array(description: "Dependency node UUIDs.", items: .string()),
                                 "role": .string(description: "Optional role label."),
-                                "execution_policy": .string(description: "How this node should execute.", enum: ["coordinator_only", "steer_primary", "fresh_sibling_on_same_worktree", "fresh_worktree", "ask_user"]),
+                                "execution_policy": .string(description: "How this node should execute.", enum: ["coordinator_only", "fresh_readonly_child", "steer_primary", "fresh_sibling_on_same_worktree", "fresh_worktree", "ask_user"]),
                                 "status": .string(description: "Node status.", enum: ["pending", "running", "completed", "blocked", "skipped", "cancelled"]),
                                 "bound_session_id": .string(description: "Optional delegated session UUID."),
                                 "bound_interaction_id": .string(description: "Optional interaction UUID.")

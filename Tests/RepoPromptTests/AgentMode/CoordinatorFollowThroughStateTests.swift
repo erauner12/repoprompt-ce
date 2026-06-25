@@ -246,7 +246,7 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
                         id: discoveryWorkstreamID,
                         title: "Discovery",
                         purpose: "Map cleanup code paths.",
-                        defaultPolicy: .coordinatorOnly,
+                        defaultPolicy: .freshReadOnlyChild,
                         worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
                     ),
                     CoordinatorMissionWorkstreamSummary(
@@ -269,7 +269,7 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
                         id: discoveryNodeID,
                         title: "Map cleanup entry points",
                         workstreamID: discoveryWorkstreamID,
-                        executionPolicy: .coordinatorOnly,
+                        executionPolicy: .freshReadOnlyChild,
                         status: .completed
                     ),
                     CoordinatorMissionPlanNode(
@@ -343,9 +343,11 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         let plan = try XCTUnwrap(state.missionPlan)
         XCTAssertEqual(plan.revision, 4)
         XCTAssertEqual(plan.workstreams.map(\.id), [discoveryWorkstreamID, implementationWorkstreamID, reviewWorkstreamID])
+        XCTAssertEqual(plan.workstreams[0].defaultPolicy, .freshReadOnlyChild)
         XCTAssertEqual(plan.workstreams[1].purpose, "Implementation is active in an isolated worktree.")
         XCTAssertEqual(plan.workstreams[1].primarySessionID, childID)
         XCTAssertEqual(plan.nodes.map(\.id), [discoveryNodeID, implementationNodeID, settingNodeID, reviewNodeID])
+        XCTAssertEqual(plan.nodes[0].executionPolicy, .freshReadOnlyChild)
         XCTAssertEqual(plan.nodes.map(\.status), [.completed, .running, .running, .pending])
         XCTAssertEqual(plan.nodes[1].boundSessionID, childID)
         XCTAssertEqual(plan.nodes[3].dependsOn, [implementationNodeID, settingNodeID])

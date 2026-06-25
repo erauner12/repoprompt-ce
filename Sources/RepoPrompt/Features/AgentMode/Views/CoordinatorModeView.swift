@@ -39,6 +39,15 @@ struct CoordinatorModeView: View {
         case planNode(CoordinatorMissionPlanNode, CoordinatorMissionWorkstreamSummary?, CoordinatorMissionPlan, CoordinatorModeRow?)
     }
 
+    private struct MissionPlanExecutionLane: Identifiable {
+        let id: String
+        let title: String
+        let subtitle: String
+        let systemImage: String
+        let policy: CoordinatorMissionExecutionPolicy
+        var nodes: [CoordinatorMissionPlanNode]
+    }
+
     private enum ChildDirectiveAvailability {
         case ready(status: String)
         case openToReply(AgentSessionDeepLinkRoute)
@@ -1304,14 +1313,143 @@ struct CoordinatorModeView: View {
                     .foregroundStyle(.tertiary)
                     .padding(.vertical, metrics.tightSpacing)
             } else {
-                ForEach(nodes) { node in
-                    missionPlanNodeRow(node, workstream: workstream, plan: plan, metrics: metrics)
+                ForEach(missionPlanExecutionLanes(workstream: workstream, nodes: nodes)) { lane in
+                    missionPlanExecutionLaneSection(lane, workstream: workstream, plan: plan, metrics: metrics)
                 }
             }
         }
         .padding(metrics.pendingPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius)
+    }
+
+    private func missionPlanExecutionLanes(
+        workstream: CoordinatorMissionWorkstreamSummary?,
+        nodes: [CoordinatorMissionPlanNode]
+    ) -> [MissionPlanExecutionLane] {
+        var lanes: [MissionPlanExecutionLane] = []
+        var indicesByID: [String: Int] = [:]
+
+        for node in nodes {
+            var lane = missionPlanExecutionLane(for: node, workstream: workstream)
+            if let index = indicesByID[lane.id] {
+                lanes[index].nodes.append(node)
+            } else {
+                lane.nodes = [node]
+                indicesByID[lane.id] = lanes.count
+                lanes.append(lane)
+            }
+        }
+
+        return lanes
+    }
+
+    private func missionPlanExecutionLane(
+        for node: CoordinatorMissionPlanNode,
+        workstream: CoordinatorMissionWorkstreamSummary?
+    ) -> MissionPlanExecutionLane {
+        if let boundSessionID = node.boundSessionID {
+            return MissionPlanExecutionLane(
+                id: "session-\(boundSessionID.uuidString)",
+                title: "Bound session",
+                subtitle: "Session \(boundSessionID.uuidString.prefix(8))",
+                systemImage: "person.text.rectangle",
+                policy: node.executionPolicy,
+                nodes: []
+            )
+        }
+
+        let workstreamKey = workstream?.id.uuidString ?? node.workstreamID.uuidString
+        switch node.executionPolicy {
+        case .coordinatorOnly:
+            return MissionPlanExecutionLane(
+                id: "\(workstreamKey)-coordinator",
+                title: "Coordinator lane",
+                subtitle: "Coordinator-owned work",
+                systemImage: "sparkles",
+                policy: node.executionPolicy,
+                nodes: []
+            )
+        case .freshReadOnlyChild:
+            return MissionPlanExecutionLane(
+                id: "\(workstreamKey)-readonly-fanout",
+                title: "Read-only fanout",
+                subtitle: "Delegated discovery without a worktree",
+                systemImage: "magnifyingglass",
+                policy: node.executionPolicy,
+                nodes: []
+            )
+        case .freshWorktree:
+            return MissionPlanExecutionLane(
+                id: "\(workstreamKey)-primary-worktree",
+                title: "Primary implementation lane",
+                subtitle: workstream?.worktreeStrategy.mode.displayName ?? "Fresh isolated worktree",
+                systemImage: "arrow.triangle.branch",
+                policy: node.executionPolicy,
+                nodes: []
+            )
+        case .steerPrimary:
+            return MissionPlanExecutionLane(
+                id: "\(workstreamKey)-primary-session",
+                title: "Primary session",
+                subtitle: "Continue the workstream's active child",
+                systemImage: "arrowshape.turn.up.right",
+                policy: node.executionPolicy,
+                nodes: []
+            )
+        case .freshSiblingOnSameWorktree:
+            return MissionPlanExecutionLane(
+                id: "\(workstreamKey)-same-worktree-sibling",
+                title: "Fresh sibling lane",
+                subtitle: "Separate session on the same worktree",
+                systemImage: "rectangle.split.2x1",
+                policy: node.executionPolicy,
+                nodes: []
+            )
+        case .askUser:
+            return MissionPlanExecutionLane(
+                id: "\(workstreamKey)-ask-user",
+                title: "User decision lane",
+                subtitle: "Paused for a coordinator-owned choice",
+                systemImage: "questionmark.bubble",
+                policy: node.executionPolicy,
+                nodes: []
+            )
+        }
+    }
+
+    private func missionPlanExecutionLaneSection(
+        _ lane: MissionPlanExecutionLane,
+        workstream: CoordinatorMissionWorkstreamSummary?,
+        plan: CoordinatorMissionPlan,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                Label(lane.title, systemImage: lane.systemImage)
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(lane.subtitle)
+                    .font(metrics.micro)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                Spacer(minLength: metrics.controlSpacing)
+                statusChip(lane.policy.displayName, color: Color.accentColor, metrics: metrics)
+            }
+
+            HStack(alignment: .top, spacing: metrics.smallSpacing) {
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.16))
+                    .frame(width: 2)
+                    .padding(.vertical, metrics.tightSpacing)
+                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                    ForEach(lane.nodes) { node in
+                        missionPlanNodeRow(node, workstream: workstream, plan: plan, metrics: metrics)
+                    }
+                }
+            }
+        }
     }
 
     private func missionPlanWorkstreamHeader(
