@@ -267,10 +267,12 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
         Run this as a scoped Coordinator change.
 
         1. Record a Mission Plan with `coordinator_chat op=mission_plan` before delegation. Use one user-level workstream unless the objective clearly needs more. Include `default_policy` and explicit `worktree_strategy` for each workstream.
-        2. Deeply inspect the existing code and produce a short plan before delegating.
-        3. Delegate mutable work only into isolated worktrees.
-        4. Keep workstreams focused on user-level outcomes, not raw session mechanics.
-        5. Review delegated results, ask me before irreversible actions, then coordinate any needed fixes.
+        2. Decompose the user's objective into concrete DAG-lite nodes. Node titles must name user-specific deliverables or decisions, not generic phases such as "Plan", "Orchestrate", or "Review" unless this is only a smoke test.
+        3. Attach workflow choices as node metadata with `workflow_name` / `workflow_id` or nested `workflow`. Include `completion_evidence` for each nontrivial node.
+        4. Deeply inspect the existing code and produce a short plan before delegating.
+        5. Delegate mutable work only into isolated worktrees.
+        6. Keep workstreams focused on user-level outcomes, not raw session mechanics.
+        7. Review delegated results, ask me before irreversible actions, then coordinate any needed fixes.
 
         User objective:
         $MISSION
@@ -289,8 +291,10 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
 
         Mission Plan:
         1. Record the plan with `coordinator_chat op=mission_plan` before starting children. Include `default_policy` and `worktree_strategy` for each workstream.
-        2. Use workstreams such as "Plan", "Implement", and "Review" only if each will map to distinct user-level work.
-        3. Update each workstream with `primary_session_id`, `related_session_ids`, and `worktree_strategy.worktree_id` as children are launched or bound.
+        2. Decompose the user's objective into concrete deliverable nodes. Use workflow metadata for "Deep Plan", "Orchestrate", and "Review"; do not make those words the whole node title unless this is only a smoke test.
+        3. Include `completion_evidence` on each nontrivial node, and make review nodes depend on the implementation or verification nodes they review.
+        4. Use workstreams such as "Discovery", "Implementation", and "Quality" only when each maps to distinct user-level work.
+        5. Update each workstream with `primary_session_id`, `related_session_ids`, and `worktree_strategy.worktree_id` as children are launched or bound.
 
         Stage 1 - Deep Plan:
         1. Start exactly one delegated child with workflow_name="Deep Plan" for the user's objective.

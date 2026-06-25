@@ -1358,6 +1358,9 @@ struct CoordinatorModeView: View {
             }
 
             HStack(spacing: metrics.smallSpacing) {
+                if let workflowHint = node.workflowHint {
+                    workflowBadge(workflowHint, metrics: metrics)
+                }
                 statusChip(node.executionPolicy.displayName, color: Color.accentColor, metrics: metrics)
                 if let role = node.role {
                     statusChip(role, color: .secondary, metrics: metrics)
@@ -1873,6 +1876,9 @@ struct CoordinatorModeView: View {
                 VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
                     inspectorGroup("Plan Node", metrics: metrics) {
                         keyValue("Status", node.status.displayName, metrics: metrics)
+                        if let workflowHint = node.workflowHint {
+                            keyValue("Workflow", workflowHint.name, metrics: metrics)
+                        }
                         keyValue("Policy", node.executionPolicy.displayName, metrics: metrics)
                         if let role = node.role {
                             keyValue("Role", role, metrics: metrics)
@@ -1883,6 +1889,9 @@ struct CoordinatorModeView: View {
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let completionEvidence = node.completionEvidence {
+                            keyValue("Completion evidence", completionEvidence, metrics: metrics)
                         }
                     }
 
@@ -2027,6 +2036,9 @@ struct CoordinatorModeView: View {
                     Label(node.status.displayName, systemImage: node.status.systemImage)
                         .font(metrics.micro)
                         .foregroundStyle(node.status.tint)
+                    if let workflowHint = node.workflowHint {
+                        workflowBadge(workflowHint, metrics: metrics)
+                    }
                     statusChip(node.executionPolicy.displayName, color: Color.accentColor, metrics: metrics)
                 }
             }
@@ -3924,6 +3936,47 @@ struct CoordinatorModeView: View {
             return color
         }
         return .secondary
+    }
+
+    private func workflowBadge(_ workflowHint: CoordinatorMissionPlanNodeWorkflowHint, metrics: CoordinatorVisualMetrics) -> some View {
+        let tint = workflowTint(workflowHint)
+        return HStack(spacing: metrics.miniPillIconSpacing) {
+            Image(systemName: workflowIconName(workflowHint))
+                .font(.system(size: metrics.microIconSize, weight: .semibold))
+            Text(workflowHint.name)
+                .font(metrics.microMedium)
+                .lineLimit(1)
+        }
+        .foregroundStyle(tint.opacity(0.9))
+        .padding(.horizontal, metrics.miniPillHorizontalPadding)
+        .padding(.vertical, metrics.miniPillVerticalPadding)
+        .background(Capsule().fill(tint.opacity(0.12)))
+        .overlay(Capsule().stroke(tint.opacity(0.2), lineWidth: 0.5))
+    }
+
+    private func workflowIconName(_ workflowHint: CoordinatorMissionPlanNodeWorkflowHint) -> String {
+        if let iconName = workflowHint.iconName {
+            return iconName
+        }
+        return builtInWorkflow(for: workflowHint)?.iconName ?? "arrow.triangle.branch"
+    }
+
+    private func workflowTint(_ workflowHint: CoordinatorMissionPlanNodeWorkflowHint) -> Color {
+        if let builtIn = builtInWorkflow(for: workflowHint) {
+            return builtIn.accentColor
+        }
+        if let hex = workflowHint.accentColorHex, let color = Color(hex: hex) {
+            return color
+        }
+        return .secondary
+    }
+
+    private func builtInWorkflow(for workflowHint: CoordinatorMissionPlanNodeWorkflowHint) -> AgentWorkflow? {
+        AgentWorkflow.allCases.first { workflow in
+            workflowHint.id == workflow.definition.id
+                || workflowHint.id == workflow.rawValue
+                || workflowHint.name.caseInsensitiveCompare(workflow.displayName) == .orderedSame
+        }
     }
 
     private func worktreeLabel(_ worktree: CoordinatorModeRow.Workstream, metrics: CoordinatorVisualMetrics) -> some View {

@@ -322,17 +322,25 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 #### Scenario: Coordinator records a Mission Plan
 - **WHEN** a Coordinator starts or revises a Mission with one or more intended workstreams
 - **THEN** it MAY update the selected Mission's Mission Plan through the external `coordinator_chat` control surface using `op: "mission_plan"`
-- **AND** the Mission Plan SHALL record a stable plan ID, revision, visible Mission objective, status, approval state, template summary when present, declared workstreams, future DAG-lite nodes, and execution events
+- **AND** the Mission Plan SHALL record a stable plan ID, revision, visible Mission objective, status, approval state, template summary when present, declared workstreams, future DAG-lite nodes, node workflow hints, node completion evidence, and execution events
 - **AND** each declared workstream SHALL record title, purpose, role, default execution policy, explicit worktree strategy, optional primary child session ID, optional related child session IDs, and optional worktree ID
 - **AND** the update MAY include optional status, approval state, DAG-lite nodes, and appended execution events
 - **AND** omitted objective, status, approval state, workstreams, or nodes SHALL preserve their previous stored values
 - **AND** updating the Mission Plan SHALL update Coordinator-mode projection metadata without submitting an ordinary Coordinator chat turn
 - **AND** it SHALL NOT create child sessions, mutate child run state, change status groups, or grant approval for mutable work.
 
+#### Scenario: Mission Plan nodes decompose user intent
+- **WHEN** a Coordinator records DAG-lite nodes for a nontrivial Mission Plan
+- **THEN** node titles SHOULD describe user-specific deliverables, decisions, or verification outcomes rather than generic workflow phases
+- **AND** workflow labels such as Deep Plan, Orchestrate, or Review SHOULD be recorded as node workflow hints instead of being used as the primary node identity
+- **AND** each nontrivial node SHOULD include completion evidence that states what proves the node is done
+- **AND** review nodes SHOULD depend on the implementation or verification nodes they review
+- **AND** parallel nodes SHOULD be used only when their files, worktrees, and context boundaries do not overlap.
+
 #### Scenario: Coordinator queries Mission status
 - **WHEN** an external Coordinator/debugging client calls `coordinator_chat` with `op: "mission_status"` for the selected or requested Mission
 - **THEN** the response SHALL be read-only and SHALL NOT submit a Coordinator chat turn or mutate Mission state
-- **AND** it SHALL include the Mission's plan revision, status, approval state, objective, workstreams, DAG-lite nodes, dependency satisfaction, node counts by status, and recent events when a Mission Plan exists
+- **AND** it SHALL include the Mission's plan revision, status, approval state, objective, workstreams, DAG-lite nodes, node workflow hints, node completion evidence, dependency satisfaction, node counts by status, and recent events when a Mission Plan exists
 - **AND** it SHOULD include board/session bindings for nodes or workstreams that resolve to projected delegated rows
 - **AND** it SHALL include a concise debug summary suitable for external coordinator chats.
 
@@ -353,13 +361,13 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 #### Scenario: Mission Plan renders in right-panel Plan presentation
 - **WHEN** the selected Mission has a stored Mission Plan
 - **THEN** the right work panel SHALL offer a read-only `Plan` presentation beside `Board`
-- **AND** the Plan presentation SHALL show plan revision, status, approval state, objective, declared workstreams, DAG-lite nodes, and recent node events when present
+- **AND** the Plan presentation SHALL show plan revision, status, approval state, objective, declared workstreams, DAG-lite nodes, workflow hint chips, completion evidence, and recent node events when present
 - **AND** when no Mission Plan is stored, the Plan presentation SHALL show an empty state instead of board rows
 - **AND** the former full List presentation SHALL remain available only as the responsive fallback when the Board cannot fit.
 
 #### Scenario: Plan node uses shared inspector surface
 - **WHEN** the user selects a DAG-lite node in the selected Mission Plan
-- **THEN** the stacked inspector SHALL show node title, status, role/detail, execution policy, declared workstream, dependencies, bound session or interaction IDs, and recent node events
+- **THEN** the stacked inspector SHALL show node title, status, workflow hint, role/detail, completion evidence, execution policy, declared workstream, dependencies, bound session or interaction IDs, and recent node events
 - **AND** it MAY show an Open Agent affordance only when the node's bound session resolves to a routeable projected row
 - **AND** it SHALL NOT show child reply controls for a plan node because the Plan tab is an observability surface.
 

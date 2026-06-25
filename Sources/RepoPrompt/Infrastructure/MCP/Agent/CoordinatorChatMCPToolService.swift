@@ -252,7 +252,11 @@ struct CoordinatorChatMCPToolService {
             throw MCPError.invalidParams("nodes must be an array.")
         }
         let existingByTitle = Dictionary(
-            (existingPlan?.nodes ?? []).map { ($0.title.normalizedMissionPlanKey, $0.id) },
+            (existingPlan?.nodes ?? []).map { ($0.title.normalizedMissionPlanKey, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let existingByID = Dictionary(
+            (existingPlan?.nodes ?? []).map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first }
         )
         return try array.map { element in
@@ -260,8 +264,10 @@ struct CoordinatorChatMCPToolService {
                 throw MCPError.invalidParams("Each node must be an object.")
             }
             let title = try AgentMCPToolHelpers.requireNonEmptyString(object["title"], name: "nodes[].title")
-            let id = try optionalUUID(object["id"], name: "nodes[].id")
-                ?? existingByTitle[title.normalizedMissionPlanKey]
+            let explicitID = try optionalUUID(object["id"], name: "nodes[].id")
+            let existingNode = explicitID.flatMap { existingByID[$0] } ?? existingByTitle[title.normalizedMissionPlanKey]
+            let id = explicitID
+                ?? existingNode?.id
                 ?? UUID()
             let workstreamID = try parseMissionPlanNodeWorkstreamID(object, workstreams: workstreams)
             let policyRaw = try AgentMCPToolHelpers.requireNonEmptyString(
@@ -276,6 +282,8 @@ struct CoordinatorChatMCPToolService {
                 id: id,
                 title: title,
                 detail: normalizedString(object["detail"]),
+                workflowHint: parseMissionPlanNodeWorkflowHint(object, existing: existingNode?.workflowHint),
+                completionEvidence: parseMissionPlanNodeCompletionEvidence(object, existing: existingNode?.completionEvidence),
                 workstreamID: workstreamID,
                 dependsOn: optionalUUIDArray(object["depends_on"] ?? object["dependsOn"], name: "nodes[].depends_on") ?? [],
                 role: normalizedString(object["role"]),
@@ -285,6 +293,54 @@ struct CoordinatorChatMCPToolService {
                 boundInteractionID: optionalUUID(object["bound_interaction_id"] ?? object["boundInteractionID"], name: "nodes[].bound_interaction_id")
             )
         }
+    }
+
+    private func parseMissionPlanNodeWorkflowHint(
+        _ object: [String: Value],
+        existing: CoordinatorMissionPlanNodeWorkflowHint?
+    ) throws -> CoordinatorMissionPlanNodeWorkflowHint? {
+        let hasWorkflowField = object.keys.contains("workflow")
+            || object.keys.contains("workflow_hint")
+            || object.keys.contains("workflowHint")
+            || object.keys.contains("workflow_id")
+            || object.keys.contains("workflowID")
+            || object.keys.contains("workflow_name")
+            || object.keys.contains("workflowName")
+        guard hasWorkflowField else { return existing }
+
+        let nestedValue = object["workflow"] ?? object["workflow_hint"] ?? object["workflowHint"]
+        if nestedValue == .null {
+            return nil
+        }
+        let nested = nestedValue?.objectValue
+        let id = normalizedString(nested?["id"] ?? object["workflow_id"] ?? object["workflowID"])
+        let name = normalizedString(
+            nested?["name"]
+                ?? nested?["display_name"]
+                ?? nested?["displayName"]
+                ?? object["workflow_name"]
+                ?? object["workflowName"]
+        ) ?? existing?.name
+        guard let name else {
+            throw MCPError.invalidParams("nodes[].workflow_name or nodes[].workflow.name is required when workflow metadata is provided.")
+        }
+        return CoordinatorMissionPlanNodeWorkflowHint(
+            id: id ?? existing?.id,
+            name: name,
+            iconName: normalizedString(nested?["icon_name"] ?? nested?["iconName"] ?? object["workflow_icon_name"] ?? object["workflowIconName"])
+                ?? existing?.iconName,
+            accentColorHex: normalizedString(nested?["accent_color_hex"] ?? nested?["accentColorHex"] ?? object["workflow_accent_color_hex"] ?? object["workflowAccentColorHex"])
+                ?? existing?.accentColorHex
+        )
+    }
+
+    private func parseMissionPlanNodeCompletionEvidence(
+        _ object: [String: Value],
+        existing: String?
+    ) -> String? {
+        let hasEvidenceField = object.keys.contains("completion_evidence") || object.keys.contains("completionEvidence")
+        guard hasEvidenceField else { return existing }
+        return normalizedString(object["completion_evidence"] ?? object["completionEvidence"])
     }
 
     private func parseMissionPlanNodeWorkstreamID(
@@ -762,6 +818,10 @@ struct CoordinatorChatMCPToolService {
             "id": .string(node.id.uuidString),
             "title": .string(node.title),
             "detail": AgentMCPToolHelpers.stringOrNull(node.detail),
+            "workflow": missionPlanNodeWorkflowHintValue(node.workflowHint),
+            "workflow_id": AgentMCPToolHelpers.stringOrNull(node.workflowHint?.id),
+            "workflow_name": AgentMCPToolHelpers.stringOrNull(node.workflowHint?.name),
+            "completion_evidence": AgentMCPToolHelpers.stringOrNull(node.completionEvidence),
             "workstream_id": .string(node.workstreamID.uuidString),
             "depends_on": .array(node.dependsOn.map { .string($0.uuidString) }),
             "role": AgentMCPToolHelpers.stringOrNull(node.role),
@@ -769,6 +829,16 @@ struct CoordinatorChatMCPToolService {
             "status": .string(node.status.rawValue),
             "bound_session_id": AgentMCPToolHelpers.stringOrNull(node.boundSessionID?.uuidString),
             "bound_interaction_id": AgentMCPToolHelpers.stringOrNull(node.boundInteractionID?.uuidString)
+        ])
+    }
+
+    private func missionPlanNodeWorkflowHintValue(_ workflowHint: CoordinatorMissionPlanNodeWorkflowHint?) -> Value {
+        guard let workflowHint else { return .null }
+        return .object([
+            "id": AgentMCPToolHelpers.stringOrNull(workflowHint.id),
+            "name": .string(workflowHint.name),
+            "icon_name": AgentMCPToolHelpers.stringOrNull(workflowHint.iconName),
+            "accent_color_hex": AgentMCPToolHelpers.stringOrNull(workflowHint.accentColorHex)
         ])
     }
 

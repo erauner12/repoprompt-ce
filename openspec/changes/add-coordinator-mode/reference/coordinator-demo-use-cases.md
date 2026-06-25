@@ -199,6 +199,26 @@ Expected completion readback:
 - `Plan`, `Orchestrate`, and `Review` are all `completed`.
 - No delegated child rows are created.
 
+## 7. User-Specific Mission Decomposition Smoke
+
+Facet: Mission Plan quality, workflow metadata, completion evidence, and Plan tab projection.
+
+Checkpoint required: Plan nodes are concrete user-intent deliverables, while workflows render as node metadata.
+
+Prompt:
+
+```text
+Coordinator decomposition smoke. Start a fresh Coordinator Mission for this neutral product task: "Add CSV export to the orders table." Record the Mission Plan only; do not edit files or launch child agents. Decompose the objective into concrete nodes such as confirming export requirements, adding the export action, generating CSV from filtered rows, adding export tests, reviewing the implementation, and reporting verification. Attach workflow hints like Deep Plan, Orchestrate, and Review as metadata instead of using those words as the main node titles. Include completion evidence for each nontrivial node, then summarize the Mission status.
+```
+
+Expected result:
+
+- The Plan presentation shows concrete node titles such as `Confirm export requirements`, `Add export action to orders table`, `Generate CSV from filtered rows`, `Add export tests`, and `Review implementation from fresh session`.
+- Workflow names such as `Deep Plan`, `Orchestrate`, and `Review` appear as chips or metadata on those nodes rather than replacing the node titles.
+- `mission_status` returns node `workflow`, `workflow_name`, and `completion_evidence` fields.
+- The node inspector shows workflow hint and completion evidence for the selected node.
+- No delegated child rows are created because the prompt requested plan-state only.
+
 ## Non-Example: Three Worktrees Is Not Three Parents
 
 Prompt:

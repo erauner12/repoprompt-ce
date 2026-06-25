@@ -62,6 +62,44 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(state.missionPlan, plan)
     }
 
+    func testMissionPlanNodeWorkflowHintAndEvidenceCodableRoundTrip() throws {
+        let workstreamID = UUID()
+        let plan = CoordinatorMissionPlan(
+            objective: "Add CSV export to orders table",
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Product behavior",
+                    purpose: "Ship the export behavior.",
+                    defaultPolicy: .freshWorktree,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    title: "Generate CSV from filtered rows",
+                    workflowHint: CoordinatorMissionPlanNodeWorkflowHint(
+                        id: "builtin-orchestrate",
+                        name: "Orchestrate",
+                        iconName: "arrow.triangle.branch",
+                        accentColorHex: "#30D158"
+                    ),
+                    completionEvidence: "Downloaded CSV matches the currently visible filtered data.",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree
+                )
+            ]
+        )
+
+        let data = try JSONEncoder().encode(plan)
+        let decoded = try JSONDecoder().decode(CoordinatorMissionPlan.self, from: data)
+
+        XCTAssertEqual(decoded.nodes.first?.title, "Generate CSV from filtered rows")
+        XCTAssertEqual(decoded.nodes.first?.workflowHint?.name, "Orchestrate")
+        XCTAssertEqual(decoded.nodes.first?.workflowHint?.id, "builtin-orchestrate")
+        XCTAssertEqual(decoded.nodes.first?.completionEvidence, "Downloaded CSV matches the currently visible filtered data.")
+    }
+
     func testMissionPlanUpsertReusesWorkstreamIDByTitle() {
         let existingID = UUID()
         let nodeID = UUID()

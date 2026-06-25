@@ -148,6 +148,13 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     "id": .string(nodeID.uuidString),
                     "title": .string("Docs edit"),
                     "workstream_title": .string("Implement"),
+                    "workflow": .object([
+                        "id": .string("builtin-orchestrate"),
+                        "name": .string("Orchestrate"),
+                        "icon_name": .string("arrow.triangle.branch"),
+                        "accent_color_hex": .string("#30D158")
+                    ]),
+                    "completion_evidence": .string("README wording is updated and tests pass."),
                     "execution_policy": .string("fresh_worktree"),
                     "status": .string("running"),
                     "bound_session_id": .string(childID.uuidString)
@@ -169,6 +176,11 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let node = try XCTUnwrap(plan["nodes"]?.arrayValue?.first?.objectValue)
         XCTAssertEqual(node["id"]?.stringValue, nodeID.uuidString)
         XCTAssertEqual(node["workstream_id"]?.stringValue, workstreamID.uuidString)
+        XCTAssertEqual(node["workflow_name"]?.stringValue, "Orchestrate")
+        XCTAssertEqual(node["completion_evidence"]?.stringValue, "README wording is updated and tests pass.")
+        let workflow = try XCTUnwrap(node["workflow"]?.objectValue)
+        XCTAssertEqual(workflow["id"]?.stringValue, "builtin-orchestrate")
+        XCTAssertEqual(workflow["icon_name"]?.stringValue, "arrow.triangle.branch")
         XCTAssertEqual(node["bound_session_id"]?.stringValue, childID.uuidString)
         let events = try XCTUnwrap(plan["events"]?.arrayValue)
         XCTAssertEqual(events.last?.objectValue?["kind"]?.stringValue, "node_started")
@@ -204,7 +216,14 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 ),
                 CoordinatorMissionPlanNode(
                     id: reviewNodeID,
-                    title: "Review",
+                    title: "Review implementation from fresh session",
+                    workflowHint: CoordinatorMissionPlanNodeWorkflowHint(
+                        id: "builtin-review",
+                        name: "Review",
+                        iconName: "eye.fill",
+                        accentColorHex: "#BF5AF2"
+                    ),
+                    completionEvidence: "Review reports no must-fix issues.",
                     workstreamID: workstreamID,
                     dependsOn: [planNodeID],
                     executionPolicy: .freshSiblingOnSameWorktree,
@@ -243,6 +262,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         }?.objectValue)
         XCTAssertEqual(review["dependencies_satisfied"]?.boolValue, true)
         XCTAssertEqual(review["workstream_title"]?.stringValue, "Implement")
+        XCTAssertEqual(review["workflow_name"]?.stringValue, "Review")
+        XCTAssertEqual(review["completion_evidence"]?.stringValue, "Review reports no must-fix issues.")
         let recentEvents = try XCTUnwrap(status["recent_events"]?.arrayValue)
         XCTAssertEqual(recentEvents.first?.objectValue?["kind"]?.stringValue, "node_completed")
     }

@@ -388,6 +388,8 @@ struct CoordinatorMissionPlanNode: Codable, Equatable, Identifiable {
     let id: UUID
     var title: String
     var detail: String?
+    var workflowHint: CoordinatorMissionPlanNodeWorkflowHint?
+    var completionEvidence: String?
     var workstreamID: UUID
     var dependsOn: [UUID]
     var role: String?
@@ -400,6 +402,8 @@ struct CoordinatorMissionPlanNode: Codable, Equatable, Identifiable {
         id: UUID = UUID(),
         title: String,
         detail: String? = nil,
+        workflowHint: CoordinatorMissionPlanNodeWorkflowHint? = nil,
+        completionEvidence: String? = nil,
         workstreamID: UUID,
         dependsOn: [UUID] = [],
         role: String? = nil,
@@ -411,6 +415,8 @@ struct CoordinatorMissionPlanNode: Codable, Equatable, Identifiable {
         self.id = id
         self.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         self.detail = detail?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.workflowHint = workflowHint
+        self.completionEvidence = completionEvidence?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.workstreamID = workstreamID
         self.dependsOn = dependsOn
         self.role = role?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
@@ -418,6 +424,25 @@ struct CoordinatorMissionPlanNode: Codable, Equatable, Identifiable {
         self.status = status
         self.boundSessionID = boundSessionID
         self.boundInteractionID = boundInteractionID
+    }
+}
+
+struct CoordinatorMissionPlanNodeWorkflowHint: Codable, Equatable {
+    var id: String?
+    var name: String
+    var iconName: String?
+    var accentColorHex: String?
+
+    init(
+        id: String? = nil,
+        name: String,
+        iconName: String? = nil,
+        accentColorHex: String? = nil
+    ) {
+        self.id = id?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.iconName = iconName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.accentColorHex = accentColorHex?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }
 }
 
