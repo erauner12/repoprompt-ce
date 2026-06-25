@@ -110,7 +110,7 @@ struct CoordinatorModeView: View {
     let selectionCoordinator: WorkspaceSelectionCoordinator?
     let onOpenAgentChat: (AgentSessionDeepLinkRoute) -> Void
 
-    @State private var presentationMode: PresentationMode = .board
+    @State private var presentationMode: PresentationMode = .plan
     @State private var selectedRowID: UUID?
     @State private var selectedPlanNodeID: UUID?
     @State private var hoveredRowID: UUID?
