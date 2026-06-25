@@ -89,5 +89,6 @@ final class AgentRunCoordinatorMissionPlanPolicyTests: XCTestCase {
         XCTAssertTrue(reason.contains("coordinator_chat op=mission_plan"), file: file, line: line)
         XCTAssertTrue(reason.contains("approval_state"), file: file, line: line)
         XCTAssertTrue(reason.contains("agent_run.start"), file: file, line: line)
+        XCTAssertTrue(reason.contains("agent_explore.start"), file: file, line: line)
     }
 }

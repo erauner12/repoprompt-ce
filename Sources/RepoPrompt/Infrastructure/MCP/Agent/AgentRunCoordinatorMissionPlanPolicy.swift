@@ -7,7 +7,7 @@ enum AgentRunCoordinatorMissionPlanPolicy {
     }
 
     static let approvedMissionPlanRequiredMessage = """
-    Coordinator missions must record and approve a concrete Mission Plan before launching delegated Agent Mode sessions. Use coordinator_chat op=mission_plan to create DAG-lite nodes for the user's actual deliverables, set approval_state to "awaiting_approval", and ask the user: Proceed / Revise / Start smaller. After the user chooses Proceed, update the Mission Plan to approval_state "approved" before calling agent_run.start. A planning delegate is not a Mission Plan.
+    Coordinator missions must record and approve a concrete Mission Plan before launching delegated Agent Mode sessions. Use coordinator_chat op=mission_plan to create DAG-lite nodes for the user's actual deliverables, set approval_state to "awaiting_approval", and ask the user: Proceed / Revise / Start smaller. After the user chooses Proceed, update the Mission Plan to approval_state "approved" before starting delegated child sessions with agent_run.start or agent_explore.start. A planning delegate is not a Mission Plan.
     """
 
     static func decision(

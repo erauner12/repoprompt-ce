@@ -268,8 +268,8 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
 
         1. Record a Mission Plan with `coordinator_chat op=mission_plan` before delegation. Use one user-level workstream unless the objective clearly needs more. Include `default_policy` and explicit `worktree_strategy` for each workstream.
         2. Decompose the user's objective into concrete DAG-lite nodes. Node titles must name user-specific deliverables or decisions, not generic phases such as "Plan", "Orchestrate", or "Review" unless this is only a smoke test.
-        3. Attach workflow choices as node metadata with `workflow_name` / `workflow_id` or nested `workflow`. Include `completion_evidence` for each nontrivial node.
-        4. If repo evidence is needed, make discovery visible plan nodes with workflow_name="Investigate" or workflow_name="Deep Plan" and execution_policy="fresh_readonly_child"; ask before launching those read-only children.
+        3. Attach workflow choices as node metadata by default for real workflow nodes: workflow_name="Orchestrate" for mutable implementation, workflow_name="Review" for independent review, and workflow_name="Investigate" or workflow_name="Deep Plan" for formal discovery/planning deliverables. Omit workflow metadata only for disposable read-only probe nodes launched with `agent_explore.start` or coordinator-only bookkeeping/reporting nodes. Include `completion_evidence` for each nontrivial node.
+        4. If repo evidence is needed, make discovery visible plan nodes with execution_policy="fresh_readonly_child"; use workflow-less probe nodes for narrow read-only questions and workflow_name="Investigate" or workflow_name="Deep Plan" only for formal discovery/planning deliverables. Ask before launching those read-only children.
         5. After discovery, revise the same Mission Plan with grounded details before mutable implementation.
         6. Delegate mutable work only into isolated worktrees. Use fresh_worktree for the first primary implementation node, then steer_primary for later same-session nodes in that workstream.
         7. Record routing_decisions before or alongside each start, steer, respond, cancel, or hold choice so the inspector can show why that path was chosen.
@@ -296,15 +296,15 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
         1. Record the plan with `coordinator_chat op=mission_plan` before starting children. Include `default_policy` and `worktree_strategy` for each workstream.
         2. Decompose the user's objective into concrete deliverable nodes. Use workflow metadata for "Deep Plan", "Orchestrate", and "Review"; do not make those words the whole node title unless this is only a smoke test.
         3. Include `completion_evidence` on each nontrivial node, and make review nodes depend on the implementation or verification nodes they review.
-        4. Treat the first plan as a visible draft when repo evidence is still missing. Add discovery/grounding nodes with workflow_name="Investigate" or workflow_name="Deep Plan" and execution_policy="fresh_readonly_child" before implementation nodes.
+        4. Treat the first plan as a visible draft when repo evidence is still missing. Add workflow-less probe nodes with execution_policy="fresh_readonly_child" for narrow read-only questions, or use workflow_name="Investigate" / workflow_name="Deep Plan" when the discovery/planning node is a formal workflow deliverable. Mutable implementation nodes should still carry workflow_name="Orchestrate"; independent review nodes should carry workflow_name="Review".
         5. Use workstreams such as "Discovery", "Implementation", and "Quality" only when each maps to distinct user-level work.
         6. Update each workstream with `primary_session_id`, `related_session_ids`, and `worktree_strategy.worktree_id` as children are launched or bound. When updating one workstream or node, omit unrelated entries; the app preserves them.
-        7. Record routing_decisions before or alongside each start, steer, respond, cancel, or hold choice. Use operation values such as `agent_run.start`, `agent_run.steer`, and `coordinator_hold`.
+        7. Record routing_decisions before or alongside each start, steer, respond, cancel, or hold choice. Use operation values such as `agent_explore.start`, `agent_run.start`, `agent_run.steer`, and `coordinator_hold`.
         8. In one mutable workstream, use fresh_worktree for the first primary implementation node and steer_primary for later same-session nodes. Keep downstream same-lane nodes pending until the primary session reaches them.
 
         Stage 1 - Grounding:
         1. Ask me to approve the visible draft plan before starting the discovery child.
-        2. Start delegated read-only child work with workflow_name="Investigate" or workflow_name="Deep Plan" for the discovery node(s).
+        2. Start narrow workflow-less probe nodes with `agent_explore.start`; start formal Investigate/Deep Plan discovery nodes with `agent_run.start` and the matching workflow metadata.
         3. If the discovery child asks the user a question, needs approval, or reaches any Needs you state, stop and report that the child needs the user. Do not answer for the user.
         4. Wait for the discovery child to finish after the user resolves any checkpoint.
         5. Revise the Mission Plan with evidence-grounded implementation details and ask me whether to proceed, revise, or stop before mutable implementation.

@@ -904,9 +904,14 @@ struct CoordinatorChatMCPToolService {
         payload["dependencies_satisfied"] = .bool(dependenciesSatisfied)
         if let boundSessionID = node.boundSessionID, let row = rowsBySessionID[boundSessionID] {
             payload["bound_row"] = missionStatusBoundRowValue(row)
+            payload["actual_workflow"] = missionStatusWorkflowValue(row.workflow)
+            payload["workflow_matches_plan"] = missionStatusWorkflowMatchesPlan(planned: node.workflowHint, actual: row.workflow)
         } else {
             payload["bound_row"] = .null
+            payload["actual_workflow"] = .null
+            payload["workflow_matches_plan"] = .null
         }
+        payload["planned_workflow"] = missionPlanNodeWorkflowHintValue(node.workflowHint)
         return .object(payload)
     }
 
@@ -918,8 +923,51 @@ struct CoordinatorChatMCPToolService {
             "run_state": .string(row.runState.rawValue),
             "route_available": .bool(row.openAgentChatRoute != nil),
             "workflow": AgentMCPToolHelpers.stringOrNull(row.workflow?.displayName),
+            "workflow_id": AgentMCPToolHelpers.stringOrNull(row.workflow?.id),
+            "workflow_name": AgentMCPToolHelpers.stringOrNull(row.workflow?.displayName),
             "worktree": row.workstream.map(missionStatusWorktreeValue) ?? .null
         ])
+    }
+
+    private func missionStatusWorkflowValue(_ workflow: CoordinatorModeWorkflowDisplaySummary?) -> Value {
+        guard let workflow else { return .null }
+        return .object([
+            "id": .string(workflow.id),
+            "name": .string(workflow.displayName),
+            "icon_name": .string(workflow.iconName),
+            "accent_color_hex": AgentMCPToolHelpers.stringOrNull(workflow.accentColorHex)
+        ])
+    }
+
+    private func missionStatusWorkflowMatchesPlan(
+        planned: CoordinatorMissionPlanNodeWorkflowHint?,
+        actual: CoordinatorModeWorkflowDisplaySummary?
+    ) -> Value {
+        guard let planned else { return .null }
+        guard let actual else { return .bool(false) }
+        return .bool(workflowHint(planned, matches: actual))
+    }
+
+    private func workflowHint(
+        _ planned: CoordinatorMissionPlanNodeWorkflowHint,
+        matches actual: CoordinatorModeWorkflowDisplaySummary
+    ) -> Bool {
+        let actualKeys = [
+            actual.id,
+            actual.displayName
+        ].map(normalizedWorkflowComparisonKey)
+        let plannedKeys = [
+            planned.id,
+            planned.name
+        ].compactMap(\.self).map(normalizedWorkflowComparisonKey)
+        return !Set(actualKeys).isDisjoint(with: plannedKeys)
+    }
+
+    private func normalizedWorkflowComparisonKey(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: #"[^a-z0-9]+"#, with: "", options: .regularExpression)
     }
 
     private func missionStatusWorktreeValue(_ worktree: CoordinatorModeRow.Workstream) -> Value {

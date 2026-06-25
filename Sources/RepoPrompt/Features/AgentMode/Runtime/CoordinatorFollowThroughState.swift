@@ -686,6 +686,7 @@ enum CoordinatorMissionRoutingDecisionKind: String, Codable, Equatable, CaseIter
 }
 
 enum CoordinatorMissionRoutingOperation: String, Codable, Equatable, CaseIterable {
+    case agentExploreStart = "agent_explore.start"
     case agentRunStart = "agent_run.start"
     case agentRunSteer = "agent_run.steer"
     case agentRunRespond = "agent_run.respond"
@@ -694,6 +695,7 @@ enum CoordinatorMissionRoutingOperation: String, Codable, Equatable, CaseIterabl
 
     var displayName: String {
         switch self {
+        case .agentExploreStart: "agent_explore.start"
         case .agentRunStart: "agent_run.start"
         case .agentRunSteer: "agent_run.steer"
         case .agentRunRespond: "agent_run.respond"

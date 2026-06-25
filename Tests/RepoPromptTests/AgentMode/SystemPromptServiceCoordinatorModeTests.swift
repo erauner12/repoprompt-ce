@@ -12,6 +12,18 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
         XCTAssertFalse(prompt.contains("Coordinator auto mode"))
         XCTAssertTrue(prompt.contains("Do not use raw shell/bash from the Coordinator turn"))
         XCTAssertTrue(prompt.contains("raw shell can block the control plane"))
+        XCTAssertTrue(prompt.contains("Workflow fidelity rule"))
+        XCTAssertTrue(prompt.contains("Mission Plan workflow metadata is an execution contract"))
+        XCTAssertTrue(prompt.contains("Default workflow mapping"))
+        XCTAssertTrue(prompt.contains("Mutable implementation nodes use `workflow_name:\"Orchestrate\"` by default"))
+        XCTAssertTrue(prompt.contains("Independent review nodes use `workflow_name:\"Review\"` by default"))
+        XCTAssertTrue(prompt.contains("workflow-less read-only probe nodes may use `agent_explore.start`"))
+        XCTAssertTrue(prompt.contains("should not pretend to be Investigate"))
+        XCTAssertTrue(prompt.contains("agent_run.start"))
+        XCTAssertTrue(prompt.contains("model_id:\"explore\""))
+        XCTAssertTrue(prompt.contains("workflow_name:\"Investigate\""))
+        XCTAssertTrue(prompt.contains("node with `workflow_name` or `workflow_id`"))
+        XCTAssertTrue(prompt.contains("revise the Mission Plan to the real workflow"))
     }
 
     func testCoordinatorPromptIncludesAutoModeWhenEnabled() {

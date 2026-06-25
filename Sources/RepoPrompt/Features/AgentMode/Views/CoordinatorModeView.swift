@@ -2006,6 +2006,7 @@ struct CoordinatorModeView: View {
                 if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
                 return lhs.timestamp > rhs.timestamp
             }
+        let workflowMismatch = missionPlanWorkflowMismatch(node: node, boundRow: boundRow)
 
         return VStack(spacing: 0) {
             inspectorSheetHandle(isExpanded: true, metrics: metrics) {
@@ -2095,6 +2096,15 @@ struct CoordinatorModeView: View {
                                     keyValue("Branch", branch, metrics: metrics)
                                 }
                             }
+                        }
+                    }
+
+                    if let workflowMismatch {
+                        inspectorGroup("Workflow Mismatch", metrics: metrics) {
+                            Label(workflowMismatch, systemImage: "exclamationmark.triangle.fill")
+                                .font(metrics.body)
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
 
@@ -4242,6 +4252,44 @@ struct CoordinatorModeView: View {
         .padding(.vertical, metrics.miniPillVerticalPadding)
         .background(Capsule().fill(tint.opacity(0.12)))
         .overlay(Capsule().stroke(tint.opacity(0.2), lineWidth: 0.5))
+    }
+
+    private func missionPlanWorkflowMismatch(
+        node: CoordinatorMissionPlanNode,
+        boundRow: CoordinatorModeRow?
+    ) -> String? {
+        guard let plannedWorkflow = node.workflowHint,
+              let boundRow
+        else { return nil }
+        if let workflow = boundRow.workflow,
+           workflowHint(plannedWorkflow, matches: workflow)
+        {
+            return nil
+        }
+        let actual = boundRow.workflow?.displayName ?? "none"
+        return "Planned workflow \(plannedWorkflow.name) does not match bound session workflow \(actual). Use agent_run with the node workflow, or revise the Mission Plan."
+    }
+
+    private func workflowHint(
+        _ planned: CoordinatorMissionPlanNodeWorkflowHint,
+        matches actual: CoordinatorModeWorkflowDisplaySummary
+    ) -> Bool {
+        let actualKeys = [
+            actual.id,
+            actual.displayName
+        ].map(normalizedWorkflowComparisonKey)
+        let plannedKeys = [
+            planned.id,
+            planned.name
+        ].compactMap(\.self).map(normalizedWorkflowComparisonKey)
+        return !Set(actualKeys).isDisjoint(with: plannedKeys)
+    }
+
+    private func normalizedWorkflowComparisonKey(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: #"[^a-z0-9]+"#, with: "", options: .regularExpression)
     }
 
     private func workflowIconName(_ workflowHint: CoordinatorMissionPlanNodeWorkflowHint) -> String {

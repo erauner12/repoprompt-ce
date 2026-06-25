@@ -222,7 +222,6 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     "id": .string(nodeID.uuidString),
                     "title": .string("Map provider cleanup entry points"),
                     "workstream_id": .string(workstreamID.uuidString),
-                    "workflow_name": .string("Investigate"),
                     "execution_policy": .string("fresh_readonly_child")
                 ])
             ]),
@@ -233,12 +232,11 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     "node_title": .string("Map provider cleanup entry points"),
                     "workstream_title": .string("Discovery"),
                     "decision": .string("start_fresh_readonly_child"),
-                    "operation": .string("agent_run.start"),
+                    "operation": .string("agent_explore.start"),
                     "session_id": .string(childID.uuidString),
-                    "workflow_name": .string("Investigate"),
                     "model_id": .string("explore"),
                     "role": .string("explore"),
-                    "reason": .string("The implementation surface is unknown, so start read-only discovery first."),
+                    "reason": .string("The implementation surface is unknown, so start a narrow read-only probe first."),
                     "context_summary": .string("Need to map MCP session cleanup, provider metadata, and Oracle finalization.")
                 ])
             ])
@@ -252,9 +250,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(decision["node_id"]?.stringValue, nodeID.uuidString)
         XCTAssertEqual(decision["workstream_id"]?.stringValue, workstreamID.uuidString)
         XCTAssertEqual(decision["decision"]?.stringValue, "start_fresh_readonly_child")
-        XCTAssertEqual(decision["operation"]?.stringValue, "agent_run.start")
+        XCTAssertEqual(decision["operation"]?.stringValue, "agent_explore.start")
         XCTAssertEqual(decision["session_id"]?.stringValue, childID.uuidString)
         XCTAssertEqual(decision["model_id"]?.stringValue, "explore")
+        XCTAssertNil(decision["workflow_name"]?.stringValue)
 
         let updated = try await service.execute(args: [
             "op": .string("mission_plan"),
@@ -263,7 +262,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     "id": .string(decisionID.uuidString),
                     "timestamp": .string("2026-06-25T10:00:00Z"),
                     "decision": .string("start_fresh_readonly_child"),
-                    "operation": .string("agent_run.start"),
+                    "operation": .string("agent_explore.start"),
                     "reason": .string("Corrected route rationale.")
                 ])
             ])
@@ -425,6 +424,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let workstreamID = UUID()
         let planNodeID = UUID()
         let reviewNodeID = UUID()
+        let reviewSessionID = UUID()
         let routingDecisions = (0 ..< 25).map { index in
             CoordinatorMissionRoutingDecision(
                 id: UUID(uuidString: "00000000-0000-0000-0000-\(String(format: "%012d", index))")!,
@@ -472,7 +472,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     workstreamID: workstreamID,
                     dependsOn: [planNodeID],
                     executionPolicy: .freshSiblingOnSameWorktree,
-                    status: .pending
+                    status: .pending,
+                    boundSessionID: reviewSessionID
                 )
             ],
             routingDecisions: routingDecisions,
@@ -489,6 +490,14 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
+            rows: [
+                Self.childRow(
+                    id: reviewSessionID,
+                    parentCoordinatorID: coordinatorID,
+                    title: "Review implementation",
+                    workflow: CoordinatorModeWorkflowDisplaySummary(AgentWorkflow.review.definition)
+                )
+            ],
             missionPlans: { [coordinatorID: plan] }
         )
 
@@ -510,6 +519,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(review["workstream_title"]?.stringValue, "Implement")
         XCTAssertEqual(review["workflow_name"]?.stringValue, "Review")
         XCTAssertEqual(review["completion_evidence"]?.stringValue, "Review reports no must-fix issues.")
+        XCTAssertEqual(review["planned_workflow"]?.objectValue?["name"]?.stringValue, "Review")
+        XCTAssertEqual(review["actual_workflow"]?.objectValue?["name"]?.stringValue, "Review")
+        XCTAssertEqual(review["workflow_matches_plan"]?.boolValue, true)
+        XCTAssertEqual(review["bound_row"]?.objectValue?["workflow_name"]?.stringValue, "Review")
         let recentEvents = try XCTUnwrap(status["recent_events"]?.arrayValue)
         XCTAssertEqual(recentEvents.first?.objectValue?["kind"]?.stringValue, "node_completed")
         let recentRouting = try XCTUnwrap(status["routing_decisions_recent"]?.arrayValue)
@@ -517,6 +530,120 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(recentRouting.first?.objectValue?["reason"]?.stringValue, "Decision 24.")
         XCTAssertEqual(recentRouting.last?.objectValue?["reason"]?.stringValue, "Decision 5.")
         XCTAssertNil(status["routing_decisions_recent"]?.arrayValue?.first?.objectValue?["context_summary"]?.stringValue)
+    }
+
+    func testMissionStatusFlagsBoundWorkflowMismatch() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let childID = UUID()
+        let plan = CoordinatorMissionPlan(
+            objective: "Investigate cleanup behavior",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Discovery",
+                    purpose: "Map provider cleanup paths.",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Investigate provider cleanup paths",
+                    workflowHint: CoordinatorMissionPlanNodeWorkflowHint(
+                        id: AgentWorkflow.investigate.definition.id,
+                        name: "Investigate"
+                    ),
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .running,
+                    boundSessionID: childID
+                )
+            ]
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            rows: [
+                Self.childRow(
+                    id: childID,
+                    parentCoordinatorID: coordinatorID,
+                    title: "Explore cleanup paths",
+                    workflow: nil
+                )
+            ],
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_status")
+        ])
+        let status = try XCTUnwrap(response.objectValue?["mission_status"]?.objectValue)
+        let node = try XCTUnwrap(status["nodes"]?.arrayValue?.first?.objectValue)
+
+        XCTAssertEqual(node["planned_workflow"]?.objectValue?["name"]?.stringValue, "Investigate")
+        XCTAssertEqual(node["actual_workflow"], .null)
+        XCTAssertEqual(node["workflow_matches_plan"]?.boolValue, false)
+        XCTAssertNil(node["bound_row"]?.objectValue?["workflow_name"]?.stringValue)
+    }
+
+    func testMissionStatusDoesNotFlagWorkflowlessProbeNodeAsMismatch() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let childID = UUID()
+        let plan = CoordinatorMissionPlan(
+            objective: "Map cleanup behavior",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Discovery",
+                    purpose: "Map provider cleanup paths.",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Probe provider cleanup entry points",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .running,
+                    boundSessionID: childID
+                )
+            ]
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            rows: [
+                Self.childRow(
+                    id: childID,
+                    parentCoordinatorID: coordinatorID,
+                    title: "Explore cleanup paths",
+                    workflow: nil
+                )
+            ],
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_status")
+        ])
+        let status = try XCTUnwrap(response.objectValue?["mission_status"]?.objectValue)
+        let node = try XCTUnwrap(status["nodes"]?.arrayValue?.first?.objectValue)
+
+        XCTAssertEqual(node["planned_workflow"], .null)
+        XCTAssertEqual(node["actual_workflow"], .null)
+        XCTAssertEqual(node["workflow_matches_plan"], .null)
+        XCTAssertNil(node["bound_row"]?.objectValue?["workflow_name"]?.stringValue)
     }
 
     func testMissionPlanRejectsInvalidWorktreeStrategy() async throws {
@@ -675,6 +802,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             toolName: MCPWindowToolName.coordinatorChat,
             taskLabelKind: .coordinator
         ))
+        XCTAssertTrue(AgentModeMCPToolAdvertisementPolicy.shouldAdvertise(
+            toolName: MCPWindowToolName.agentExplore,
+            taskLabelKind: .coordinator
+        ))
         for role in AgentModelCatalog.TaskLabelKind.allCases {
             guard role != .coordinator else { continue }
             XCTAssertFalse(AgentModeMCPToolAdvertisementPolicy.shouldAdvertise(
@@ -691,6 +822,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
         submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
+        rows: [CoordinatorModeRow] = [],
         missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },
         updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in }
     ) -> CoordinatorChatMCPToolService {
@@ -701,6 +833,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             submit: submit,
             pendingChild: pendingChild,
             submitPendingChild: submitPendingChild,
+            rows: rows,
             missionPlans: missionPlans,
             updateMissionPlan: updateMissionPlan
         )
@@ -714,6 +847,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
         submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
+        rows: [CoordinatorModeRow] = [],
         missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },
         updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in }
     ) -> CoordinatorChatMCPToolService {
@@ -723,6 +857,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     Self.snapshot(
                         coordinatorIDs: coordinatorIDs,
                         selectedID: selectedID(),
+                        rows: rows,
                         missionPlans: missionPlans()
                     )
                 },
@@ -740,6 +875,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
     private static func snapshot(
         coordinatorIDs: [UUID],
         selectedID: UUID,
+        rows: [CoordinatorModeRow] = [],
         missionPlans: [UUID: CoordinatorMissionPlan] = [:]
     ) -> CoordinatorModeSnapshot {
         let options = coordinatorIDs.enumerated().map { index, id in
@@ -767,7 +903,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             sortMode: .lastUpdated,
             boardScope: .coordinatorFleet,
             counts: .empty,
-            groups: CoordinatorModeStatusGroup.allCases.map { CoordinatorModeStatusSection(group: $0, rows: []) },
+            groups: CoordinatorModeStatusGroup.allCases.map { group in
+                CoordinatorModeStatusSection(group: group, rows: rows.filter { $0.statusGroup == group })
+            },
             coordinatorRail: CoordinatorModeCoordinatorRail(
                 state: .selected,
                 coordinatorSessionID: selectedID,
@@ -790,6 +928,45 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             pendingInteractions: [],
             mcpAwareness: .off,
             isEmpty: false
+        )
+    }
+
+    private static func childRow(
+        id: UUID,
+        parentCoordinatorID: UUID,
+        title: String,
+        workflow: CoordinatorModeWorkflowDisplaySummary?
+    ) -> CoordinatorModeRow {
+        CoordinatorModeRow(
+            id: id,
+            sessionID: id,
+            tabID: UUID(),
+            title: title,
+            providerName: "codexExec",
+            modelName: "gpt-5.5",
+            runState: .running,
+            statusGroup: .working,
+            parentSessionID: parentCoordinatorID,
+            parentCoordinator: CoordinatorModeRow.ParentCoordinator(
+                sessionID: parentCoordinatorID,
+                title: "Coordinator mission",
+                isSelected: true
+            ),
+            childSessionIDs: [],
+            isMCPOriginated: true,
+            isPersistedOnly: false,
+            isCoordinator: false,
+            startedAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 20),
+            priority: nil,
+            workstream: nil,
+            workstreamSummary: nil,
+            workflow: workflow,
+            mergeAttention: nil,
+            pendingInteraction: nil,
+            openAgentChatRoute: nil,
+            statusReport: nil,
+            origin: .coordinatorFleet
         )
     }
 

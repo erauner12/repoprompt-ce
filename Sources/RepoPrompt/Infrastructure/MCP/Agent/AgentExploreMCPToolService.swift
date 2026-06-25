@@ -204,6 +204,15 @@ struct AgentExploreMCPToolService {
         let agentModeVM = targetWindow.agentModeViewModel
         let caller = try await resolveExploreCaller(metadata: metadata, agentModeVM: agentModeVM)
         try agentModeVM.mcpValidateAgentRunSpawnAllowed(sourceTabID: caller.sourceTabID, isExploreOnly: true)
+        let isCoordinatorParent = agentModeVM.mcpIsCoordinatorRuntime(sessionID: caller.sourceSessionID)
+        let coordinatorMissionPlan = agentModeVM.mcpCoordinatorMissionPlan(sessionID: caller.sourceSessionID)
+        let coordinatorMissionPlanDecision = AgentRunCoordinatorMissionPlanPolicy.decision(
+            isCoordinatorParent: isCoordinatorParent,
+            missionPlan: coordinatorMissionPlan
+        )
+        if case let .requireApprovedMissionPlan(reason) = coordinatorMissionPlanDecision {
+            throw MCPError.invalidParams(reason)
+        }
 
         let selection = try AgentMCPSelectionResolver.resolve(
             modelID: nil,
