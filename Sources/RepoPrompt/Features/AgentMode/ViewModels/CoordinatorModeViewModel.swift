@@ -80,6 +80,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias DirectiveSubmitter = @MainActor (_ submission: CoordinatorDirectiveSubmission) async -> DirectiveSubmissionResult
     typealias ChildDirectiveSubmitter = @MainActor (_ text: String, _ row: CoordinatorModeRow) async -> DirectiveSubmissionResult
     typealias ChildInteractionResponseSubmitter = @MainActor (_ submission: ChildInteractionResponseSubmission, _ row: CoordinatorModeRow) async -> DirectiveSubmissionResult
+    typealias CoordinatorInteractionResponseSubmitter = @MainActor (_ submission: ChildInteractionResponseSubmission, _ coordinatorSessionID: UUID, _ interactionID: UUID) async -> DirectiveSubmissionResult
     typealias ChildInteractionResponseRecorder = @MainActor (_ text: String, _ row: CoordinatorModeRow) -> Void
     typealias ContinuationGateHandler = @MainActor (_ gate: CoordinatorContinuationGate, _ snapshotBeforeGateCleared: CoordinatorModeSnapshot) async -> Void
     typealias CoordinatorActivationHandler = @MainActor (_ sessionID: UUID) async -> Void
@@ -113,6 +114,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let directiveSubmitter: DirectiveSubmitter
     private let childDirectiveSubmitter: ChildDirectiveSubmitter
     private let childInteractionResponseSubmitter: ChildInteractionResponseSubmitter
+    private let coordinatorInteractionResponseSubmitter: CoordinatorInteractionResponseSubmitter
     private let childInteractionResponseRecorder: ChildInteractionResponseRecorder
     private let continuationGateHandler: ContinuationGateHandler
     private let coordinatorActivationHandler: CoordinatorActivationHandler
@@ -138,6 +140,9 @@ final class CoordinatorModeViewModel: ObservableObject {
             .rejected(message: "Session replies are unavailable.")
         },
         childInteractionResponseSubmitter: ChildInteractionResponseSubmitter? = nil,
+        coordinatorInteractionResponseSubmitter: @escaping CoordinatorInteractionResponseSubmitter = { _, _, _ in
+            .rejected(message: "Coordinator replies are unavailable.")
+        },
         childInteractionResponseRecorder: @escaping ChildInteractionResponseRecorder = { _, _ in },
         continuationGateHandler: @escaping ContinuationGateHandler = { _, _ in },
         coordinatorActivationHandler: @escaping CoordinatorActivationHandler = { _ in },
@@ -154,6 +159,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.childInteractionResponseSubmitter = childInteractionResponseSubmitter ?? { submission, row in
             await childDirectiveSubmitter(submission.fallbackText, row)
         }
+        self.coordinatorInteractionResponseSubmitter = coordinatorInteractionResponseSubmitter
         self.childInteractionResponseRecorder = childInteractionResponseRecorder
         self.continuationGateHandler = continuationGateHandler
         self.coordinatorActivationHandler = coordinatorActivationHandler
@@ -398,6 +404,7 @@ final class CoordinatorModeViewModel: ObservableObject {
             childCounts: .empty,
             missionTemplate: nil,
             missionPlan: nil,
+            pendingInteraction: nil,
             openAgentChatRoute: nil,
             statusReport: nil,
             isComposerEnabled: false,
@@ -483,6 +490,29 @@ final class CoordinatorModeViewModel: ObservableObject {
         case let .rejected(message):
             composerNotice = message.isEmpty ? nil : message
         }
+        return result
+    }
+
+    @discardableResult
+    func submitCoordinatorPendingInteractionResponse(
+        _ submission: ChildInteractionResponseSubmission,
+        pending: CoordinatorModePendingInteractionSummary
+    ) async -> DirectiveSubmissionResult {
+        let displayText = submission.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !displayText.isEmpty || submission.skip || submission.hasStructuredAnswers else {
+            return .rejected(message: "")
+        }
+        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID else {
+            return .rejected(message: "No Coordinator mission is selected.")
+        }
+        let result = await coordinatorInteractionResponseSubmitter(submission, coordinatorSessionID, pending.id)
+        switch result {
+        case .accepted:
+            composerNotice = nil
+        case let .rejected(message):
+            composerNotice = message.isEmpty ? nil : message
+        }
+        refresh()
         return result
     }
 
@@ -807,6 +837,20 @@ extension AgentModeViewModel {
                 return .rejected(message: "Session replies are unavailable.")
             }
             switch await submitChildInteractionResponseToAgentMode(submission, row: row) {
+            case .submitted:
+                return .accepted
+            case let .blocked(message):
+                return .rejected(message: message)
+            }
+        } coordinatorInteractionResponseSubmitter: { [weak self] submission, coordinatorSessionID, interactionID in
+            guard let self else {
+                return .rejected(message: "Coordinator replies are unavailable.")
+            }
+            switch await submitCoordinatorInteractionResponseToAgentMode(
+                submission,
+                coordinatorSessionID: coordinatorSessionID,
+                interactionID: interactionID
+            ) {
             case .submitted:
                 return .accepted
             case let .blocked(message):
@@ -1286,6 +1330,39 @@ extension AgentModeViewModel {
     }
 
     @MainActor
+    func submitCoordinatorInteractionResponseToAgentMode(
+        _ submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission,
+        coordinatorSessionID: UUID,
+        interactionID: UUID
+    ) async -> UserTurnSubmissionResult {
+        guard sessions.values.contains(where: { session in
+            session.activeAgentSessionID == coordinatorSessionID && session.isCoordinatorRuntime
+        }) else {
+            return .blocked(message: "This Coordinator mission is no longer available.")
+        }
+        do {
+            _ = try await mcpResolvePendingInteraction(
+                sessionID: coordinatorSessionID,
+                interactionID: interactionID,
+                payload: MCPInteractionResponsePayload(
+                    text: submission.text,
+                    skip: submission.skip,
+                    explicitSkip: submission.skip,
+                    decisionRaw: submission.text,
+                    amendment: nil,
+                    answersByQuestionID: [:],
+                    askUserAnswersByQuestionID: submission.answersByQuestionID,
+                    hasStructuredAnswerObjects: submission.hasStructuredAnswers,
+                    elicitationActionRaw: submission.text
+                )
+            )
+            return .submitted
+        } catch {
+            return .blocked(message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+        }
+    }
+
+    @MainActor
     private func clearCoordinatorRuntimeDemoTarget(preferredSessionID: UUID?) {
         for (tabID, session) in sessions {
             let isPreferredLiveSession = preferredSessionID != nil && session.activeAgentSessionID == preferredSessionID
@@ -1487,7 +1564,6 @@ extension AgentModeViewModel {
         var mcpSnapshotsBySessionID: [UUID: AgentRunMCPSnapshot] = [:]
         for tabID in mcpControlledTabIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard let session = sessions[tabID],
-                  !session.isCoordinatorRuntime,
                   let snapshot = mcpSnapshot(for: session)
             else { continue }
             mcpSnapshotsBySessionID[snapshot.sessionID] = snapshot

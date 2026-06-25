@@ -2180,8 +2180,38 @@ struct CoordinatorModeView: View {
         _ rail: CoordinatorModeCoordinatorRail,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        if let checkpoint = activeCoordinatorContinuationCheckpoint(rail),
-           let pending = coordinatorOwnedCheckpointState(for: checkpoint)
+        if let pendingInteraction = rail.pendingInteraction,
+           let pending = coordinatorPendingAskUserState(for: pendingInteraction)
+        {
+            coordinatorCompactCheckpointCard(
+                pending: pending,
+                badgeTitle: "Coordinator question",
+                badgeSystemImage: "questionmark.bubble.fill",
+                accentColor: Color.accentColor,
+                submitLabel: "Submit",
+                showsSkipControls: true,
+                metrics: metrics,
+                onDraftChange: { questionID, draft in
+                    var drafts = coordinatorCheckpointDrafts[pending.interaction.id] ?? pending.interaction.emptyDrafts()
+                    drafts[questionID] = draft
+                    coordinatorCheckpointDrafts[pending.interaction.id] = drafts
+                },
+                onQuestionIndexChange: { index in
+                    coordinatorCheckpointQuestionIndex[pending.interaction.id] = index
+                },
+                onSubmit: {
+                    submitCoordinatorStructuredInteractionResponse(pendingInteraction)
+                },
+                onSkipAll: {
+                    submitCoordinatorStructuredInteractionSkip(pendingInteraction, pending: pending)
+                },
+                onUserActivity: {}
+            )
+            .disabled(isSubmittingCoordinatorDirective)
+            .padding(.horizontal, metrics.cardPadding)
+            .padding(.vertical, metrics.smallSpacing)
+        } else if let checkpoint = activeCoordinatorContinuationCheckpoint(rail),
+                  let pending = coordinatorOwnedCheckpointState(for: checkpoint)
         {
             coordinatorCompactCheckpointCard(
                 pending: pending,
@@ -2935,8 +2965,12 @@ struct CoordinatorModeView: View {
     }
 
     private func coordinatorPendingAskUserState(for row: CoordinatorModeRow) -> AgentAskUserPendingState? {
-        guard let pending = row.pendingInteraction,
-              pending.kind == .question || pending.kind == .userInput,
+        guard let pending = row.pendingInteraction else { return nil }
+        return coordinatorPendingAskUserState(for: pending)
+    }
+
+    private func coordinatorPendingAskUserState(for pending: CoordinatorModePendingInteractionSummary) -> AgentAskUserPendingState? {
+        guard pending.kind == .question || pending.kind == .userInput,
               !pending.fields.isEmpty
         else { return nil }
         let questions = pending.fields.map { field in
@@ -2961,6 +2995,49 @@ struct CoordinatorModeView: View {
             draftsByQuestionID: coordinatorCheckpointDrafts[pending.id] ?? interaction.emptyDrafts(),
             currentQuestionIndex: coordinatorCheckpointQuestionIndex[pending.id] ?? 0
         )
+    }
+
+    private func submitCoordinatorStructuredInteractionResponse(_ pendingInteraction: CoordinatorModePendingInteractionSummary) {
+        guard let pending = coordinatorPendingAskUserState(for: pendingInteraction),
+              pending.isComplete
+        else { return }
+        let answers = pending.interaction.questions.reduce(into: [String: AgentAskUserAnswer]()) { partialResult, question in
+            partialResult[question.id] = question.answer(from: pending.draftsByQuestionID[question.id] ?? AgentAskUserDraft())
+        }
+        let displayText = coordinatorStructuredAnswerDisplayText(pending: pending, answers: answers)
+        let submission = CoordinatorModeViewModel.ChildInteractionResponseSubmission(
+            text: nil,
+            skip: false,
+            answersByQuestionID: answers,
+            displayText: displayText
+        )
+        Task {
+            await viewModel.submitCoordinatorPendingInteractionResponse(submission, pending: pendingInteraction)
+            await MainActor.run {
+                coordinatorCheckpointDrafts[pending.interaction.id] = nil
+                coordinatorCheckpointQuestionIndex[pending.interaction.id] = nil
+            }
+        }
+    }
+
+    private func submitCoordinatorStructuredInteractionSkip(
+        _ pendingInteraction: CoordinatorModePendingInteractionSummary,
+        pending: AgentAskUserPendingState
+    ) {
+        let displayText = "Skipped \(pending.interaction.title ?? "Coordinator question")"
+        let submission = CoordinatorModeViewModel.ChildInteractionResponseSubmission(
+            text: nil,
+            skip: true,
+            answersByQuestionID: [:],
+            displayText: displayText
+        )
+        Task {
+            await viewModel.submitCoordinatorPendingInteractionResponse(submission, pending: pendingInteraction)
+            await MainActor.run {
+                coordinatorCheckpointDrafts[pending.interaction.id] = nil
+                coordinatorCheckpointQuestionIndex[pending.interaction.id] = nil
+            }
+        }
     }
 
     private func submitPendingChildStructuredInteractionResponse(to row: CoordinatorModeRow) {
@@ -5851,6 +5928,7 @@ private extension AgentSessionRunState {
                     childCounts: .empty,
                     missionTemplate: nil,
                     missionPlan: nil,
+                    pendingInteraction: nil,
                     openAgentChatRoute: nil,
                     statusReport: CoordinatorModeSessionStatusReport(
                         status: .running,

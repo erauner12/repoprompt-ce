@@ -314,6 +314,14 @@ struct AgentRunMCPToolService {
             throw MCPError.invalidParams("agent_run.start was routed from an Agent Mode run, but RepoPrompt could not resolve its parent Agent session. Refusing to create an unparented run; reconnect the agent MCP client or retry after the source session is active.")
         }
         let isCoordinatorParent = await agentModeVM.mcpIsCoordinatorRuntime(sessionID: spawnParentSessionID)
+        let coordinatorMissionPlan = await agentModeVM.mcpCoordinatorMissionPlan(sessionID: spawnParentSessionID)
+        let coordinatorMissionPlanDecision = AgentRunCoordinatorMissionPlanPolicy.decision(
+            isCoordinatorParent: isCoordinatorParent,
+            missionPlan: coordinatorMissionPlan
+        )
+        if case let .requireApprovedMissionPlan(reason) = coordinatorMissionPlanDecision {
+            throw MCPError.invalidParams(reason)
+        }
         let coordinatorWorktreeDecision = AgentRunCoordinatorWorktreePolicy.decision(
             isCoordinatorParent: isCoordinatorParent,
             message: message,

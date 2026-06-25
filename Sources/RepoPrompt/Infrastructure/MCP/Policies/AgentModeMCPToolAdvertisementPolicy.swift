@@ -14,7 +14,7 @@ import Foundation
 enum AgentModeMCPToolAdvertisementPolicy {
     // MARK: - Precomputed hidden tool sets
 
-    /// Direct app-control tools that should not be advertised inside agent-run tool catalogs.
+    /// Direct app-control tools that should only be advertised to the layer-above Coordinator.
     private static let directAppControlTools: Set<String> = [
         MCPWindowToolName.coordinatorChat
     ]
@@ -59,8 +59,10 @@ enum AgentModeMCPToolAdvertisementPolicy {
         switch taskLabelKind {
         case .explore:
             return exploreHiddenTools.union(exploreControlTools).union(directAppControlTools)
-        case .engineer, .pair, .design, .coordinator:
+        case .engineer, .pair, .design:
             return nonExploreRoleHiddenTools.union(directAppControlTools)
+        case .coordinator:
+            return nonExploreRoleHiddenTools
         }
     }
 
@@ -72,7 +74,7 @@ enum AgentModeMCPToolAdvertisementPolicy {
     /// - Returns: `true` if the tool should be included in `ListTools` results.
     static func shouldAdvertise(toolName: String, taskLabelKind: AgentModelCatalog.TaskLabelKind?) -> Bool {
         if directAppControlTools.contains(toolName) {
-            return taskLabelKind == nil
+            return taskLabelKind == nil || taskLabelKind == .coordinator
         }
 
         if MCPToolCapabilities.capabilities(for: toolName).contains(.agentExploreControl) {

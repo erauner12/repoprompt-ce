@@ -392,6 +392,7 @@ struct CoordinatorModeCoordinatorRail: Equatable {
         childCounts: .empty,
         missionTemplate: nil,
         missionPlan: nil,
+        pendingInteraction: nil,
         openAgentChatRoute: nil,
         statusReport: nil,
         isComposerEnabled: false,
@@ -422,6 +423,7 @@ struct CoordinatorModeCoordinatorRail: Equatable {
     let childCounts: CoordinatorModeCoordinatorChildCounts
     let missionTemplate: CoordinatorMissionTemplateSummary?
     let missionPlan: CoordinatorMissionPlan?
+    let pendingInteraction: CoordinatorModePendingInteractionSummary?
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
     let statusReport: CoordinatorModeSessionStatusReport?
     let isComposerEnabled: Bool
@@ -440,6 +442,7 @@ struct CoordinatorModeCoordinatorRail: Equatable {
         childCounts: CoordinatorModeCoordinatorChildCounts,
         missionTemplate: CoordinatorMissionTemplateSummary? = nil,
         missionPlan: CoordinatorMissionPlan? = nil,
+        pendingInteraction: CoordinatorModePendingInteractionSummary? = nil,
         openAgentChatRoute: AgentSessionDeepLinkRoute?,
         statusReport: CoordinatorModeSessionStatusReport?,
         isComposerEnabled: Bool,
@@ -457,6 +460,7 @@ struct CoordinatorModeCoordinatorRail: Equatable {
         self.childCounts = childCounts
         self.missionTemplate = missionTemplate
         self.missionPlan = missionPlan
+        self.pendingInteraction = pendingInteraction
         self.openAgentChatRoute = openAgentChatRoute
         self.statusReport = statusReport
         self.isComposerEnabled = isComposerEnabled

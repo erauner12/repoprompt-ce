@@ -848,6 +848,59 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertNil(missingRouteSnapshot.pendingInteractions.first?.openAgentChatRoute)
     }
 
+    func testSelectedCoordinatorOwnPendingInteractionProjectsToRail() {
+        let coordinatorID = uuid(10)
+        let tabID = uuid(110)
+        let interaction = AgentRunMCPSnapshot.Interaction(
+            id: uuid(200),
+            kind: .question,
+            responseType: .structured,
+            title: "Approve Mission Plan?",
+            prompt: "Choose how to continue.",
+            context: "The Coordinator is waiting on a user-owned checkpoint.",
+            allowsMultiple: nil,
+            options: [],
+            fields: [
+                AgentRunMCPSnapshot.Interaction.Field(
+                    id: "decision",
+                    header: "Coordinator decision",
+                    prompt: "What should happen next?",
+                    context: nil,
+                    isSecret: false,
+                    allowsOther: false,
+                    allowsMultiple: false,
+                    allowsCustom: false,
+                    options: [
+                        AgentRunMCPSnapshot.Interaction.Option(label: "Proceed", description: nil),
+                        AgentRunMCPSnapshot.Interaction.Option(label: "Revise", description: nil)
+                    ]
+                )
+            ],
+            details: []
+        )
+
+        let snapshot = projector.project(input(
+            live: [
+                live(
+                    id: coordinatorID,
+                    tab: tabID,
+                    title: "Coordinator Runtime Demo",
+                    updatedAt: date(20),
+                    state: .waitingForQuestion,
+                    coordinatorRuntime: true
+                )
+            ],
+            mcpSnapshots: [coordinatorID: mcpSnapshot(sessionID: coordinatorID, tabID: tabID, interaction: interaction)],
+            selectedCoordinatorID: coordinatorID,
+            resolvableTabs: [tabID],
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        XCTAssertEqual(snapshot.coordinatorRail.pendingInteraction?.id, interaction.id)
+        XCTAssertEqual(snapshot.coordinatorRail.pendingInteraction?.title, "Approve Mission Plan?")
+        XCTAssertEqual(snapshot.coordinatorRail.pendingInteraction?.fields.first?.id, "decision")
+    }
+
     func testPersistedOnlyRowWithoutLiveSnapshotDoesNotProjectPendingInteraction() {
         let coordinatorID = uuid(10)
         let sessionID = uuid(1)

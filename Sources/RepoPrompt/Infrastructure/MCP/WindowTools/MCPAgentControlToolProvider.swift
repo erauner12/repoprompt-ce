@@ -229,16 +229,18 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             name: MCPWindowToolName.coordinatorChat,
             freshnessPolicy: .providerManaged,
             description: """
-            External test/control surface for Coordinator Mode. This mirrors the visible Coordinator UI: list parent threads, select a parent thread, start a fresh parent thread, or submit a directive to the selected parent.
+            External test/control surface for Coordinator Mode. This mirrors the visible Coordinator UI: list parent threads, select a parent thread, start a fresh parent thread, submit a directive to the selected parent, or record/read the selected Mission Plan.
 
-            **Operations**: list | select | new | submit
+            **Operations**: list | select | new | submit | mission_plan | mission_status
 
             - `list`: Return current Coordinator parent selection, available parents, and board counts.
             - `select`: Select an existing Coordinator parent by `coordinator_session_id`.
             - `new`: Mirror New Coordinator. The rail switches to a blank parent context; the next submit creates the parent runtime.
             - `submit`: Send a directive to the selected parent, to `coordinator_session_id`, or to a fresh parent when `new_parent=true`.
+            - `mission_plan`: Create or update the selected Coordinator Mission's DAG-lite plan. Use this before `agent_run.start` delegation.
+            - `mission_status`: Read back the selected Coordinator Mission's current plan and node status.
 
-            This tool is intended for direct app automation and live smoke testing, not for in-agent recursion.
+            Coordinator-role agents should use `mission_plan` to record concrete user-specific deliverables before delegating child Agent Mode sessions. Workflows such as Deep Plan, Orchestrate, and Review belong in node workflow metadata, not as generic node titles.
             """,
             annotations: .repoPromptLocalEphemeralState,
             inputSchema: .object(
@@ -249,12 +251,81 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 **select**: coordinator_session_id (required)
                 **new**: no additional fields
                 **submit**: message (required), coordinator_session_id? or new_parent?
+                **mission_plan**: coordinator_session_id? plus one or more of objective, status, approval_state, workstreams, nodes, events
+                **mission_status**: coordinator_session_id?; returns current plan state
                 """,
                 properties: [
-                    "op": .string(description: "Operation.", enum: ["list", "select", "new", "submit"]),
-                    "coordinator_session_id": .string(description: "[select, submit] Existing Coordinator parent session UUID."),
+                    "op": .string(description: "Operation.", enum: ["list", "select", "new", "submit", "mission_plan", "mission_status"]),
+                    "coordinator_session_id": .string(description: "[select, submit, mission_plan, mission_status] Existing Coordinator parent session UUID. Defaults to the selected Coordinator for mission_plan/mission_status."),
                     "message": .string(description: "[submit] Directive text to send to the selected or requested Coordinator parent."),
-                    "new_parent": .boolean(description: "[submit] Start from a blank Coordinator parent before sending this directive. Default false.")
+                    "new_parent": .boolean(description: "[submit] Start from a blank Coordinator parent before sending this directive. Default false."),
+                    "objective": .string(description: "[mission_plan] User-specific Mission objective."),
+                    "status": .string(description: "[mission_plan] Mission status.", enum: ["draft", "approved", "running", "blocked", "completed", "stopped"]),
+                    "approval_state": .string(description: "[mission_plan] Human approval state for the plan.", enum: ["not_required", "awaiting_approval", "approved", "revision_requested"]),
+                    "workstreams": .array(
+                        description: "[mission_plan] Workstream objects. Each requires title, purpose, default_policy, and worktree_strategy { mode, worktree_id?, reason? }.",
+                        items: .object(
+                            description: "Mission workstream.",
+                            properties: [
+                                "id": .string(description: "Optional stable UUID."),
+                                "title": .string(description: "User-level workstream title."),
+                                "purpose": .string(description: "Why this workstream exists."),
+                                "role": .string(description: "Optional role label."),
+                                "default_policy": .string(description: "Default execution policy.", enum: ["coordinator_only", "steer_primary", "fresh_sibling_on_same_worktree", "fresh_worktree", "ask_user"]),
+                                "worktree_strategy": .object(
+                                    description: "Worktree strategy.",
+                                    properties: [
+                                        "mode": .string(description: "Worktree mode.", enum: ["noneReadOnly", "createIsolated", "reuseExisting", "reuseWorkstream", "askUser"]),
+                                        "worktree_id": .string(description: "Optional worktree identifier."),
+                                        "reason": .string(description: "Reason for this strategy.")
+                                    ],
+                                    required: ["mode"]
+                                ),
+                                "primary_session_id": .string(description: "Optional primary child session UUID."),
+                                "related_session_ids": .array(description: "Optional related child session UUIDs.", items: .string())
+                            ],
+                            required: ["title", "purpose", "default_policy", "worktree_strategy"]
+                        )
+                    ),
+                    "nodes": .array(
+                        description: "[mission_plan] DAG-lite nodes. Titles should be concrete deliverables, not generic phase names. Each requires title, workstream_id or workstream_title, execution_policy, and status.",
+                        items: .object(
+                            description: "Mission Plan node.",
+                            properties: [
+                                "id": .string(description: "Optional stable UUID."),
+                                "title": .string(description: "Concrete deliverable title."),
+                                "detail": .string(description: "Node detail."),
+                                "workflow_name": .string(description: "Optional workflow hint such as Deep Plan, Orchestrate, or Review."),
+                                "completion_evidence": .string(description: "Evidence that marks this node complete."),
+                                "workstream_id": .string(description: "Workstream UUID."),
+                                "workstream_title": .string(description: "Workstream title alternative."),
+                                "depends_on": .array(description: "Dependency node UUIDs.", items: .string()),
+                                "role": .string(description: "Optional role label."),
+                                "execution_policy": .string(description: "How this node should execute.", enum: ["coordinator_only", "steer_primary", "fresh_sibling_on_same_worktree", "fresh_worktree", "ask_user"]),
+                                "status": .string(description: "Node status.", enum: ["pending", "running", "completed", "blocked", "skipped", "cancelled"]),
+                                "bound_session_id": .string(description: "Optional delegated session UUID."),
+                                "bound_interaction_id": .string(description: "Optional interaction UUID.")
+                            ],
+                            required: ["title", "execution_policy", "status"]
+                        )
+                    ),
+                    "events": .array(
+                        description: "[mission_plan] Optional plan events.",
+                        items: .object(
+                            description: "Mission Plan event.",
+                            properties: [
+                                "id": .string(description: "Optional event UUID."),
+                                "kind": .string(description: "Event kind.", enum: ["created", "revised", "approved", "node_started", "node_completed", "node_blocked", "session_bound", "gate_cleared"]),
+                                "node_id": .string(description: "Optional node UUID."),
+                                "node_title": .string(description: "Optional node title alternative."),
+                                "session_id": .string(description: "Optional session UUID."),
+                                "interaction_id": .string(description: "Optional interaction UUID."),
+                                "timestamp": .string(description: "Optional ISO 8601 timestamp."),
+                                "summary": .string(description: "Event summary.")
+                            ],
+                            required: ["kind"]
+                        )
+                    )
                 ],
                 required: ["op"]
             )

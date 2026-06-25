@@ -415,12 +415,17 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         }
     }
 
-    func testCoordinatorChatIsDirectClientOnlyInAgentAdvertisements() {
+    func testCoordinatorChatIsAvailableToDirectClientsAndCoordinatorRole() {
         XCTAssertTrue(AgentModeMCPToolAdvertisementPolicy.shouldAdvertise(
             toolName: MCPWindowToolName.coordinatorChat,
             taskLabelKind: nil
         ))
+        XCTAssertTrue(AgentModeMCPToolAdvertisementPolicy.shouldAdvertise(
+            toolName: MCPWindowToolName.coordinatorChat,
+            taskLabelKind: .coordinator
+        ))
         for role in AgentModelCatalog.TaskLabelKind.allCases {
+            guard role != .coordinator else { continue }
             XCTAssertFalse(AgentModeMCPToolAdvertisementPolicy.shouldAdvertise(
                 toolName: MCPWindowToolName.coordinatorChat,
                 taskLabelKind: role
@@ -525,6 +530,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 childCounts: .empty,
                 missionTemplate: nil,
                 missionPlan: missionPlans[selectedID],
+                pendingInteraction: nil,
                 openAgentChatRoute: nil,
                 statusReport: nil,
                 isComposerEnabled: true,
