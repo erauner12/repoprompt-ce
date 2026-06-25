@@ -505,69 +505,6 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         return text
     }
 
-    func testCoordinatorCheckpointMarkerIsStrippedAndProjected() {
-        let parsed = CoordinatorModeConversationCheckpointParser.parse("""
-        I finished the safe part and can continue if you want.
-        COORDINATOR_CHECKPOINT: safe_continuation_ready
-        """)
-
-        XCTAssertEqual(parsed.visibleText, "I finished the safe part and can continue if you want.")
-        XCTAssertEqual(parsed.checkpoint?.kind, .safeContinuationReady)
-    }
-
-    func testCoordinatorCheckpointParserLeavesOrdinaryMessagesUngated() {
-        let parsed = CoordinatorModeConversationCheckpointParser.parse("I finished and summarized the result.")
-
-        XCTAssertEqual(parsed.visibleText, "I finished and summarized the result.")
-        XCTAssertNil(parsed.checkpoint)
-    }
-
-    func testCoordinatorRailProjectsCheckpointWhileHidingMarker() {
-        let coordinatorID = uuid(1)
-        let coordinatorTab = uuid(101)
-        let mcpSnapshots: [UUID: AgentRunMCPSnapshot] = [
-            coordinatorID: mcpSnapshot(
-                sessionID: coordinatorID,
-                tabID: coordinatorTab,
-                sessionName: "Coordinator",
-                status: .completed,
-                statusText: "Run complete",
-                assistantPreview: """
-                I finished the safe part and can continue if you want.
-                COORDINATOR_CHECKPOINT: safe_continuation_ready
-                """,
-                parent: nil
-            )
-        ]
-        let viewModel = CoordinatorModeViewModel(
-            inputProvider: { sortMode, selectedCoordinatorID in
-                self.input(
-                    live: [
-                        self.live(
-                            id: coordinatorID,
-                            tab: coordinatorTab,
-                            title: "Coordinator",
-                            updatedAt: self.date(20),
-                            state: .idle,
-                            isMCP: true
-                        )
-                    ],
-                    mcpSnapshots: mcpSnapshots,
-                    selectedCoordinatorID: selectedCoordinatorID,
-                    sort: sortMode,
-                    demoCoordinatorIDs: [coordinatorID]
-                )
-            },
-            dashboardVisibilityHandler: { _ in }
-        )
-
-        viewModel.refresh()
-
-        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.coordinator])
-        XCTAssertEqual(viewModel.railTranscriptEntries.first?.text, "I finished the safe part and can continue if you want.")
-        XCTAssertEqual(viewModel.railTranscriptEntries.first?.checkpoint?.kind, .safeContinuationReady)
-    }
-
     func testCoordinatorRailRestoresSelectedRuntimeConversationTranscript() {
         let firstCoordinatorID = uuid(1)
         let secondCoordinatorID = uuid(2)

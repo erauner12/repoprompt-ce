@@ -49,6 +49,7 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
         XCTAssertTrue(prompt.contains("use the actual repo default"))
         XCTAssertTrue(prompt.contains("worktree_base_ref"))
         XCTAssertTrue(prompt.contains("operation values must be `agent_explore.start`, `agent_run.start`, `agent_run.steer`, `agent_run.respond`, `agent_run.cancel`, or `coordinator_hold`"))
+        XCTAssertFalse(prompt.contains("COORDINATOR_CHECKPOINT"))
     }
 
     func testBuiltInMissionTemplatesAvoidCoordinatorProtocolDetails() {
@@ -88,6 +89,7 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Coordinator runtime demo mode"))
         XCTAssertTrue(prompt.contains("Coordinator Auto pace"))
         XCTAssertTrue(prompt.contains("Auto execution pace is enabled"))
+        XCTAssertFalse(prompt.contains("COORDINATOR_CHECKPOINT"))
         XCTAssertTrue(prompt.contains("Respect boundaries"))
         XCTAssertTrue(prompt.contains("If a delegated child or workflow appears stuck"))
         XCTAssertTrue(prompt.contains("wait once with a bounded timeout"))

@@ -948,21 +948,13 @@ final class CoordinatorModeViewModel: ObservableObject {
 
         lastDurableRailStatusEntryKey = key
         let role: CoordinatorModeRailTranscriptEntry.Role = report.status.isTerminal ? .coordinator : .event
-        var displayText = text
-        var checkpoint: CoordinatorModeConversationCheckpoint?
-        if role == .coordinator {
-            let parsed = CoordinatorModeConversationCheckpointParser.parse(text)
-            displayText = parsed.visibleText
-            checkpoint = parsed.checkpoint
-        }
 
         railTranscriptEntries.append(CoordinatorModeRailTranscriptEntry(
             id: UUID(),
             role: role,
-            text: displayText,
+            text: text,
             createdAt: Date(),
-            action: nil,
-            checkpoint: checkpoint
+            action: nil
         ))
     }
 
@@ -1171,13 +1163,7 @@ extension AgentModeViewModel {
 
         var entries: [CoordinatorModeRailTranscriptEntry] = session.items.compactMap { item in
             guard let role = coordinatorModeRailRole(for: item.kind) else { return nil }
-            var text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            var checkpoint: CoordinatorModeConversationCheckpoint?
-            if role == .coordinator {
-                let parsed = CoordinatorModeConversationCheckpointParser.parse(text)
-                text = parsed.visibleText
-                checkpoint = parsed.checkpoint
-            }
+            let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard AgentDisplayableText.hasDisplayableBody(text) else { return nil }
             if role == .user, isCoordinatorFollowThroughResumeDirective(text) {
                 return nil
@@ -1187,8 +1173,7 @@ extension AgentModeViewModel {
                 role: role,
                 text: text,
                 createdAt: item.timestamp,
-                action: nil,
-                checkpoint: checkpoint
+                action: nil
             )
         }
         let childResponseEntries = session.coordinatorFollowThroughState?.childInteractionResponses.map { record in

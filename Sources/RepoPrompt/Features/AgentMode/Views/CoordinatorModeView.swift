@@ -2422,97 +2422,135 @@ struct CoordinatorModeView: View {
         _ rail: CoordinatorModeCoordinatorRail,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        if let pendingInteraction = rail.pendingInteraction,
-           let pending = coordinatorPendingAskUserState(for: pendingInteraction)
-        {
-            coordinatorCompactCheckpointCard(
-                pending: pending,
-                badgeTitle: "Coordinator question",
-                badgeSystemImage: "questionmark.bubble.fill",
-                accentColor: Color.accentColor,
-                submitLabel: "Submit",
-                showsSkipControls: true,
-                metrics: metrics,
-                onDraftChange: { questionID, draft in
-                    var drafts = coordinatorCheckpointDrafts[pending.interaction.id] ?? pending.interaction.emptyDrafts()
-                    drafts[questionID] = draft
-                    coordinatorCheckpointDrafts[pending.interaction.id] = drafts
-                },
-                onQuestionIndexChange: { index in
-                    coordinatorCheckpointQuestionIndex[pending.interaction.id] = index
-                },
-                onSubmit: {
-                    submitCoordinatorStructuredInteractionResponse(pendingInteraction)
-                },
-                onSkipAll: {
-                    submitCoordinatorStructuredInteractionSkip(pendingInteraction, pending: pending)
-                },
-                onUserActivity: {}
-            )
-            .disabled(isSubmittingCoordinatorDirective)
-            .padding(.horizontal, metrics.cardPadding)
-            .padding(.vertical, metrics.smallSpacing)
-        } else if let checkpoint = activeCoordinatorContinuationCheckpoint(rail),
-                  let pending = coordinatorOwnedCheckpointState(for: checkpoint)
-        {
-            coordinatorCompactCheckpointCard(
-                pending: pending,
-                badgeTitle: "Coordinator checkpoint",
-                badgeSystemImage: "flag.checkered",
-                accentColor: Color.accentColor,
-                submitLabel: "Continue",
-                showsSkipControls: false,
-                metrics: metrics,
-                onDraftChange: { questionID, draft in
-                    let key = checkpoint.kind.rawValue
-                    var drafts = coordinatorOwnedCheckpointDrafts[key] ?? pending.interaction.emptyDrafts()
-                    drafts[questionID] = draft
-                    coordinatorOwnedCheckpointDrafts[key] = drafts
-                },
-                onQuestionIndexChange: { index in
-                    coordinatorOwnedCheckpointQuestionIndex[checkpoint.kind.rawValue] = index
-                },
-                onSubmit: {
-                    submitCoordinatorOwnedCheckpoint(checkpoint)
-                },
-                onSkipAll: {},
-                onUserActivity: {}
-            )
-            .disabled(isSubmittingCoordinatorDirective)
-            .padding(.horizontal, metrics.cardPadding)
-            .padding(.vertical, metrics.smallSpacing)
-        } else if rail.state == .selected,
-                  rail.isComposerSendEnabled,
-                  !isSubmittingCoordinatorDirective,
-                  let event = viewModel.activePendingFollowThroughEvent(),
-                  let pending = coordinatorFollowThroughCheckpointState(for: event)
-        {
-            coordinatorCompactCheckpointCard(
-                pending: pending,
-                badgeTitle: "Step checkpoint",
-                badgeSystemImage: "pause.circle.fill",
-                accentColor: Color.accentColor,
-                submitLabel: "Continue",
-                showsSkipControls: false,
-                metrics: metrics,
-                onDraftChange: { questionID, draft in
-                    var drafts = coordinatorOwnedCheckpointDrafts[event.id] ?? pending.interaction.emptyDrafts()
-                    drafts[questionID] = draft
-                    coordinatorOwnedCheckpointDrafts[event.id] = drafts
-                },
-                onQuestionIndexChange: { index in
-                    coordinatorOwnedCheckpointQuestionIndex[event.id] = index
-                },
-                onSubmit: {
-                    submitCoordinatorFollowThroughCheckpoint(event)
-                },
-                onSkipAll: {},
-                onUserActivity: {}
-            )
-            .disabled(isSubmittingCoordinatorDirective)
-            .padding(.horizontal, metrics.cardPadding)
-            .padding(.vertical, metrics.smallSpacing)
+        switch activeCoordinatorCheckpoint(for: rail) {
+        case let .pendingInteraction(pendingInteraction):
+            if let pending = coordinatorPendingAskUserState(for: pendingInteraction) {
+                coordinatorCompactCheckpointCard(
+                    pending: pending,
+                    badgeTitle: "Coordinator question",
+                    badgeSystemImage: "questionmark.bubble.fill",
+                    accentColor: Color.accentColor,
+                    submitLabel: "Submit",
+                    showsSkipControls: true,
+                    metrics: metrics,
+                    onDraftChange: { questionID, draft in
+                        var drafts = coordinatorCheckpointDrafts[pending.interaction.id] ?? pending.interaction.emptyDrafts()
+                        drafts[questionID] = draft
+                        coordinatorCheckpointDrafts[pending.interaction.id] = drafts
+                    },
+                    onQuestionIndexChange: { index in
+                        coordinatorCheckpointQuestionIndex[pending.interaction.id] = index
+                    },
+                    onSubmit: {
+                        submitCoordinatorStructuredInteractionResponse(pendingInteraction)
+                    },
+                    onSkipAll: {
+                        submitCoordinatorStructuredInteractionSkip(pendingInteraction, pending: pending)
+                    },
+                    onUserActivity: {}
+                )
+                .disabled(isSubmittingCoordinatorDirective)
+                .padding(.horizontal, metrics.cardPadding)
+                .padding(.vertical, metrics.smallSpacing)
+            }
+        case .planApproval:
+            if let pending = coordinatorPlanApprovalCheckpointState() {
+                coordinatorCompactCheckpointCard(
+                    pending: pending,
+                    badgeTitle: "Coordinator checkpoint",
+                    badgeSystemImage: "flag.checkered",
+                    accentColor: Color.accentColor,
+                    submitLabel: "Continue",
+                    showsSkipControls: false,
+                    metrics: metrics,
+                    onDraftChange: { questionID, draft in
+                        let key = Self.planApprovalCheckpointDraftKey
+                        var drafts = coordinatorOwnedCheckpointDrafts[key] ?? pending.interaction.emptyDrafts()
+                        drafts[questionID] = draft
+                        coordinatorOwnedCheckpointDrafts[key] = drafts
+                    },
+                    onQuestionIndexChange: { index in
+                        coordinatorOwnedCheckpointQuestionIndex[Self.planApprovalCheckpointDraftKey] = index
+                    },
+                    onSubmit: {
+                        submitCoordinatorPlanApprovalCheckpoint()
+                    },
+                    onSkipAll: {},
+                    onUserActivity: {}
+                )
+                .disabled(isSubmittingCoordinatorDirective)
+                .padding(.horizontal, metrics.cardPadding)
+                .padding(.vertical, metrics.smallSpacing)
+            }
+        case let .stepBoundary(event):
+            if let pending = coordinatorFollowThroughCheckpointState(for: event) {
+                coordinatorCompactCheckpointCard(
+                    pending: pending,
+                    badgeTitle: "Step checkpoint",
+                    badgeSystemImage: "pause.circle.fill",
+                    accentColor: Color.accentColor,
+                    submitLabel: "Continue",
+                    showsSkipControls: false,
+                    metrics: metrics,
+                    onDraftChange: { questionID, draft in
+                        var drafts = coordinatorOwnedCheckpointDrafts[event.id] ?? pending.interaction.emptyDrafts()
+                        drafts[questionID] = draft
+                        coordinatorOwnedCheckpointDrafts[event.id] = drafts
+                    },
+                    onQuestionIndexChange: { index in
+                        coordinatorOwnedCheckpointQuestionIndex[event.id] = index
+                    },
+                    onSubmit: {
+                        submitCoordinatorFollowThroughCheckpoint(event)
+                    },
+                    onSkipAll: {},
+                    onUserActivity: {}
+                )
+                .disabled(isSubmittingCoordinatorDirective)
+                .padding(.horizontal, metrics.cardPadding)
+                .padding(.vertical, metrics.smallSpacing)
+            }
+        case nil:
+            EmptyView()
         }
+    }
+
+    private enum CoordinatorCheckpointPresentation {
+        case pendingInteraction(CoordinatorModePendingInteractionSummary)
+        case planApproval
+        case stepBoundary(CoordinatorFollowThroughEvent)
+    }
+
+    private func activeCoordinatorCheckpoint(
+        for rail: CoordinatorModeCoordinatorRail
+    ) -> CoordinatorCheckpointPresentation? {
+        if let pendingInteraction = rail.pendingInteraction {
+            return .pendingInteraction(pendingInteraction)
+        }
+
+        guard rail.state == .selected,
+              rail.isComposerSendEnabled,
+              !isSubmittingCoordinatorDirective
+        else { return nil }
+
+        if let missionPlan = rail.missionPlan,
+           shouldShowPlanApprovalCheckpoint(missionPlan)
+        {
+            return .planApproval
+        }
+
+        if let event = viewModel.activePendingFollowThroughEvent() {
+            return .stepBoundary(event)
+        }
+
+        return nil
+    }
+
+    private func shouldShowPlanApprovalCheckpoint(_ missionPlan: CoordinatorMissionPlan) -> Bool {
+        missionPlan.approvalState == .awaitingApproval
+            && !missionPlan.nodes.isEmpty
+            && missionPlan.status != .stopped
+            && missionPlan.status != .completed
     }
 
     private func coordinatorMissionPlanCard(
@@ -2614,9 +2652,12 @@ struct CoordinatorModeView: View {
             )
     }
 
-    private func coordinatorOwnedCheckpointState(
-        for checkpoint: CoordinatorModeConversationCheckpoint
-    ) -> AgentAskUserPendingState? {
+    private static let planApprovalCheckpointDraftKey = "plan_approval"
+    private static let planApprovalCheckpointID = UUID(
+        uuid: (0x1F, 0x7D, 0xE6, 0xE3, 0x1F, 0x56, 0x46, 0xD4, 0xA3, 0xDF, 0xBB, 0x74, 0x01, 0x95, 0xD0, 0x06)
+    )
+
+    private func coordinatorPlanApprovalCheckpointState() -> AgentAskUserPendingState? {
         var options = [
             AgentAskUserOption(
                 label: "Proceed",
@@ -2627,7 +2668,7 @@ struct CoordinatorModeView: View {
                 description: "Edit the plan or instruction before continuing."
             )
         ]
-        if offersPlanCritiqueDecision(for: checkpoint) {
+        if offersPlanApprovalPhaseDecisions() {
             options.append(AgentAskUserOption(
                 label: "Gather evidence",
                 description: "Run narrow read-only probes before approval."
@@ -2650,8 +2691,8 @@ struct CoordinatorModeView: View {
             description: "End this Mission here."
         ))
         let interaction = AgentAskUserInteraction(
-            id: checkpoint.interactionID,
-            title: checkpoint.displayName,
+            id: Self.planApprovalCheckpointID,
+            title: "Approval required",
             context: "Choose how the Coordinator should continue from this checkpoint.",
             questions: [
                 AgentAskUserQuestion(
@@ -2664,7 +2705,7 @@ struct CoordinatorModeView: View {
                 )
             ]
         )
-        let key = checkpoint.kind.rawValue
+        let key = Self.planApprovalCheckpointDraftKey
         return AgentAskUserPendingState(
             interaction: interaction,
             draftsByQuestionID: coordinatorOwnedCheckpointDrafts[key] ?? interaction.emptyDrafts(),
@@ -2711,13 +2752,13 @@ struct CoordinatorModeView: View {
         )
     }
 
-    private func submitCoordinatorOwnedCheckpoint(_ checkpoint: CoordinatorModeConversationCheckpoint) {
-        guard let pending = coordinatorOwnedCheckpointState(for: checkpoint),
+    private func submitCoordinatorPlanApprovalCheckpoint() {
+        guard let pending = coordinatorPlanApprovalCheckpointState(),
               pending.isComplete,
               let selected = pending.draftsByQuestionID["decision"]?.selectedOptionLabels.first
         else { return }
-        coordinatorOwnedCheckpointDrafts[checkpoint.kind.rawValue] = nil
-        coordinatorOwnedCheckpointQuestionIndex[checkpoint.kind.rawValue] = nil
+        coordinatorOwnedCheckpointDrafts[Self.planApprovalCheckpointDraftKey] = nil
+        coordinatorOwnedCheckpointQuestionIndex[Self.planApprovalCheckpointDraftKey] = nil
         switch selected {
         case "Proceed":
             submitCoordinatorContinuation(.proceed)
@@ -2770,34 +2811,10 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func offersPlanCritiqueDecision(for checkpoint: CoordinatorModeConversationCheckpoint) -> Bool {
-        guard checkpoint.kind == .approvalRequired,
-              let missionPlan = viewModel.snapshot.coordinatorRail.missionPlan
+    private func offersPlanApprovalPhaseDecisions() -> Bool {
+        guard let missionPlan = viewModel.snapshot.coordinatorRail.missionPlan
         else { return false }
-        return missionPlan.approvalState == .awaitingApproval && !missionPlan.nodes.isEmpty
-    }
-
-    private func activeCoordinatorContinuationCheckpoint(
-        _ rail: CoordinatorModeCoordinatorRail
-    ) -> CoordinatorModeConversationCheckpoint? {
-        guard rail.state == .selected,
-              rail.isComposerSendEnabled,
-              !isSubmittingCoordinatorDirective
-        else { return nil }
-
-        if let missionPlan = rail.missionPlan,
-           missionPlan.approvalState == .awaitingApproval,
-           !missionPlan.nodes.isEmpty,
-           missionPlan.status != .stopped,
-           missionPlan.status != .completed
-        {
-            return CoordinatorModeConversationCheckpoint(kind: .approvalRequired)
-        }
-
-        guard let entry = viewModel.railTranscriptEntries.last(where: { $0.action == nil }),
-              entry.role == .coordinator
-        else { return nil }
-        return entry.checkpoint
+        return shouldShowPlanApprovalCheckpoint(missionPlan)
     }
 
     private func coordinatorEmptyConversation(
