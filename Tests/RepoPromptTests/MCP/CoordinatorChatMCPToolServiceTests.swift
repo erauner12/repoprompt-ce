@@ -187,6 +187,149 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(events.last?.objectValue?["node_id"]?.stringValue, nodeID.uuidString)
     }
 
+    func testMissionPlanSubsetUpdatePreservesExistingDagEntries() async throws {
+        let coordinatorID = UUID()
+        let discoveryWorkstreamID = UUID()
+        let implementationWorkstreamID = UUID()
+        let reviewWorkstreamID = UUID()
+        let discoveryNodeID = UUID()
+        let implementationNodeID = UUID()
+        let settingNodeID = UUID()
+        let reviewNodeID = UUID()
+        let childID = UUID()
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { missionPlans },
+            updateMissionPlan: { sessionID, update in
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(update)
+                missionPlans[sessionID] = state.missionPlan
+            }
+        )
+
+        _ = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "objective": .string("Issue 298 provider cleanup"),
+            "status": .string("running"),
+            "approval_state": .string("approved"),
+            "workstreams": .array([
+                .object([
+                    "id": .string(discoveryWorkstreamID.uuidString),
+                    "title": .string("Discovery"),
+                    "purpose": .string("Map cleanup code paths."),
+                    "default_policy": .string("coordinator_only"),
+                    "worktree_strategy": .object(["mode": .string("noneReadOnly")])
+                ]),
+                .object([
+                    "id": .string(implementationWorkstreamID.uuidString),
+                    "title": .string("Implementation"),
+                    "purpose": .string("Make provider cleanup changes."),
+                    "default_policy": .string("fresh_worktree"),
+                    "worktree_strategy": .object(["mode": .string("createIsolated")])
+                ]),
+                .object([
+                    "id": .string(reviewWorkstreamID.uuidString),
+                    "title": .string("Review"),
+                    "purpose": .string("Fresh review the implementation."),
+                    "default_policy": .string("fresh_sibling_on_same_worktree"),
+                    "worktree_strategy": .object(["mode": .string("reuseWorkstream")])
+                ])
+            ]),
+            "nodes": .array([
+                .object([
+                    "id": .string(discoveryNodeID.uuidString),
+                    "title": .string("Map cleanup entry points"),
+                    "workstream_id": .string(discoveryWorkstreamID.uuidString),
+                    "execution_policy": .string("coordinator_only"),
+                    "status": .string("completed")
+                ]),
+                .object([
+                    "id": .string(implementationNodeID.uuidString),
+                    "title": .string("Add provider cleanup contract"),
+                    "detail": .string("Implement cleanup contract."),
+                    "workstream_id": .string(implementationWorkstreamID.uuidString),
+                    "depends_on": .array([.string(discoveryNodeID.uuidString)]),
+                    "workflow_name": .string("Orchestrate"),
+                    "execution_policy": .string("fresh_worktree"),
+                    "status": .string("pending")
+                ]),
+                .object([
+                    "id": .string(settingNodeID.uuidString),
+                    "title": .string("Add cleanup setting"),
+                    "workstream_id": .string(implementationWorkstreamID.uuidString),
+                    "depends_on": .array([.string(discoveryNodeID.uuidString)]),
+                    "workflow_name": .string("Orchestrate"),
+                    "execution_policy": .string("fresh_worktree"),
+                    "status": .string("pending")
+                ]),
+                .object([
+                    "id": .string(reviewNodeID.uuidString),
+                    "title": .string("Review cleanup safety"),
+                    "workstream_id": .string(reviewWorkstreamID.uuidString),
+                    "depends_on": .array([
+                        .string(implementationNodeID.uuidString),
+                        .string(settingNodeID.uuidString)
+                    ]),
+                    "workflow_name": .string("Review"),
+                    "execution_policy": .string("fresh_sibling_on_same_worktree"),
+                    "status": .string("pending")
+                ])
+            ])
+        ])
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "workstreams": .array([
+                .object([
+                    "id": .string(implementationWorkstreamID.uuidString),
+                    "title": .string("Implementation"),
+                    "primary_session_id": .string(childID.uuidString)
+                ])
+            ]),
+            "nodes": .array([
+                .object([
+                    "id": .string(implementationNodeID.uuidString),
+                    "title": .string("Add provider cleanup contract"),
+                    "status": .string("running"),
+                    "bound_session_id": .string(childID.uuidString)
+                ]),
+                .object([
+                    "id": .string(settingNodeID.uuidString),
+                    "title": .string("Add cleanup setting"),
+                    "status": .string("running"),
+                    "bound_session_id": .string(childID.uuidString)
+                ])
+            ])
+        ])
+
+        let plan = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue)
+        XCTAssertEqual(plan["revision"]?.intValue, 2)
+        let workstreams = try XCTUnwrap(plan["workstreams"]?.arrayValue)
+        XCTAssertEqual(workstreams.count, 3)
+        XCTAssertEqual(workstreams.map { $0.objectValue?["id"]?.stringValue }, [
+            discoveryWorkstreamID.uuidString,
+            implementationWorkstreamID.uuidString,
+            reviewWorkstreamID.uuidString
+        ])
+        XCTAssertEqual(workstreams[1].objectValue?["purpose"]?.stringValue, "Make provider cleanup changes.")
+        XCTAssertEqual(workstreams[1].objectValue?["default_policy"]?.stringValue, "fresh_worktree")
+        let nodes = try XCTUnwrap(plan["nodes"]?.arrayValue)
+        XCTAssertEqual(nodes.count, 4)
+        XCTAssertEqual(nodes.map { $0.objectValue?["id"]?.stringValue }, [
+            discoveryNodeID.uuidString,
+            implementationNodeID.uuidString,
+            settingNodeID.uuidString,
+            reviewNodeID.uuidString
+        ])
+        XCTAssertEqual(nodes[1].objectValue?["status"]?.stringValue, "running")
+        XCTAssertEqual(nodes[1].objectValue?["bound_session_id"]?.stringValue, childID.uuidString)
+        XCTAssertEqual(nodes[1].objectValue?["detail"]?.stringValue, "Implement cleanup contract.")
+        XCTAssertEqual(nodes[1].objectValue?["depends_on"]?.arrayValue?.compactMap(\.stringValue), [discoveryNodeID.uuidString])
+        XCTAssertEqual(nodes[3].objectValue?["workflow_name"]?.stringValue, "Review")
+    }
+
     func testMissionStatusReturnsCompactDagStatus() async throws {
         let coordinatorID = UUID()
         let workstreamID = UUID()

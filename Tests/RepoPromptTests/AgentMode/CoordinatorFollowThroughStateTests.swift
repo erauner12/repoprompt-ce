@@ -226,6 +226,131 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(plan.events.suffix(2).map(\.kind), [.revised, .nodeStarted])
     }
 
+    func testMissionPlanSubsetNodeAndWorkstreamUpdatePreservesOmittedPlanEntries() throws {
+        let discoveryWorkstreamID = UUID()
+        let implementationWorkstreamID = UUID()
+        let reviewWorkstreamID = UUID()
+        let discoveryNodeID = UUID()
+        let implementationNodeID = UUID()
+        let settingNodeID = UUID()
+        let reviewNodeID = UUID()
+        let childID = UUID()
+        var state = CoordinatorFollowThroughState(
+            missionPlan: CoordinatorMissionPlan(
+                revision: 3,
+                objective: "Issue 298 provider cleanup",
+                status: .running,
+                approvalState: .approved,
+                workstreams: [
+                    CoordinatorMissionWorkstreamSummary(
+                        id: discoveryWorkstreamID,
+                        title: "Discovery",
+                        purpose: "Map cleanup code paths.",
+                        defaultPolicy: .coordinatorOnly,
+                        worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                    ),
+                    CoordinatorMissionWorkstreamSummary(
+                        id: implementationWorkstreamID,
+                        title: "Implementation",
+                        purpose: "Make provider cleanup changes.",
+                        defaultPolicy: .freshWorktree,
+                        worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+                    ),
+                    CoordinatorMissionWorkstreamSummary(
+                        id: reviewWorkstreamID,
+                        title: "Review",
+                        purpose: "Fresh review the implementation.",
+                        defaultPolicy: .freshSiblingOnSameWorktree,
+                        worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .reuseWorkstream)
+                    )
+                ],
+                nodes: [
+                    CoordinatorMissionPlanNode(
+                        id: discoveryNodeID,
+                        title: "Map cleanup entry points",
+                        workstreamID: discoveryWorkstreamID,
+                        executionPolicy: .coordinatorOnly,
+                        status: .completed
+                    ),
+                    CoordinatorMissionPlanNode(
+                        id: implementationNodeID,
+                        title: "Add provider cleanup contract",
+                        workstreamID: implementationWorkstreamID,
+                        dependsOn: [discoveryNodeID],
+                        executionPolicy: .freshWorktree,
+                        status: .pending
+                    ),
+                    CoordinatorMissionPlanNode(
+                        id: settingNodeID,
+                        title: "Add cleanup setting",
+                        workstreamID: implementationWorkstreamID,
+                        dependsOn: [discoveryNodeID],
+                        executionPolicy: .freshWorktree,
+                        status: .pending
+                    ),
+                    CoordinatorMissionPlanNode(
+                        id: reviewNodeID,
+                        title: "Review cleanup safety",
+                        workstreamID: reviewWorkstreamID,
+                        dependsOn: [implementationNodeID, settingNodeID],
+                        executionPolicy: .freshSiblingOnSameWorktree,
+                        status: .pending
+                    )
+                ],
+                updatedAt: Date(timeIntervalSince1970: 10)
+            )
+        )
+
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: implementationWorkstreamID,
+                    title: "Implementation",
+                    purpose: "Implementation is active in an isolated worktree.",
+                    defaultPolicy: .freshWorktree,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                        mode: .createIsolated,
+                        worktreeID: "wt_issue_298",
+                        reason: "Keep the Coordinator demo checkout clean."
+                    ),
+                    primarySessionID: childID,
+                    relatedSessionIDs: [childID]
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: implementationNodeID,
+                    title: "Add provider cleanup contract",
+                    workstreamID: implementationWorkstreamID,
+                    dependsOn: [discoveryNodeID],
+                    executionPolicy: .freshWorktree,
+                    status: .running,
+                    boundSessionID: childID
+                ),
+                CoordinatorMissionPlanNode(
+                    id: settingNodeID,
+                    title: "Add cleanup setting",
+                    workstreamID: implementationWorkstreamID,
+                    dependsOn: [discoveryNodeID],
+                    executionPolicy: .freshWorktree,
+                    status: .running,
+                    boundSessionID: childID
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 20)
+        ))
+
+        let plan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(plan.revision, 4)
+        XCTAssertEqual(plan.workstreams.map(\.id), [discoveryWorkstreamID, implementationWorkstreamID, reviewWorkstreamID])
+        XCTAssertEqual(plan.workstreams[1].purpose, "Implementation is active in an isolated worktree.")
+        XCTAssertEqual(plan.workstreams[1].primarySessionID, childID)
+        XCTAssertEqual(plan.nodes.map(\.id), [discoveryNodeID, implementationNodeID, settingNodeID, reviewNodeID])
+        XCTAssertEqual(plan.nodes.map(\.status), [.completed, .running, .running, .pending])
+        XCTAssertEqual(plan.nodes[1].boundSessionID, childID)
+        XCTAssertEqual(plan.nodes[3].dependsOn, [implementationNodeID, settingNodeID])
+    }
+
     func testCompletesSatisfiedCoordinatorOnlyRunningMissionPlanNodes() throws {
         let workstreamID = UUID()
         let planID = UUID()

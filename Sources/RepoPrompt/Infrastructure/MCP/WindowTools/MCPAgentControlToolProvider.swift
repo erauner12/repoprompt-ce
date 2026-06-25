@@ -237,10 +237,10 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             - `select`: Select an existing Coordinator parent by `coordinator_session_id`.
             - `new`: Mirror New Coordinator. The rail switches to a blank parent context; the next submit creates the parent runtime.
             - `submit`: Send a directive to the selected parent, to `coordinator_session_id`, or to a fresh parent when `new_parent=true`.
-            - `mission_plan`: Create or update the selected Coordinator Mission's DAG-lite plan. Use this before `agent_run.start` delegation.
+            - `mission_plan`: Create or update the selected Coordinator Mission's DAG-lite plan. Use this before `agent_run.start` delegation. Workstream and node arrays are upserts: include only changed entries for existing IDs/titles; omitted entries are preserved.
             - `mission_status`: Read back the selected Coordinator Mission's current plan and node status.
 
-            Coordinator-role agents should use `mission_plan` to record concrete user-specific deliverables before delegating child Agent Mode sessions. Workflows such as Deep Plan, Orchestrate, and Review belong in node workflow metadata, not as generic node titles.
+            Coordinator-role agents should use `mission_plan` to record concrete user-specific deliverables before delegating child Agent Mode sessions. Workflows such as Investigate, Deep Plan, Orchestrate, and Review belong in node workflow metadata, not as generic node titles.
             """,
             annotations: .repoPromptLocalEphemeralState,
             inputSchema: .object(
@@ -263,7 +263,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                     "status": .string(description: "[mission_plan] Mission status.", enum: ["draft", "approved", "running", "blocked", "completed", "stopped"]),
                     "approval_state": .string(description: "[mission_plan] Human approval state for the plan.", enum: ["not_required", "awaiting_approval", "approved", "revision_requested"]),
                     "workstreams": .array(
-                        description: "[mission_plan] Workstream objects. Each requires title, purpose, default_policy, and worktree_strategy { mode, worktree_id?, reason? }.",
+                        description: "[mission_plan] Workstream upsert objects. Existing workstreams may be patched by id or title. New workstreams require title, purpose, default_policy, and worktree_strategy { mode, worktree_id?, reason? }.",
                         items: .object(
                             description: "Mission workstream.",
                             properties: [
@@ -284,11 +284,11 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                                 "primary_session_id": .string(description: "Optional primary child session UUID."),
                                 "related_session_ids": .array(description: "Optional related child session UUIDs.", items: .string())
                             ],
-                            required: ["title", "purpose", "default_policy", "worktree_strategy"]
+                            required: ["title"]
                         )
                     ),
                     "nodes": .array(
-                        description: "[mission_plan] DAG-lite nodes. Titles should be concrete deliverables, not generic phase names. Each requires title, workstream_id or workstream_title, execution_policy, and status.",
+                        description: "[mission_plan] DAG-lite node upserts. Titles should be concrete deliverables, not generic phase names. Existing nodes may be patched by id or title. New nodes require title, workstream_id or workstream_title, and execution_policy; status defaults to pending.",
                         items: .object(
                             description: "Mission Plan node.",
                             properties: [
@@ -306,7 +306,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                                 "bound_session_id": .string(description: "Optional delegated session UUID."),
                                 "bound_interaction_id": .string(description: "Optional interaction UUID.")
                             ],
-                            required: ["title", "execution_policy", "status"]
+                            required: ["title"]
                         )
                     ),
                     "events": .array(

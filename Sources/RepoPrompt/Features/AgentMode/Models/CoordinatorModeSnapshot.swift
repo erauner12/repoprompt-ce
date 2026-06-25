@@ -269,10 +269,11 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
         1. Record a Mission Plan with `coordinator_chat op=mission_plan` before delegation. Use one user-level workstream unless the objective clearly needs more. Include `default_policy` and explicit `worktree_strategy` for each workstream.
         2. Decompose the user's objective into concrete DAG-lite nodes. Node titles must name user-specific deliverables or decisions, not generic phases such as "Plan", "Orchestrate", or "Review" unless this is only a smoke test.
         3. Attach workflow choices as node metadata with `workflow_name` / `workflow_id` or nested `workflow`. Include `completion_evidence` for each nontrivial node.
-        4. Deeply inspect the existing code and produce a short plan before delegating.
-        5. Delegate mutable work only into isolated worktrees.
-        6. Keep workstreams focused on user-level outcomes, not raw session mechanics.
-        7. Review delegated results, ask me before irreversible actions, then coordinate any needed fixes.
+        4. If repo evidence is needed, make discovery a visible plan node with workflow_name="Investigate" or workflow_name="Deep Plan"; ask before launching that read-only child.
+        5. After discovery, revise the same Mission Plan with grounded details before mutable implementation.
+        6. Delegate mutable work only into isolated worktrees.
+        7. Keep workstreams focused on user-level outcomes, not raw session mechanics.
+        8. Review delegated results, ask me before irreversible actions, then coordinate any needed fixes.
 
         User objective:
         $MISSION
@@ -293,14 +294,16 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
         1. Record the plan with `coordinator_chat op=mission_plan` before starting children. Include `default_policy` and `worktree_strategy` for each workstream.
         2. Decompose the user's objective into concrete deliverable nodes. Use workflow metadata for "Deep Plan", "Orchestrate", and "Review"; do not make those words the whole node title unless this is only a smoke test.
         3. Include `completion_evidence` on each nontrivial node, and make review nodes depend on the implementation or verification nodes they review.
-        4. Use workstreams such as "Discovery", "Implementation", and "Quality" only when each maps to distinct user-level work.
-        5. Update each workstream with `primary_session_id`, `related_session_ids`, and `worktree_strategy.worktree_id` as children are launched or bound.
+        4. Treat the first plan as a visible draft when repo evidence is still missing. Add a discovery/grounding node with workflow_name="Investigate" or workflow_name="Deep Plan" before implementation nodes.
+        5. Use workstreams such as "Discovery", "Implementation", and "Quality" only when each maps to distinct user-level work.
+        6. Update each workstream with `primary_session_id`, `related_session_ids`, and `worktree_strategy.worktree_id` as children are launched or bound. When updating one workstream or node, omit unrelated entries; the app preserves them.
 
-        Stage 1 - Deep Plan:
-        1. Start exactly one delegated child with workflow_name="Deep Plan" for the user's objective.
-        2. If the Deep Plan child asks the user a question, needs approval, or reaches any Needs you state, stop and report that the child needs the user. Do not answer for the user.
-        3. Wait for the Deep Plan child to finish after the user resolves any checkpoint.
-        4. Summarize the resulting plan and ask me whether to proceed, revise, or stop before mutable implementation.
+        Stage 1 - Grounding:
+        1. Ask me to approve the visible draft plan before starting the discovery child.
+        2. Start exactly one delegated child with workflow_name="Investigate" or workflow_name="Deep Plan" for the discovery node.
+        3. If the discovery child asks the user a question, needs approval, or reaches any Needs you state, stop and report that the child needs the user. Do not answer for the user.
+        4. Wait for the discovery child to finish after the user resolves any checkpoint.
+        5. Revise the Mission Plan with evidence-grounded implementation details and ask me whether to proceed, revise, or stop before mutable implementation.
 
         Stage 2 - Orchestrate:
         1. Only after I proceed, start exactly one delegated child with workflow_name="Orchestrate".

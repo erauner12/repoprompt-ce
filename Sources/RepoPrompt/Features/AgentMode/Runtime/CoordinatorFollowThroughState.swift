@@ -67,15 +67,16 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             (missionPlan?.workstreams ?? []).map { ($0.title.normalizedMissionPlanTitleKey, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        let workstreams = (update.workstreams ?? missionPlan?.workstreams ?? []).map { incoming -> CoordinatorMissionWorkstreamSummary in
-            if let existing = existingByID[incoming.id] {
-                return incoming.reusingStableID(existing.id)
-            }
-            if let existing = existingByTitle[incoming.title.normalizedMissionPlanTitleKey] {
-                return incoming.reusingStableID(existing.id)
-            }
-            return incoming
-        }
+        let workstreams = mergeWorkstreams(
+            existing: missionPlan?.workstreams ?? [],
+            incoming: update.workstreams,
+            existingByID: existingByID,
+            existingByTitle: existingByTitle
+        )
+        let nodes = mergeNodes(
+            existing: missionPlan?.nodes ?? [],
+            incoming: update.nodes
+        )
         missionPlan = CoordinatorMissionPlan(
             id: missionPlan?.id ?? UUID(),
             revision: (missionPlan?.revision ?? 0) + 1,
@@ -85,7 +86,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             approvalState: update.approvalState ?? missionPlan?.approvalState ?? .notRequired,
             template: missionTemplate,
             workstreams: workstreams,
-            nodes: update.nodes ?? missionPlan?.nodes ?? [],
+            nodes: nodes,
             events: (missionPlan?.events ?? []) + [
                 CoordinatorMissionPlanEvent(
                     kind: missionPlan == nil ? .created : .revised,
@@ -95,6 +96,63 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             ] + update.events,
             updatedAt: update.updatedAt
         )
+    }
+
+    private func mergeWorkstreams(
+        existing: [CoordinatorMissionWorkstreamSummary],
+        incoming: [CoordinatorMissionWorkstreamSummary]?,
+        existingByID: [UUID: CoordinatorMissionWorkstreamSummary],
+        existingByTitle: [String: CoordinatorMissionWorkstreamSummary]
+    ) -> [CoordinatorMissionWorkstreamSummary] {
+        guard let incoming else { return existing }
+        guard !existing.isEmpty else { return incoming }
+
+        let normalizedIncoming = incoming.map { workstream -> CoordinatorMissionWorkstreamSummary in
+            if let existing = existingByID[workstream.id] {
+                return workstream.reusingStableID(existing.id)
+            }
+            if let existing = existingByTitle[workstream.title.normalizedMissionPlanTitleKey] {
+                return workstream.reusingStableID(existing.id)
+            }
+            return workstream
+        }
+
+        var updatesByID = Dictionary(uniqueKeysWithValues: normalizedIncoming.map { ($0.id, $0) })
+        var merged = existing.map { workstream -> CoordinatorMissionWorkstreamSummary in
+            updatesByID.removeValue(forKey: workstream.id) ?? workstream
+        }
+        merged.append(contentsOf: normalizedIncoming.filter { updatesByID[$0.id] != nil })
+        return merged
+    }
+
+    private func mergeNodes(
+        existing: [CoordinatorMissionPlanNode],
+        incoming: [CoordinatorMissionPlanNode]?
+    ) -> [CoordinatorMissionPlanNode] {
+        guard let incoming else { return existing }
+        guard !existing.isEmpty else { return incoming }
+
+        let existingByID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        let existingByTitle = Dictionary(
+            existing.map { ($0.title.normalizedMissionPlanTitleKey, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let normalizedIncoming = incoming.map { node -> CoordinatorMissionPlanNode in
+            if existingByID[node.id] != nil {
+                return node
+            }
+            if let existingNode = existingByTitle[node.title.normalizedMissionPlanTitleKey] {
+                return node.reusingStableID(existingNode.id)
+            }
+            return node
+        }
+
+        var updatesByID = Dictionary(uniqueKeysWithValues: normalizedIncoming.map { ($0.id, $0) })
+        var merged = existing.map { node -> CoordinatorMissionPlanNode in
+            updatesByID.removeValue(forKey: node.id) ?? node
+        }
+        merged.append(contentsOf: normalizedIncoming.filter { updatesByID[$0.id] != nil })
+        return merged
     }
 
     @discardableResult
@@ -424,6 +482,23 @@ struct CoordinatorMissionPlanNode: Codable, Equatable, Identifiable {
         self.status = status
         self.boundSessionID = boundSessionID
         self.boundInteractionID = boundInteractionID
+    }
+
+    fileprivate func reusingStableID(_ stableID: UUID) -> CoordinatorMissionPlanNode {
+        CoordinatorMissionPlanNode(
+            id: stableID,
+            title: title,
+            detail: detail,
+            workflowHint: workflowHint,
+            completionEvidence: completionEvidence,
+            workstreamID: workstreamID,
+            dependsOn: dependsOn,
+            role: role,
+            executionPolicy: executionPolicy,
+            status: status,
+            boundSessionID: boundSessionID,
+            boundInteractionID: boundInteractionID
+        )
     }
 }
 

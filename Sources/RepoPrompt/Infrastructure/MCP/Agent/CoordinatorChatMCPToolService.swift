@@ -200,32 +200,88 @@ struct CoordinatorChatMCPToolService {
                 throw MCPError.invalidParams("Each workstream must be an object.")
             }
             let title = try AgentMCPToolHelpers.requireNonEmptyString(object["title"], name: "workstreams[].title")
-            let purpose = try AgentMCPToolHelpers.requireNonEmptyString(object["purpose"], name: "workstreams[].purpose")
             let id = try optionalUUID(object["id"], name: "workstreams[].id")
                 ?? existingByTitle[title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()]
                 ?? UUID()
-            let policyRaw = try AgentMCPToolHelpers.requireNonEmptyString(
-                object["default_policy"] ?? object["defaultPolicy"],
-                name: "workstreams[].default_policy"
-            )
-            guard let policy = CoordinatorMissionExecutionPolicy(rawValue: policyRaw) else {
-                throw MCPError.invalidParams("workstreams[].default_policy must be one of: \(CoordinatorMissionExecutionPolicy.allCases.map(\.rawValue).joined(separator: ", ")).")
-            }
-            let worktreeStrategy = try parseWorktreeStrategy(
-                object["worktree_strategy"] ?? object["worktreeStrategy"] ?? object["worktree_plan"] ?? object["worktreePlan"],
-                name: "workstreams[].worktree_strategy"
-            )
+            let existing = existingPlan?.workstreams.first(where: { $0.id == id })
+            let purpose = try parseMissionWorkstreamPurpose(object, existing: existing)
+            let policy = try parseMissionWorkstreamPolicy(object, existing: existing)
+            let worktreeStrategy = try parseMissionWorkstreamWorktreeStrategy(object, existing: existing)
             return try CoordinatorMissionWorkstreamSummary(
                 id: id,
                 title: title,
                 purpose: purpose,
-                role: normalizedString(object["role"]),
+                role: object.keys.contains("role") ? normalizedString(object["role"]) : existing?.role,
                 defaultPolicy: policy,
                 worktreeStrategy: worktreeStrategy,
-                primarySessionID: optionalUUID(object["primary_session_id"] ?? object["primarySessionID"], name: "workstreams[].primary_session_id"),
-                relatedSessionIDs: optionalUUIDArray(object["related_session_ids"] ?? object["relatedSessionIDs"], name: "workstreams[].related_session_ids") ?? []
+                primarySessionID: parseMissionWorkstreamPrimarySessionID(object, existing: existing),
+                relatedSessionIDs: parseMissionWorkstreamRelatedSessionIDs(object, existing: existing)
             )
         }
+    }
+
+    private func parseMissionWorkstreamPurpose(
+        _ object: [String: Value],
+        existing: CoordinatorMissionWorkstreamSummary?
+    ) throws -> String {
+        if let purpose = normalizedString(object["purpose"]) {
+            return purpose
+        }
+        if let purpose = existing?.purpose {
+            return purpose
+        }
+        throw MCPError.invalidParams("workstreams[].purpose is required for new workstreams.")
+    }
+
+    private func parseMissionWorkstreamPolicy(
+        _ object: [String: Value],
+        existing: CoordinatorMissionWorkstreamSummary?
+    ) throws -> CoordinatorMissionExecutionPolicy {
+        guard let rawValue = object["default_policy"] ?? object["defaultPolicy"] else {
+            if let policy = existing?.defaultPolicy {
+                return policy
+            }
+            throw MCPError.invalidParams("workstreams[].default_policy is required for new workstreams.")
+        }
+        let policyRaw = try AgentMCPToolHelpers.requireNonEmptyString(rawValue, name: "workstreams[].default_policy")
+        guard let policy = CoordinatorMissionExecutionPolicy(rawValue: policyRaw) else {
+            throw MCPError.invalidParams("workstreams[].default_policy must be one of: \(CoordinatorMissionExecutionPolicy.allCases.map(\.rawValue).joined(separator: ", ")).")
+        }
+        return policy
+    }
+
+    private func parseMissionWorkstreamWorktreeStrategy(
+        _ object: [String: Value],
+        existing: CoordinatorMissionWorkstreamSummary?
+    ) throws -> CoordinatorMissionWorktreeStrategy {
+        let value = object["worktree_strategy"] ?? object["worktreeStrategy"] ?? object["worktree_plan"] ?? object["worktreePlan"]
+        guard let value else {
+            if let strategy = existing?.worktreeStrategy {
+                return strategy
+            }
+            throw MCPError.invalidParams("workstreams[].worktree_strategy is required for new workstreams.")
+        }
+        return try parseWorktreeStrategy(value, name: "workstreams[].worktree_strategy")
+    }
+
+    private func parseMissionWorkstreamPrimarySessionID(
+        _ object: [String: Value],
+        existing: CoordinatorMissionWorkstreamSummary?
+    ) throws -> UUID? {
+        guard object.keys.contains("primary_session_id") || object.keys.contains("primarySessionID") else {
+            return existing?.primarySessionID
+        }
+        return try optionalUUID(object["primary_session_id"] ?? object["primarySessionID"], name: "workstreams[].primary_session_id")
+    }
+
+    private func parseMissionWorkstreamRelatedSessionIDs(
+        _ object: [String: Value],
+        existing: CoordinatorMissionWorkstreamSummary?
+    ) throws -> [UUID] {
+        guard object.keys.contains("related_session_ids") || object.keys.contains("relatedSessionIDs") else {
+            return existing?.relatedSessionIDs ?? []
+        }
+        return try optionalUUIDArray(object["related_session_ids"] ?? object["relatedSessionIDs"], name: "workstreams[].related_session_ids") ?? []
     }
 
     private func parseWorktreeStrategy(_ value: Value?, name: String) throws -> CoordinatorMissionWorktreeStrategy {
@@ -269,30 +325,75 @@ struct CoordinatorChatMCPToolService {
             let id = explicitID
                 ?? existingNode?.id
                 ?? UUID()
-            let workstreamID = try parseMissionPlanNodeWorkstreamID(object, workstreams: workstreams)
-            let policyRaw = try AgentMCPToolHelpers.requireNonEmptyString(
-                object["execution_policy"] ?? object["executionPolicy"],
-                name: "nodes[].execution_policy"
+            let workstreamID = try parseMissionPlanNodeWorkstreamID(
+                object,
+                workstreams: workstreams,
+                existing: existingNode
             )
-            guard let policy = CoordinatorMissionExecutionPolicy(rawValue: policyRaw) else {
-                throw MCPError.invalidParams("nodes[].execution_policy must be one of: \(CoordinatorMissionExecutionPolicy.allCases.map(\.rawValue).joined(separator: ", ")).")
-            }
-            let status = try parseOptionalMissionPlanNodeStatus(object["status"]) ?? .pending
+            let policy = try parseMissionPlanNodePolicy(object, existing: existingNode)
+            let status = try parseOptionalMissionPlanNodeStatus(object["status"]) ?? existingNode?.status ?? .pending
             return try CoordinatorMissionPlanNode(
                 id: id,
                 title: title,
-                detail: normalizedString(object["detail"]),
+                detail: object.keys.contains("detail") ? normalizedString(object["detail"]) : existingNode?.detail,
                 workflowHint: parseMissionPlanNodeWorkflowHint(object, existing: existingNode?.workflowHint),
                 completionEvidence: parseMissionPlanNodeCompletionEvidence(object, existing: existingNode?.completionEvidence),
                 workstreamID: workstreamID,
-                dependsOn: optionalUUIDArray(object["depends_on"] ?? object["dependsOn"], name: "nodes[].depends_on") ?? [],
-                role: normalizedString(object["role"]),
+                dependsOn: parseMissionPlanNodeDependencies(object, existing: existingNode),
+                role: object.keys.contains("role") ? normalizedString(object["role"]) : existingNode?.role,
                 executionPolicy: policy,
                 status: status,
-                boundSessionID: optionalUUID(object["bound_session_id"] ?? object["boundSessionID"], name: "nodes[].bound_session_id"),
-                boundInteractionID: optionalUUID(object["bound_interaction_id"] ?? object["boundInteractionID"], name: "nodes[].bound_interaction_id")
+                boundSessionID: parseMissionPlanNodeBoundSessionID(object, existing: existingNode),
+                boundInteractionID: parseMissionPlanNodeBoundInteractionID(object, existing: existingNode)
             )
         }
+    }
+
+    private func parseMissionPlanNodePolicy(
+        _ object: [String: Value],
+        existing: CoordinatorMissionPlanNode?
+    ) throws -> CoordinatorMissionExecutionPolicy {
+        guard let rawValue = object["execution_policy"] ?? object["executionPolicy"] else {
+            if let policy = existing?.executionPolicy {
+                return policy
+            }
+            throw MCPError.invalidParams("nodes[].execution_policy is required for new nodes.")
+        }
+        let policyRaw = try AgentMCPToolHelpers.requireNonEmptyString(rawValue, name: "nodes[].execution_policy")
+        guard let policy = CoordinatorMissionExecutionPolicy(rawValue: policyRaw) else {
+            throw MCPError.invalidParams("nodes[].execution_policy must be one of: \(CoordinatorMissionExecutionPolicy.allCases.map(\.rawValue).joined(separator: ", ")).")
+        }
+        return policy
+    }
+
+    private func parseMissionPlanNodeDependencies(
+        _ object: [String: Value],
+        existing: CoordinatorMissionPlanNode?
+    ) throws -> [UUID] {
+        guard object.keys.contains("depends_on") || object.keys.contains("dependsOn") else {
+            return existing?.dependsOn ?? []
+        }
+        return try optionalUUIDArray(object["depends_on"] ?? object["dependsOn"], name: "nodes[].depends_on") ?? []
+    }
+
+    private func parseMissionPlanNodeBoundSessionID(
+        _ object: [String: Value],
+        existing: CoordinatorMissionPlanNode?
+    ) throws -> UUID? {
+        guard object.keys.contains("bound_session_id") || object.keys.contains("boundSessionID") else {
+            return existing?.boundSessionID
+        }
+        return try optionalUUID(object["bound_session_id"] ?? object["boundSessionID"], name: "nodes[].bound_session_id")
+    }
+
+    private func parseMissionPlanNodeBoundInteractionID(
+        _ object: [String: Value],
+        existing: CoordinatorMissionPlanNode?
+    ) throws -> UUID? {
+        guard object.keys.contains("bound_interaction_id") || object.keys.contains("boundInteractionID") else {
+            return existing?.boundInteractionID
+        }
+        return try optionalUUID(object["bound_interaction_id"] ?? object["boundInteractionID"], name: "nodes[].bound_interaction_id")
     }
 
     private func parseMissionPlanNodeWorkflowHint(
@@ -345,7 +446,8 @@ struct CoordinatorChatMCPToolService {
 
     private func parseMissionPlanNodeWorkstreamID(
         _ object: [String: Value],
-        workstreams: [CoordinatorMissionWorkstreamSummary]
+        workstreams: [CoordinatorMissionWorkstreamSummary],
+        existing: CoordinatorMissionPlanNode?
     ) throws -> UUID {
         if let workstreamID = try optionalUUID(object["workstream_id"] ?? object["workstreamID"], name: "nodes[].workstream_id") {
             return workstreamID
@@ -356,7 +458,10 @@ struct CoordinatorChatMCPToolService {
             }
             throw MCPError.invalidParams("nodes[].workstream_title must match a declared workstream title.")
         }
-        throw MCPError.invalidParams("nodes[].workstream_id or nodes[].workstream_title is required.")
+        if let workstreamID = existing?.workstreamID {
+            return workstreamID
+        }
+        throw MCPError.invalidParams("nodes[].workstream_id or nodes[].workstream_title is required for new nodes.")
     }
 
     private func parseMissionPlanEvents(
