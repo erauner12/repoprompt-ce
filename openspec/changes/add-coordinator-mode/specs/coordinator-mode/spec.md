@@ -199,8 +199,8 @@ The system SHALL present v1 as a read-only status board by default, with a list 
 - **THEN** the Coordinator view SHALL show a board view by default
 - **AND** status groups SHALL render as board columns containing session cards
 - **AND** the board SHALL derive columns and cards from the same `CoordinatorModeSnapshot` grouping and row projection used by other Coordinator view regions
-- **AND** the selected-Mission board SHALL keep `Working`, `Review`, and `Done` visible as stable default lanes even when empty
-- **AND** the selected-Mission board SHOULD omit empty `Needs you` and `Blocked` lanes until those statuses contain rows
+- **AND** the selected-Mission board SHALL keep `Needs you`, `Working`, and `Done` visible as stable default lanes even when empty
+- **AND** the selected-Mission board SHOULD omit empty `Blocked` and `Review` lanes until those statuses contain rows
 - **AND** the selected-Mission board SHOULD size the stable default lanes so all three fit without horizontal scrolling at ordinary Coordinator panel widths
 - **AND** Kanban cards SHOULD avoid redundant status or persistence chips when the same information is already communicated by the lane, inspector, or list view
 - **AND** the All Agents Board SHALL continue to show every status lane for the fleet overview.
@@ -669,7 +669,7 @@ The system SHALL group Coordinator view rows by testable, structured status rule
 - **THEN** the Coordinator view SHALL show those board columns by default when the board view is active.
 
 #### Scenario: Lower-priority board columns are non-empty
-- **WHEN** `Done` or `Idle` groups contain cards
+- **WHEN** `Review` or `Done` groups contain cards
 - **THEN** the Coordinator view SHALL keep those columns available in board view
 - **AND** it MAY de-emphasize, horizontally scroll, or collapse lower-priority columns when space is constrained
 - **AND** it SHALL keep counts visible when a column is collapsed.

@@ -1599,7 +1599,7 @@ struct CoordinatorModeView: View {
         case .allAgents:
             return sections
         case .coordinatorFleet:
-            let defaultGroups: Set<CoordinatorModeStatusGroup> = [.working, .review, .done]
+            let defaultGroups: Set<CoordinatorModeStatusGroup> = [.needsYou, .working, .done]
             return sections.filter { section in
                 !section.rows.isEmpty || defaultGroups.contains(section.group)
             }
