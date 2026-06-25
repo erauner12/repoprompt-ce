@@ -477,6 +477,45 @@ final class WorkspaceRootNamespaceManifestTests: XCTestCase {
         XCTAssertEqual(try readAll(derived).count, 12)
     }
 
+    func testGenericSpillDuplicateResolutionIsInvariantAcrossBatchBoundaries() async throws {
+        let storeRoot = try temporaryRoots.makeRoot(suiteName: "WorkspaceRootNamespaceManifest-duplicates")
+        let store = try SpillBackedSortedArtifactStore(
+            directoryURL: storeRoot.appendingPathComponent("spill", isDirectory: true),
+            defaultDirectoryStem: "unused"
+        )
+        let format = NamespaceManifestMaliciousSpillFormat(
+            recordBound: 16,
+            coalesceDuplicates: true
+        )
+
+        let sameBatchWriter = try store.makeWriter(
+            format: format,
+            header: Data([0x48]),
+            resourcePolicy: maliciousSpillPolicy(bufferBytes: 64, batchRecords: 4)
+        )
+        try await sameBatchWriter.append(contentsOf: [
+            Data([0x62]), Data([0x61]), Data([0x61])
+        ])
+        let sameBatch = try await sameBatchWriter.finish()
+
+        let crossRunWriter = try store.makeWriter(
+            format: format,
+            header: Data([0x48]),
+            resourcePolicy: maliciousSpillPolicy(bufferBytes: 64, batchRecords: 1)
+        )
+        try await crossRunWriter.append(contentsOf: [
+            Data([0x62]), Data([0x61]), Data([0x61])
+        ])
+        let crossRun = try await crossRunWriter.finish()
+
+        XCTAssertEqual(sameBatch.statistics.recordCount, 2)
+        XCTAssertEqual(crossRun.statistics.recordCount, 2)
+        XCTAssertEqual(
+            try Data(contentsOf: sameBatch.fileURL),
+            try Data(contentsOf: crossRun.fileURL)
+        )
+    }
+
     func testGenericSpillRejectsEncodedRecordsBeyondFormatAndByteBudgets() async throws {
         let storeRoot = try temporaryRoots.makeRoot(suiteName: "WorkspaceRootNamespaceManifest-malicious-record")
         let store = try SpillBackedSortedArtifactStore(
@@ -801,11 +840,12 @@ final class WorkspaceRootNamespaceManifestTests: XCTestCase {
     }
 
     private func maliciousSpillPolicy(
-        bufferBytes: Int
+        bufferBytes: Int,
+        batchRecords: Int = 1
     ) -> SpillBackedSortedArtifactResourcePolicy {
         SpillBackedSortedArtifactResourcePolicy(
             maximumBufferedRecordBytes: bufferBytes,
-            maximumRecordsPerBatch: 1,
+            maximumRecordsPerBatch: batchRecords,
             maximumRecordByteCount: 64,
             maximumOpenRuns: 2,
             minimumFreeDiskBytes: 0
@@ -920,19 +960,22 @@ private struct NamespaceManifestMaliciousSpillFormat: SpillBackedSortedArtifactF
     let maximumEncodedHeaderByteCount: Int
     let maximumEncodedFooterByteCount: Int
     let footerFrame: Data
+    let coalesceDuplicates: Bool
 
     init(
         recordBound: Int,
         finalRecordBound: Int? = nil,
         headerBound: Int = 16,
         footerBound: Int = 16,
-        footerFrame: Data = Data([0x46])
+        footerFrame: Data = Data([0x46]),
+        coalesceDuplicates: Bool = false
     ) {
         self.recordBound = recordBound
         self.finalRecordBound = finalRecordBound ?? recordBound
         maximumEncodedHeaderByteCount = headerBound
         maximumEncodedFooterByteCount = footerBound
         self.footerFrame = footerFrame
+        self.coalesceDuplicates = coalesceDuplicates
     }
 
     func error(_ failure: SpillBackedSortedArtifactFailure) -> any Error {
@@ -960,6 +1003,13 @@ private struct NamespaceManifestMaliciousSpillFormat: SpillBackedSortedArtifactF
     func ordering(_ lhs: Data, _ rhs: Data) -> SpillBackedSortedArtifactOrdering {
         if lhs == rhs { return .same }
         return lhs.lexicographicallyPrecedes(rhs) ? .ascending : .descending
+    }
+
+    func duplicateResolution(
+        _: Data,
+        _: Data
+    ) throws -> SpillBackedSortedArtifactDuplicateResolution {
+        coalesceDuplicates ? .coalesce : .reject
     }
 
     func encodeFinalHeader(_ header: Data) throws -> Data {

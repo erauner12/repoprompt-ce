@@ -26,7 +26,7 @@ actor GitService {
         }
     }
 
-    private enum GitProcessCaptureError: Error {
+    enum GitProcessCaptureError: Error, Equatable {
         case stdoutByteLimitExceeded
         case stderrByteLimitExceeded
         case timedOut
@@ -255,6 +255,7 @@ actor GitService {
     #if DEBUG
         private nonisolated let receiptCreationFailureHook = ReceiptCreationFailureHook()
         private var worktreeMutationLockAcquiredHandlerForTesting: (@Sendable (UUID?) async -> Void)?
+        private var targetEvidenceDidSealBeforeCommandHandlerForTesting: (@Sendable () async throws -> Void)?
     #endif
 
     init(
@@ -286,6 +287,12 @@ actor GitService {
             _ handler: (@Sendable (UUID?) async -> Void)?
         ) {
             worktreeMutationLockAcquiredHandlerForTesting = handler
+        }
+
+        func setTargetEvidenceDidSealBeforeCommandHandlerForTesting(
+            _ handler: (@Sendable () async throws -> Void)?
+        ) {
+            targetEvidenceDidSealBeforeCommandHandlerForTesting = handler
         }
 
         func waitForWorktreeMutationWaiterForTesting(at repoURL: URL) async {
@@ -3428,6 +3435,710 @@ actor GitService {
         )
     }
 
+    // MARK: - Spill-backed target-seed Git evidence
+
+    func writeTreeDeltaEvidence(
+        baseTreeOID: GitObjectID,
+        in layout: GitRepositoryLayout,
+        prefix: GitRepositoryRelativeRootPrefix,
+        authorityFence: GitWorkspacePendingInitializationAuthorityFence,
+        attemptID: UUID,
+        suppliedCreationCutProvenanceBytes: Data?,
+        store: GitTargetEvidenceManifestStore,
+        evidenceResourcePolicy: GitTargetEvidenceResourcePolicy = .default,
+        spoolResourcePolicy: GitRawOutputSpoolResourcePolicy = .default,
+        pathPolicy: GitTargetEvidencePathPolicy = .init(),
+        priority: GitProcessAdmissionPriority = .rootBootstrap
+    ) async throws -> GitTargetTreeDeltaEvidenceLease {
+        do {
+            let targetTreeOID = authorityFence.snapshot.treeOID
+            guard baseTreeOID.objectFormat == targetTreeOID.objectFormat else {
+                throw GitTargetEvidenceCollectionError.malformedGitOutput(
+                    "tree object formats differ"
+                )
+            }
+            var arguments = Self.targetEvidenceGitArguments([
+                "diff-tree", "-r", "--raw", "-z", "--no-commit-id",
+                "--find-renames", "--find-copies", "--no-ext-diff",
+                baseTreeOID.lowercaseHex, targetTreeOID.lowercaseHex
+            ])
+            appendLiteralPrefix(prefix, to: &arguments)
+            let sealed = try await runSealedTargetEvidenceCommand(
+                arguments,
+                layout: layout,
+                prefix: prefix,
+                authorityFence: authorityFence,
+                resourcePolicy: spoolResourcePolicy,
+                priority: priority,
+                family: .treeDelta
+            )
+            let identity = try Self.targetEvidenceIdentity(
+                prefix: prefix,
+                authorityFence: authorityFence,
+                attemptID: attemptID,
+                sealedAuthority: sealed.authority,
+                commandOutputDigest: sealed.commandOutputDigest,
+                arguments: arguments,
+                commandFormat: "git-diff-tree-raw-z-v2",
+                baseObjectID: baseTreeOID,
+                suppliedCreationCutProvenanceBytes: suppliedCreationCutProvenanceBytes,
+                sparseCheckoutEnabled: nil
+            )
+            let writer = try store.makeTreeDeltaWriter(
+                identity: identity,
+                resourcePolicy: evidenceResourcePolicy
+            )
+            do {
+                var parser = GitTargetTreeDeltaStreamingParser(
+                    objectFormat: sealed.authority.objectFormat,
+                    rootPrefix: prefix,
+                    pathPolicy: pathPolicy
+                ) { record in
+                    try await writer.append(record)
+                }
+                try await Self.consume(sealed.rawOutput, with: &parser)
+                return try await writer.finish()
+            } catch {
+                await writer.cancel()
+                throw error
+            }
+        } catch {
+            throw Self.targetEvidenceCollectionError(error)
+        }
+    }
+
+    func writeIndexEvidence(
+        in layout: GitRepositoryLayout,
+        prefix: GitRepositoryRelativeRootPrefix,
+        authorityFence: GitWorkspacePendingInitializationAuthorityFence,
+        attemptID: UUID,
+        suppliedCreationCutProvenanceBytes: Data?,
+        store: GitTargetEvidenceManifestStore,
+        evidenceResourcePolicy: GitTargetEvidenceResourcePolicy = .default,
+        spoolResourcePolicy: GitRawOutputSpoolResourcePolicy = .default,
+        pathPolicy: GitTargetEvidencePathPolicy = .init(),
+        priority: GitProcessAdmissionPriority = .rootBootstrap
+    ) async throws -> GitTargetIndexEvidenceLease {
+        do {
+            var arguments = Self.targetEvidenceGitArguments([
+                "ls-files", "--stage", "-v", "-z"
+            ])
+            appendLiteralPrefix(prefix, to: &arguments)
+            let sealed = try await runSealedTargetEvidenceCommand(
+                arguments,
+                layout: layout,
+                prefix: prefix,
+                authorityFence: authorityFence,
+                resourcePolicy: spoolResourcePolicy,
+                priority: priority,
+                family: .indexManifest
+            )
+            let identity = try Self.targetEvidenceIdentity(
+                prefix: prefix,
+                authorityFence: authorityFence,
+                attemptID: attemptID,
+                sealedAuthority: sealed.authority,
+                commandOutputDigest: sealed.commandOutputDigest,
+                arguments: arguments,
+                commandFormat: "git-ls-files-stage-v-z-v2",
+                baseObjectID: nil,
+                suppliedCreationCutProvenanceBytes: suppliedCreationCutProvenanceBytes,
+                sparseCheckoutEnabled: sealed.authority.sparseCheckoutEnabled
+            )
+            let writer = try store.makeIndexWriter(
+                identity: identity,
+                resourcePolicy: evidenceResourcePolicy
+            )
+            do {
+                var parser = GitTargetIndexStreamingParser(
+                    objectFormat: sealed.authority.objectFormat,
+                    rootPrefix: prefix,
+                    pathPolicy: pathPolicy
+                ) { record in
+                    try await writer.append(record)
+                }
+                try await Self.consume(sealed.rawOutput, with: &parser)
+                return try await writer.finish()
+            } catch {
+                await writer.cancel()
+                throw error
+            }
+        } catch {
+            throw Self.targetEvidenceCollectionError(error)
+        }
+    }
+
+    func writeStatusEvidence(
+        in layout: GitRepositoryLayout,
+        prefix: GitRepositoryRelativeRootPrefix,
+        authorityFence: GitWorkspacePendingInitializationAuthorityFence,
+        attemptID: UUID,
+        suppliedCreationCutProvenanceBytes: Data?,
+        store: GitTargetEvidenceManifestStore,
+        includeUntracked: Bool = true,
+        includeIgnored: Bool = true,
+        evidenceResourcePolicy: GitTargetEvidenceResourcePolicy = .default,
+        spoolResourcePolicy: GitRawOutputSpoolResourcePolicy = .default,
+        pathPolicy: GitTargetEvidencePathPolicy = .init(),
+        priority: GitProcessAdmissionPriority = .rootBootstrap
+    ) async throws -> GitTargetStatusEvidenceLease {
+        do {
+            var arguments = Self.targetEvidenceGitArguments([
+                "status", "--porcelain=v2", "-z",
+                includeUntracked ? "--untracked-files=all" : "--untracked-files=no"
+            ])
+            if includeIgnored { arguments.append("--ignored=matching") }
+            appendLiteralPrefix(prefix, to: &arguments)
+            let sealed = try await runSealedTargetEvidenceCommand(
+                arguments,
+                layout: layout,
+                prefix: prefix,
+                authorityFence: authorityFence,
+                resourcePolicy: spoolResourcePolicy,
+                priority: priority,
+                family: .status
+            )
+            let identity = try Self.targetEvidenceIdentity(
+                prefix: prefix,
+                authorityFence: authorityFence,
+                attemptID: attemptID,
+                sealedAuthority: sealed.authority,
+                commandOutputDigest: sealed.commandOutputDigest,
+                arguments: arguments,
+                commandFormat: "git-status-porcelain-v2-z-v2",
+                baseObjectID: nil,
+                suppliedCreationCutProvenanceBytes: suppliedCreationCutProvenanceBytes,
+                sparseCheckoutEnabled: nil
+            )
+            let writer = try store.makeStatusWriter(
+                identity: identity,
+                resourcePolicy: evidenceResourcePolicy
+            )
+            do {
+                var parser = GitTargetStatusPorcelainV2StreamingParser(
+                    rootPrefix: prefix,
+                    pathPolicy: pathPolicy
+                ) { record in
+                    try await writer.append(record)
+                }
+                try await Self.consume(sealed.rawOutput, with: &parser)
+                return try await writer.finish()
+            } catch {
+                await writer.cancel()
+                throw error
+            }
+        } catch {
+            throw Self.targetEvidenceCollectionError(error)
+        }
+    }
+
+    private struct GitTargetEvidenceSealedAuthority: Equatable {
+        let physicalWorktree: GitTargetEvidenceFileSystemIdentity
+        let repositoryCommonDirectory: GitTargetEvidenceFileSystemIdentity
+        let repositoryGitDirectory: GitTargetEvidenceFileSystemIdentity
+        let objectFormat: GitObjectFormat
+        let headCommitOID: GitObjectID
+        let headTreeOID: GitObjectID
+        let indexGeneration: String
+        let sparseCheckoutEnabled: Bool
+        let environmentIdentity: Data
+    }
+
+    private struct GitTargetEvidenceSealedCommand {
+        let rawOutput: GitRawOutputSpoolLease
+        let authority: GitTargetEvidenceSealedAuthority
+        let commandOutputDigest: Data
+    }
+
+    private func runSealedTargetEvidenceCommand(
+        _ arguments: [String],
+        layout: GitRepositoryLayout,
+        prefix: GitRepositoryRelativeRootPrefix,
+        authorityFence: GitWorkspacePendingInitializationAuthorityFence,
+        resourcePolicy: GitRawOutputSpoolResourcePolicy,
+        priority: GitProcessAdmissionPriority,
+        family: GitProcessCommandFamily
+    ) async throws -> GitTargetEvidenceSealedCommand {
+        try await validateTargetEvidenceFence(
+            authorityFence,
+            layout: layout,
+            prefix: prefix
+        )
+        let environment = await Self.capabilityBoundObjectReadEnvironment(
+            baseEnvironment: processEnvironment(),
+            layout: layout
+        )
+        let environmentIdentity = Self.targetEvidenceEnvironmentIdentity(environment)
+        let before = try await targetEvidenceAuthorityCapture(
+            layout: layout,
+            environment: environment,
+            environmentIdentity: environmentIdentity,
+            priority: priority,
+            timeout: resourcePolicy.activityTimeout
+        )
+        guard before.objectFormat == authorityFence.snapshot.objectFormat,
+              before.headCommitOID == authorityFence.snapshot.headCommitOID,
+              before.headTreeOID == authorityFence.snapshot.treeOID,
+              before.indexGeneration == authorityFence.snapshot.indexGeneration
+        else { throw GitTargetEvidenceCollectionError.authorityChanged }
+
+        #if DEBUG
+            if let targetEvidenceDidSealBeforeCommandHandlerForTesting {
+                try await targetEvidenceDidSealBeforeCommandHandlerForTesting()
+            }
+        #endif
+
+        let rawOutput = try await runSpoolingAuthorityGit(
+            arguments,
+            layout: layout,
+            environment: environment,
+            resourcePolicy: resourcePolicy,
+            priority: priority,
+            family: family
+        )
+        let commandOutputDigest = try rawOutput.sha256Digest()
+        let after = try await targetEvidenceAuthorityCapture(
+            layout: layout,
+            environment: environment,
+            environmentIdentity: environmentIdentity,
+            priority: priority,
+            timeout: resourcePolicy.activityTimeout
+        )
+        guard before == after else {
+            throw GitTargetEvidenceCollectionError.authorityChanged
+        }
+        try await validateTargetEvidenceFence(
+            authorityFence,
+            layout: layout,
+            prefix: prefix
+        )
+        return GitTargetEvidenceSealedCommand(
+            rawOutput: rawOutput,
+            authority: before,
+            commandOutputDigest: commandOutputDigest
+        )
+    }
+
+    private func validateTargetEvidenceFence(
+        _ fence: GitWorkspacePendingInitializationAuthorityFence,
+        layout: GitRepositoryLayout,
+        prefix: GitRepositoryRelativeRootPrefix
+    ) async throws {
+        guard fence.targetLayout == layout,
+              fence.repositoryRelativeRootPrefix == prefix,
+              fence.snapshot.repositoryRelativeRootPrefix == prefix,
+              fence.repositoryKey == GitWorkspaceAuthorityRepositoryKey(layout: layout),
+              await workspaceStateAuthority.pendingInitializationAuthorityFenceIsCurrent(fence)
+        else { throw GitTargetEvidenceCollectionError.authorityChanged }
+    }
+
+    private func targetEvidenceAuthorityCapture(
+        layout: GitRepositoryLayout,
+        environment: [String: String],
+        environmentIdentity: Data,
+        priority: GitProcessAdmissionPriority,
+        timeout: Duration
+    ) async throws -> GitTargetEvidenceSealedAuthority {
+        let physicalWorktree = try GitTargetEvidenceFileSystemIdentity(url: layout.workTreeRoot)
+        let repositoryCommonDirectory = try GitTargetEvidenceFileSystemIdentity(url: layout.commonDir)
+        let repositoryGitDirectory = try GitTargetEvidenceFileSystemIdentity(url: layout.gitDir)
+        let objectFormatData = try await runTargetEvidenceMetadataGit(
+            ["rev-parse", "--show-object-format"],
+            layout: layout,
+            environment: environment,
+            priority: priority,
+            timeout: timeout,
+            family: .treeResolution
+        )
+        guard let objectFormatValue = String(data: objectFormatData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        else {
+            throw GitTargetEvidenceCollectionError.malformedGitOutput(
+                "object format is not UTF-8"
+            )
+        }
+        let objectFormat: GitObjectFormat
+        do {
+            objectFormat = try GitObjectFormat(gitValue: objectFormatValue)
+        } catch {
+            throw GitTargetEvidenceCollectionError.malformedGitOutput(
+                "unsupported object format"
+            )
+        }
+        let headCommitData = try await runTargetEvidenceMetadataGit(
+            ["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
+            layout: layout,
+            environment: environment,
+            priority: priority,
+            timeout: timeout,
+            family: .treeResolution
+        )
+        guard let headCommitValue = String(data: headCommitData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        else {
+            throw GitTargetEvidenceCollectionError.malformedGitOutput(
+                "HEAD commit object ID is not UTF-8"
+            )
+        }
+        let headCommitOID = try GitObjectID(
+            objectFormat: objectFormat,
+            lowercaseHex: headCommitValue
+        )
+        let treeData = try await runTargetEvidenceMetadataGit(
+            ["rev-parse", "--verify", "--end-of-options", "HEAD^{tree}"],
+            layout: layout,
+            environment: environment,
+            priority: priority,
+            timeout: timeout,
+            family: .treeResolution
+        )
+        guard let treeValue = String(data: treeData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        else {
+            throw GitTargetEvidenceCollectionError.malformedGitOutput(
+                "HEAD tree object ID is not UTF-8"
+            )
+        }
+        let headTreeOID = try GitObjectID(
+            objectFormat: objectFormat,
+            lowercaseHex: treeValue
+        )
+        let sparseData = try await runTargetEvidenceMetadataGit(
+            ["config", "--bool", "-z", "--get", "core.sparseCheckout"],
+            layout: layout,
+            environment: environment,
+            priority: priority,
+            timeout: timeout,
+            family: .authorityMetadata,
+            allowedExitCodes: [0, 1]
+        )
+        let sparseCheckoutEnabled: Bool
+        if sparseData.isEmpty || sparseData == Data("false\0".utf8) {
+            sparseCheckoutEnabled = false
+        } else if sparseData == Data("true\0".utf8) {
+            sparseCheckoutEnabled = true
+        } else {
+            throw GitTargetEvidenceCollectionError.malformedGitOutput(
+                "invalid core.sparseCheckout boolean"
+            )
+        }
+        let finalPhysicalWorktree = try GitTargetEvidenceFileSystemIdentity(url: layout.workTreeRoot)
+        let finalRepositoryCommonDirectory = try GitTargetEvidenceFileSystemIdentity(url: layout.commonDir)
+        let finalRepositoryGitDirectory = try GitTargetEvidenceFileSystemIdentity(url: layout.gitDir)
+        guard physicalWorktree == finalPhysicalWorktree,
+              repositoryCommonDirectory == finalRepositoryCommonDirectory,
+              repositoryGitDirectory == finalRepositoryGitDirectory
+        else { throw GitTargetEvidenceCollectionError.authorityChanged }
+        return try GitTargetEvidenceSealedAuthority(
+            physicalWorktree: physicalWorktree,
+            repositoryCommonDirectory: repositoryCommonDirectory,
+            repositoryGitDirectory: repositoryGitDirectory,
+            objectFormat: objectFormat,
+            headCommitOID: headCommitOID,
+            headTreeOID: headTreeOID,
+            indexGeneration: Self.targetEvidenceIndexGeneration(layout: layout),
+            sparseCheckoutEnabled: sparseCheckoutEnabled,
+            environmentIdentity: environmentIdentity
+        )
+    }
+
+    private func runTargetEvidenceMetadataGit(
+        _ arguments: [String],
+        layout: GitRepositoryLayout,
+        environment: [String: String],
+        priority: GitProcessAdmissionPriority,
+        timeout: Duration,
+        family: GitProcessCommandFamily,
+        allowedExitCodes: Set<Int32> = [0]
+    ) async throws -> Data {
+        let admissionDeadline = priority == .rootBootstrap || priority == .userInitiatedAuthority
+            ? Self.gitAdmissionDeadline(after: timeout)
+            : nil
+        let admissionLease = try await processAdmissionController.acquire(
+            repositoryKey: layout.commonDir.standardizedFileURL.path,
+            priority: priority,
+            deadline: admissionDeadline
+        )
+        do {
+            try Task.checkCancellation()
+            let (stdout, stderr, exitCode) = try await runAdmittedGitData(
+                Self.targetEvidenceGitArguments(arguments),
+                at: layout.workTreeRoot,
+                environment: environment,
+                stdin: nil,
+                diagnosticRepositoryPath: layout.workTreeRoot.standardizedFileURL.path,
+                processQueueWaitMicroseconds: admissionLease.queueWaitMicroseconds,
+                stdoutByteLimit: 4096,
+                stderrByteLimit: 64 * 1024,
+                admissionPriority: priority,
+                commandFamily: family,
+                commandTimeout: timeout
+            )
+            await processAdmissionController.release(admissionLease)
+            guard allowedExitCodes.contains(exitCode) else {
+                throw GitTargetEvidenceCollectionError.gitFailure(
+                    exitCode: exitCode,
+                    stderr: stderr
+                )
+            }
+            return stdout
+        } catch {
+            await processAdmissionController.release(admissionLease)
+            throw error
+        }
+    }
+
+    private nonisolated static func targetEvidenceIdentity(
+        prefix: GitRepositoryRelativeRootPrefix,
+        authorityFence: GitWorkspacePendingInitializationAuthorityFence,
+        attemptID: UUID,
+        sealedAuthority: GitTargetEvidenceSealedAuthority,
+        commandOutputDigest: Data,
+        arguments: [String],
+        commandFormat: String,
+        baseObjectID: GitObjectID?,
+        suppliedCreationCutProvenanceBytes: Data?,
+        sparseCheckoutEnabled: Bool?
+    ) throws -> GitTargetEvidenceArtifactIdentity {
+        let snapshotDigest = targetEvidenceAuthoritySnapshotDigest(
+            fence: authorityFence,
+            sealedAuthority: sealedAuthority
+        )
+        return try GitTargetEvidenceArtifactIdentity(
+            physicalWorktree: sealedAuthority.physicalWorktree,
+            repositoryCommonDirectory: sealedAuthority.repositoryCommonDirectory,
+            repositoryGitDirectory: sealedAuthority.repositoryGitDirectory,
+            authority: GitTargetEvidenceAuthorityIdentity(
+                authorityGeneration: authorityFence.lease.authorityGeneration,
+                invalidationGeneration: authorityFence.lease.invalidationGeneration,
+                acceptedMetadataWatermark: authorityFence.acceptedMetadataWatermark,
+                attemptID: attemptID,
+                snapshotDigestBytes: snapshotDigest
+            ),
+            commandArguments: arguments.map { Data($0.utf8) },
+            commandFormatBytes: Data(commandFormat.utf8),
+            environmentIdentityBytes: sealedAuthority.environmentIdentity,
+            commandOutputDigestBytes: commandOutputDigest,
+            repositoryRelativeRootPrefixBytes: Data(prefix.value.utf8),
+            objectFormatBytes: Data(sealedAuthority.objectFormat.rawValue.utf8),
+            baseObjectIDBytes: baseObjectID.map { Data($0.lowercaseHex.utf8) },
+            targetObjectIDBytes: Data(sealedAuthority.headTreeOID.lowercaseHex.utf8),
+            suppliedCreationCutProvenanceBytes: suppliedCreationCutProvenanceBytes,
+            sparseCheckoutEnabled: sparseCheckoutEnabled
+        )
+    }
+
+    private nonisolated static func targetEvidenceAuthoritySnapshotDigest(
+        fence: GitWorkspacePendingInitializationAuthorityFence,
+        sealedAuthority: GitTargetEvidenceSealedAuthority
+    ) -> Data {
+        let snapshot = fence.snapshot
+        var canonical = Data("git-target-evidence-sealed-authority-v3".utf8)
+        for value in [
+            snapshot.repositoryNamespace.rawValue,
+            snapshot.objectFormat.rawValue,
+            snapshot.headCommitOID.lowercaseHex,
+            snapshot.treeOID.lowercaseHex,
+            sealedAuthority.objectFormat.rawValue,
+            sealedAuthority.headCommitOID.lowercaseHex,
+            sealedAuthority.headTreeOID.lowercaseHex,
+            snapshot.repositoryRelativeRootPrefix.value,
+            snapshot.repositoryBindingEpoch,
+            snapshot.worktreeBindingEpoch,
+            snapshot.layoutGeneration,
+            snapshot.indexGeneration,
+            snapshot.checkoutConfigurationGeneration,
+            snapshot.metadataGeneration,
+            snapshot.policyIdentity.mandatoryIgnorePolicyIdentity,
+            snapshot.policyIdentity.committedIgnoreControlDigest,
+            snapshot.policyIdentity.configuredIgnoreAuthorityDigest,
+            snapshot.policyIdentity.attributePolicyDigest,
+            snapshot.policyIdentity.sparsePolicyDigest,
+            sealedAuthority.indexGeneration,
+            sealedAuthority.sparseCheckoutEnabled ? "true" : "false"
+        ] {
+            appendLengthPrefixed(Data(value.utf8), to: &canonical)
+        }
+        appendUInt64(fence.lease.authorityGeneration, to: &canonical)
+        appendUInt64(fence.lease.invalidationGeneration, to: &canonical)
+        appendUInt64(fence.acceptedMetadataWatermark, to: &canonical)
+        appendLengthPrefixed(sealedAuthority.environmentIdentity, to: &canonical)
+        return Data(SHA256.hash(data: canonical))
+    }
+
+    /// Global options intentionally fixed for every Git subprocess that
+    /// contributes target evidence. Local repository config remains available
+    /// for data semantics, but it cannot register executable status hooks or
+    /// mutable acceleration caches.
+    private nonisolated static func targetEvidenceGitArguments(
+        _ arguments: [String]
+    ) -> [String] {
+        [
+            "-c", "core.fsmonitor=false",
+            "-c", "core.hooksPath=/dev/null",
+            "-c", "core.untrackedCache=false"
+        ] + arguments
+    }
+
+    private nonisolated static func targetEvidenceEnvironmentIdentity(
+        _ environment: [String: String]
+    ) -> Data {
+        var canonical = Data("git-target-evidence-environment-v1".utf8)
+        let boundKeys = environment.keys.filter {
+            $0.hasPrefix("GIT_") || $0 == "LC_ALL" || $0 == "LANG"
+        }.sorted { Data($0.utf8).lexicographicallyPrecedes(Data($1.utf8)) }
+        for key in boundKeys {
+            appendLengthPrefixed(Data(key.utf8), to: &canonical)
+            appendLengthPrefixed(Data((environment[key] ?? "").utf8), to: &canonical)
+        }
+        return Data(SHA256.hash(data: canonical))
+    }
+
+    private nonisolated static func targetEvidenceIndexGeneration(
+        layout: GitRepositoryLayout
+    ) throws -> String {
+        let url = layout.gitDir.appendingPathComponent("index")
+        var digest = SHA256()
+        func updateLengthPrefixed(_ value: Data) {
+            var length = UInt64(clamping: value.count).bigEndian
+            withUnsafeBytes(of: &length) { digest.update(bufferPointer: $0) }
+            digest.update(data: value)
+        }
+        updateLengthPrefixed(Data("index".utf8))
+
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        if descriptor < 0 {
+            guard errno == ENOENT else {
+                throw GitTargetEvidenceCollectionError.io(
+                    operation: "index-open",
+                    code: errno
+                )
+            }
+            updateLengthPrefixed(Data("missing".utf8))
+            return Data(digest.finalize()).map { String(format: "%02x", $0) }.joined()
+        }
+        defer { _ = Darwin.close(descriptor) }
+        var initial = stat()
+        guard fstat(descriptor, &initial) == 0 else {
+            throw GitTargetEvidenceCollectionError.io(
+                operation: "index-fstat",
+                code: errno
+            )
+        }
+        guard initial.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), initial.st_size >= 0 else {
+            throw GitTargetEvidenceCollectionError.authorityChanged
+        }
+        updateLengthPrefixed(Data("regular".utf8))
+        var length = UInt64(initial.st_size).bigEndian
+        withUnsafeBytes(of: &length) { digest.update(bufferPointer: $0) }
+
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        while true {
+            try Task.checkCancellation()
+            let amount = buffer.withUnsafeMutableBytes {
+                Darwin.read(descriptor, $0.baseAddress, $0.count)
+            }
+            if amount > 0 {
+                digest.update(data: Data(buffer.prefix(amount)))
+            } else if amount == 0 {
+                break
+            } else if errno != EINTR {
+                throw GitTargetEvidenceCollectionError.io(
+                    operation: "index-read",
+                    code: errno
+                )
+            }
+        }
+        var final = stat()
+        guard fstat(descriptor, &final) == 0 else {
+            throw GitTargetEvidenceCollectionError.io(
+                operation: "index-refstat",
+                code: errno
+            )
+        }
+        var pathStatus = stat()
+        guard lstat(url.path, &pathStatus) == 0,
+              initial.st_dev == final.st_dev,
+              initial.st_ino == final.st_ino,
+              initial.st_size == final.st_size,
+              initial.st_mtimespec.tv_sec == final.st_mtimespec.tv_sec,
+              initial.st_mtimespec.tv_nsec == final.st_mtimespec.tv_nsec,
+              initial.st_ctimespec.tv_sec == final.st_ctimespec.tv_sec,
+              initial.st_ctimespec.tv_nsec == final.st_ctimespec.tv_nsec,
+              initial.st_dev == pathStatus.st_dev,
+              initial.st_ino == pathStatus.st_ino
+        else { throw GitTargetEvidenceCollectionError.authorityChanged }
+        return Data(digest.finalize()).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private nonisolated static func consume(
+        _ lease: GitRawOutputSpoolLease,
+        with parser: inout GitTargetTreeDeltaStreamingParser
+    ) async throws {
+        let reader = try lease.makeReader()
+        while let chunk = try reader.nextChunk() {
+            try await parser.consume(chunk)
+        }
+        try await parser.finish()
+    }
+
+    private nonisolated static func consume(
+        _ lease: GitRawOutputSpoolLease,
+        with parser: inout GitTargetIndexStreamingParser
+    ) async throws {
+        let reader = try lease.makeReader()
+        while let chunk = try reader.nextChunk() {
+            try await parser.consume(chunk)
+        }
+        try await parser.finish()
+    }
+
+    private nonisolated static func consume(
+        _ lease: GitRawOutputSpoolLease,
+        with parser: inout GitTargetStatusPorcelainV2StreamingParser
+    ) async throws {
+        let reader = try lease.makeReader()
+        while let chunk = try reader.nextChunk() {
+            try await parser.consume(chunk)
+        }
+        try await parser.finish()
+    }
+
+    nonisolated static func targetEvidenceCollectionError(_ error: any Error) -> any Error {
+        if error is CancellationError { return CancellationError() }
+        if let error = error as? GitTargetEvidenceCollectionError { return error }
+        if let error = error as? GitTargetEvidenceManifestError {
+            return GitTargetEvidenceCollectionError.artifact(error)
+        }
+        if let error = error as? GitRawOutputSpoolError {
+            return GitTargetEvidenceCollectionError.spool(error)
+        }
+        if let error = error as? GitProcessAdmissionError {
+            return GitTargetEvidenceCollectionError.admission(error)
+        }
+        if let error = error as? GitWorktreeInitializationError {
+            return GitTargetEvidenceCollectionError.gitInitialization(error)
+        }
+        if let error = error as? GitProcessCaptureError {
+            return switch error {
+            case .timedOut:
+                GitTargetEvidenceCollectionError.activityTimeout
+            case .stdoutByteLimitExceeded:
+                GitTargetEvidenceCollectionError.processCapture(.stdoutLimitExceeded)
+            case .stderrByteLimitExceeded:
+                GitTargetEvidenceCollectionError.processCapture(.stderrLimitExceeded)
+            }
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSPOSIXErrorDomain || nsError.domain == NSCocoaErrorDomain {
+            return GitTargetEvidenceCollectionError.processLaunch(
+                domain: nsError.domain,
+                code: nsError.code
+            )
+        }
+        return error
+    }
+
     func authorityMetadata(
         in layout: GitRepositoryLayout,
         prefix: GitRepositoryRelativeRootPrefix,
@@ -4763,6 +5474,307 @@ actor GitService {
         }
     }
 
+    /// Runs one exact-worktree Git authority command with stdout written
+    /// directly to a secure raw spool. Unlike `runGitData`, this path never
+    /// concatenates stdout chunks into `Data`; the pipe callback synchronously
+    /// applies disk backpressure and refreshes an activity (not total-runtime)
+    /// timeout after every successfully persisted chunk.
+    private func runSpoolingAuthorityGit(
+        _ args: [String],
+        layout: GitRepositoryLayout,
+        environment: [String: String],
+        resourcePolicy: GitRawOutputSpoolResourcePolicy,
+        priority: GitProcessAdmissionPriority,
+        family: GitProcessCommandFamily,
+        allowedExitCodes: Set<Int32> = [0]
+    ) async throws -> GitRawOutputSpoolLease {
+        let admissionDeadline = priority == .rootBootstrap || priority == .userInitiatedAuthority
+            ? Self.gitAdmissionDeadline(after: resourcePolicy.activityTimeout)
+            : nil
+        let admissionLease = try await processAdmissionController.acquire(
+            repositoryKey: layout.commonDir.standardizedFileURL.path,
+            priority: priority,
+            deadline: admissionDeadline
+        )
+        do {
+            try Task.checkCancellation()
+            let (spool, stderr, exitCode, terminationReason) = try await runAdmittedGitSpooling(
+                args,
+                at: layout.workTreeRoot,
+                environment: environment,
+                diagnosticRepositoryPath: layout.workTreeRoot.standardizedFileURL.path,
+                processQueueWaitMicroseconds: admissionLease.queueWaitMicroseconds,
+                resourcePolicy: resourcePolicy,
+                admissionPriority: priority,
+                commandFamily: family
+            )
+            await processAdmissionController.release(admissionLease)
+            if terminationReason == .uncaughtSignal {
+                throw GitTargetEvidenceCollectionError.gitSignal(
+                    signal: exitCode,
+                    stderr: stderr
+                )
+            }
+            guard allowedExitCodes.contains(exitCode) else {
+                throw GitTargetEvidenceCollectionError.gitFailure(
+                    exitCode: exitCode,
+                    stderr: stderr
+                )
+            }
+            return spool
+        } catch {
+            await processAdmissionController.release(admissionLease)
+            throw error
+        }
+    }
+
+    private func runAdmittedGitSpooling(
+        _ args: [String],
+        at repoURL: URL,
+        environment: [String: String],
+        diagnosticRepositoryPath: String,
+        processQueueWaitMicroseconds: Int,
+        resourcePolicy: GitRawOutputSpoolResourcePolicy,
+        admissionPriority: GitProcessAdmissionPriority,
+        commandFamily: GitProcessCommandFamily
+    ) async throws -> (GitRawOutputSpoolLease, Data, Int32, Process.TerminationReason) {
+        #if DEBUG
+            let benchmarkMetricTag = WorktreeStartupInstrumentation.currentBenchmarkMetricTag
+        #endif
+        let process = Process()
+        let timeoutController = GitProcessActivityTimeoutController()
+        let lifecycleController = GitProcessLifecycleController()
+        let commandRecorder = MCPToolWorkCountDiagnostics.gitCommandRecorder()
+        let spool = try GitRawOutputSpool(resourcePolicy: resourcePolicy)
+        process.executableURL = gitExecutableURL
+        process.arguments = args
+        process.currentDirectoryURL = repoURL
+        process.environment = environment
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        let activityHandler: @Sendable () -> Void = {
+            let identifier = process.processIdentifier
+            guard identifier > 0, process.isRunning else { return }
+            timeoutController.schedule(
+                process: process,
+                processIdentifier: identifier,
+                timeout: resourcePolicy.activityTimeout,
+                terminationGrace: self.processTerminationGrace
+            )
+        }
+        let outDrain = try GitProcessPipeSpoolDrain.make(
+            readingFrom: outPipe.fileHandleForReading,
+            spool: spool,
+            activityHandler: activityHandler
+        )
+        let (errStream, errDrain) = try GitProcessPipeDrain.makeStream(
+            readingFrom: errPipe.fileHandleForReading,
+            byteLimit: 64 * 1024
+        )
+        let errCollector = Task(priority: .userInitiated) { () -> Data in
+            var buffer = Data()
+            for await chunk in errStream where !chunk.isEmpty {
+                buffer.append(chunk)
+            }
+            return buffer
+        }
+
+        let processMetrics = GitProcessMetricsBox()
+        let commandStartedAt = DispatchTime.now().uptimeNanoseconds
+        let result = try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<
+                    (GitRawOutputSpoolLease, Data, Int32, Process.TerminationReason),
+                    any Error
+                >) in
+                outPipe.fileHandleForReading.readabilityHandler = { handle in
+                    if outDrain.consumeAvailableData() {
+                        handle.readabilityHandler = nil
+                    }
+                    if outDrain.terminalError != nil {
+                        lifecycleController.requestCancellation(
+                            process: process,
+                            terminationGrace: self.processTerminationGrace
+                        )
+                    }
+                }
+                errPipe.fileHandleForReading.readabilityHandler = { handle in
+                    if errDrain.consumeAvailableData() {
+                        handle.readabilityHandler = nil
+                    } else {
+                        activityHandler()
+                    }
+                    if errDrain.didExceedByteLimit {
+                        lifecycleController.requestCancellation(
+                            process: process,
+                            terminationGrace: self.processTerminationGrace
+                        )
+                    }
+                }
+
+                process.terminationHandler = { terminatedProcess in
+                    lifecycleController.didTerminate()
+                    timeoutController.cancel()
+                    outPipe.fileHandleForReading.readabilityHandler = nil
+                    errPipe.fileHandleForReading.readabilityHandler = nil
+                    outDrain.finishReading()
+                    errDrain.finishReading()
+
+                    Task {
+                        let stderrData = await errCollector.value
+                        let stdoutResult: Result<GitRawOutputSpoolLease, any Error>
+                        do {
+                            stdoutResult = try .success(spool.finish())
+                        } catch {
+                            stdoutResult = .failure(error)
+                        }
+                        let stdoutByteCount: UInt64 = switch stdoutResult {
+                        case let .success(lease): lease.byteCount
+                        case .failure: 0
+                        }
+                        let outputByteCount = Int(
+                            clamping: stdoutByteCount + UInt64(stderrData.count)
+                        )
+                        commandRecorder(
+                            diagnosticRepositoryPath,
+                            args,
+                            processQueueWaitMicroseconds,
+                            processMetrics.spawnMicroseconds,
+                            outputByteCount
+                        )
+                        let commandFinishedAt = DispatchTime.now().uptimeNanoseconds
+                        let durationMicroseconds = Int(
+                            clamping: commandFinishedAt >= commandStartedAt
+                                ? (commandFinishedAt - commandStartedAt) / 1000
+                                : 0
+                        )
+                        let wasCancelled = lifecycleController.cancellationErrorIfRequested() != nil
+                        WorktreeStartupInstrumentation.recordGitCommand(
+                            family: commandFamily,
+                            priority: admissionPriority,
+                            queueWaitMicroseconds: processQueueWaitMicroseconds,
+                            durationMicroseconds: durationMicroseconds,
+                            outputByteCount: outputByteCount,
+                            cancelled: wasCancelled
+                        )
+                        #if DEBUG
+                            WorktreeStartupInstrumentation.recordBenchmarkGitCommand(
+                                tag: benchmarkMetricTag,
+                                family: commandFamily,
+                                priority: admissionPriority,
+                                queueWaitMicroseconds: processQueueWaitMicroseconds,
+                                durationMicroseconds: durationMicroseconds,
+                                outputByteCount: outputByteCount,
+                                cancelled: wasCancelled
+                            )
+                        #endif
+
+                        if let error = outDrain.terminalError {
+                            continuation.resume(throwing: error)
+                        } else if case let .failure(error) = stdoutResult {
+                            continuation.resume(throwing: error)
+                        } else if errDrain.didExceedByteLimit {
+                            continuation.resume(throwing: GitProcessCaptureError.stderrByteLimitExceeded)
+                        } else if timeoutController.didTimeOut {
+                            continuation.resume(throwing: GitProcessCaptureError.timedOut)
+                        } else if case let .success(stdoutLease) = stdoutResult {
+                            continuation.resume(returning: (
+                                stdoutLease,
+                                stderrData,
+                                terminatedProcess.terminationStatus,
+                                terminatedProcess.terminationReason
+                            ))
+                        } else {
+                            preconditionFailure("raw spool result was not exhaustive")
+                        }
+                    }
+                }
+
+                do {
+                    try lifecycleController.checkCancellationBeforeSpawn()
+                    let spawnStart = DispatchTime.now().uptimeNanoseconds
+                    try process.run()
+                    let identifier = process.processIdentifier
+                    let spawnState = lifecycleController.didSpawn(
+                        process: process,
+                        processIdentifier: identifier,
+                        terminationGrace: processTerminationGrace
+                    )
+                    if spawnState == .running {
+                        timeoutController.schedule(
+                            process: process,
+                            processIdentifier: identifier,
+                            timeout: resourcePolicy.activityTimeout,
+                            terminationGrace: processTerminationGrace
+                        )
+                        if !lifecycleController.shouldKeepNormalTimeout() {
+                            timeoutController.cancel()
+                        }
+                    }
+                    let spawnEnd = DispatchTime.now().uptimeNanoseconds
+                    processMetrics.spawnMicroseconds = Int(
+                        clamping: spawnEnd >= spawnStart ? (spawnEnd - spawnStart) / 1000 : 0
+                    )
+                } catch {
+                    timeoutController.cancel()
+                    outPipe.fileHandleForReading.readabilityHandler = nil
+                    errPipe.fileHandleForReading.readabilityHandler = nil
+                    outDrain.cancel()
+                    errDrain.cancel()
+                    spool.cancel()
+                    commandRecorder(
+                        diagnosticRepositoryPath,
+                        args,
+                        processQueueWaitMicroseconds,
+                        processMetrics.spawnMicroseconds,
+                        0
+                    )
+                    let commandFinishedAt = DispatchTime.now().uptimeNanoseconds
+                    let durationMicroseconds = Int(
+                        clamping: commandFinishedAt >= commandStartedAt
+                            ? (commandFinishedAt - commandStartedAt) / 1000
+                            : 0
+                    )
+                    let wasCancelled = lifecycleController.cancellationErrorIfRequested() != nil
+                    WorktreeStartupInstrumentation.recordGitCommand(
+                        family: commandFamily,
+                        priority: admissionPriority,
+                        queueWaitMicroseconds: processQueueWaitMicroseconds,
+                        durationMicroseconds: durationMicroseconds,
+                        outputByteCount: 0,
+                        cancelled: wasCancelled
+                    )
+                    #if DEBUG
+                        WorktreeStartupInstrumentation.recordBenchmarkGitCommand(
+                            tag: benchmarkMetricTag,
+                            family: commandFamily,
+                            priority: admissionPriority,
+                            queueWaitMicroseconds: processQueueWaitMicroseconds,
+                            durationMicroseconds: durationMicroseconds,
+                            outputByteCount: 0,
+                            cancelled: wasCancelled
+                        )
+                    #endif
+                    continuation.resume(
+                        throwing: lifecycleController.cancellationErrorIfRequested() ?? error
+                    )
+                }
+            }
+        }, onCancel: {
+            timeoutController.cancel()
+            lifecycleController.requestCancellation(
+                process: process,
+                terminationGrace: processTerminationGrace
+            )
+        })
+        try Task.checkCancellation()
+        return result
+    }
+
     private nonisolated static func capabilityBoundObjectReadEnvironment(
         baseEnvironment: [String: String],
         layout: GitRepositoryLayout
@@ -4839,7 +5851,7 @@ actor GitService {
             let benchmarkMetricTag = WorktreeStartupInstrumentation.currentBenchmarkMetricTag
         #endif
         let process = Process()
-        let timeoutController = GitProcessTimeoutController()
+        let timeoutController = GitProcessActivityTimeoutController()
         let lifecycleController = GitProcessLifecycleController()
         let commandRecorder = MCPToolWorkCountDiagnostics.gitCommandRecorder()
         process.executableURL = gitExecutableURL
@@ -5728,56 +6740,6 @@ private extension GitService.WorkingStatus {
 
     var changedPaths: [String] {
         Array(Set(staged + modified + untracked)).sorted()
-    }
-}
-
-private final class GitProcessTimeoutController: @unchecked Sendable {
-    private let lock = NSLock()
-    private var task: Task<Void, Never>?
-    private var timedOut = false
-
-    var didTimeOut: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return timedOut
-    }
-
-    func schedule(
-        process: Process,
-        processIdentifier: pid_t,
-        timeout: Duration,
-        terminationGrace: Duration
-    ) {
-        lock.lock()
-        defer { lock.unlock() }
-        task?.cancel()
-        timedOut = false
-        task = Task {
-            do {
-                try await Task.sleep(for: timeout)
-                guard !Task.isCancelled, process.isRunning else { return }
-                self.markTimedOut()
-                process.terminate()
-                try await Task.sleep(for: terminationGrace)
-                guard !Task.isCancelled, process.isRunning else { return }
-                kill(processIdentifier, SIGKILL)
-            } catch {
-                return
-            }
-        }
-    }
-
-    func cancel() {
-        lock.lock()
-        defer { lock.unlock() }
-        task?.cancel()
-        task = nil
-    }
-
-    private func markTimedOut() {
-        lock.lock()
-        timedOut = true
-        lock.unlock()
     }
 }
 

@@ -258,6 +258,550 @@ final class GitWorktreeInitializationAPITests: XCTestCase {
         )
     }
 
+    func testStreamingTargetEvidenceAPIsPreserveGitSemanticsAndAuthenticatedHeaders() async throws {
+        let fixture = try GitInitializationFixture()
+        defer { fixture.cleanup() }
+        let git = GitService()
+        let layout = try XCTUnwrap(GitRepositoryLayoutResolver.resolve(atWorkTreeRoot: fixture.root))
+        let prefix = try GitRepositoryRelativeRootPrefix("Root")
+        try fixture.write("Root/assumed.txt", "assumed\n")
+        try fixture.commitAll("add assume-unchanged fixture")
+        let base = try await git.resolveTreeOID("HEAD", in: layout)
+
+        try fixture.rename("Root/old file.txt", to: "Root/new\nname.txt")
+        try fixture.commitAll("rename for streamed evidence")
+        try fixture.git(["update-index", "--assume-unchanged", "--", "Root/assumed.txt"])
+        try fixture.git(["mv", "--", "Root/new\nname.txt", "Root/status\trenamed.txt"])
+        try fixture.write("Root/untracked*name.txt", "untracked\n")
+
+        let fence = try await git.pendingInitializationAuthorityFence(
+            layout: layout,
+            prefix: prefix
+        )
+        let attemptID = UUID()
+        let suppliedProvenance = Data("creation-cut-v1".utf8)
+        let store = try GitTargetEvidenceManifestStore()
+        do {
+            let deltaLease = try await git.writeTreeDeltaEvidence(
+                baseTreeOID: base,
+                in: layout,
+                prefix: prefix,
+                authorityFence: fence,
+                attemptID: attemptID,
+                suppliedCreationCutProvenanceBytes: suppliedProvenance,
+                store: store
+            )
+            let deltaRecords = try readAll(deltaLease.makeReader())
+            XCTAssertTrue(deltaRecords.contains {
+                $0.status == .renamedSource &&
+                    $0.repositoryRelativePathBytes == Data("Root/old file.txt".utf8)
+            })
+            XCTAssertTrue(deltaRecords.contains {
+                $0.status == .renamed && $0.similarityScore == 100 &&
+                    $0.sourceRepositoryRelativePathBytes == Data("Root/old file.txt".utf8) &&
+                    $0.repositoryRelativePathBytes == Data("Root/new\nname.txt".utf8)
+            })
+            XCTAssertEqual(
+                deltaLease.header.identity.authority.authorityGeneration,
+                fence.lease.authorityGeneration
+            )
+            XCTAssertEqual(
+                deltaLease.header.identity.authority.invalidationGeneration,
+                fence.lease.invalidationGeneration
+            )
+            XCTAssertEqual(deltaLease.header.identity.authority.attemptID, attemptID)
+            XCTAssertEqual(deltaLease.header.identity.suppliedCreationCutProvenanceBytes, suppliedProvenance)
+            XCTAssertEqual(deltaLease.header.identity.baseObjectIDBytes, Data(base.lowercaseHex.utf8))
+            XCTAssertEqual(
+                deltaLease.header.identity.targetObjectIDBytes,
+                Data(fence.snapshot.treeOID.lowercaseHex.utf8)
+            )
+            XCTAssertEqual(deltaLease.header.identity.environmentIdentityBytes.count, 32)
+            XCTAssertEqual(deltaLease.header.identity.commandOutputDigestBytes.count, 32)
+            XCTAssertTrue(deltaLease.header.identity.commandArguments.contains(Data("--raw".utf8)))
+
+            let indexLease = try await git.writeIndexEvidence(
+                in: layout,
+                prefix: prefix,
+                authorityFence: fence,
+                attemptID: attemptID,
+                suppliedCreationCutProvenanceBytes: suppliedProvenance,
+                store: store
+            )
+            let indexRecords = try readAll(indexLease.makeReader())
+            XCTAssertTrue(indexRecords.contains {
+                $0.repositoryRelativePathBytes == Data("Root/assumed.txt".utf8) &&
+                    $0.assumeUnchanged && $0.stage == 0
+            })
+            XCTAssertFalse(indexRecords.contains {
+                $0.repositoryRelativePathBytes.starts(with: Data("RootSibling/".utf8))
+            })
+
+            let statusLease = try await git.writeStatusEvidence(
+                in: layout,
+                prefix: prefix,
+                authorityFence: fence,
+                attemptID: attemptID,
+                suppliedCreationCutProvenanceBytes: suppliedProvenance,
+                store: store
+            )
+            let statusRecords = try readAll(statusLease.makeReader())
+            XCTAssertTrue(statusRecords.contains {
+                $0.kind == .renamed && $0.similarityScore == 100 &&
+                    $0.sourceRepositoryRelativePathBytes == Data("Root/new\nname.txt".utf8) &&
+                    $0.repositoryRelativePathBytes == Data("Root/status\trenamed.txt".utf8)
+            })
+            XCTAssertTrue(statusRecords.contains {
+                $0.kind == .untracked &&
+                    $0.repositoryRelativePathBytes == Data("Root/untracked*name.txt".utf8)
+            })
+            XCTAssertFalse(statusRecords.contains {
+                $0.repositoryRelativePathBytes.starts(with: Data("RootSibling/".utf8))
+            })
+
+            let bundle = try GitTargetEvidenceBundleLease(
+                treeDelta: deltaLease,
+                index: indexLease,
+                status: statusLease
+            )
+            XCTAssertEqual(bundle.treeDelta.header.identity.authority.attemptID, attemptID)
+        } catch {
+            await git.releasePendingInitializationAuthorityFence(fence)
+            throw error
+        }
+        await git.releasePendingInitializationAuthorityFence(fence)
+    }
+
+    func testStreamingTargetEvidenceDisablesRepositoryFSMonitorAndBindsSafeConfig() async throws {
+        let fixture = try GitInitializationFixture()
+        defer { fixture.cleanup() }
+        let hook = fixture.sandbox.appendingPathComponent("fsmonitor-hook")
+        let marker = fixture.sandbox.appendingPathComponent("fsmonitor-ran")
+        try """
+        #!/bin/sh
+        /usr/bin/touch "\(marker.path)"
+        exit 1
+        """.write(to: hook, atomically: true, encoding: .utf8)
+        guard chmod(hook.path, 0o755) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        try fixture.git(["config", "core.fsmonitor", hook.path])
+        try fixture.write("Root/fsmonitor-untracked.txt", "untracked\n")
+
+        try fixture.git(["status", "--porcelain=v2", "-z"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        try FileManager.default.removeItem(at: marker)
+
+        let git = GitService()
+        let layout = try XCTUnwrap(GitRepositoryLayoutResolver.resolve(atWorkTreeRoot: fixture.root))
+        let prefix = try GitRepositoryRelativeRootPrefix("Root")
+        let base = try await git.resolveTreeOID("HEAD", in: layout)
+        let fence = try await git.pendingInitializationAuthorityFence(
+            layout: layout,
+            prefix: prefix
+        )
+        let attemptID = UUID()
+        let store = try GitTargetEvidenceManifestStore()
+        do {
+            let tree = try await git.writeTreeDeltaEvidence(
+                baseTreeOID: base,
+                in: layout,
+                prefix: prefix,
+                authorityFence: fence,
+                attemptID: attemptID,
+                suppliedCreationCutProvenanceBytes: nil,
+                store: store
+            )
+            let index = try await git.writeIndexEvidence(
+                in: layout,
+                prefix: prefix,
+                authorityFence: fence,
+                attemptID: attemptID,
+                suppliedCreationCutProvenanceBytes: nil,
+                store: store
+            )
+            let status = try await git.writeStatusEvidence(
+                in: layout,
+                prefix: prefix,
+                authorityFence: fence,
+                attemptID: attemptID,
+                suppliedCreationCutProvenanceBytes: nil,
+                store: store
+            )
+
+            XCTAssertTrue(try readAll(tree.makeReader()).isEmpty)
+            XCTAssertTrue(try readAll(index.makeReader()).contains {
+                $0.repositoryRelativePathBytes == Data("Root/old file.txt".utf8)
+            })
+            XCTAssertTrue(try readAll(status.makeReader()).contains {
+                $0.kind == .untracked &&
+                    $0.repositoryRelativePathBytes == Data("Root/fsmonitor-untracked.txt".utf8)
+            })
+            let safeConfigArguments = [
+                "-c", "core.fsmonitor=false",
+                "-c", "core.hooksPath=/dev/null",
+                "-c", "core.untrackedCache=false"
+            ].map { Data($0.utf8) }
+            XCTAssertEqual(
+                Array(tree.header.identity.commandArguments.prefix(safeConfigArguments.count)),
+                safeConfigArguments
+            )
+            XCTAssertEqual(
+                Array(index.header.identity.commandArguments.prefix(safeConfigArguments.count)),
+                safeConfigArguments
+            )
+            XCTAssertEqual(
+                Array(status.header.identity.commandArguments.prefix(safeConfigArguments.count)),
+                safeConfigArguments
+            )
+            XCTAssertEqual(
+                tree.header.identity.environmentIdentityBytes,
+                status.header.identity.environmentIdentityBytes
+            )
+            XCTAssertNoThrow(try GitTargetEvidenceBundleLease(
+                treeDelta: tree,
+                index: index,
+                status: status
+            ))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+        } catch {
+            await git.releasePendingInitializationAuthorityFence(fence)
+            throw error
+        }
+        await git.releasePendingInitializationAuthorityFence(fence)
+    }
+
+    func testStreamingTargetEvidenceRejectsSameTreeHEADMutation() async throws {
+        let fixture = try GitInitializationFixture()
+        defer { fixture.cleanup() }
+        let git = GitService()
+        let layout = try XCTUnwrap(GitRepositoryLayoutResolver.resolve(atWorkTreeRoot: fixture.root))
+        let prefix = try GitRepositoryRelativeRootPrefix("Root")
+        let original = try await git.authorityMetadata(in: layout, prefix: prefix)
+
+        try fixture.git(["commit", "--allow-empty", "-m", "same tree replacement"])
+        let replacement = try await git.authorityMetadata(in: layout, prefix: prefix)
+        XCTAssertEqual(original.treeOID, replacement.treeOID)
+        XCTAssertNotEqual(original.headCommitOID, replacement.headCommitOID)
+        try fixture.git(["update-ref", "HEAD", original.headCommitOID.lowercaseHex])
+
+        let fence = try await git.pendingInitializationAuthorityFence(
+            layout: layout,
+            prefix: prefix
+        )
+        let root = fixture.root
+        let replacementHead = replacement.headCommitOID.lowercaseHex
+        await git.setTargetEvidenceDidSealBeforeCommandHandlerForTesting {
+            try runGitEvidenceTestCommand(
+                ["update-ref", "HEAD", replacementHead],
+                at: root
+            )
+        }
+        do {
+            _ = try await git.writeStatusEvidence(
+                in: layout,
+                prefix: prefix,
+                authorityFence: fence,
+                attemptID: UUID(),
+                suppliedCreationCutProvenanceBytes: nil,
+                store: GitTargetEvidenceManifestStore()
+            )
+            XCTFail("expected the sealed attempt to reject same-tree HEAD movement")
+        } catch let error as GitTargetEvidenceCollectionError {
+            XCTAssertEqual(error, .authorityChanged)
+        }
+        await git.setTargetEvidenceDidSealBeforeCommandHandlerForTesting(nil)
+        await git.releasePendingInitializationAuthorityFence(fence)
+    }
+
+    func testStreamingTargetEvidenceBundleRejectsSuppliedCreationCutProvenanceMismatch() async throws {
+        let fixture = try GitInitializationFixture()
+        defer { fixture.cleanup() }
+        let git = GitService()
+        let layout = try XCTUnwrap(GitRepositoryLayoutResolver.resolve(atWorkTreeRoot: fixture.root))
+        let prefix = try GitRepositoryRelativeRootPrefix("Root")
+        let base = try await git.resolveTreeOID("HEAD", in: layout)
+        let fence = try await git.pendingInitializationAuthorityFence(
+            layout: layout,
+            prefix: prefix
+        )
+        let attemptID = UUID()
+        let store = try GitTargetEvidenceManifestStore()
+        do {
+            let tree = try await git.writeTreeDeltaEvidence(
+                baseTreeOID: base,
+                in: layout,
+                prefix: prefix,
+                authorityFence: fence,
+                attemptID: attemptID,
+                suppliedCreationCutProvenanceBytes: Data("supplied-cut-a".utf8),
+                store: store
+            )
+            let index = try await git.writeIndexEvidence(
+                in: layout,
+                prefix: prefix,
+                authorityFence: fence,
+                attemptID: attemptID,
+                suppliedCreationCutProvenanceBytes: Data("supplied-cut-a".utf8),
+                store: store
+            )
+            let status = try await git.writeStatusEvidence(
+                in: layout,
+                prefix: prefix,
+                authorityFence: fence,
+                attemptID: attemptID,
+                suppliedCreationCutProvenanceBytes: Data("supplied-cut-b".utf8),
+                store: store
+            )
+
+            XCTAssertThrowsError(try GitTargetEvidenceBundleLease(
+                treeDelta: tree,
+                index: index,
+                status: status
+            )) { error in
+                XCTAssertEqual(
+                    error as? GitTargetEvidenceManifestError,
+                    .corrupt("incoherent evidence bundle")
+                )
+            }
+        } catch {
+            await git.releasePendingInitializationAuthorityFence(fence)
+            throw error
+        }
+        await git.releasePendingInitializationAuthorityFence(fence)
+    }
+
+    func testStreamingTargetEvidenceActivityTimeoutCancellationAndByteAdmissionReleasePermits() async throws {
+        let fixture = try GitInitializationFixture()
+        defer { fixture.cleanup() }
+        let realGit = GitService()
+        let layout = try XCTUnwrap(GitRepositoryLayoutResolver.resolve(atWorkTreeRoot: fixture.root))
+        let prefix = try GitRepositoryRelativeRootPrefix("Root")
+        let fence = try await realGit.pendingInitializationAuthorityFence(
+            layout: layout,
+            prefix: prefix
+        )
+        let attemptID = UUID()
+        let admission = GitProcessAdmissionController(globalLimit: 1, perRepositoryLimit: 1)
+        let sleepingGit = try GitService(
+            gitExecutableURL: fixture.makeSleepingGitExecutable(),
+            processAdmissionController: admission,
+            processTerminationGrace: .milliseconds(10)
+        )
+
+        do {
+            do {
+                _ = try await sleepingGit.writeStatusEvidence(
+                    in: layout,
+                    prefix: prefix,
+                    authorityFence: fence,
+                    attemptID: attemptID,
+                    suppliedCreationCutProvenanceBytes: nil,
+                    store: GitTargetEvidenceManifestStore(),
+                    spoolResourcePolicy: GitRawOutputSpoolResourcePolicy(
+                        maximumSpoolByteCount: 1024,
+                        maximumWriteChunkByteCount: 64 * 1024,
+                        readChunkByteCount: 64 * 1024,
+                        minimumFreeDiskBytes: 0,
+                        activityTimeout: .milliseconds(20)
+                    )
+                )
+                XCTFail("expected activity timeout")
+            } catch let error as GitTargetEvidenceCollectionError {
+                XCTAssertEqual(error, .activityTimeout)
+            }
+            var admissionSnapshot = await admission.snapshot()
+            XCTAssertEqual(admissionSnapshot.activeLeaseCount, 0)
+
+            let cancellable = Task {
+                try await sleepingGit.writeStatusEvidence(
+                    in: layout,
+                    prefix: prefix,
+                    authorityFence: fence,
+                    attemptID: attemptID,
+                    suppliedCreationCutProvenanceBytes: nil,
+                    store: GitTargetEvidenceManifestStore(),
+                    spoolResourcePolicy: GitRawOutputSpoolResourcePolicy(
+                        maximumSpoolByteCount: 1024,
+                        maximumWriteChunkByteCount: 64 * 1024,
+                        readChunkByteCount: 64 * 1024,
+                        minimumFreeDiskBytes: 0,
+                        activityTimeout: .seconds(30)
+                    )
+                )
+            }
+            for _ in 0 ..< 1000 {
+                if await admission.snapshot().activeLeaseCount == 1 { break }
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            cancellable.cancel()
+            do {
+                _ = try await cancellable.value
+                XCTFail("expected streamed evidence cancellation")
+            } catch is CancellationError {
+                // Expected.
+            }
+            admissionSnapshot = await admission.snapshot()
+            XCTAssertEqual(admissionSnapshot.activeLeaseCount, 0)
+
+            try fixture.write("Root/untracked-output.txt", String(repeating: "x", count: 32))
+            do {
+                _ = try await realGit.writeStatusEvidence(
+                    in: layout,
+                    prefix: prefix,
+                    authorityFence: fence,
+                    attemptID: attemptID,
+                    suppliedCreationCutProvenanceBytes: nil,
+                    store: GitTargetEvidenceManifestStore(),
+                    spoolResourcePolicy: GitRawOutputSpoolResourcePolicy(
+                        maximumSpoolByteCount: 8,
+                        maximumWriteChunkByteCount: 64 * 1024,
+                        readChunkByteCount: 64 * 1024,
+                        minimumFreeDiskBytes: 0,
+                        activityTimeout: .seconds(5)
+                    )
+                )
+                XCTFail("expected raw-spool byte admission failure")
+            } catch let error as GitTargetEvidenceCollectionError {
+                XCTAssertEqual(error, .spool(.resourceAdmission))
+            }
+        } catch {
+            await realGit.releasePendingInitializationAuthorityFence(fence)
+            throw error
+        }
+        await realGit.releasePendingInitializationAuthorityFence(fence)
+    }
+
+    func testStreamingTargetEvidenceSealedAttemptRejectsConcurrentIndexMutationAndSanitizesEnvironment() async throws {
+        let fixture = try GitInitializationFixture()
+        defer { fixture.cleanup() }
+        let git = GitService()
+        let layout = try XCTUnwrap(GitRepositoryLayoutResolver.resolve(atWorkTreeRoot: fixture.root))
+        let prefix = try GitRepositoryRelativeRootPrefix("Root")
+        let staleFence = try await git.pendingInitializationAuthorityFence(
+            layout: layout,
+            prefix: prefix
+        )
+        let root = fixture.root
+        await git.setTargetEvidenceDidSealBeforeCommandHandlerForTesting {
+            try runGitEvidenceTestCommand(
+                ["update-index", "--assume-unchanged", "--", "Root/old file.txt"],
+                at: root
+            )
+        }
+        do {
+            _ = try await git.writeIndexEvidence(
+                in: layout,
+                prefix: prefix,
+                authorityFence: staleFence,
+                attemptID: UUID(),
+                suppliedCreationCutProvenanceBytes: nil,
+                store: GitTargetEvidenceManifestStore()
+            )
+            XCTFail("expected the sealed attempt to reject an index mutation")
+        } catch let error as GitTargetEvidenceCollectionError {
+            XCTAssertEqual(error, .authorityChanged)
+        }
+        await git.setTargetEvidenceDidSealBeforeCommandHandlerForTesting(nil)
+        await git.releasePendingInitializationAuthorityFence(staleFence)
+        try fixture.git(["update-index", "--no-assume-unchanged", "--", "Root/old file.txt"])
+
+        let fence = try await git.pendingInitializationAuthorityFence(
+            layout: layout,
+            prefix: prefix
+        )
+        var hostileEnvironment = ProcessInfo.processInfo.environment
+        let hostile = fixture.sandbox.appendingPathComponent("hostile", isDirectory: true)
+        hostileEnvironment["GIT_OBJECT_DIRECTORY"] = hostile.appendingPathComponent("objects").path
+        hostileEnvironment["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = hostile.appendingPathComponent("alternates").path
+        hostileEnvironment["GIT_REPLACE_REF_BASE"] = "refs/hostile/"
+        hostileEnvironment["GIT_CONFIG_PARAMETERS"] = "'status.showUntrackedFiles'='no'"
+        hostileEnvironment["GIT_CONFIG_COUNT"] = "1"
+        hostileEnvironment["GIT_CONFIG_KEY_0"] = "core.worktree"
+        hostileEnvironment["GIT_CONFIG_VALUE_0"] = hostile.path
+        hostileEnvironment["GIT_EXEC_PATH"] = hostile.path
+        let hostileGit = GitService(inheritedProcessEnvironment: hostileEnvironment)
+        let attemptID = UUID()
+        do {
+            let ordinary = try await git.writeStatusEvidence(
+                in: layout,
+                prefix: prefix,
+                authorityFence: fence,
+                attemptID: attemptID,
+                suppliedCreationCutProvenanceBytes: nil,
+                store: GitTargetEvidenceManifestStore()
+            )
+            let sanitized = try await hostileGit.writeStatusEvidence(
+                in: layout,
+                prefix: prefix,
+                authorityFence: fence,
+                attemptID: attemptID,
+                suppliedCreationCutProvenanceBytes: nil,
+                store: GitTargetEvidenceManifestStore()
+            )
+            XCTAssertEqual(
+                ordinary.header.identity.environmentIdentityBytes,
+                sanitized.header.identity.environmentIdentityBytes
+            )
+            XCTAssertEqual(
+                ordinary.header.identity.commandOutputDigestBytes,
+                sanitized.header.identity.commandOutputDigestBytes
+            )
+            XCTAssertEqual(
+                ordinary.header.identity.authority.snapshotDigestBytes,
+                sanitized.header.identity.authority.snapshotDigestBytes
+            )
+        } catch {
+            await git.releasePendingInitializationAuthorityFence(fence)
+            throw error
+        }
+        await git.releasePendingInitializationAuthorityFence(fence)
+    }
+
+    func testTargetEvidenceErrorMappingPreservesAdmissionProcessAndSpoolFailures() {
+        let admissionCases: [GitProcessAdmissionError] = [
+            .queueFull, .repositoryQueueFull, .deadlineQueueFull,
+            .deadlineUnsupported, .deadlineExceeded
+        ]
+        for error in admissionCases {
+            XCTAssertEqual(
+                GitService.targetEvidenceCollectionError(error) as? GitTargetEvidenceCollectionError,
+                .admission(error)
+            )
+        }
+        let spoolCases: [GitRawOutputSpoolError] = [
+            .invalidConfiguration,
+            .resourceAdmission,
+            .closed,
+            .corrupt("digest mismatch"),
+            .io(operation: "spool-fsync", code: EIO)
+        ]
+        for error in spoolCases {
+            XCTAssertEqual(
+                GitService.targetEvidenceCollectionError(error) as? GitTargetEvidenceCollectionError,
+                .spool(error)
+            )
+        }
+        let captureCases: [(GitService.GitProcessCaptureError, GitTargetEvidenceCollectionError)] = [
+            (.stdoutByteLimitExceeded, .processCapture(.stdoutLimitExceeded)),
+            (.stderrByteLimitExceeded, .processCapture(.stderrLimitExceeded)),
+            (.timedOut, .activityTimeout)
+        ]
+        for (error, expected) in captureCases {
+            XCTAssertEqual(
+                GitService.targetEvidenceCollectionError(error) as? GitTargetEvidenceCollectionError,
+                expected
+            )
+        }
+        let launch = NSError(domain: NSPOSIXErrorDomain, code: Int(ENOEXEC))
+        XCTAssertEqual(
+            GitService.targetEvidenceCollectionError(launch) as? GitTargetEvidenceCollectionError,
+            .processLaunch(domain: NSPOSIXErrorDomain, code: Int(ENOEXEC))
+        )
+        let unknown = GitTargetEvidenceUnknownError()
+        XCTAssertTrue(GitService.targetEvidenceCollectionError(unknown) is GitTargetEvidenceUnknownError)
+    }
+
     func testParsersRejectSiblingPrefixesInvalidUTF8AndMissingNULTermination() throws {
         XCTAssertThrowsError(try GitRepositoryRelativeRootPrefix("Root/../escape"))
         let oid = try GitObjectID(objectFormat: .sha1, lowercaseHex: String(repeating: "1", count: 40))
@@ -287,6 +831,71 @@ final class GitWorktreeInitializationAPITests: XCTestCase {
             rootPrefix: prefix,
             limits: .treeInventory
         ))
+    }
+
+    private func readAll(
+        _ reader: GitTargetTreeDeltaEvidenceReader
+    ) throws -> [GitTargetTreeDeltaEvidenceRecord] {
+        var records: [GitTargetTreeDeltaEvidenceRecord] = []
+        while let record = try reader.next() {
+            records.append(record)
+        }
+        XCTAssertEqual(reader.validationState, .verified)
+        return records
+    }
+
+    private func readAll(
+        _ reader: GitTargetIndexEvidenceReader
+    ) throws -> [GitTargetIndexEvidenceRecord] {
+        var records: [GitTargetIndexEvidenceRecord] = []
+        while let record = try reader.next() {
+            records.append(record)
+        }
+        XCTAssertEqual(reader.validationState, .verified)
+        return records
+    }
+
+    private func readAll(
+        _ reader: GitTargetStatusEvidenceReader
+    ) throws -> [GitTargetStatusEvidenceRecord] {
+        var records: [GitTargetStatusEvidenceRecord] = []
+        while let record = try reader.next() {
+            records.append(record)
+        }
+        XCTAssertEqual(reader.validationState, .verified)
+        return records
+    }
+}
+
+private struct GitTargetEvidenceUnknownError: Error {}
+
+private func runGitEvidenceTestCommand(
+    _ arguments: [String],
+    at root: URL
+) throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+    process.arguments = arguments
+    process.currentDirectoryURL = root
+    process.environment = ProcessInfo.processInfo.environment.merging([
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0"
+    ]) { _, new in new }
+    let stderr = Pipe()
+    process.standardOutput = Pipe()
+    process.standardError = stderr
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        let detail = String(
+            data: stderr.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+        throw NSError(
+            domain: "GitTargetEvidenceTestCommand",
+            code: Int(process.terminationStatus),
+            userInfo: [NSLocalizedDescriptionKey: detail]
+        )
     }
 }
 

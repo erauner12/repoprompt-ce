@@ -8,6 +8,11 @@ enum SpillBackedSortedArtifactOrdering {
     case descending
 }
 
+enum SpillBackedSortedArtifactDuplicateResolution {
+    case reject
+    case coalesce
+}
+
 enum SpillBackedSortedArtifactFailure: Equatable {
     case invalidConfiguration
     case duplicateRecord
@@ -71,6 +76,13 @@ protocol SpillBackedSortedArtifactFormat: Sendable {
     var maximumEncodedHeaderByteCount: Int { get }
     var maximumEncodedFooterByteCount: Int { get }
     func ordering(_ lhs: Record, _ rhs: Record) -> SpillBackedSortedArtifactOrdering
+    /// Called only when `ordering` returns `.same`. The format owns
+    /// same-key equivalence; coalescing retains `existing` and drops `candidate`.
+    /// The decision must be deterministic for every equal-key pair.
+    func duplicateResolution(
+        _ existing: Record,
+        _ candidate: Record
+    ) throws -> SpillBackedSortedArtifactDuplicateResolution
 
     func encodeFinalHeader(_ header: Header) throws -> Data
     func encodeFinalRecord(_ record: Record, encodedRecord: Data) throws -> Data
@@ -82,6 +94,15 @@ protocol SpillBackedSortedArtifactFormat: Sendable {
     ) throws
     func makeFinalFooter(accumulator: FinalAccumulator, digest: Data) throws -> Footer
     func encodeFinalFooter(_ footer: Footer) throws -> Data
+}
+
+extension SpillBackedSortedArtifactFormat {
+    func duplicateResolution(
+        _: Record,
+        _: Record
+    ) throws -> SpillBackedSortedArtifactDuplicateResolution {
+        .reject
+    }
 }
 
 struct SpillBackedSortedArtifactFormatBounds {
@@ -747,11 +768,24 @@ actor SpillBackedSortedArtifactWriter<Format: SpillBackedSortedArtifactFormat> {
         guard !bufferedRecords.isEmpty else { return }
         try store.admit(policy, format: format)
         bufferedRecords.sort { format.ordering($0, $1) == .ascending }
-        for index in bufferedRecords.indices.dropFirst() {
-            guard format.ordering(bufferedRecords[index - 1], bufferedRecords[index]) != .same else {
-                throw format.error(.duplicateRecord)
+        // Apply the format's same-key policy before run publication so
+        // duplicate behavior is invariant across batch boundaries.
+        var uniqueRecords: [Format.Record] = []
+        uniqueRecords.reserveCapacity(bufferedRecords.count)
+        for record in bufferedRecords {
+            if let existing = uniqueRecords.last,
+               format.ordering(existing, record) == .same
+            {
+                switch try format.duplicateResolution(existing, record) {
+                case .reject:
+                    throw format.error(.duplicateRecord)
+                case .coalesce:
+                    continue
+                }
             }
+            uniqueRecords.append(record)
         }
+        bufferedRecords = uniqueRecords
         let run = try makeRunReference()
         let descriptor = try SpillBackedSortedArtifactStore.createSecureFile(at: run.url, format: format)
         var descriptorIsOpen = true
@@ -1002,7 +1036,16 @@ actor SpillBackedSortedArtifactWriter<Format: SpillBackedSortedArtifactFormat> {
             guard let selected, let record = cursors[selected].record else { return }
             if let previous {
                 switch format.ordering(previous, record) {
-                case .same: throw format.error(.duplicateRecord)
+                case .same:
+                    // This must mirror flushRun: run partitioning cannot change
+                    // whether equal-key records are rejected or coalesced.
+                    switch try format.duplicateResolution(previous, record) {
+                    case .reject:
+                        throw format.error(.duplicateRecord)
+                    case .coalesce:
+                        try cursors[selected].advance()
+                        continue
+                    }
                 case .descending: throw format.error(.outOfOrder)
                 case .ascending: break
                 }
