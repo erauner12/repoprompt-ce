@@ -234,6 +234,7 @@ public enum ClaudeCompatibleModelCatalog {
     private static let haikuRaw = "haiku"
     private static let sonnetRaw = "sonnet"
     private static let opusRaw = "opus"
+    private static let fable5Raw = "claude-fable-5"
     private static let opus1mRaw = "opus[1m]"
     private static let opus47Raw = "claude-opus-4-7"
     private static let opus46Raw = "claude-opus-4-6"
@@ -244,6 +245,12 @@ public enum ClaudeCompatibleModelCatalog {
 
     private static let claudeModels: [StaticModel] = [
         StaticModel(
+            rawValue: fable5Raw,
+            displayName: "Fable 5",
+            description: "Claude Fable 5. Anthropic's most capable widely released model for demanding reasoning and long-horizon agentic work.",
+            supportsXHigh: true
+        ),
+        StaticModel(
             rawValue: opus1mRaw,
             displayName: "Opus Latest (1M)",
             description: "Claude Opus with 1M token context. Best for large codebases and tasks requiring extensive context.",
@@ -252,25 +259,25 @@ public enum ClaudeCompatibleModelCatalog {
         StaticModel(
             rawValue: opusRaw,
             displayName: "Opus Latest",
-            description: "Strongest Claude model. Best for open-ended tasks, architecture, and complex reasoning.",
+            description: "Most capable Opus-tier model. Best for open-ended tasks, architecture, and complex reasoning.",
             supportsXHigh: true
         ),
         StaticModel(
             rawValue: opus47Raw,
             displayName: "Opus 4.7",
-            description: "Pinned Claude Opus 4.7. Strongest Claude tier for complex reasoning and architecture.",
+            description: "Pinned Claude Opus 4.7. Opus-tier capability for complex reasoning and architecture.",
             supportsXHigh: true
         ),
         StaticModel(
             rawValue: opus46Raw,
             displayName: "Opus 4.6",
-            description: "Pinned Claude Opus 4.6. Strongest Claude tier for complex reasoning and architecture.",
+            description: "Pinned Claude Opus 4.6. Opus-tier capability for complex reasoning and architecture.",
             supportsXHigh: true
         ),
         StaticModel(
             rawValue: opus45Raw,
             displayName: "Opus 4.5",
-            description: "Pinned Claude Opus 4.5. Strongest Claude tier for complex reasoning and architecture.",
+            description: "Pinned Claude Opus 4.5. Opus-tier capability for complex reasoning and architecture.",
             supportsXHigh: true
         ),
         StaticModel(
@@ -398,11 +405,15 @@ public enum ClaudeCompatibleModelCatalog {
             )]
         case let .claudeSlotMapping(mapping):
             let normalized = mapping.normalized
-            return [
+            var options = [
                 compatibleSlotOption(slotRaw: haikuRaw, backendModelID: normalized.haiku, slotName: "Haiku"),
                 compatibleSlotOption(slotRaw: sonnetRaw, backendModelID: normalized.sonnet, slotName: "Sonnet", isProviderDefault: true),
                 compatibleSlotOption(slotRaw: opusRaw, backendModelID: normalized.opus, slotName: "Opus")
             ]
+            if backendID == .glmZAI {
+                options.append(contentsOf: directGLMOptions())
+            }
+            return options
         }
     }
 
@@ -426,18 +437,41 @@ public enum ClaudeCompatibleModelCatalog {
     ) -> ClaudeCompatibleModelOption {
         ClaudeCompatibleModelOption(
             rawValue: slotRaw,
-            displayName: displayName(forBackendModelID: backendModelID),
+            displayName: "\(displayName(forBackendModelID: backendModelID)) — \(slotName)",
             description: "Routes Claude Code's \(slotName) model slot to \(backendModelID).",
             isPlaceholderDefault: false,
             isProviderDefault: isProviderDefault,
-            supportedEffortLevels: supportedEfforts(supportsXHigh: false).map(\.raw)
+            supportedEffortLevels: supportedEfforts(
+                supportsXHigh: ClaudeCompatibleModelNormalizer.supportsXHighEffort(backendModelID)
+            ).map(\.raw)
         )
+    }
+
+    private static func directGLMOptions() -> [ClaudeCompatibleModelOption] {
+        ClaudeCompatibleModelNormalizer.directSelectableGLMModelRawValues.map { rawValue in
+            ClaudeCompatibleModelOption(
+                rawValue: rawValue,
+                displayName: displayName(forBackendModelID: rawValue),
+                description: "Runs \(rawValue) directly for this session without changing configured Claude Code slot mappings.",
+                isPlaceholderDefault: false,
+                isProviderDefault: false,
+                supportedEffortLevels: supportedEfforts(
+                    supportsXHigh: ClaudeCompatibleModelNormalizer.supportsXHighEffort(rawValue)
+                ).map(\.raw)
+            )
+        }
     }
 
     private static func displayName(forBackendModelID modelID: String) -> String {
         switch modelID {
+        case "glm-4.5-air":
+            "GLM 4.5 Air"
         case "glm-4.7":
             "GLM 4.7"
+        case "glm-5.2":
+            "GLM 5.2"
+        case "glm-5.2[1m]":
+            "GLM 5.2 (1M)"
         case "glm-5-turbo":
             "GLM 5 Turbo"
         case "glm-5.1":

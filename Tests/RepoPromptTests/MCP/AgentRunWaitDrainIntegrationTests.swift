@@ -157,11 +157,11 @@ final class AgentRunWaitDrainTestHarness {
             },
             requireTargetWindow: { window },
             resolveRequestedTabID: { _ in nil },
-            resolveSpawnSourceTabID: { _ in nil },
+            resolveSpawnParentSourceTabID: { _ in nil },
             resolveSpawnParentSessionID: { _, _ in nil },
             bindCurrentRequestToTab: { _, _ in },
             withHeartbeat: { _, _, _, _, operation in try await operation() },
-            startRun: { _, _, _, _, _, _, _, _, _, _ in
+            startRun: { _, _, _, _, _, _, _, _, _, _, _, _ in
                 throw MCPError.internalError("startRun should not be used by wait-drain tests")
             }
         )
@@ -391,7 +391,7 @@ private enum AgentRunWaitDrainHarnessError: Error {
     case missingControlContext
 }
 
-private final class AgentRunWaitDrainCodexController: CodexSessionControlling {
+private final class AgentRunWaitDrainCodexController: CodexSessionControllerTurnDispatchTestDefaults {
     var hasActiveThread: Bool {
         false
     }
@@ -445,23 +445,6 @@ private final class AgentRunWaitDrainCodexController: CodexSessionControlling {
     }
 
     func setThreadName(_: String, threadID _: String?) async throws {}
-    func sendUserMessage(_: String) async throws {}
-    func sendUserTurn(text _: String, images _: [AgentImageAttachment]) async throws {}
-    func sendUserTurn(
-        text _: String,
-        images _: [AgentImageAttachment],
-        model _: String?,
-        reasoningEffort _: String?
-    ) async throws {}
-
-    func sendUserTurn(
-        text _: String,
-        images _: [AgentImageAttachment],
-        model _: String?,
-        reasoningEffort _: String?,
-        serviceTier _: String?
-    ) async throws {}
-
     func compactThread() async throws {}
     func getThreadGoal() async throws -> CodexNativeSessionController.ThreadGoal? {
         nil

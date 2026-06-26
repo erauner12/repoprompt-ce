@@ -1,7 +1,7 @@
 import Foundation
 
 enum AgentModelCatalog {
-    struct AvailabilityContext {
+    struct AvailabilityContext: Equatable {
         let claudeCodeAvailable: Bool
         let codexAvailable: Bool
         let openCodeAvailable: Bool
@@ -1009,17 +1009,6 @@ enum AgentModelCatalog {
         )
     }
 
-    /// Base model raw values (lowercased) that support the XHigh effort tier.
-    /// Opus Latest, Opus 1M, and pinned Opus full IDs support XHigh.
-    /// Sonnet, Haiku, and GLM deliberately do not support XHigh.
-    private static let claudeXHighEligibleBaseRaws: Set<String> = [
-        AgentModel.claudeOpus.rawValue.lowercased(),
-        AgentModel.claudeOpus1m.rawValue.lowercased(),
-        AgentModel.claudeOpus47.rawValue.lowercased(),
-        AgentModel.claudeOpus46.rawValue.lowercased(),
-        AgentModel.claudeOpus45.rawValue.lowercased()
-    ]
-
     private static func strippedClaudeEffortSuffix(from label: String) -> String {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         var tokens = trimmed.split(separator: " ").map(String.init)
@@ -1038,7 +1027,18 @@ enum AgentModelCatalog {
 
     private static func claudeBaseModelKey(_ rawModel: String, agentKind: AgentProviderKind) -> String {
         if let normalized = ClaudeCompatibleModelCatalogAdapter.canonicalCompatibleBackendModelRaw(rawModel, for: agentKind) {
-            return ClaudeModelSpecifier(raw: normalized).baseModel ?? normalized
+            let base = ClaudeModelSpecifier(raw: normalized).baseModel ?? normalized
+            if agentKind == .claudeCodeGLM,
+               ClaudeCompatibleProviderRuntimeBridge.isDirectSelectableGLMModel(base)
+            {
+                return "direct:\(base.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
+            }
+            if agentKind == .claudeCodeGLM,
+               [AgentModel.claudeHaiku.rawValue, AgentModel.claudeSonnet.rawValue, AgentModel.claudeOpus.rawValue].contains(base)
+            {
+                return "slot:\(base.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
+            }
+            return base
         }
         return rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -2080,7 +2080,10 @@ enum AgentModelCatalog {
                 let specifier = ClaudeModelSpecifier(raw: option.rawValue)
                 let effortDisplayName = specifier.effortLevel?.displayName
                 let targetNameSuffix = effortDisplayName.map { "\(group.displayName) \($0)" } ?? option.displayName
-                let contextWindow = AgentModel.resolvedModel(forRaw: option.rawValue, agentKind: agent)?.contextWindowTokens
+                let contextWindow = ClaudeCompatibleModelCatalogAdapter.contextWindowTokens(
+                    forRequestedModelRaw: option.rawValue,
+                    agentKind: agent
+                ) ?? AgentModel.resolvedModel(forRaw: option.rawValue, agentKind: agent)?.contextWindowTokens
                 return DiscoveryStartTarget(
                     selectionID: selectionID,
                     modelRaw: option.rawValue,
@@ -2107,7 +2110,10 @@ enum AgentModelCatalog {
                 description: representative?.description,
                 available: true,
                 tags: tags,
-                contextWindowTokens: representativeModel?.contextWindowTokens,
+                contextWindowTokens: ClaudeCompatibleModelCatalogAdapter.contextWindowTokens(
+                    forRequestedModelRaw: group.baseModelRaw,
+                    agentKind: agent
+                ) ?? representativeModel?.contextWindowTokens,
                 supportedReasoningEfforts: [],
                 defaultReasoningEffort: nil,
                 startTargets: targets

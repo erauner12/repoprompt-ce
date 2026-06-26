@@ -11,6 +11,154 @@ import MCP
 #endif
 
 extension MCPServerViewModel {
+    struct DetachedContextBuilderTabContext {
+        let connectionID: UUID
+        let context: TabScopedContext
+    }
+
+    struct ContextBuilderCommittedTabSnapshot {
+        let identity: WorkspaceSelectionIdentity
+        let nestedRunID: UUID
+        let tab: ComposeTabState
+        let selectionRevision: UInt64
+        let usedAgentOutputAsPrompt: Bool
+    }
+
+    struct ContextBuilderTabContextCommitResult {
+        let outcome: ContextBuilderTabContextCommitOutcome
+        let committedTab: ContextBuilderCommittedTabSnapshot?
+    }
+
+    private struct CommittedTabWrite {
+        let identity: WorkspaceSelectionIdentity
+        let tab: ComposeTabState
+        let selectionRevision: UInt64
+        let usedAgentOutputAsPrompt: Bool
+    }
+
+    enum ContextBuilderTabContextCommitOutcome: Equatable {
+        case committed
+        case staleOrNoLongerCurrent
+        case missingFinalContext(runID: UUID, connectionID: UUID?)
+        case failed(String)
+    }
+
+    enum ContextBuilderTeardownPublicationOutcome: Equatable {
+        case peerEOFDetached
+        case resolvedWithoutPeerEOFDetachment(reason: String)
+        case timedOut
+        case cancelled
+
+        var diagnosticSource: String {
+            switch self {
+            case .peerEOFDetached:
+                "peer_eof_detached"
+            case let .resolvedWithoutPeerEOFDetachment(reason):
+                "resolved_without_detachment:\(reason)"
+            case .timedOut:
+                "timeout"
+            case .cancelled:
+                "cancelled"
+            }
+        }
+    }
+
+    @MainActor
+    final class ContextBuilderTeardownPublicationCoordinator {
+        struct Key: Hashable {
+            let runID: UUID
+            let connectionID: UUID
+        }
+
+        private struct Waiter {
+            let continuation: CheckedContinuation<ContextBuilderTeardownPublicationOutcome, Never>
+            let timeoutWorkItem: DispatchWorkItem
+        }
+
+        private var retainedOutcomes: [Key: ContextBuilderTeardownPublicationOutcome] = [:]
+        private var retainedOutcomeOrder: [Key] = []
+        private var waiters: [Key: [UUID: Waiter]] = [:]
+        private let retainedOutcomeLimit = 64
+
+        func publish(
+            _ outcome: ContextBuilderTeardownPublicationOutcome,
+            runID: UUID,
+            connectionID: UUID
+        ) {
+            let key = Key(runID: runID, connectionID: connectionID)
+            guard retainedOutcomes[key] == nil else { return }
+            retainedOutcomes[key] = outcome
+            retainedOutcomeOrder.removeAll { $0 == key }
+            retainedOutcomeOrder.append(key)
+            while retainedOutcomeOrder.count > retainedOutcomeLimit {
+                let expired = retainedOutcomeOrder.removeFirst()
+                retainedOutcomes.removeValue(forKey: expired)
+            }
+            let pending = waiters.removeValue(forKey: key)?.values ?? [:].values
+            for waiter in pending {
+                waiter.timeoutWorkItem.cancel()
+                waiter.continuation.resume(returning: outcome)
+            }
+        }
+
+        func wait(
+            runID: UUID,
+            connectionID: UUID,
+            timeoutSeconds: TimeInterval
+        ) async -> ContextBuilderTeardownPublicationOutcome {
+            let key = Key(runID: runID, connectionID: connectionID)
+            if let outcome = retainedOutcomes[key] { return outcome }
+
+            let waiterID = UUID()
+            return await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    if let outcome = retainedOutcomes[key] {
+                        continuation.resume(returning: outcome)
+                        return
+                    }
+                    let timeoutWorkItem = DispatchWorkItem { [weak self] in
+                        Task { @MainActor in
+                            self?.resolveWaiter(
+                                key: key,
+                                waiterID: waiterID,
+                                outcome: .timedOut
+                            )
+                        }
+                    }
+                    waiters[key, default: [:]][waiterID] = Waiter(
+                        continuation: continuation,
+                        timeoutWorkItem: timeoutWorkItem
+                    )
+                    DispatchQueue.main.asyncAfter(
+                        deadline: .now() + timeoutSeconds,
+                        execute: timeoutWorkItem
+                    )
+                }
+            } onCancel: {
+                Task { @MainActor [weak self] in
+                    self?.resolveWaiter(
+                        key: key,
+                        waiterID: waiterID,
+                        outcome: .cancelled
+                    )
+                }
+            }
+        }
+
+        private func resolveWaiter(
+            key: Key,
+            waiterID: UUID,
+            outcome: ContextBuilderTeardownPublicationOutcome
+        ) {
+            guard let waiter = waiters[key]?.removeValue(forKey: waiterID) else { return }
+            if waiters[key]?.isEmpty == true {
+                waiters.removeValue(forKey: key)
+            }
+            waiter.timeoutWorkItem.cancel()
+            waiter.continuation.resume(returning: outcome)
+        }
+    }
+
     struct PendingPolicyRunIDMappingToken {
         let id: UUID
         let connectionID: UUID
@@ -22,6 +170,14 @@ extension MCPServerViewModel {
         let previousRunPrimaryConnectionID: UUID?
         let previousPendingPolicyTokenID: UUID?
         let previousWindowID: Int?
+    }
+
+    /// Ordered, immutable coordinator lanes displaced by one pending-policy replacement.
+    /// Keys retain connection and binding-generation identity so later replacement churn cannot
+    /// redirect a drain to another tab, workspace, run, or context generation.
+    struct ReadFileAutoSelectionHandoverLineage {
+        let successorKey: MCPReadFileAutoSelectionCoordinator.ContextKey
+        let predecessorKeys: [MCPReadFileAutoSelectionCoordinator.ContextKey]
     }
 
     enum PendingPolicyRunIDMappingRollbackResult: Equatable {
@@ -39,17 +195,33 @@ extension MCPServerViewModel {
         let windowID: Int
         let workspaceID: UUID?
         var promptText: String
+        /// True when terminal commit copied assistant output into an otherwise empty prompt.
+        var usedAgentOutputAsPrompt: Bool
         var selection: StoredSelection
+        /// Monotonic canonical selection revision observed when this snapshot last synchronized.
+        /// A final commit uses it to avoid overwriting selection persisted by a newer connection.
+        var selectionRevision: UInt64
         /// Selected stored prompt IDs for computing meta tokens in tab-context snapshots.
         var selectedMetaPromptIDs: [UUID]
+        /// Selected Context Builder prompt IDs. These are distinct from StoredPrompt IDs.
+        var selectedContextBuilderPromptIDs: [UUID]
         /// Tab name for MCP metadata block generation.
         var tabName: String
         /// Optional run lease associated with this snapshot.
         var runID: UUID?
         /// Active persisted Agent session bound to this tab, if any.
         var activeAgentSessionID: UUID?
-        /// Worktree bindings for the active Agent session at snapshot time.
-        var worktreeBindings: [AgentSessionWorktreeBinding]
+        /// Hydration-aware worktree binding state for the active Agent session at snapshot time.
+        var worktreeBindingState: AgentSessionWorktreeBindingState
+        var worktreeBindings: [AgentSessionWorktreeBinding] {
+            get { worktreeBindingState.bindings ?? [] }
+            set { worktreeBindingState = .hydrated(newValue) }
+        }
+
+        /// Frozen lookup context inherited by nested run-scoped tools.
+        var frozenLookupContext: WorkspaceLookupContext?
+        /// Ephemeral Context Builder review repository authority for one exact nested run.
+        var contextBuilderReviewTargetResolution: ContextBuilderReviewTargetResolution?
         /// True if this snapshot was created via explicit `bind_context` / `_tabID` binding.
         /// Explicit bindings should persist even when the bound tab is not the active tab.
         let explicitlyBound: Bool
@@ -62,12 +234,18 @@ extension MCPServerViewModel {
             windowID: Int,
             workspaceID: UUID?,
             promptText: String,
+            usedAgentOutputAsPrompt: Bool = false,
             selection: StoredSelection,
+            selectionRevision: UInt64 = 0,
             selectedMetaPromptIDs: [UUID],
+            selectedContextBuilderPromptIDs: [UUID] = [],
             tabName: String,
             runID: UUID?,
             activeAgentSessionID: UUID? = nil,
             worktreeBindings: [AgentSessionWorktreeBinding] = [],
+            worktreeBindingState: AgentSessionWorktreeBindingState? = nil,
+            frozenLookupContext: WorkspaceLookupContext? = nil,
+            contextBuilderReviewTargetResolution: ContextBuilderReviewTargetResolution? = nil,
             explicitlyBound: Bool,
             readFileAutoSelectionGeneration: UInt64 = 0
         ) {
@@ -75,12 +253,18 @@ extension MCPServerViewModel {
             self.windowID = windowID
             self.workspaceID = workspaceID
             self.promptText = promptText
+            self.usedAgentOutputAsPrompt = usedAgentOutputAsPrompt
             self.selection = selection
+            self.selectionRevision = selectionRevision
             self.selectedMetaPromptIDs = selectedMetaPromptIDs
+            self.selectedContextBuilderPromptIDs = selectedContextBuilderPromptIDs
             self.tabName = tabName
             self.runID = runID
             self.activeAgentSessionID = activeAgentSessionID
-            self.worktreeBindings = worktreeBindings
+            self.worktreeBindingState = worktreeBindingState
+                ?? (activeAgentSessionID == nil ? .notApplicable : .hydrated(worktreeBindings))
+            self.frozenLookupContext = frozenLookupContext
+            self.contextBuilderReviewTargetResolution = contextBuilderReviewTargetResolution
             self.explicitlyBound = explicitlyBound
             self.readFileAutoSelectionGeneration = readFileAutoSelectionGeneration
         }
@@ -434,13 +618,30 @@ extension MCPServerViewModel {
 
     @MainActor
     private func invalidateReadFileAutoSelection(connectionID: UUID, context: TabScopedContext) {
-        readFileAutoSelectionCoordinator.invalidate(
-            context: readFileAutoSelectionContextKey(connectionID: connectionID, context: context)
-        )
+        let key = readFileAutoSelectionContextKey(connectionID: connectionID, context: context)
+        evictReadFileAutoSelectionCoverageCertificate(for: key)
+        #if DEBUG
+            readFileAutoSelectionForcedAuthoritativeProbeIDsByContext.removeValue(forKey: key)
+            let serverIdentity = ObjectIdentifier(self)
+            Task {
+                await MCPReadFileAutoSelectionProbeRegistry.shared.cancel(
+                    serverIdentity: serverIdentity,
+                    contextKey: key
+                )
+                await MCPApplyEditsRebaseProbeRegistry.shared.cancel(
+                    serverIdentity: serverIdentity,
+                    contextKey: key
+                )
+            }
+        #endif
+        readFileAutoSelectionCoordinator.invalidate(context: key)
     }
 
     @MainActor
     private func releaseBinding(connectionID: UUID, preserveConnectionRunIDMapping: Bool = false) {
+        readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: connectionID)
+        fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+        pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)?.task.cancel()
         guard let context = tabContextByConnectionID.removeValue(forKey: connectionID) else { return }
         invalidateReadFileAutoSelection(connectionID: connectionID, context: context)
         endMirroringForConnection(connectionID)
@@ -538,11 +739,27 @@ extension MCPServerViewModel {
                     let promptChanged = bound.promptText != snapshot.promptText
                     let metaChanged = bound.selectedMetaPromptIDs != snapshot.selectedMetaPromptIDs
                     let nameChanged = bound.tabName != snapshot.name
-                    if selectionChanged || promptChanged || metaChanged || nameChanged {
+                    let sessionChanged = bound.runID == nil
+                        && bound.activeAgentSessionID != snapshot.activeAgentSessionID
+                    if selectionChanged || promptChanged || metaChanged || nameChanged || sessionChanged {
                         bound.selection = incomingSelection
+                        if let workspaceID = bound.workspaceID {
+                            bound.selectionRevision = manager.selectionRevisionForMCP(
+                                workspaceID: workspaceID,
+                                tabID: bound.tabID
+                            )
+                        }
                         bound.promptText = snapshot.promptText
                         bound.selectedMetaPromptIDs = snapshot.selectedMetaPromptIDs
                         bound.tabName = snapshot.name
+                        if sessionChanged {
+                            bound.activeAgentSessionID = snapshot.activeAgentSessionID
+                            bound.worktreeBindingState = snapshot.activeAgentSessionID.map {
+                                self.agentWorktreeBindingStateProvider?($0, snapshot.id) ?? .unhydrated
+                            } ?? .notApplicable
+                            self.fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+                            self.pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)?.task.cancel()
+                        }
                         self.tabContextByConnectionID[connectionID] = bound
                         tabContextLog("applied snapshot connectionID=\(connectionID) tab=\(context.tabID) selCount=\(incomingSelection.selectedPaths.count) promptChars=\(snapshot.promptText.count)")
                     }
@@ -586,6 +803,13 @@ extension MCPServerViewModel {
         guard ctx.windowID == windowID else { return nil }
         return ctx.tabID
     }
+
+    #if DEBUG
+        @MainActor
+        func debugSelectionRevisionForBoundConnection(_ connectionID: UUID) -> UInt64? {
+            tabContextByConnectionID[connectionID]?.selectionRevision
+        }
+    #endif
 
     @MainActor
     func connectionBindingSnapshot(forConnection connectionID: UUID) -> ConnectionBindingSnapshot {
@@ -681,11 +905,15 @@ extension MCPServerViewModel {
     /// Proactively removes all cached tab-context state for a closing tab while preserving window affinity.
     @MainActor
     func purgeClosedTabContext(tabID: UUID) {
+        gitArtifactAdvertisementRegistry.removeTab(tabID: tabID)
         let boundConnections = tabContextByConnectionID.compactMap { connectionID, context in
             context.tabID == tabID ? connectionID : nil
         }
 
         for connectionID in boundConnections {
+            readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: connectionID)
+            fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+            pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)?.task.cancel()
             guard let context = tabContextByConnectionID.removeValue(forKey: connectionID) else { continue }
             invalidateReadFileAutoSelection(connectionID: connectionID, context: context)
             endMirroringForConnection(connectionID)
@@ -732,11 +960,11 @@ extension MCPServerViewModel {
         guard let manager = workspaceManager else {
             throw TabBindError.missingWorkspace
         }
-        guard let captured = manager.collectMCPTabContextComposeSnapshot(
+        guard let stored = manager.collectMCPTabContextComposeSnapshot(
             tabID: tabID,
             workspaceID: requestedWorkspaceID,
-            captureActiveUIState: captureActiveUIState,
-            flushPendingUISelection: flushActiveSelection
+            captureActiveUIState: false,
+            flushPendingUISelection: false
         ) else {
             if let requestedWorkspaceID,
                !manager.workspaces.contains(where: { $0.id == requestedWorkspaceID })
@@ -746,18 +974,41 @@ extension MCPServerViewModel {
             throw TabBindError.tabNotFound(tabID)
         }
 
-        let snapshot = captured.snapshot
+        let storedSnapshot = stored.snapshot
+        let storedWorktreeBindingState = storedSnapshot.activeAgentSessionID.map {
+            agentWorktreeBindingStateProvider?($0, storedSnapshot.id) ?? .unhydrated
+        } ?? .notApplicable
+        let preserveStoredSelection = storedWorktreeBindingState.bindings?.isEmpty == false
+        let captured = manager.collectMCPTabContextComposeSnapshot(
+            tabID: tabID,
+            workspaceID: stored.workspaceID,
+            captureActiveUIState: captureActiveUIState,
+            // Worktree-only paths intentionally are not mirrored into the logical base UI.
+            // Flushing that UI would erase the canonical tab selection on the next request.
+            flushPendingUISelection: flushActiveSelection && !preserveStoredSelection
+        ) ?? stored
+        var snapshot = captured.snapshot
+        if preserveStoredSelection {
+            snapshot.selection = storedSnapshot.selection
+        }
         return TabContextSnapshot(
             tabID: snapshot.id,
             windowID: windowID,
             workspaceID: captured.workspaceID,
             promptText: snapshot.promptText,
             selection: snapshot.selection,
+            selectionRevision: manager.selectionRevisionForMCP(
+                workspaceID: captured.workspaceID,
+                tabID: snapshot.id
+            ),
             selectedMetaPromptIDs: snapshot.selectedMetaPromptIDs,
+            selectedContextBuilderPromptIDs: snapshot.contextBuilder.selectedContextBuilderPromptIDs,
             tabName: snapshot.name,
             runID: runID,
             activeAgentSessionID: snapshot.activeAgentSessionID,
-            worktreeBindings: snapshot.activeAgentSessionID.map { agentWorktreeBindingsProvider?($0, snapshot.id) ?? [] } ?? [],
+            worktreeBindingState: snapshot.activeAgentSessionID.map {
+                agentWorktreeBindingStateProvider?($0, snapshot.id) ?? .unhydrated
+            } ?? .notApplicable,
             explicitlyBound: explicitlyBound
         )
     }
@@ -795,11 +1046,18 @@ extension MCPServerViewModel {
                 workspaceID: captured.workspaceID,
                 promptText: snapshot.promptText,
                 selection: snapshot.selection,
+                selectionRevision: workspaceManager?.selectionRevisionForMCP(
+                    workspaceID: captured.workspaceID,
+                    tabID: snapshot.id
+                ) ?? 0,
                 selectedMetaPromptIDs: snapshot.selectedMetaPromptIDs,
+                selectedContextBuilderPromptIDs: snapshot.contextBuilder.selectedContextBuilderPromptIDs,
                 tabName: snapshot.name,
                 runID: runID,
                 activeAgentSessionID: snapshot.activeAgentSessionID,
-                worktreeBindings: snapshot.activeAgentSessionID.map { agentWorktreeBindingsProvider?($0, snapshot.id) ?? [] } ?? [],
+                worktreeBindingState: snapshot.activeAgentSessionID.map {
+                    agentWorktreeBindingStateProvider?($0, snapshot.id) ?? .unhydrated
+                } ?? .notApplicable,
                 explicitlyBound: explicitlyBound
             )
         }
@@ -810,11 +1068,20 @@ extension MCPServerViewModel {
             workspaceID: resolvedWorkspaceID,
             promptText: composeSnapshot.promptText,
             selection: composeSnapshot.selection,
+            selectionRevision: resolvedWorkspaceID.map {
+                workspaceManager?.selectionRevisionForMCP(
+                    workspaceID: $0,
+                    tabID: composeSnapshot.id
+                ) ?? 0
+            } ?? 0,
             selectedMetaPromptIDs: composeSnapshot.selectedMetaPromptIDs,
+            selectedContextBuilderPromptIDs: composeSnapshot.contextBuilder.selectedContextBuilderPromptIDs,
             tabName: composeSnapshot.name,
             runID: runID,
             activeAgentSessionID: composeSnapshot.activeAgentSessionID,
-            worktreeBindings: composeSnapshot.activeAgentSessionID.map { agentWorktreeBindingsProvider?($0, composeSnapshot.id) ?? [] } ?? [],
+            worktreeBindingState: composeSnapshot.activeAgentSessionID.map {
+                agentWorktreeBindingStateProvider?($0, composeSnapshot.id) ?? .unhydrated
+            } ?? .notApplicable,
             explicitlyBound: explicitlyBound
         )
     }
@@ -867,6 +1134,8 @@ extension MCPServerViewModel {
         if let runID {
             let mappingSucceeded = registerRunIDMapping(connectionID: connectionID, runID: runID, windowID: windowID)
             guard mappingSucceeded else {
+                fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+                pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)?.task.cancel()
                 tabContextByConnectionID.removeValue(forKey: connectionID)
                 windowIDByConnection.removeValue(forKey: connectionID)
                 throw TabBindError.runMappingRejected(runID)
@@ -935,7 +1204,7 @@ extension MCPServerViewModel {
             return workspaceManager?.activeWorkspace?.id
         }()
 
-        var context = makeTabContextSnapshot(
+        let context = makeTabContextSnapshot(
             from: snapshot,
             workspaceID: resolvedWorkspaceID,
             windowID: windowID,
@@ -944,7 +1213,46 @@ extension MCPServerViewModel {
             captureActiveUIState: false,
             flushActiveSelection: false
         )
+        return installTabContext(
+            clientID: clientID,
+            clientName: clientName,
+            windowID: windowID,
+            context: context,
+            signalRouting: signalRouting,
+            deferRunIDReplacementForPendingPolicy: deferRunIDReplacementForPendingPolicy
+        )
+    }
 
+    @MainActor
+    @discardableResult
+    func installFrozenTabContext(
+        clientID: String?,
+        clientName: String?,
+        context: TabContextSnapshot,
+        signalRouting: Bool = true,
+        deferRunIDReplacementForPendingPolicy: Bool = false
+    ) -> PendingPolicyRunIDMappingToken? {
+        tabContextLog("installFrozenTabContext tab=\(context.tabID) window=\(context.windowID) clientID=\(clientID ?? "nil") clientName=\(clientName ?? "nil") runID=\(context.runID?.uuidString ?? "nil")")
+        return installTabContext(
+            clientID: clientID,
+            clientName: clientName,
+            windowID: context.windowID,
+            context: context,
+            signalRouting: signalRouting,
+            deferRunIDReplacementForPendingPolicy: deferRunIDReplacementForPendingPolicy
+        )
+    }
+
+    @MainActor
+    private func installTabContext(
+        clientID: String?,
+        clientName: String?,
+        windowID: Int,
+        context initialContext: TabContextSnapshot,
+        signalRouting: Bool,
+        deferRunIDReplacementForPendingPolicy: Bool
+    ) -> PendingPolicyRunIDMappingToken? {
+        var context = initialContext
         if let clientID,
            let uuid = UUID(uuidString: clientID)
         {
@@ -969,6 +1277,7 @@ extension MCPServerViewModel {
             }
 
             tabContextLog("installTabContext immediate bind connectionID=\(uuid)")
+            readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: uuid)
             if let previous = tabContextByConnectionID[uuid] {
                 invalidateReadFileAutoSelection(connectionID: uuid, context: previous)
                 endMirroringForConnection(uuid)
@@ -1047,6 +1356,10 @@ extension MCPServerViewModel {
            let existing = tabContextByConnectionID[previousConnection]
         {
             if existing.windowID == windowID {
+                readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: previousConnection)
+                readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: connectionID)
+                fileToolLookupContextCacheByConnectionID.removeValue(forKey: previousConnection)
+                pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: previousConnection)?.task.cancel()
                 tabContextByConnectionID.removeValue(forKey: previousConnection)
                 invalidateReadFileAutoSelection(connectionID: previousConnection, context: existing)
                 endMirroringForConnection(previousConnection)
@@ -1082,6 +1395,7 @@ extension MCPServerViewModel {
             return nil
         }
 
+        readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: connectionID)
         activateReadFileAutoSelection(&context)
         tabContextByConnectionID[connectionID] = context
         windowIDByConnection[connectionID] = context.windowID
@@ -1110,24 +1424,34 @@ extension MCPServerViewModel {
         /// This is not a sticky connection binding; resolvers validate it against any
         /// existing binding and otherwise use it for this call only.
         let tabContextHint: TabContextHint?
+        /// Dispatcher-validated provenance for a one-shot hidden `_windowID`.
+        /// This is distinct from effective or persisted connection affinity.
+        let explicitWindowRoutingHint: MCPExplicitWindowRoutingHint?
 
         init(
             connectionID: UUID?,
             clientName: String?,
             windowID: Int?,
             runPurpose: MCPRunPurpose? = nil,
-            tabContextHint: TabContextHint? = nil
+            tabContextHint: TabContextHint? = nil,
+            explicitWindowRoutingHint: MCPExplicitWindowRoutingHint? = nil
         ) {
             self.connectionID = connectionID
             self.clientName = clientName
             self.windowID = windowID
             self.runPurpose = runPurpose
             self.tabContextHint = tabContextHint
+            self.explicitWindowRoutingHint = explicitWindowRoutingHint
         }
     }
 
     @MainActor
     func captureRequestMetadata() async -> RequestMetadata {
+        #if DEBUG
+            if let requestMetadataOverrideForTesting {
+                return requestMetadataOverrideForTesting
+            }
+        #endif
         let connectionID = await service.currentRequestConnectionID()
         let runPurpose: MCPRunPurpose? = if let connectionID {
             await ServerNetworkManager.shared.runPurpose(for: connectionID)
@@ -1139,7 +1463,8 @@ extension MCPServerViewModel {
             clientName: service.currentRequestClientName(),
             windowID: service.currentRequestWindowID(),
             runPurpose: runPurpose,
-            tabContextHint: ServerNetworkManager.currentTabContextHint
+            tabContextHint: ServerNetworkManager.currentTabContextHint,
+            explicitWindowRoutingHint: service.currentRequestExplicitWindowRoutingHint()
         )
     }
 
@@ -1148,7 +1473,8 @@ extension MCPServerViewModel {
         from metadata: RequestMetadata,
         explicitHint: TabContextHint? = nil,
         toolName: String = "unknown",
-        policy: TabContextResolutionPolicy
+        policy: TabContextResolutionPolicy,
+        startMirroring: Bool = true
     ) throws -> TabContextResolution {
         try resolveTabContext(
             connectionID: metadata.connectionID,
@@ -1157,13 +1483,25 @@ extension MCPServerViewModel {
             explicitHint: explicitHint ?? metadata.tabContextHint,
             toolName: toolName,
             policy: policy,
-            runPurpose: metadata.runPurpose
+            runPurpose: metadata.runPurpose,
+            startMirroring: startMirroring
         )
     }
 
     struct ResolvedTabContextSnapshot {
         var snapshot: TabContextSnapshot
         let usesActiveTabCompatibility: Bool
+        let source: TabContextSnapshotSource?
+
+        init(
+            snapshot: TabContextSnapshot,
+            usesActiveTabCompatibility: Bool,
+            source: TabContextSnapshotSource? = nil
+        ) {
+            self.snapshot = snapshot
+            self.usesActiveTabCompatibility = usesActiveTabCompatibility
+            self.source = source
+        }
     }
 
     nonisolated static func activeTabCompatibilityFallbackDecision(
@@ -1251,20 +1589,27 @@ extension MCPServerViewModel {
         from metadata: RequestMetadata,
         explicitHint: TabContextHint? = nil,
         toolName: String,
-        policy: TabContextResolutionPolicy
+        policy: TabContextResolutionPolicy,
+        startMirroring: Bool = true
     ) throws -> ResolvedTabContextSnapshot {
         switch try resolveTabContext(
             from: metadata,
             explicitHint: explicitHint,
             toolName: toolName,
-            policy: policy
+            policy: policy,
+            startMirroring: startMirroring
         ) {
-        case let .tabContextSnapshot(snapshot, _):
-            ResolvedTabContextSnapshot(snapshot: snapshot, usesActiveTabCompatibility: false)
+        case let .tabContextSnapshot(snapshot, source):
+            ResolvedTabContextSnapshot(
+                snapshot: snapshot,
+                usesActiveTabCompatibility: false,
+                source: source
+            )
         case .activeTabCompatibility:
             try ResolvedTabContextSnapshot(
                 snapshot: activeTabCompatibilitySnapshot(metadata: metadata, toolName: toolName),
-                usesActiveTabCompatibility: true
+                usesActiveTabCompatibility: true,
+                source: nil
             )
         }
     }
@@ -1284,6 +1629,11 @@ extension MCPServerViewModel {
         }
         var merged = latest
         merged.selection = context.selection
+        merged.selectedContextBuilderPromptIDs = context.selectedContextBuilderPromptIDs
+        merged.activeAgentSessionID = context.activeAgentSessionID
+        merged.worktreeBindingState = context.worktreeBindingState
+        merged.frozenLookupContext = context.frozenLookupContext
+        merged.contextBuilderReviewTargetResolution = context.contextBuilderReviewTargetResolution
         merged.readFileAutoSelectionGeneration = context.readFileAutoSelectionGeneration
         return merged
     }
@@ -1292,6 +1642,19 @@ extension MCPServerViewModel {
         case persisted
         case unchanged
         case unavailable
+    }
+
+    struct PrimaryGitArtifactCommitResult: Equatable {
+        let selection: StoredSelection
+        let selectionRevision: UInt64
+        let newlyAddedArtifacts: [GitDiffPublishedArtifact]
+        let autoSelectedAliases: [String]
+    }
+
+    enum MCPManageSelectionArtifactCommitResult: Equatable {
+        case committed(selection: StoredSelection, selectionRevision: UInt64)
+        case conflict(reason: String)
+        case unavailable(reason: String)
     }
 
     struct MCPSelectionPersistenceVerification: Equatable {
@@ -1316,35 +1679,53 @@ extension MCPServerViewModel {
     static func persistMCPSelectionThroughCoordinator(
         _ selection: StoredSelection,
         for tabID: UUID,
-        selectionCoordinator: WorkspaceSelectionCoordinator?
+        workspaceID: UUID?,
+        selectionCoordinator: WorkspaceSelectionCoordinator?,
+        mirrorToUIIfActive: Bool = true,
+        expectedCurrentSelection: StoredSelection? = nil
     ) async -> MCPSelectionCoordinatorPersistenceResult {
-        guard let selectionCoordinator,
-              let current = selectionCoordinator.selectionSnapshot(for: tabID, flushPendingUIIfActive: false)
-        else { return .unavailable }
-        guard current.selection != selection else { return .unchanged }
+        guard let workspaceID, let selectionCoordinator else { return .unavailable }
+        let identity = WorkspaceSelectionIdentity(workspaceID: workspaceID, tabID: tabID)
+        guard let current = selectionCoordinator.selectionSnapshot(
+            for: identity,
+            flushPendingUIIfActive: false
+        ) else { return .unavailable }
+        let outcome: MCPSelectionCoordinatorPersistenceResult = current.selection == selection ? .unchanged : .persisted
         _ = await selectionCoordinator.persistSelection(
             selection,
-            for: tabID,
+            for: identity,
             source: .mcpTabContext,
-            mirrorToUIIfActive: true
+            mirrorToUIIfActive: mirrorToUIIfActive,
+            expectedCurrentSelection: expectedCurrentSelection
         )
-        return .persisted
+        return outcome
     }
 
     @MainActor
     static func persistMCPSelectionAndVerifyThroughCoordinator(
         _ selection: StoredSelection,
         for tabID: UUID,
-        selectionCoordinator: WorkspaceSelectionCoordinator?
+        workspaceID: UUID?,
+        selectionCoordinator: WorkspaceSelectionCoordinator?,
+        mirrorToUIIfActive: Bool = true,
+        expectedCurrentSelection: StoredSelection? = nil
     ) async -> MCPSelectionPersistenceVerification {
         let outcome = await persistMCPSelectionThroughCoordinator(
             selection,
             for: tabID,
-            selectionCoordinator: selectionCoordinator
+            workspaceID: workspaceID,
+            selectionCoordinator: selectionCoordinator,
+            mirrorToUIIfActive: mirrorToUIIfActive,
+            expectedCurrentSelection: expectedCurrentSelection
         )
-        let canonicalSelection = selectionCoordinator?
-            .selectionSnapshot(for: tabID, flushPendingUIIfActive: false)?
-            .selection
+        let canonicalSelection = workspaceID.flatMap { workspaceID in
+            selectionCoordinator?
+                .selectionSnapshot(
+                    for: WorkspaceSelectionIdentity(workspaceID: workspaceID, tabID: tabID),
+                    flushPendingUIIfActive: false
+                )?
+                .selection
+        }
         return MCPSelectionPersistenceVerification(
             outcome: outcome,
             expectedSelection: selection,
@@ -1353,11 +1734,19 @@ extension MCPServerViewModel {
     }
 
     @MainActor
-    private func canonicalPersistedSelection(for tabID: UUID) -> StoredSelection? {
-        if let selection = selectionCoordinator?.selectionSnapshot(for: tabID, flushPendingUIIfActive: false)?.selection {
+    private func canonicalPersistedSelection(
+        for tabID: UUID,
+        workspaceID: UUID?
+    ) -> StoredSelection? {
+        guard let workspaceID else { return nil }
+        let identity = WorkspaceSelectionIdentity(workspaceID: workspaceID, tabID: tabID)
+        if let selection = selectionCoordinator?
+            .selectionSnapshot(for: identity, flushPendingUIIfActive: false)?
+            .selection
+        {
             return selection
         }
-        return workspaceManager?.composeTab(with: tabID)?.selection
+        return workspaceManager?.composeTab(for: identity)?.selection
     }
 
     @MainActor
@@ -1377,17 +1766,24 @@ extension MCPServerViewModel {
     ) async -> MCPSelectionPersistenceVerification? {
         guard mutated else { return nil }
         let context = await persistenceSafeTabContext(resolved.snapshot)
+        // The visible file-tree UI is backed by logical workspace roots. Mirroring a
+        // worktree-only selection through it would drop paths that exist only in the bound root.
         var verification = await Self.persistMCPSelectionAndVerifyThroughCoordinator(
             context.selection,
             for: context.tabID,
-            selectionCoordinator: selectionCoordinator
+            workspaceID: context.workspaceID,
+            selectionCoordinator: selectionCoordinator,
+            mirrorToUIIfActive: context.worktreeBindings.isEmpty
         )
         if verification.outcome == .unavailable {
             await commitTabContext(selectionOnlyCommitContext(from: context))
             verification = MCPSelectionPersistenceVerification(
                 outcome: .unavailable,
                 expectedSelection: context.selection,
-                canonicalSelection: canonicalPersistedSelection(for: context.tabID)
+                canonicalSelection: canonicalPersistedSelection(
+                    for: context.tabID,
+                    workspaceID: context.workspaceID
+                )
             )
         }
 
@@ -1404,79 +1800,150 @@ extension MCPServerViewModel {
         {
             var refreshed = selectionOnlyCommitContext(from: context)
             refreshed.selection = canonicalSelection
+            if let workspaceID = context.workspaceID {
+                refreshed.selectionRevision = workspaceManager?.selectionRevisionForMCP(
+                    workspaceID: workspaceID,
+                    tabID: context.tabID
+                ) ?? latest.selectionRevision
+            }
             refreshed.readFileAutoSelectionGeneration = latest.readFileAutoSelectionGeneration
             tabContextByConnectionID[connectionID] = refreshed
         }
         return verification
     }
 
-    @MainActor
-    private func readFileAutoSelectionPersistenceContext(
-        selection: StoredSelection,
-        contextKey: MCPReadFileAutoSelectionCoordinator.ContextKey
-    ) async -> TabContextSnapshot? {
-        guard var context = readFileAutoSelectionContext(for: contextKey),
-              context.tabID == contextKey.tabID
-        else { return nil }
-        context.selection = selection
-        return context
+    struct ReadFileAutoSelectionAuthoritativeResult: Equatable {
+        let persistedSelection: StoredSelection
+        let canonicalUnchanged: Bool
+        let coordinatorVerified: Bool
+        let selectionRevision: UInt64
     }
 
     @MainActor
-    private func persistedSelectionForReadFileAutoSelection(
-        selection: StoredSelection,
-        contextKey: MCPReadFileAutoSelectionCoordinator.ContextKey
-    ) async -> StoredSelection {
-        guard let persistenceContext = await readFileAutoSelectionPersistenceContext(
-            selection: selection,
-            contextKey: contextKey
-        ) else { return selection }
-        let persistedContext = await persistenceSafeTabContext(persistenceContext)
-        return persistedContext.selection
+    private func currentReadFileAutoSelectionTab(
+        for contextKey: MCPReadFileAutoSelectionCoordinator.ContextKey
+    ) -> (manager: WorkspaceManagerViewModel, identity: WorkspaceSelectionIdentity, tab: ComposeTabState)? {
+        guard isReadFileAutoSelectionContextCurrent(contextKey),
+              let manager = workspaceManager,
+              let workspaceID = contextKey.workspaceID,
+              let workspace = manager.workspaces.first(where: { $0.id == workspaceID }),
+              let tab = workspace.composeTabs.first(where: { $0.id == contextKey.tabID })
+        else { return nil }
+        return (
+            manager,
+            WorkspaceSelectionIdentity(workspaceID: workspaceID, tabID: contextKey.tabID),
+            tab
+        )
     }
 
     @MainActor
     func acceptReadFileAutoSelection(
         selection: StoredSelection,
-        contextKey: MCPReadFileAutoSelectionCoordinator.ContextKey
-    ) async -> Bool {
-        guard isReadFileAutoSelectionContextCurrent(contextKey),
-              let manager = workspaceManager,
-              let workspaceID = contextKey.workspaceID,
-              let workspaceIndex = manager.workspaces.firstIndex(where: { $0.id == workspaceID }),
-              let tabIndex = manager.workspaces[workspaceIndex].composeTabs.firstIndex(where: { $0.id == contextKey.tabID })
-        else { return false }
+        lookupContext: WorkspaceLookupContext,
+        contextKey: MCPReadFileAutoSelectionCoordinator.ContextKey,
+        expectedBaseSelection: StoredSelection
+    ) async -> ReadFileAutoSelectionAuthoritativeResult? {
+        guard isReadFileAutoSelectionContextCurrent(contextKey) else { return nil }
 
-        let persistedSelection = await persistedSelectionForReadFileAutoSelection(
-            selection: selection,
-            contextKey: contextKey
+        #if DEBUG
+            if let handler = readFileAutoSelectionPersistenceWillResolveHandlerForTesting {
+                await handler()
+            }
+        #endif
+        guard isReadFileAutoSelectionContextCurrent(contextKey),
+              let currentTarget = currentReadFileAutoSelectionTab(for: contextKey),
+              currentTarget.tab.selection == expectedBaseSelection
+        else { return nil }
+
+        let logicalSelection = lookupContext.logicalizeSelection(selection)
+        let logicalExpectedBaseSelection = lookupContext.logicalizeSelection(expectedBaseSelection)
+        let expectedBaseForPreservation = StoredSelection(
+            selectedPaths: StoredSelectionPathNormalization.standardizedPaths(logicalExpectedBaseSelection.selectedPaths),
+            autoCodemapPaths: StoredSelectionPathNormalization.standardizedPaths(logicalExpectedBaseSelection.autoCodemapPaths),
+            slices: StoredSelectionPathNormalization.standardizedSlices(logicalExpectedBaseSelection.slices).mapValues {
+                SliceRangeMath.normalize($0)
+            },
+            codemapAutoEnabled: logicalExpectedBaseSelection.codemapAutoEnabled
+        )
+        let persistedSelection = StoredSelection(
+            selectedPaths: StoredSelectionPathNormalization.standardizedPaths(logicalSelection.selectedPaths),
+            autoCodemapPaths: StoredSelectionPathNormalization.standardizedPaths(logicalSelection.autoCodemapPaths),
+            slices: StoredSelectionPathNormalization.standardizedSlices(logicalSelection.slices).mapValues {
+                SliceRangeMath.normalize($0)
+            },
+            codemapAutoEnabled: logicalSelection.codemapAutoEnabled
+        )
+        guard MCPReadFileAutoSelectionCoordinator.authoritativeSelection(
+            expectedBaseForPreservation,
+            isPreservedBy: persistedSelection
+        ),
+            let target = currentReadFileAutoSelectionTab(for: contextKey)
+        else { return nil }
+        let canonicalUnchanged = target.tab.selection == persistedSelection
+        var coordinatorVerified = canonicalUnchanged
+
+        if !canonicalUnchanged {
+            var verification = await EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.AutoSelect.canonicalStoredCommit) {
+                await Self.persistMCPSelectionAndVerifyThroughCoordinator(
+                    persistedSelection,
+                    for: contextKey.tabID,
+                    workspaceID: contextKey.workspaceID,
+                    selectionCoordinator: selectionCoordinator,
+                    mirrorToUIIfActive: false,
+                    expectedCurrentSelection: expectedBaseSelection
+                )
+            }
+            guard let refreshedTarget = currentReadFileAutoSelectionTab(for: contextKey) else { return nil }
+            if verification.outcome == .unavailable {
+                guard refreshedTarget.tab.selection == expectedBaseSelection else { return nil }
+                var updatedTab = refreshedTarget.tab
+                updatedTab.selection = persistedSelection
+                updatedTab.lastModified = Date()
+                await EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.AutoSelect.canonicalStoredCommit) {
+                    _ = refreshedTarget.manager.updateComposeTabStoredOnly(
+                        updatedTab,
+                        inWorkspaceID: refreshedTarget.identity.workspaceID
+                    )
+                }
+                verification = MCPSelectionPersistenceVerification(
+                    outcome: .unavailable,
+                    expectedSelection: persistedSelection,
+                    canonicalSelection: currentReadFileAutoSelectionTab(for: contextKey)?.tab.selection
+                )
+            }
+            coordinatorVerified = verification.isVerified
+        }
+
+        guard coordinatorVerified,
+              let finalTarget = currentReadFileAutoSelectionTab(for: contextKey),
+              finalTarget.tab.selection == persistedSelection
+        else { return nil }
+        if canonicalUnchanged {
+            finalTarget.manager.updateComposeTabSelectionPresentation(
+                persistedSelection,
+                for: finalTarget.identity
+            )
+        }
+        let selectionRevision = finalTarget.manager.selectionRevisionForMCP(
+            workspaceID: finalTarget.identity.workspaceID,
+            tabID: finalTarget.identity.tabID
         )
 
         if case let .bound(connectionID, _) = contextKey.route,
-           var latest = tabContextByConnectionID[connectionID]
+           var latest = tabContextByConnectionID[connectionID],
+           latest.readFileAutoSelectionGeneration == contextKey.bindingGeneration
         {
             latest.selection = persistedSelection
+            latest.selectionRevision = selectionRevision
             tabContextByConnectionID[connectionID] = latest
         }
 
-        let currentTab = manager.workspaces[workspaceIndex].composeTabs[tabIndex]
-        guard currentTab.selection != persistedSelection else { return false }
-        let persistenceResult = await EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.AutoSelect.canonicalStoredCommit) {
-            await Self.persistMCPSelectionThroughCoordinator(
-                persistedSelection,
-                for: contextKey.tabID,
-                selectionCoordinator: selectionCoordinator
-            )
-        }
-        if persistenceResult == .unavailable {
-            var updatedTab = currentTab
-            updatedTab.selection = persistedSelection
-            updatedTab.lastModified = Date()
-            await EditFlowPerf.measure(EditFlowPerf.Stage.ReadFile.AutoSelect.canonicalStoredCommit) {
-                manager.updateComposeTabStoredOnly(updatedTab)
-            }
-        }
-        return true
+        return ReadFileAutoSelectionAuthoritativeResult(
+            persistedSelection: persistedSelection,
+            canonicalUnchanged: canonicalUnchanged,
+            coordinatorVerified: coordinatorVerified,
+            selectionRevision: selectionRevision
+        )
     }
 
     @MainActor
@@ -1488,31 +1955,418 @@ extension MCPServerViewModel {
 
     @MainActor
     func resolveFileToolLookupContext(
+        tabID: UUID,
+        workspaceID: UUID?
+    ) async throws -> WorkspaceLookupContext {
+        let snapshot = try makeTabContextSnapshot(
+            tabID: tabID,
+            workspaceID: workspaceID,
+            windowID: windowID,
+            runID: nil,
+            explicitlyBound: false,
+            captureActiveUIState: false,
+            flushActiveSelection: false
+        )
+        return await lookupContext(for: snapshot)
+    }
+
+    @MainActor
+    func resolveFileToolLookupContext(
         from metadata: RequestMetadata
     ) async -> WorkspaceLookupContext {
-        let purpose: MCPRunPurpose = if let connectionID = metadata.connectionID {
-            await ServerNetworkManager.shared.runPurpose(for: connectionID)
-        } else {
-            .unknown
-        }
-        let resolved = try? resolveTabContextSnapshot(
+        let purpose = metadata.runPurpose ?? .unknown
+        var resolved = try? resolveTabContextSnapshot(
             from: metadata,
             toolName: "file_tool_lookup_scope",
             policy: .allowLegacyImplicitRouting
         )
+        if var snapshot = resolved?.snapshot {
+            if snapshot.runID == nil,
+               let workspaceID = snapshot.workspaceID,
+               let liveTab = workspaceManager?.composeTab(
+                   for: WorkspaceSelectionIdentity(workspaceID: workspaceID, tabID: snapshot.tabID)
+               ),
+               liveTab.activeAgentSessionID != snapshot.activeAgentSessionID
+            {
+                snapshot.activeAgentSessionID = liveTab.activeAgentSessionID
+                snapshot.worktreeBindingState = liveTab.activeAgentSessionID.map {
+                    agentWorktreeBindingStateProvider?($0, snapshot.tabID) ?? .unhydrated
+                } ?? .notApplicable
+                if let connectionID = metadata.connectionID,
+                   var bound = tabContextByConnectionID[connectionID],
+                   fileToolLookupRouteMatches(bound, snapshot)
+                {
+                    bound.activeAgentSessionID = snapshot.activeAgentSessionID
+                    bound.worktreeBindingState = snapshot.worktreeBindingState
+                    tabContextByConnectionID[connectionID] = bound
+                    fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+                    pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)?.task.cancel()
+                }
+            }
+
+            if let sessionID = snapshot.activeAgentSessionID {
+                if snapshot.runID == nil,
+                   let agentWorktreeBindingStateProvider
+                {
+                    snapshot.worktreeBindingState = agentWorktreeBindingStateProvider(sessionID, snapshot.tabID)
+                }
+                if snapshot.worktreeBindingState == .unhydrated,
+                   let agentWorktreeBindingStateResolver
+                {
+                    let bindingGeneration = snapshot.readFileAutoSelectionGeneration
+                    let hydratedState = await agentWorktreeBindingStateResolver(sessionID, snapshot.tabID)
+                    guard fileToolLookupSnapshotIsCurrent(
+                        snapshot,
+                        connectionID: metadata.connectionID,
+                        expectedBindingGeneration: bindingGeneration
+                    ),
+                        agentWorktreeBindingStateProvider?(sessionID, snapshot.tabID) == hydratedState
+                        || agentWorktreeBindingStateProvider == nil
+                    else {
+                        #if DEBUG
+                            fileToolLookupContextStaleCompletionCount += 1
+                        #endif
+                        return AgentWorkspaceLookupContextResolver.failClosedLookupContext
+                    }
+                    snapshot.worktreeBindingState = hydratedState
+                }
+            } else {
+                snapshot.worktreeBindingState = .notApplicable
+            }
+
+            resolved?.snapshot = snapshot
+            if let connectionID = metadata.connectionID,
+               var bound = tabContextByConnectionID[connectionID],
+               fileToolLookupRouteMatches(bound, snapshot)
+            {
+                if bound.activeAgentSessionID != snapshot.activeAgentSessionID
+                    || bound.worktreeBindingState != snapshot.worktreeBindingState
+                {
+                    fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+                    pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)?.task.cancel()
+                }
+                bound.activeAgentSessionID = snapshot.activeAgentSessionID
+                bound.worktreeBindingState = snapshot.worktreeBindingState
+                tabContextByConnectionID[connectionID] = bound
+            }
+        }
+
         let baseScope = Self.resolveFileToolLookupRootScope(purpose: purpose, resolvedContext: resolved)
-        guard let resolved,
-              let sessionID = resolved.snapshot.activeAgentSessionID,
-              !resolved.snapshot.worktreeBindings.isEmpty,
-              let projection = await materializeWorkspaceBindingProjection(
-                  sessionID: sessionID,
-                  bindings: resolved.snapshot.worktreeBindings
-              ),
-              !projection.isEmpty
-        else {
+        guard let resolved else {
             return WorkspaceLookupContext(rootScope: baseScope, bindingProjection: nil)
         }
-        return WorkspaceLookupContext(rootScope: projection.lookupRootScope, bindingProjection: projection)
+        if resolved.usesActiveTabCompatibility,
+           resolved.snapshot.activeAgentSessionID == nil
+        {
+            return WorkspaceLookupContext(rootScope: baseScope, bindingProjection: nil)
+        }
+        if let frozenLookupContext = resolved.snapshot.frozenLookupContext {
+            return frozenLookupContext
+        }
+
+        let source = AgentWorkspaceLookupContextSource(
+            activeAgentSessionID: resolved.snapshot.activeAgentSessionID,
+            worktreeBindingState: resolved.snapshot.worktreeBindingState
+        )
+        guard let connectionID = metadata.connectionID,
+              !resolved.usesActiveTabCompatibility,
+              let boundSnapshot = tabContextByConnectionID[connectionID],
+              fileToolLookupSnapshotMatches(boundSnapshot, resolved.snapshot),
+              source.activeAgentSessionID != nil,
+              !source.worktreeBindings.isEmpty
+        else {
+            let lookupContext = await AgentWorkspaceLookupContextResolver.authoritativeLookupContextOrFailClosed(
+                source: source,
+                store: promptVM.workspaceFileContextStore
+            )
+            return Self.fileToolLookupContext(lookupContext, applying: baseScope)
+        }
+
+        let visibleRootFingerprint = await fileToolVisibleRootFingerprint()
+        guard fileToolLookupSnapshotIsCurrent(resolved.snapshot, connectionID: connectionID),
+              fileToolBindingSourceIsCurrent(source, for: resolved.snapshot)
+        else {
+            #if DEBUG
+                fileToolLookupContextStaleCompletionCount += 1
+            #endif
+            return AgentWorkspaceLookupContextResolver.failClosedLookupContext
+        }
+        let cacheKey = FileToolLookupContextCacheKey(
+            connectionID: connectionID,
+            windowID: resolved.snapshot.windowID,
+            workspaceID: resolved.snapshot.workspaceID,
+            tabID: resolved.snapshot.tabID,
+            runID: resolved.snapshot.runID,
+            bindingGeneration: resolved.snapshot.readFileAutoSelectionGeneration,
+            baseScope: baseScope,
+            sourceIdentity: source.identity,
+            visibleRootFingerprint: visibleRootFingerprint
+        )
+        if let cached = fileToolLookupContextCacheByConnectionID[connectionID],
+           cached.key == cacheKey,
+           cached.sessionRootLifetimeSnapshot.isGenerationCurrent()
+        {
+            let canReuse = await AgentWorkspaceLookupContextResolver.canReuseAuthoritativeLookupContext(
+                cached.context,
+                source: source,
+                store: promptVM.workspaceFileContextStore
+            )
+            if canReuse {
+                #if DEBUG
+                    if let debugAfterFileToolLookupContextRootValidationForTesting {
+                        await debugAfterFileToolLookupContextRootValidationForTesting()
+                    }
+                #endif
+                let currentVisibleRootFingerprint = await fileToolVisibleRootFingerprint()
+                guard currentVisibleRootFingerprint == visibleRootFingerprint,
+                      fileToolLookupSnapshotIsCurrent(resolved.snapshot, connectionID: connectionID),
+                      fileToolBindingSourceIsCurrent(source, for: resolved.snapshot)
+                else {
+                    fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+                    #if DEBUG
+                        fileToolLookupContextStaleCompletionCount += 1
+                    #endif
+                    return AgentWorkspaceLookupContextResolver.failClosedLookupContext
+                }
+                var currentCachedContext: WorkspaceLookupContext?
+                guard await cached.sessionRootLifetimeSnapshot.isCurrent(),
+                      cached.sessionRootLifetimeSnapshot.performIfGenerationCurrent({
+                          currentCachedContext = cached.context
+                      }), let currentCachedContext
+                else {
+                    fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+                    #if DEBUG
+                        fileToolLookupContextStaleCompletionCount += 1
+                    #endif
+                    return AgentWorkspaceLookupContextResolver.failClosedLookupContext
+                }
+                #if DEBUG
+                    fileToolLookupContextCacheHitCount += 1
+                #endif
+                return currentCachedContext
+            }
+            fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+        }
+        fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+
+        let pendingResolution: PendingFileToolLookupContextResolution
+        if let pending = pendingFileToolLookupContextResolutionByConnectionID[connectionID],
+           pending.key == cacheKey
+        {
+            #if DEBUG
+                fileToolLookupContextCoalescedWaitCount += 1
+                if let debugFileToolLookupContextDidCoalesceForTesting {
+                    await debugFileToolLookupContextDidCoalesceForTesting()
+                }
+            #endif
+            pendingResolution = pending
+        } else {
+            pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)?.task.cancel()
+            #if DEBUG
+                fileToolLookupContextCacheMissCount += 1
+                let beforeResolution = debugBeforeFileToolLookupContextResolutionForTesting
+            #endif
+            let resolutionID = UUID()
+            let resolutionTask = Task { @MainActor in
+                #if DEBUG
+                    if let beforeResolution {
+                        await beforeResolution()
+                    }
+                #endif
+                return await AgentWorkspaceLookupContextResolver.authoritativeLookupContextOrFailClosed(
+                    source: source,
+                    store: promptVM.workspaceFileContextStore
+                )
+            }
+            pendingResolution = PendingFileToolLookupContextResolution(
+                id: resolutionID,
+                key: cacheKey,
+                task: resolutionTask
+            )
+            pendingFileToolLookupContextResolutionByConnectionID[connectionID] = pendingResolution
+        }
+
+        let lookupContext = await pendingResolution.task.value
+        let currentVisibleRootFingerprint = await fileToolVisibleRootFingerprint()
+        let ownsPendingResolution = pendingFileToolLookupContextResolutionByConnectionID[connectionID]?.id
+            == pendingResolution.id
+        let publishedEntry = fileToolLookupContextCacheByConnectionID[connectionID]
+            .flatMap { $0.key == cacheKey ? $0 : nil }
+        guard currentVisibleRootFingerprint == visibleRootFingerprint,
+              ownsPendingResolution || publishedEntry != nil,
+              fileToolLookupSnapshotIsCurrent(resolved.snapshot, connectionID: connectionID),
+              fileToolBindingSourceIsCurrent(source, for: resolved.snapshot)
+        else {
+            if ownsPendingResolution {
+                pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)
+            }
+            #if DEBUG
+                fileToolLookupContextStaleCompletionCount += 1
+            #endif
+            return AgentWorkspaceLookupContextResolver.failClosedLookupContext
+        }
+        let adjustedLookupContext = publishedEntry?.context
+            ?? Self.fileToolLookupContext(lookupContext, applying: baseScope)
+        guard let bindingProjection = adjustedLookupContext.bindingProjection else {
+            if ownsPendingResolution {
+                pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)
+            }
+            return adjustedLookupContext
+        }
+
+        let sessionRootLifetimeSnapshot: WorkspaceSessionRootLifetimeSnapshot? = if let publishedEntry {
+            publishedEntry.sessionRootLifetimeSnapshot
+        } else {
+            await promptVM.workspaceFileContextStore.sessionBoundRootScopeValidationSnapshot(
+                adjustedLookupContext.rootScope,
+                expectedPhysicalRoots: bindingProjection.physicalRootRefs
+            )
+        }
+        #if DEBUG
+            if let debugAfterFileToolLookupContextRootValidationForTesting {
+                await debugAfterFileToolLookupContextRootValidationForTesting()
+            }
+        #endif
+        let finalVisibleRootFingerprint = await fileToolVisibleRootFingerprint()
+        let stillOwnsResolution = pendingFileToolLookupContextResolutionByConnectionID[connectionID]?.id
+            == pendingResolution.id
+        let matchingPublishedEntryExists = fileToolLookupContextCacheByConnectionID[connectionID]?.key == cacheKey
+        guard let sessionRootLifetimeSnapshot,
+              finalVisibleRootFingerprint == visibleRootFingerprint,
+              stillOwnsResolution || matchingPublishedEntryExists,
+              fileToolLookupSnapshotIsCurrent(resolved.snapshot, connectionID: connectionID),
+              fileToolBindingSourceIsCurrent(source, for: resolved.snapshot)
+        else {
+            if stillOwnsResolution {
+                pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)
+            }
+            if matchingPublishedEntryExists {
+                fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+            }
+            #if DEBUG
+                fileToolLookupContextStaleCompletionCount += 1
+            #endif
+            return AgentWorkspaceLookupContextResolver.failClosedLookupContext
+        }
+        if let publishedEntry {
+            var currentPublishedContext: WorkspaceLookupContext?
+            guard await sessionRootLifetimeSnapshot.isCurrent(),
+                  sessionRootLifetimeSnapshot.performIfGenerationCurrent({
+                      currentPublishedContext = publishedEntry.context
+                  }), let currentPublishedContext
+            else {
+                fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+                #if DEBUG
+                    fileToolLookupContextStaleCompletionCount += 1
+                #endif
+                return AgentWorkspaceLookupContextResolver.failClosedLookupContext
+            }
+            return currentPublishedContext
+        }
+
+        let cacheEntry = FileToolLookupContextCacheEntry(
+            key: cacheKey,
+            context: adjustedLookupContext,
+            sessionRootLifetimeSnapshot: sessionRootLifetimeSnapshot
+        )
+        guard await sessionRootLifetimeSnapshot.isCurrent(),
+              sessionRootLifetimeSnapshot.performIfGenerationCurrent({
+                  fileToolLookupContextCacheByConnectionID[connectionID] = cacheEntry
+              })
+        else {
+            if stillOwnsResolution {
+                pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)
+            }
+            #if DEBUG
+                fileToolLookupContextStaleCompletionCount += 1
+            #endif
+            return AgentWorkspaceLookupContextResolver.failClosedLookupContext
+        }
+        if stillOwnsResolution {
+            pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)
+        }
+        return adjustedLookupContext
+    }
+
+    @MainActor
+    private func fileToolVisibleRootFingerprint() async -> String {
+        await promptVM.workspaceFileContextStore.rootRefs(scope: .visibleWorkspace)
+            .map { "\($0.id.uuidString)\u{1F}\($0.standardizedFullPath)" }
+            .sorted()
+            .joined(separator: "\u{1E}")
+    }
+
+    @MainActor
+    private func fileToolLookupSnapshotIsCurrent(
+        _ snapshot: TabContextSnapshot,
+        connectionID: UUID?,
+        expectedBindingGeneration: UInt64? = nil
+    ) -> Bool {
+        if snapshot.runID == nil,
+           let workspaceID = snapshot.workspaceID
+        {
+            guard let liveTab = workspaceManager?.composeTab(
+                for: WorkspaceSelectionIdentity(workspaceID: workspaceID, tabID: snapshot.tabID)
+            ), liveTab.activeAgentSessionID == snapshot.activeAgentSessionID
+            else { return false }
+        }
+        guard let connectionID else { return true }
+        guard let current = tabContextByConnectionID[connectionID],
+              fileToolLookupSnapshotMatches(current, snapshot)
+        else { return false }
+        return expectedBindingGeneration == nil
+            || current.readFileAutoSelectionGeneration == expectedBindingGeneration
+    }
+
+    @MainActor
+    private func fileToolLookupRouteMatches(
+        _ lhs: TabContextSnapshot,
+        _ rhs: TabContextSnapshot
+    ) -> Bool {
+        lhs.tabID == rhs.tabID
+            && lhs.windowID == rhs.windowID
+            && lhs.workspaceID == rhs.workspaceID
+            && lhs.runID == rhs.runID
+            && lhs.readFileAutoSelectionGeneration == rhs.readFileAutoSelectionGeneration
+    }
+
+    @MainActor
+    private func fileToolLookupSnapshotMatches(
+        _ lhs: TabContextSnapshot,
+        _ rhs: TabContextSnapshot
+    ) -> Bool {
+        fileToolLookupRouteMatches(lhs, rhs)
+            && lhs.activeAgentSessionID == rhs.activeAgentSessionID
+    }
+
+    @MainActor
+    private func fileToolBindingSourceIsCurrent(
+        _ source: AgentWorkspaceLookupContextSource,
+        for snapshot: TabContextSnapshot
+    ) -> Bool {
+        guard let sessionID = source.activeAgentSessionID else { return true }
+        if snapshot.runID != nil {
+            return AgentWorkspaceLookupContextSource(
+                activeAgentSessionID: sessionID,
+                worktreeBindingState: snapshot.worktreeBindingState
+            ).identity == source.identity
+        }
+        guard let agentWorktreeBindingStateProvider else { return true }
+        let currentState = agentWorktreeBindingStateProvider(sessionID, snapshot.tabID)
+        return AgentWorkspaceLookupContextSource(
+            activeAgentSessionID: sessionID,
+            worktreeBindingState: currentState
+        ).identity == source.identity
+    }
+
+    private static func fileToolLookupContext(
+        _ lookupContext: WorkspaceLookupContext,
+        applying baseScope: WorkspaceLookupRootScope
+    ) -> WorkspaceLookupContext {
+        if lookupContext == .visibleWorkspace, baseScope != .visibleWorkspace {
+            return WorkspaceLookupContext(rootScope: baseScope, bindingProjection: nil)
+        }
+        return lookupContext
     }
 
     @MainActor
@@ -1540,31 +2394,49 @@ extension MCPServerViewModel {
         return .visibleWorkspace
     }
 
-    static func spawnSourceTabIDForAgentSessionCreation(
+    static func spawnParentSourceTabIDForAgentSessionCreation(
         purpose: MCPRunPurpose,
         resolvedContext: ResolvedTabContextSnapshot?
     ) -> UUID? {
         guard purpose == .agentModeRun,
               let resolvedContext,
-              !resolvedContext.usesActiveTabCompatibility
+              isExactRunScopedTabContext(resolvedContext)
         else {
             return nil
         }
         return resolvedContext.snapshot.tabID
     }
 
-    static func spawnParentSourceTabIDForAgentSessionCreation(
+    private static func isExactRunScopedTabContext(
+        _ resolvedContext: ResolvedTabContextSnapshot
+    ) -> Bool {
+        guard !resolvedContext.usesActiveTabCompatibility,
+              resolvedContext.snapshot.runID != nil
+        else {
+            return false
+        }
+        switch resolvedContext.source {
+        case .runInstall, .runHandover, .pendingRunScoped:
+            return true
+        case .explicitBinding, .implicitBindingCompatibility, .explicitHint, nil:
+            return false
+        }
+    }
+
+    /// Compatibility wrapper for Agent Explore/Manage call sites that have not yet adopted the
+    /// parent-only name. This resolver must never be used as an Oracle packaging-source resolver.
+    static func spawnSourceTabIDForAgentSessionCreation(
         purpose: MCPRunPurpose,
         resolvedContext: ResolvedTabContextSnapshot?
     ) -> UUID? {
-        spawnSourceTabIDForAgentSessionCreation(
+        spawnParentSourceTabIDForAgentSessionCreation(
             purpose: purpose,
             resolvedContext: resolvedContext
         )
     }
 
     @MainActor
-    func resolveSpawnSourceTabIDForAgentSessionCreation(
+    func resolveSpawnParentSourceTabIDForAgentSessionCreation(
         metadata: RequestMetadata
     ) async -> UUID? {
         var purpose: MCPRunPurpose
@@ -1584,9 +2456,228 @@ extension MCPServerViewModel {
             toolName: "agent_session_spawn_source",
             policy: .allowLegacyImplicitRouting
         )
-        return Self.spawnSourceTabIDForAgentSessionCreation(
+        return Self.spawnParentSourceTabIDForAgentSessionCreation(
             purpose: purpose,
             resolvedContext: resolvedContext
+        )
+    }
+
+    /// Compatibility wrapper for Agent Explore/Manage call sites. Agent Run uses the explicit
+    /// parent-only resolver plus a separate immutable Oracle launch-source resolver.
+    @MainActor
+    func resolveSpawnSourceTabIDForAgentSessionCreation(
+        metadata: RequestMetadata
+    ) async -> UUID? {
+        await resolveSpawnParentSourceTabIDForAgentSessionCreation(metadata: metadata)
+    }
+
+    @MainActor
+    private func reconciledAgentRunLaunchPurpose(
+        metadata: RequestMetadata
+    ) async throws -> MCPRunPurpose {
+        var currentPurpose: MCPRunPurpose = .unknown
+        var cachedRunPolicyPurpose: MCPRunPurpose?
+        if let connectionID = metadata.connectionID {
+            let networkManager = ServerNetworkManager.shared
+            currentPurpose = await networkManager.runPurpose(for: connectionID)
+            if currentPurpose == .agentModeRun || currentPurpose == .discoverRun || currentPurpose == .unknown {
+                _ = await networkManager.rehydrateRunTabContextForConnectionIfPossible(connectionID)
+                currentPurpose = await networkManager.runPurpose(for: connectionID)
+            }
+            if let runID = await networkManager.runIDForConnection(connectionID) {
+                cachedRunPolicyPurpose = await networkManager.runPolicyPurpose(for: runID)
+            }
+        }
+
+        let scopedPurposes = [metadata.runPurpose, currentPurpose, cachedRunPolicyPurpose]
+            .compactMap { purpose -> MCPRunPurpose? in
+                guard let purpose, purpose != .unknown else { return nil }
+                return purpose
+            }
+        let distinctPurposes = Set(scopedPurposes.map(\.rawValue))
+        guard distinctPurposes.count <= 1 else {
+            throw MCPError.invalidParams(
+                "agent_run.start observed conflicting run purposes while resolving its launch source. Refusing ambiguous routing."
+            )
+        }
+        return scopedPurposes.first ?? .unknown
+    }
+
+    @MainActor
+    func resolveImplicitContextBuilderGitTarget(
+        metadata: RequestMetadata
+    ) async throws -> ContextBuilderReviewTargetResolution? {
+        let purpose = try await reconciledAgentRunLaunchPurpose(metadata: metadata)
+        guard purpose == .discoverRun else { return nil }
+        let resolved = try resolveTabContextSnapshot(
+            from: metadata,
+            toolName: "context_builder nested git target",
+            policy: .requireExplicitOrRunScoped
+        )
+        guard Self.isExactRunScopedTabContext(resolved),
+              resolved.snapshot.activeAgentSessionID != nil
+        else { return nil }
+        guard resolved.snapshot.runID != nil else {
+            return .unavailable(.missingFrozenTarget)
+        }
+        return resolved.snapshot.contextBuilderReviewTargetResolution
+            ?? .unavailable(.missingFrozenTarget)
+    }
+
+    @MainActor
+    func validateContextBuilderGitArtifactSelection(
+        metadata: RequestMetadata,
+        target: ContextBuilderReviewTarget
+    ) async throws {
+        let resolved = try resolveTabContextSnapshot(
+            from: metadata,
+            toolName: "context_builder nested git publication",
+            policy: .requireExplicitOrRunScoped
+        )
+        guard Self.isExactRunScopedTabContext(resolved),
+              let workspaceID = resolved.snapshot.workspaceID,
+              workspaceID == target.workspaceID,
+              resolved.snapshot.tabID == target.tabID,
+              resolved.snapshot.contextBuilderReviewTargetResolution == .available(target),
+              let lookupContext = resolved.snapshot.frozenLookupContext
+        else {
+            throw ContextBuilderReviewTargetUnavailableReason.workspaceOrTabMismatch
+        }
+        let reviewContext = FrozenPromptGitReviewContext(
+            artifactCapability: target.artifactCapability,
+            compareIntent: .uncommittedHEAD,
+            displayContext: target.displayContext
+        )
+        _ = try await ContextBuilderReviewTargetResolver().finalizeSelection(
+            input: ContextBuilderReviewTargetInput(
+                workspaceID: workspaceID,
+                tabID: resolved.snapshot.tabID,
+                selectionRevision: resolved.snapshot.selectionRevision,
+                selection: resolved.snapshot.selection,
+                lookupContext: lookupContext,
+                reviewGitContext: reviewContext
+            ),
+            initialResolution: .available(target),
+            store: promptVM.workspaceFileContextStore
+        )
+    }
+
+    /// Resolves and freezes the exact compose tab whose immutable review package will be
+    /// delegated to a child Agent run. This is intentionally separate from conversation-parent
+    /// resolution: a top-level window-only launch has no Agent parent but still has a packaging
+    /// source.
+    @MainActor
+    func resolveAgentRunOracleReviewLaunchSnapshot(
+        metadata: RequestMetadata,
+        targetWindow: WindowState
+    ) async throws -> AgentRunOracleReviewLaunchSnapshot {
+        let purpose = try await reconciledAgentRunLaunchPurpose(metadata: metadata)
+        let binding = metadata.connectionID.map(connectionBindingSnapshot(forConnection:))
+        let explicitWindowRoutingHint = metadata.explicitWindowRoutingHint
+
+        for candidateWindowID in [
+            metadata.windowID,
+            metadata.tabContextHint?.windowID,
+            binding?.windowID,
+            explicitWindowRoutingHint?.windowID
+        ].compactMap(\.self) {
+            guard candidateWindowID == targetWindow.windowID else {
+                throw MCPError.invalidParams(
+                    "agent_run.start launch-source routing conflicts with the target window. Bind or hint the intended window before retrying."
+                )
+            }
+        }
+
+        let hasValidatedExplicitWindowRoute: Bool
+        if let explicitWindowRoutingHint {
+            guard explicitWindowRoutingHint.connectionID == metadata.connectionID,
+                  explicitWindowRoutingHint.toolName == "agent_run",
+                  explicitWindowRoutingHint.provenance == .hiddenWindowArgument,
+                  explicitWindowRoutingHint.windowID == metadata.windowID,
+                  explicitWindowRoutingHint.windowID == targetWindow.windowID,
+                  explicitWindowRoutingHint.windowStateIdentity == ObjectIdentifier(targetWindow),
+                  explicitWindowRoutingHint.serverViewModelIdentity == ObjectIdentifier(targetWindow.mcpServer)
+            else {
+                throw MCPError.invalidParams(
+                    "agent_run.start received an explicit window route that does not match its authorized connection, tool, effective window, or target window."
+                )
+            }
+            hasValidatedExplicitWindowRoute = true
+        } else {
+            hasValidatedExplicitWindowRoute = false
+        }
+
+        let isRunScoped = purpose == .agentModeRun || purpose == .discoverRun
+        let resolved: ResolvedTabContextSnapshot
+        let route: AgentRunOracleReviewLaunchRoute
+        if metadata.tabContextHint != nil || binding?.bindingKind == .tabContext || isRunScoped {
+            resolved = try resolveTabContextSnapshot(
+                from: metadata,
+                toolName: "agent_run.start review source",
+                policy: .requireExplicitOrRunScoped
+            )
+            guard !resolved.usesActiveTabCompatibility else {
+                throw MCPError.invalidParams(
+                    "agent_run.start review packaging requires an exact tab context; active-tab compatibility is not allowed."
+                )
+            }
+            if isRunScoped, !Self.isExactRunScopedTabContext(resolved) {
+                throw MCPError.invalidParams(
+                    "agent_run.start was invoked from a run-scoped connection without an exact run tab. Refusing active-tab fallback."
+                )
+            }
+            route = isRunScoped ? .runScoped : .explicitTabContext
+        } else {
+            guard binding?.bindingKind == .windowOnly || hasValidatedExplicitWindowRoute else {
+                throw MCPError.invalidParams(
+                    "agent_run.start requires either an explicit tab context, an exact run-scoped tab, or a window-only connection bound to the target window."
+                )
+            }
+            guard let workspace = targetWindow.workspaceManager.activeWorkspace,
+                  !workspace.isSystemWorkspace,
+                  let activeComposeTabID = workspace.activeComposeTabID
+            else {
+                throw MCPError.invalidParams(
+                    "agent_run.start could not resolve an active project compose tab for its window-only launch source."
+                )
+            }
+            resolved = try ResolvedTabContextSnapshot(
+                snapshot: makeTabContextSnapshot(
+                    tabID: activeComposeTabID,
+                    workspaceID: workspace.id,
+                    windowID: targetWindow.windowID,
+                    runID: nil,
+                    explicitlyBound: false,
+                    captureActiveUIState: true,
+                    flushActiveSelection: true
+                ),
+                usesActiveTabCompatibility: false,
+                source: nil
+            )
+            route = .windowOnlyActiveCompose
+        }
+
+        guard resolved.snapshot.windowID == targetWindow.windowID,
+              let sourceWorkspaceID = resolved.snapshot.workspaceID,
+              let activeWorkspace = targetWindow.workspaceManager.activeWorkspace,
+              activeWorkspace.id == sourceWorkspaceID,
+              !activeWorkspace.isSystemWorkspace
+        else {
+            throw MCPError.invalidParams(
+                "agent_run.start review source must belong to the target window's active project workspace."
+            )
+        }
+
+        return AgentRunOracleReviewLaunchSnapshot(
+            route: route,
+            windowID: resolved.snapshot.windowID,
+            workspaceID: sourceWorkspaceID,
+            tabID: resolved.snapshot.tabID,
+            selectionRevision: resolved.snapshot.selectionRevision,
+            promptText: resolved.snapshot.promptText,
+            selection: resolved.snapshot.selection,
+            sourceAgentSessionID: resolved.snapshot.activeAgentSessionID,
+            routedRunID: resolved.snapshot.runID
         )
     }
 
@@ -1595,7 +2686,9 @@ extension MCPServerViewModel {
         currentPurpose: MCPRunPurpose,
         cachedRunPolicyPurpose: MCPRunPurpose?
     ) -> Bool {
-        capturedPurpose == .agentModeRun || currentPurpose == .agentModeRun || cachedRunPolicyPurpose == .agentModeRun
+        capturedPurpose == .agentModeRun || capturedPurpose == .discoverRun
+            || currentPurpose == .agentModeRun || currentPurpose == .discoverRun
+            || cachedRunPolicyPurpose == .agentModeRun || cachedRunPolicyPurpose == .discoverRun
     }
 
     @MainActor
@@ -1630,7 +2723,7 @@ extension MCPServerViewModel {
         metadata: RequestMetadata,
         targetWindow: WindowState
     ) async -> UUID? {
-        guard let sourceTabID = await resolveSpawnSourceTabIDForAgentSessionCreation(
+        guard let sourceTabID = await resolveSpawnParentSourceTabIDForAgentSessionCreation(
             metadata: metadata
         ) else {
             return nil
@@ -1638,8 +2731,14 @@ extension MCPServerViewModel {
         return targetWindow.agentModeViewModel.mcpSpawnParentSessionID(sourceTabID: sourceTabID)
     }
 
-    private static func tabContextRoutingErrorMessage(toolName: String) -> String {
-        "No tab context is bound for \(toolName). To resolve:\n" +
+    nonisolated static func tabContextRoutingErrorMessage(
+        toolName: String,
+        runPurpose: MCPRunPurpose? = nil
+    ) -> String {
+        if runPurpose == .agentModeRun {
+            return agentModeRoutingRecoveryMessage(toolName: toolName)
+        }
+        return "No tab context is bound for \(toolName). To resolve:\n" +
             "• Call 'bind_context' with op='list' to see available windows and context_id values\n" +
             "• Call 'bind_context' with op='bind' and a context_id to bind this connection to a tab context\n" +
             "• Or pass a matching explicit tab context hint for this tool call"
@@ -1652,7 +2751,15 @@ extension MCPServerViewModel {
             "• Or pass a matching context_id/_tabID hint on this tool call"
     }
 
-    private nonisolated static func runScopedActiveTabCompatibilityMessage(toolName: String, runPurpose: MCPRunPurpose?) -> String {
+    private nonisolated static func agentModeRoutingRecoveryMessage(toolName: String) -> String {
+        "RepoPrompt could not route \(toolName) to the active Agent Mode run. " +
+            "Retry the tool call once. If it fails again, tell the user the RepoPrompt connection failed and ask them to restart this Agent Mode run."
+    }
+
+    nonisolated static func runScopedActiveTabCompatibilityMessage(toolName: String, runPurpose: MCPRunPurpose?) -> String {
+        if runPurpose == .agentModeRun {
+            return agentModeRoutingRecoveryMessage(toolName: toolName)
+        }
         let purpose = runPurpose?.rawValue ?? "run-scoped"
         return "Active-tab compatibility fallback is not allowed for \(toolName) during \(purpose) execution. " +
             "Bind the MCP connection to its invoking tab context with bind_context/context_id, or retry after run-scoped routing is established."
@@ -1687,6 +2794,10 @@ extension MCPServerViewModel {
             }
         }
 
+        readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: previousConnection)
+        readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: connectionID)
+        fileToolLookupContextCacheByConnectionID.removeValue(forKey: previousConnection)
+        pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: previousConnection)?.task.cancel()
         tabContextByConnectionID.removeValue(forKey: previousConnection)
         invalidateReadFileAutoSelection(connectionID: previousConnection, context: existing)
         endMirroringForConnection(previousConnection)
@@ -1712,7 +2823,8 @@ extension MCPServerViewModel {
         explicitHint: TabContextHint? = nil,
         toolName: String = "unknown",
         policy: TabContextResolutionPolicy,
-        runPurpose: MCPRunPurpose? = nil
+        runPurpose: MCPRunPurpose? = nil,
+        startMirroring: Bool = true
     ) throws -> TabContextResolution {
         // Prefer network-provided window ID, but if it's missing and we've
         // already learned the mapping for this connection, use our mapping.
@@ -1748,7 +2860,9 @@ extension MCPServerViewModel {
                         windowIDByConnection[connectionID] = hinted
                     }
                 }
-                beginMirroringForConnection(connectionID, context: bound)
+                if startMirroring {
+                    beginMirroringForConnection(connectionID, context: bound)
+                }
                 tabContextLog("resolveTabContext using bound context connectionID=\(connectionID) runID=\(bound.runID?.uuidString ?? "nil") tab=\(bound.tabID)")
                 let source: TabContextSnapshotSource = {
                     if bound.runID != nil { return .runInstall }
@@ -1849,7 +2963,7 @@ extension MCPServerViewModel {
         }
 
         // 6) Fail closed with routing guidance.
-        throw MCPError.invalidParams(Self.tabContextRoutingErrorMessage(toolName: toolName))
+        throw MCPError.invalidParams(Self.tabContextRoutingErrorMessage(toolName: toolName, runPurpose: runPurpose))
     }
 
     @MainActor
@@ -1873,17 +2987,17 @@ extension MCPServerViewModel {
                 policy: .requireExplicitOrRunScoped
             )
             guard case let .tabContextSnapshot(context, _) = resolution else {
-                throw MCPError.invalidParams(Self.tabContextRoutingErrorMessage(toolName: toolName))
+                throw MCPError.invalidParams(Self.tabContextRoutingErrorMessage(toolName: toolName, runPurpose: purpose))
             }
             windowIDByConnection[connectionID] = context.windowID
             beginMirroringForConnection(connectionID, context: context)
             return (connectionID, context)
         } catch {
             if purpose == .agentModeRun {
-                throw MCPError.invalidParams(
-                    "RepoPrompt could not route this Agent Mode MCP call to the active run. " +
-                        "Retry the tool call once. If it fails again, tell the user the RepoPrompt connection failed and ask them to restart this Agent Mode run."
-                )
+                throw MCPError.invalidParams(Self.tabContextRoutingErrorMessage(
+                    toolName: toolName,
+                    runPurpose: purpose
+                ))
             }
             throw error
         }
@@ -1893,6 +3007,361 @@ extension MCPServerViewModel {
     func requireCurrentTabContext(toolName: String) async throws -> TabScopedContext {
         let (_, context) = try await contextForCurrentRequest(toolName: toolName)
         return context
+    }
+
+    @MainActor
+    func commitPrimaryGitArtifactsToCurrentTab(
+        toolName: String,
+        candidates: [GitDiffPublishedArtifact]
+    ) async throws -> PrimaryGitArtifactCommitResult {
+        let (connectionID, context) = try await contextForCurrentRequest(toolName: toolName)
+        guard let workspaceID = context.workspaceID,
+              let selectionCoordinator
+        else {
+            throw MCPError.internalError("Canonical tab selection is unavailable for Git artifact publication")
+        }
+
+        let identity = WorkspaceSelectionIdentity(workspaceID: workspaceID, tabID: context.tabID)
+        var mergeResult: WorkspaceGitDiffArtifactSelectionMergeResult?
+        guard let transaction = await selectionCoordinator.transformSelection(
+            for: identity,
+            source: .mcpTabContext,
+            mirrorToUIIfActive: context.worktreeBindings.isEmpty
+        ) { latestSelection in
+            let merged = mergePrimaryGitDiffArtifactsIntoSelection(
+                existing: latestSelection,
+                candidates: candidates
+            )
+            mergeResult = merged
+            return merged.selection
+        }, let mergeResult else {
+            throw MCPError.internalError("Canonical tab selection could not commit Git artifacts")
+        }
+
+        guard let canonicalSelection = selectionCoordinator.selectionSnapshot(
+            for: identity,
+            flushPendingUIIfActive: false
+        )?.selection else {
+            throw MCPError.internalError("Canonical Git artifact selection disappeared after commit")
+        }
+        let committedRevision = workspaceManager?.selectionRevisionForMCP(
+            workspaceID: workspaceID,
+            tabID: context.tabID
+        ) ?? transaction.revision
+        let committedIdentities = Set(canonicalSelection.selectedPaths.compactMap {
+            StoredSelectionPathNormalization.standardizedPath($0)
+        })
+        let verifiedNewlyAdded = mergeResult.newlyAddedArtifacts.filter { artifact in
+            guard let identity = StoredSelectionPathNormalization.standardizedPath(artifact.absolutePath) else {
+                return false
+            }
+            return committedIdentities.contains(identity)
+        }
+        guard verifiedNewlyAdded.count == mergeResult.newlyAddedArtifacts.count else {
+            throw MCPError.internalError("Canonical Git artifact selection verification failed")
+        }
+
+        guard var latest = tabContextByConnectionID[connectionID],
+              latest.tabID == context.tabID,
+              latest.windowID == context.windowID,
+              latest.workspaceID == context.workspaceID,
+              latest.runID == context.runID
+        else {
+            throw MCPError.internalError("Git artifact publication tab context is no longer current")
+        }
+        latest.selection = canonicalSelection
+        latest.selectionRevision = committedRevision
+        tabContextByConnectionID[connectionID] = latest
+
+        return PrimaryGitArtifactCommitResult(
+            selection: canonicalSelection,
+            selectionRevision: committedRevision,
+            newlyAddedArtifacts: verifiedNewlyAdded,
+            autoSelectedAliases: verifiedNewlyAdded.compactMap(\.clientAlias)
+        )
+    }
+
+    @MainActor
+    func replaceAdvertisedGitArtifactsForCurrentTab(
+        toolName: String,
+        artifacts: [GitDiffPublishedArtifact]
+    ) async throws -> MCPGitArtifactAdvertisementSnapshot {
+        let (connectionID, context) = try await contextForCurrentRequest(toolName: toolName)
+        guard let workspaceID = context.workspaceID else {
+            throw MCPError.internalError("Workspace identity is unavailable for Git artifact advertisement")
+        }
+        let reviewContext = await promptVM.freezePromptGitReviewContext(
+            workspaceID: workspaceID,
+            tabID: context.tabID,
+            sessionID: context.activeAgentSessionID,
+            bindings: context.worktreeBindings,
+            base: "HEAD"
+        )
+        guard let capability = reviewContext.artifactCapability else {
+            throw MCPError.internalError("Git artifact capability is unavailable for advertisement")
+        }
+        let identity = WorkspaceSelectionIdentity(workspaceID: workspaceID, tabID: context.tabID)
+        let advertisedArtifacts = artifacts.filter {
+            $0.selectionDisposition == .primaryAutoSelect
+                || $0.selectionDisposition == .advertisedSelectable
+        }
+        let rootPath = capability.gitDataRoot.standardizedFullPath
+        var advertisedPaths: [String] = []
+        var seenPaths = Set<String>()
+        for artifact in advertisedArtifacts {
+            guard let alias = artifact.clientAlias,
+                  alias == "_git_data/\(artifact.gitDataRelativePath)",
+                  alias.hasPrefix("_git_data/"),
+                  GitDiffArtifactPathPolicy.isSafeRelativeArtifactPath(artifact.gitDataRelativePath),
+                  artifact.absolutePath == StandardizedPath.join(
+                      standardizedRoot: rootPath,
+                      standardizedRelativePath: artifact.gitDataRelativePath
+                  )
+            else {
+                gitArtifactAdvertisementRegistry.invalidate(identity: identity)
+                throw MCPError.internalError(
+                    "Git artifact advertisement contains an invalid selectable alias"
+                )
+            }
+            if seenPaths.insert(artifact.absolutePath).inserted {
+                advertisedPaths.append(artifact.absolutePath)
+            }
+        }
+
+        let authorization = await SelectedGitDiffArtifactAuthorizationService().authorizeExactPaths(
+            ExactSelectedGitArtifactAuthorizationRequest(
+                exactAbsolutePaths: advertisedPaths,
+                capability: capability,
+                store: promptVM.workspaceFileContextStore
+            )
+        )
+        let dispositions = authorization.dispositionsByAbsolutePath
+        for artifact in advertisedArtifacts {
+            guard let disposition = dispositions[artifact.absolutePath] else {
+                gitArtifactAdvertisementRegistry.invalidate(identity: identity)
+                throw MCPError.internalError(
+                    "Git artifact advertisement authorization returned no disposition for \(artifact.clientAlias ?? "_git_data/<invalid>")"
+                )
+            }
+            if case .authorized = disposition {
+                continue
+            }
+            let diagnostic: String = if case let .rejected(_, reason) = disposition {
+                reason.diagnosticLabel
+            } else {
+                "artifact was not authorized"
+            }
+            gitArtifactAdvertisementRegistry.invalidate(identity: identity)
+            throw MCPError.internalError(
+                "Git artifact advertisement rejected \(artifact.clientAlias ?? "_git_data/<invalid>"): \(diagnostic)"
+            )
+        }
+
+        let visibleRootsAreCurrent = await SelectedGitDiffArtifactAuthorizationService()
+            .visibleRootCheckoutsAreCurrent(
+                capability: capability,
+                store: promptVM.workspaceFileContextStore
+            )
+        guard visibleRootsAreCurrent,
+              gitArtifactAdvertisementContextIsCurrent(
+                  connectionID: connectionID,
+                  expected: context
+              )
+        else {
+            gitArtifactAdvertisementRegistry.invalidate(identity: identity)
+            throw MCPError.internalError(
+                "Git artifact advertisement context changed during authorization"
+            )
+        }
+
+        return try gitArtifactAdvertisementRegistry.replace(
+            identity: identity,
+            capability: capability,
+            artifacts: artifacts
+        )
+    }
+
+    @MainActor
+    private func gitArtifactAdvertisementContextIsCurrent(
+        connectionID: UUID,
+        expected: TabContextSnapshot
+    ) -> Bool {
+        guard let workspaceID = expected.workspaceID,
+              windowIDByConnection[connectionID] == expected.windowID,
+              let manager = workspaceManager,
+              manager.activeWorkspaceID == workspaceID,
+              let tab = manager.composeTab(with: expected.tabID)
+        else { return false }
+
+        if let latest = tabContextByConnectionID[connectionID] {
+            return latest.tabID == expected.tabID
+                && latest.windowID == expected.windowID
+                && latest.workspaceID == expected.workspaceID
+                && latest.runID == expected.runID
+                && latest.activeAgentSessionID == expected.activeAgentSessionID
+                && latest.worktreeBindingState == expected.worktreeBindingState
+                && latest.selectionRevision == expected.selectionRevision
+        }
+
+        let activeTabID = manager.activeWorkspace?.activeComposeTabID
+            ?? manager.activeWorkspace?.composeTabs.first?.id
+        return activeTabID == expected.tabID
+            && tab.activeAgentSessionID == expected.activeAgentSessionID
+            && manager.selectionRevisionForMCP(
+                workspaceID: workspaceID,
+                tabID: expected.tabID
+            ) == expected.selectionRevision
+    }
+
+    @MainActor
+    func invalidateAdvertisedGitArtifactsForCurrentTab(toolName: String) async {
+        guard let (_, context) = try? await contextForCurrentRequest(toolName: toolName),
+              let workspaceID = context.workspaceID
+        else { return }
+        gitArtifactAdvertisementRegistry.invalidate(
+            identity: WorkspaceSelectionIdentity(
+                workspaceID: workspaceID,
+                tabID: context.tabID
+            )
+        )
+    }
+
+    @MainActor
+    func commitManageSelectionArtifactMutation(
+        resolvedContext: ResolvedTabContextSnapshot,
+        metadata: RequestMetadata,
+        expectedPhysicalSelection: StoredSelection,
+        requestedPhysicalSelection: StoredSelection,
+        lookupContext: WorkspaceLookupContext,
+        fence: MCPManageSelectionArtifactAuthorizationFence
+    ) async -> MCPManageSelectionArtifactCommitResult {
+        let context = resolvedContext.snapshot
+        guard let workspaceID = context.workspaceID,
+              fence.identity == WorkspaceSelectionIdentity(
+                  workspaceID: workspaceID,
+                  tabID: context.tabID
+              ),
+              let selectionCoordinator
+        else {
+            return .unavailable(reason: "canonical tab selection is unavailable")
+        }
+
+        guard fence.capability.workspaceID == workspaceID,
+              fence.capability.creatorTabID == context.tabID,
+              fence.capability.sessionID == context.activeAgentSessionID
+        else {
+            return .conflict(reason: "workspace, tab, or session binding changed")
+        }
+        let currentRoot = await promptVM.workspaceFileContextStore.exactRootRef(
+            path: fence.capability.gitDataRoot.standardizedFullPath,
+            kind: .workspaceGitData
+        )
+        guard currentRoot == fence.capability.gitDataRoot else {
+            if let snapshot = fence.grantSnapshot {
+                gitArtifactAdvertisementRegistry.invalidate(
+                    identity: fence.identity,
+                    generation: snapshot.generation
+                )
+            }
+            return .conflict(reason: "Git-data root was unloaded or reloaded")
+        }
+        let visibleRootsAreCurrent = await SelectedGitDiffArtifactAuthorizationService()
+            .visibleRootCheckoutsAreCurrent(
+                capability: fence.capability,
+                store: promptVM.workspaceFileContextStore
+            )
+        guard visibleRootsAreCurrent else {
+            if let snapshot = fence.grantSnapshot {
+                gitArtifactAdvertisementRegistry.invalidate(
+                    identity: fence.identity,
+                    generation: snapshot.generation
+                )
+            }
+            return .conflict(reason: "visible checkout was unloaded, reloaded, or changed")
+        }
+        if let snapshot = fence.grantSnapshot,
+           !gitArtifactAdvertisementRegistry.isCurrent(snapshot)
+        {
+            return .conflict(reason: "Git artifact advertisement was replaced")
+        }
+
+        if let connectionID = metadata.connectionID {
+            guard let latest = tabContextByConnectionID[connectionID],
+                  latest.tabID == context.tabID,
+                  latest.windowID == context.windowID,
+                  latest.workspaceID == context.workspaceID,
+                  latest.runID == context.runID,
+                  latest.activeAgentSessionID == context.activeAgentSessionID,
+                  latest.worktreeBindingState == context.worktreeBindingState
+            else {
+                return .conflict(reason: "tab routing or checkout binding changed")
+            }
+        }
+
+        let expected = lookupContext.logicalizeSelection(expectedPhysicalSelection)
+        let requested = lookupContext.logicalizeSelection(requestedPhysicalSelection)
+        var matchedExpected = false
+        guard let transaction = await selectionCoordinator.transformSelection(
+            for: fence.identity,
+            source: .mcpTabContext,
+            mirrorToUIIfActive: context.worktreeBindings.isEmpty,
+            { latestSelection in
+                guard latestSelection == expected else { return latestSelection }
+                matchedExpected = true
+                return requested
+            }
+        ) else {
+            return .unavailable(reason: "canonical tab selection could not be committed")
+        }
+        guard matchedExpected else {
+            return .conflict(reason: "canonical selection changed concurrently")
+        }
+        guard let canonicalSelection = selectionCoordinator.selectionSnapshot(
+            for: fence.identity,
+            flushPendingUIIfActive: false
+        )?.selection,
+            canonicalSelection == requested
+        else {
+            return .conflict(reason: "canonical selection verification failed")
+        }
+
+        let revision = workspaceManager?.selectionRevisionForMCP(
+            workspaceID: workspaceID,
+            tabID: context.tabID
+        ) ?? transaction.revision
+        if let connectionID = metadata.connectionID,
+           var latest = tabContextByConnectionID[connectionID],
+           latest.tabID == context.tabID,
+           latest.workspaceID == context.workspaceID,
+           latest.runID == context.runID
+        {
+            latest.selection = canonicalSelection
+            latest.selectionRevision = revision
+            tabContextByConnectionID[connectionID] = latest
+        }
+        return .committed(
+            selection: canonicalSelection,
+            selectionRevision: revision
+        )
+    }
+
+    @MainActor
+    func validateManageSelectionArtifactFence(
+        _ fence: MCPManageSelectionArtifactAuthorizationFence
+    ) async -> Bool {
+        let currentRoot = await promptVM.workspaceFileContextStore.exactRootRef(
+            path: fence.capability.gitDataRoot.standardizedFullPath,
+            kind: .workspaceGitData
+        )
+        guard currentRoot == fence.capability.gitDataRoot else { return false }
+        guard await SelectedGitDiffArtifactAuthorizationService()
+            .visibleRootCheckoutsAreCurrent(
+                capability: fence.capability,
+                store: promptVM.workspaceFileContextStore
+            )
+        else { return false }
+        guard let snapshot = fence.grantSnapshot else { return true }
+        return gitArtifactAdvertisementRegistry.isCurrent(snapshot)
     }
 
     private nonisolated static func resolveLiveConnectionID(
@@ -1991,6 +3460,7 @@ extension MCPServerViewModel {
         connectionID: UUID,
         signalRoutingFailure: Bool = true
     ) {
+        readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: connectionID)
         if connectionIDByRunID[runID] == connectionID {
             connectionIDByRunID.removeValue(forKey: runID)
             pendingPolicyRunIDMappingTokenIDByRunID.removeValue(forKey: runID)
@@ -2110,6 +3580,7 @@ extension MCPServerViewModel {
             previousPendingPolicyTokenID: previousRunID.flatMap { pendingPolicyRunIDMappingTokenIDByRunID[$0] },
             previousWindowID: windowIDByConnection[connectionID]
         )
+        installReadFileAutoSelectionHandoverLineage(for: token)
 
         if let displacedConnectionID = token.displacedConnectionID,
            connectionIDToRunID[displacedConnectionID] == runID
@@ -2128,6 +3599,62 @@ extension MCPServerViewModel {
         pendingPolicyRunIDMappingTokenIDByRunID[runID] = token.id
         tabContextLog("registerPendingPolicyRunIDMapping connectionID=\(connectionID) runID=\(runID) windowID=\(windowID)")
         return token
+    }
+
+    @MainActor
+    private func installReadFileAutoSelectionHandoverLineage(
+        for token: PendingPolicyRunIDMappingToken
+    ) {
+        guard let successorContext = tabContextByConnectionID[token.connectionID],
+              successorContext.runID == token.runID
+        else {
+            readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: token.connectionID)
+            return
+        }
+        let successorKey = readFileAutoSelectionContextKey(
+            connectionID: token.connectionID,
+            context: successorContext
+        )
+
+        guard let displacedConnectionID = token.displacedConnectionID else {
+            let preservesCurrentSuccessor = token.displacedConnectionRunID == token.runID
+                && connectionIDByRunID[token.runID] == token.connectionID
+                && connectionIDToRunID[token.connectionID] == token.runID
+                && readFileAutoSelectionHandoverLineageByConnectionID[token.connectionID]?.successorKey == successorKey
+            if !preservesCurrentSuccessor {
+                readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: token.connectionID)
+            }
+            return
+        }
+
+        readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: token.connectionID)
+        guard token.displacedConnectionRunID == token.runID,
+              connectionIDByRunID[token.runID] == displacedConnectionID,
+              connectionIDToRunID[displacedConnectionID] == token.runID,
+              let displacedContext = tabContextByConnectionID[displacedConnectionID],
+              displacedContext.runID == token.runID,
+              successorContext.windowID == displacedContext.windowID,
+              successorContext.workspaceID == displacedContext.workspaceID,
+              successorContext.tabID == displacedContext.tabID
+        else { return }
+
+        let displacedKey = readFileAutoSelectionContextKey(
+            connectionID: displacedConnectionID,
+            context: displacedContext
+        )
+        var predecessorKeys: [MCPReadFileAutoSelectionCoordinator.ContextKey] = []
+        if let inherited = readFileAutoSelectionHandoverLineageByConnectionID[displacedConnectionID],
+           inherited.successorKey == displacedKey
+        {
+            predecessorKeys.append(contentsOf: inherited.predecessorKeys)
+        }
+        if !predecessorKeys.contains(displacedKey) {
+            predecessorKeys.append(displacedKey)
+        }
+        readFileAutoSelectionHandoverLineageByConnectionID[token.connectionID] = .init(
+            successorKey: successorKey,
+            predecessorKeys: predecessorKeys
+        )
     }
 
     @MainActor
@@ -2324,62 +3851,235 @@ extension MCPServerViewModel {
     }
 
     @MainActor
+    @discardableResult
+    func detachContextBuilderTabContextForPeerEOF(
+        connectionID: UUID,
+        runID: UUID
+    ) -> Bool {
+        guard connectionIDByRunID[runID] == connectionID,
+              connectionIDToRunID[connectionID] == runID,
+              let context = tabContextByConnectionID[connectionID],
+              context.runID == runID,
+              detachedContextBuilderTabContextByRunID[runID] == nil
+        else { return false }
+
+        detachedContextBuilderTabContextByRunID[runID] = DetachedContextBuilderTabContext(
+            connectionID: connectionID,
+            context: context
+        )
+        invalidateReadFileAutoSelection(connectionID: connectionID, context: context)
+        endMirroringForConnection(connectionID)
+        readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: connectionID)
+        fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+        pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)?.task.cancel()
+        tabContextByConnectionID.removeValue(forKey: connectionID)
+        windowIDByConnection.removeValue(forKey: connectionID)
+        connectionIDByRunID.removeValue(forKey: runID)
+        pendingPolicyRunIDMappingTokenIDByRunID.removeValue(forKey: runID)
+        connectionIDToRunID.removeValue(forKey: connectionID)
+        tabContextLog("Detached Context Builder context after peer EOF connectionID=\(connectionID) runID=\(runID)")
+        return true
+    }
+
+    @MainActor
+    func contextBuilderFinalContextConnectionID(runID: UUID) -> UUID? {
+        if let connectionID = connectionIDByRunID[runID],
+           connectionIDToRunID[connectionID] == runID,
+           tabContextByConnectionID[connectionID]?.runID == runID
+        {
+            return connectionID
+        }
+        return detachedContextBuilderTabContextByRunID[runID]?.connectionID
+    }
+
+    @MainActor
+    func isDetachedContextBuilderConnection(connectionID: UUID, runID: UUID) -> Bool {
+        detachedContextBuilderTabContextByRunID[runID]?.connectionID == connectionID
+    }
+
+    @MainActor
+    func discardDetachedContextBuilderTabContext(runID: UUID) {
+        detachedContextBuilderTabContextByRunID.removeValue(forKey: runID)
+    }
+
+    @MainActor
+    func commitContextBuilderTabContext(
+        connectionID: UUID,
+        expectedRunID: UUID,
+        isStillCurrent: @MainActor () -> Bool,
+        progressReporter: ContextBuilderMCPProgressReporter? = nil,
+        deferRunMappingCleanupUntilCaller: Bool = false,
+        promptFallback: String? = nil
+    ) async -> ContextBuilderTabContextCommitResult {
+        guard isStillCurrent(), !Task.isCancelled else {
+            discardDetachedContextBuilderTabContext(runID: expectedRunID)
+            return ContextBuilderTabContextCommitResult(
+                outcome: .staleOrNoLongerCurrent,
+                committedTab: nil
+            )
+        }
+
+        let alreadyFinishedAutoSelection: Bool
+        if tabContextByConnectionID[connectionID]?.runID == expectedRunID {
+            alreadyFinishedAutoSelection = false
+        } else if let detached = detachedContextBuilderTabContextByRunID[expectedRunID],
+                  detached.connectionID == connectionID,
+                  detached.context.runID == expectedRunID
+        {
+            // Destructively claim the run-owned snapshot and move it into the existing
+            // commit implementation without suspending between removal and insertion.
+            detachedContextBuilderTabContextByRunID.removeValue(forKey: expectedRunID)
+            tabContextByConnectionID[connectionID] = detached.context
+            alreadyFinishedAutoSelection = true
+        } else {
+            return ContextBuilderTabContextCommitResult(
+                outcome: .missingFinalContext(runID: expectedRunID, connectionID: connectionID),
+                committedTab: nil
+            )
+        }
+
+        if var finalContext = tabContextByConnectionID[connectionID],
+           finalContext.runID == expectedRunID,
+           finalContext.promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let promptFallback,
+           !promptFallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            finalContext.promptText = promptFallback
+            finalContext.usedAgentOutputAsPrompt = true
+            tabContextByConnectionID[connectionID] = finalContext
+        }
+
+        let committedWrite = await commitAndClearTabContextSnapshot(
+            connectionID: connectionID,
+            expectedRunID: expectedRunID,
+            isStillCurrent: isStillCurrent,
+            progressReporter: progressReporter,
+            deferRunMappingCleanupUntilCaller: deferRunMappingCleanupUntilCaller,
+            readFileAutoSelectionAlreadyFinished: alreadyFinishedAutoSelection
+        )
+
+        // Peer EOF may have transferred the live context while its auto-selection lane
+        // was finishing. The locally captured commit snapshot remains authoritative;
+        // consume any duplicate detached ownership exactly once.
+        if detachedContextBuilderTabContextByRunID[expectedRunID]?.connectionID == connectionID {
+            detachedContextBuilderTabContextByRunID.removeValue(forKey: expectedRunID)
+        }
+
+        if let committedWrite {
+            let committedTab = ContextBuilderCommittedTabSnapshot(
+                identity: committedWrite.identity,
+                nestedRunID: expectedRunID,
+                tab: committedWrite.tab,
+                selectionRevision: committedWrite.selectionRevision,
+                usedAgentOutputAsPrompt: committedWrite.usedAgentOutputAsPrompt
+            )
+            return ContextBuilderTabContextCommitResult(
+                outcome: .committed,
+                committedTab: committedTab
+            )
+        }
+        if !isStillCurrent() || Task.isCancelled {
+            return ContextBuilderTabContextCommitResult(
+                outcome: .staleOrNoLongerCurrent,
+                committedTab: nil
+            )
+        }
+        return ContextBuilderTabContextCommitResult(
+            outcome: .failed("Context Builder could not commit its final context for run \(expectedRunID.uuidString)."),
+            committedTab: nil
+        )
+    }
+
+    @MainActor
+    @discardableResult
     func commitAndClearTabContext(
         connectionID: UUID,
         expectedRunID: UUID? = nil,
-        isStillCurrent: @MainActor () -> Bool = { true }
-    ) async {
-        guard var context = tabContextByConnectionID[connectionID] else { return }
+        isStillCurrent: @MainActor () -> Bool = { true },
+        progressReporter: ContextBuilderMCPProgressReporter? = nil,
+        deferRunMappingCleanupUntilCaller: Bool = false,
+        readFileAutoSelectionAlreadyFinished: Bool = false
+    ) async -> Bool {
+        await commitAndClearTabContextSnapshot(
+            connectionID: connectionID,
+            expectedRunID: expectedRunID,
+            isStillCurrent: isStillCurrent,
+            progressReporter: progressReporter,
+            deferRunMappingCleanupUntilCaller: deferRunMappingCleanupUntilCaller,
+            readFileAutoSelectionAlreadyFinished: readFileAutoSelectionAlreadyFinished
+        ) != nil
+    }
+
+    @MainActor
+    private func commitAndClearTabContextSnapshot(
+        connectionID: UUID,
+        expectedRunID: UUID? = nil,
+        isStillCurrent: @MainActor () -> Bool = { true },
+        progressReporter: ContextBuilderMCPProgressReporter? = nil,
+        deferRunMappingCleanupUntilCaller: Bool = false,
+        readFileAutoSelectionAlreadyFinished: Bool = false
+    ) async -> CommittedTabWrite? {
+        // Capture the authoritative snapshot on the main actor before the first suspension.
+        // Connection cleanup may remove the dictionary entry while draining auto-selection,
+        // but it cannot invalidate this locally owned snapshot.
+        guard let commitOwnedContext = tabContextByConnectionID[connectionID] else { return nil }
 
         // Decide whether we will commit stored UI state for this context.
         // Mismatch or logical cancellation => clear binding only.
         var shouldCommit = isStillCurrent()
-        if let expected = expectedRunID, context.runID != expected {
-            tabContextLog("commitAndClearTabContext run mismatch connectionID=\(connectionID) expectedRunID=\(expected.uuidString) actualRunID=\(context.runID?.uuidString ?? "nil") tab=\(context.tabID) — clearing binding without commit")
+        if let expected = expectedRunID, commitOwnedContext.runID != expected {
+            tabContextLog("commitAndClearTabContext run mismatch connectionID=\(connectionID) expectedRunID=\(expected.uuidString) actualRunID=\(commitOwnedContext.runID?.uuidString ?? "nil") tab=\(commitOwnedContext.tabID) — clearing binding without commit")
             shouldCommit = false
         }
 
-        if shouldCommit {
-            let key = readFileAutoSelectionContextKey(connectionID: connectionID, context: context)
-            await readFileAutoSelectionCoordinator.finish(context: key)
-            if let latest = tabContextByConnectionID[connectionID], latest.runID == context.runID {
-                context = latest
+        if shouldCommit, !readFileAutoSelectionAlreadyFinished {
+            let key = readFileAutoSelectionContextKey(connectionID: connectionID, context: commitOwnedContext)
+            await progressReporter?(.readFileAutoSelectionFinish)
+            let finishResult = await readFileAutoSelectionCoordinator.finish(context: key)
+            evictReadFileAutoSelectionCoverageCertificate(for: key)
+            #if DEBUG
+                readFileAutoSelectionForcedAuthoritativeProbeIDsByContext.removeValue(forKey: key)
+            #endif
+            if finishResult == .cancelled {
+                shouldCommit = false
             }
             if !isStillCurrent() || Task.isCancelled {
                 shouldCommit = false
             }
-        } else {
-            invalidateReadFileAutoSelection(connectionID: connectionID, context: context)
+        } else if !shouldCommit {
+            invalidateReadFileAutoSelection(connectionID: connectionID, context: commitOwnedContext)
         }
 
-        // Clear binding regardless of mismatch so future runs can rebind
+        // Clear the mutable tab snapshot regardless of mismatch so future calls cannot
+        // mutate state being committed. Successful Context Builder completion may retain
+        // the connection/run routing maps until its independently-owned transport teardown joins.
         endMirroringForConnection(connectionID)
+        readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: connectionID)
+        fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+        pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)?.task.cancel()
         tabContextByConnectionID.removeValue(forKey: connectionID)
-        windowIDByConnection.removeValue(forKey: connectionID)
-
-        if let runID = context.runID {
-            connectionIDByRunID.removeValue(forKey: runID)
+        if !deferRunMappingCleanupUntilCaller {
+            windowIDByConnection.removeValue(forKey: connectionID)
+            if let runID = commitOwnedContext.runID {
+                connectionIDByRunID.removeValue(forKey: runID)
+            }
+            connectionIDToRunID.removeValue(forKey: connectionID)
         }
-        connectionIDToRunID.removeValue(forKey: connectionID)
 
-        guard shouldCommit, isStillCurrent(), !Task.isCancelled else { return }
+        guard shouldCommit, isStillCurrent(), !Task.isCancelled else { return nil }
 
-        tabContextLog("commitAndClearTabContext committing tab=\(context.tabID) connectionID=\(connectionID) runID=\(context.runID?.uuidString ?? "nil")")
+        tabContextLog("commitAndClearTabContext committing tab=\(commitOwnedContext.tabID) connectionID=\(connectionID) runID=\(commitOwnedContext.runID?.uuidString ?? "nil")")
 
         // IMPORTANT: Await the commit to ensure tab state is written before caller reads it.
-        // This fixes a race condition where context_builder would read stale tab state.
-        await commitTabContext(context, isStillCurrent: isStillCurrent)
-        guard isStillCurrent(), !Task.isCancelled else { return }
+        // The immutable payload remains owned by this run even if transport cleanup proceeds.
+        await progressReporter?(.tabContextCommit)
+        guard let committedTab = await commitTabContext(
+            commitOwnedContext,
+            isStillCurrent: isStillCurrent
+        ), isStillCurrent(), !Task.isCancelled else { return nil }
 
-        var discoveredTabName: String?
-        if let manager = workspaceManager,
-           let tab = manager.composeTab(with: context.tabID)
-        {
-            discoveredTabName = tab.name
-        } else if let tab = promptVM.currentComposeTabs.first(where: { $0.id == context.tabID }) {
-            discoveredTabName = tab.name
-        }
-        if let tabName = discoveredTabName, !tabName.isEmpty {
+        if !committedTab.tab.name.isEmpty {
+            let tabName = committedTab.tab.name
             NotificationService.shared.notifyContextBuilderComplete(
                 tabName: tabName,
                 fallbackToDockBounce: true
@@ -2387,9 +4087,52 @@ extension MCPServerViewModel {
         }
 
         // End-of-run flush: persist this run's final state to disk (coalesced by DiskWriter)
-        if let manager = workspaceManager {
-            await manager.pollAndSaveStateAsync(source: .mcpTabContextEndOfRun)
+        guard let manager = workspaceManager else { return nil }
+        await progressReporter?(.statePersistence)
+        await manager.pollAndSaveStateAsync(source: .mcpTabContextEndOfRun)
+        guard isStillCurrent(), !Task.isCancelled else { return nil }
+        return committedTab
+    }
+
+    #if DEBUG
+        @MainActor
+        func readFileAutoSelectionHandoverPredecessorConnectionIDsForTesting(
+            connectionID: UUID
+        ) -> [UUID] {
+            guard let context = tabContextByConnectionID[connectionID],
+                  let runID = context.runID,
+                  connectionIDByRunID[runID] == connectionID,
+                  connectionIDToRunID[connectionID] == runID,
+                  let lineage = readFileAutoSelectionHandoverLineageByConnectionID[connectionID],
+                  lineage.successorKey == readFileAutoSelectionContextKey(
+                      connectionID: connectionID,
+                      context: context
+                  )
+            else { return [] }
+            return lineage.predecessorKeys.compactMap { key in
+                guard case let .bound(predecessorConnectionID, _) = key.route else { return nil }
+                return predecessorConnectionID
+            }
         }
+    #endif
+
+    @MainActor
+    func finishReadFileAutoSelectionForConnectionTeardown(connectionID: UUID) async {
+        guard let context = tabContextByConnectionID[connectionID] else { return }
+        let key = readFileAutoSelectionContextKey(connectionID: connectionID, context: context)
+        _ = await readFileAutoSelectionCoordinator.finish(context: key)
+        evictReadFileAutoSelectionCoverageCertificate(for: key)
+        #if DEBUG
+            readFileAutoSelectionForcedAuthoritativeProbeIDsByContext.removeValue(forKey: key)
+            await MCPReadFileAutoSelectionProbeRegistry.shared.cancel(
+                serverIdentity: ObjectIdentifier(self),
+                contextKey: key
+            )
+            await MCPApplyEditsRebaseProbeRegistry.shared.cancel(
+                serverIdentity: ObjectIdentifier(self),
+                contextKey: key
+            )
+        #endif
     }
 
     @MainActor
@@ -2400,12 +4143,15 @@ extension MCPServerViewModel {
         runID: UUID? = nil,
         removeQueuedPendingContext: Bool = true
     ) {
-        if let connectionID,
-           let context = tabContextByConnectionID[connectionID]
-        {
-            if runID == nil || context.runID == runID {
+        if let connectionID {
+            readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: connectionID)
+            if let context = tabContextByConnectionID[connectionID],
+               runID == nil || context.runID == runID
+            {
                 invalidateReadFileAutoSelection(connectionID: connectionID, context: context)
                 endMirroringForConnection(connectionID)
+                fileToolLookupContextCacheByConnectionID.removeValue(forKey: connectionID)
+                pendingFileToolLookupContextResolutionByConnectionID.removeValue(forKey: connectionID)?.task.cancel()
                 tabContextByConnectionID.removeValue(forKey: connectionID)
                 windowIDByConnection.removeValue(forKey: connectionID)
 
@@ -2420,11 +4166,33 @@ extension MCPServerViewModel {
                 }
 
                 tabContextLog("removeTabContext removed bound context connectionID=\(connectionID) runID=\(runID?.uuidString ?? "nil") tab=\(context.tabID)")
+            } else if let runID {
+                // A successful Context Builder commit may already have consumed the mutable
+                // tab snapshot while deliberately retaining routing maps for a live child
+                // connection. The caller owns removing those maps after termination joins.
+                var removedDeferredMapping = false
+                if connectionIDByRunID[runID] == connectionID {
+                    connectionIDByRunID.removeValue(forKey: runID)
+                    pendingPolicyRunIDMappingTokenIDByRunID.removeValue(forKey: runID)
+                    removedDeferredMapping = true
+                }
+                if connectionIDToRunID[connectionID] == runID {
+                    connectionIDToRunID.removeValue(forKey: connectionID)
+                    removedDeferredMapping = true
+                }
+                if removedDeferredMapping {
+                    windowIDByConnection.removeValue(forKey: connectionID)
+                    tabContextLog("removeTabContext removed deferred mapping connectionID=\(connectionID) runID=\(runID.uuidString)")
+                }
             }
         }
 
         if let runID, connectionID == nil {
+            detachedContextBuilderTabContextByRunID.removeValue(forKey: runID)
             // This is an explicit cleanup by runID (called when discovery ends)
+            for (boundConnectionID, context) in tabContextByConnectionID where context.runID == runID {
+                readFileAutoSelectionHandoverLineageByConnectionID.removeValue(forKey: boundConnectionID)
+            }
             if let mappedConnection = connectionIDByRunID[runID] {
                 connectionIDToRunID.removeValue(forKey: mappedConnection)
                 windowIDByConnection.removeValue(forKey: mappedConnection)
@@ -2462,11 +4230,11 @@ extension MCPServerViewModel {
     private func commitTabContext(
         _ context: TabScopedContext,
         isStillCurrent: @MainActor () -> Bool = { true }
-    ) async {
-        guard isStillCurrent(), !Task.isCancelled else { return }
+    ) async -> CommittedTabWrite? {
+        guard isStillCurrent(), !Task.isCancelled else { return nil }
         guard let manager = workspaceManager else {
             tabContextLog("[warning] commitTabContext missing workspace manager for windowID \(context.windowID); skipping commit.")
-            return
+            return nil
         }
         tabContextLog("commitTabContext using workspaceManager \(ObjectIdentifier(manager)) for context.windowID=\(context.windowID) self.windowID=\(windowID)")
         let targetWorkspaceID = context.workspaceID ?? manager.activeWorkspace?.id
@@ -2475,14 +4243,26 @@ extension MCPServerViewModel {
               let tabIndex = manager.workspaces[workspaceIndex].composeTabs.firstIndex(where: { $0.id == context.tabID })
         else {
             tabContextLog("[warning] commitTabContext skipping commit for tab \(context.tabID) – workspace unavailable.")
-            return
+            return nil
         }
 
         var updatedTab = manager.workspaces[workspaceIndex].composeTabs[tabIndex]
         let isActive = (manager.workspaces[workspaceIndex].activeComposeTabID == updatedTab.id)
+        let canonicalSelectionAdvanced = manager.selectionRevisionForMCP(
+            workspaceID: workspaceID,
+            tabID: context.tabID
+        ) != context.selectionRevision
 
-        updatedTab.selection = context.selection
+        if canonicalSelectionAdvanced {
+            tabContextLog("commitTabContext preserving newer canonical selection tab=\(context.tabID) window=\(context.windowID) runID=\(context.runID?.uuidString ?? "nil")")
+        } else {
+            updatedTab.selection = context.selection
+        }
         updatedTab.promptText = context.promptText
+        if context.usedAgentOutputAsPrompt {
+            updatedTab.contextOverrides.useOverridePrompt = false
+            updatedTab.contextOverrides.overridePromptText = ""
+        }
         updatedTab.selectedMetaPromptIDs = context.selectedMetaPromptIDs
         updatedTab.lastModified = Date()
 
@@ -2495,15 +4275,35 @@ extension MCPServerViewModel {
         }
 
         // 1) Persist to backing store without publishing UI snapshots (prevents tool echo)
-        guard isStillCurrent(), !Task.isCancelled else { return }
-        manager.updateComposeTabStoredOnly(updatedTab)
+        guard isStillCurrent(), !Task.isCancelled else { return nil }
+        guard manager.updateComposeTabStoredOnly(updatedTab, inWorkspaceID: workspaceID) else { return nil }
+        let identity = WorkspaceSelectionIdentity(workspaceID: workspaceID, tabID: context.tabID)
+        guard let storedTab = manager.composeTab(for: identity),
+              storedTab.selection == updatedTab.selection
+        else { return nil }
+        let committedSelectionRevision = manager.selectionRevisionForMCP(
+            workspaceID: identity.workspaceID,
+            tabID: identity.tabID
+        )
+        guard committedSelectionRevision >= context.selectionRevision else { return nil }
+        let committedTab = CommittedTabWrite(
+            identity: identity,
+            tab: storedTab,
+            selectionRevision: committedSelectionRevision,
+            usedAgentOutputAsPrompt: context.usedAgentOutputAsPrompt
+        )
         tabContextLog("commitTabContext stored selection/prompt tab=\(context.tabID) window=\(context.windowID) runID=\(context.runID?.uuidString ?? "nil") workspaceID=\(workspaceID)")
 
         // 2) Apply to live UI ONLY if this tab is the active tab and the run still owns commit.
-        guard isActive, isStillCurrent(), !Task.isCancelled else {
+        guard isActive else {
             tabContextLog("commitTabContext skipping live UI apply (tab not active) tab=\(updatedTab.id)")
-            return
+            return committedTab
         }
+        guard !canonicalSelectionAdvanced else {
+            tabContextLog("commitTabContext skipping stale live UI apply tab=\(updatedTab.id)")
+            return committedTab
+        }
+        guard isStillCurrent(), !Task.isCancelled else { return nil }
 
         let applyTab = updatedTab
 
@@ -2513,5 +4313,7 @@ extension MCPServerViewModel {
         await manager.applyComposeTabState(applyTab)
         manager.endApplyingTabContext(forTabID: context.tabID)
         tabContextLog("commitTabContext UI applied: tab=\(applyTab.id)")
+        guard isStillCurrent(), !Task.isCancelled else { return nil }
+        return committedTab
     }
 }

@@ -183,32 +183,125 @@ class EphemeralMessageState {
 
 // MARK: - Message Finalisation Hub
 
+struct OracleMessageLifecycleActivityEvent: Equatable {
+    enum Kind: String {
+        case streamActivity = "stream_activity"
+        case streamInactivityWatchdogFired = "stream_inactivity_watchdog_fired"
+        case finalizationWatchdogArmed = "finalization_watchdog_armed"
+        case finalizationWatchdogFired = "finalization_watchdog_fired"
+        case finalizationWatchdogCancelled = "finalization_watchdog_cancelled"
+        case providerStopObserved = "provider_stop_observed"
+        case finalizationStarted = "finalization_started"
+        case finalizationCompleted = "finalization_completed"
+        case streamCancelled = "stream_cancelled"
+        case streamFailed = "stream_failed"
+    }
+
+    let kind: Kind
+
+    var resetsInactivityTimeout: Bool {
+        switch kind {
+        case .streamActivity,
+             .streamInactivityWatchdogFired,
+             .providerStopObserved,
+             .finalizationStarted,
+             .finalizationCompleted,
+             .streamCancelled,
+             .streamFailed:
+            true
+        case .finalizationWatchdogArmed,
+             .finalizationWatchdogFired,
+             .finalizationWatchdogCancelled:
+            false
+        }
+    }
+
+    var entersFinalization: Bool {
+        switch kind {
+        case .streamInactivityWatchdogFired,
+             .providerStopObserved,
+             .finalizationStarted,
+             .finalizationCompleted,
+             .streamCancelled,
+             .streamFailed:
+            true
+        case .streamActivity,
+             .finalizationWatchdogArmed,
+             .finalizationWatchdogFired,
+             .finalizationWatchdogCancelled:
+            false
+        }
+    }
+
+    var message: String {
+        switch kind {
+        case .streamActivity:
+            "Oracle stream activity observed"
+        case .streamInactivityWatchdogFired:
+            "Oracle stream inactivity watchdog fired"
+        case .finalizationWatchdogArmed:
+            "Oracle finalization watchdog armed"
+        case .finalizationWatchdogFired:
+            "Oracle finalization watchdog fired"
+        case .finalizationWatchdogCancelled:
+            "Oracle finalization watchdog cancelled"
+        case .providerStopObserved:
+            "Oracle provider stop observed"
+        case .finalizationStarted:
+            "Oracle message finalization started"
+        case .finalizationCompleted:
+            "Oracle message finalization completed"
+        case .streamCancelled:
+            "Oracle stream cancellation entered finalization"
+        case .streamFailed:
+            "Oracle stream failure entered finalization"
+        }
+    }
+}
+
 actor MessageFinalisationHub {
-    private var waiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
+    private struct WaiterKey: Hashable {
+        let messageID: UUID
+        let waiterID: UUID
+    }
+
+    private var waiters: [UUID: [UUID: CheckedContinuation<Void, Never>]] = [:]
+    private var cancelledWaiters: Set<WaiterKey> = []
     private var completed: Set<UUID> = []
 
-    func register(_ id: UUID, cont: CheckedContinuation<Void, Never>) {
-        if completed.contains(id) {
+    func register(
+        _ id: UUID,
+        waiterID: UUID,
+        cont: CheckedContinuation<Void, Never>
+    ) {
+        let key = WaiterKey(messageID: id, waiterID: waiterID)
+        if completed.contains(id) || cancelledWaiters.remove(key) != nil {
             cont.resume()
             return
         }
-        waiters[id, default: []].append(cont)
+        waiters[id, default: [:]][waiterID] = cont
     }
 
     func fulfil(_ id: UUID) {
         completed.insert(id)
+        cancelledWaiters = Set(cancelledWaiters.filter { $0.messageID != id })
         guard let list = waiters.removeValue(forKey: id) else { return }
-        for c in list {
-            c.resume()
+        for continuation in list.values {
+            continuation.resume()
         }
     }
 
-    /// Cancel all waiters for a specific message ID
-    func cancel(_ id: UUID) {
-        let list = waiters.removeValue(forKey: id) ?? []
-        completed.insert(id)
-        for c in list {
-            c.resume()
+    /// Cancels only the requesting task's waiter. Message completion remains authoritative
+    /// for every other current or future waiter.
+    func cancel(_ id: UUID, waiterID: UUID) {
+        guard !completed.contains(id) else { return }
+        if let continuation = waiters[id]?.removeValue(forKey: waiterID) {
+            if waiters[id]?.isEmpty == true {
+                waiters.removeValue(forKey: id)
+            }
+            continuation.resume()
+        } else {
+            cancelledWaiters.insert(WaiterKey(messageID: id, waiterID: waiterID))
         }
     }
 
@@ -218,10 +311,11 @@ actor MessageFinalisationHub {
 
     /// Clean up any orphaned waiters (safety mechanism)
     func cleanup() {
-        let allWaiters = waiters.values.flatMap(\.self)
+        let allWaiters = waiters.values.flatMap(\.values)
         waiters.removeAll()
-        for c in allWaiters {
-            c.resume()
+        cancelledWaiters.removeAll()
+        for continuation in allWaiters {
+            continuation.resume()
         }
     }
 }
@@ -517,6 +611,96 @@ class OracleViewModel: ObservableObject {
         return sessions.filter { $0.composeTabID == tabID }
     }
 
+    @MainActor
+    func resolveExactSessionForPopover(
+        chatID rawID: String,
+        workspaceID: UUID,
+        tabID: UUID
+    ) async -> ChatSession? {
+        let trimmedID = rawID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty,
+              workspaceManager.activeWorkspaceID == workspaceID,
+              let workspace = workspaceManager.activeWorkspace,
+              workspace.id == workspaceID
+        else { return nil }
+
+        let targetUUID = UUID(uuidString: trimmedID)
+        func matchesIdentity(_ session: ChatSession) -> Bool {
+            if let targetUUID {
+                return session.id == targetUUID
+            }
+            return session.shortID == trimmedID
+        }
+        func matchesRequestedTab(_ session: ChatSession) -> Bool {
+            matchesIdentity(session)
+                && session.workspaceID == workspaceID
+                && session.composeTabID == tabID
+        }
+        func registeredMatch(for sessionID: UUID) -> ChatSession? {
+            sessions.first(where: { $0.id == sessionID }).flatMap { session in
+                matchesRequestedTab(session) ? session : nil
+            }
+        }
+
+        let initialIdentityMatches = sessions.filter(matchesIdentity)
+        let initialScopedMatches = initialIdentityMatches.filter(matchesRequestedTab)
+        guard initialScopedMatches.count <= 1 else { return nil }
+        if targetUUID != nil, let inMemory = initialScopedMatches.first {
+            guard initialIdentityMatches.count == 1,
+                  let loaded = await ensureSessionLoadedForBackground(inMemory),
+                  matchesRequestedTab(loaded)
+            else { return nil }
+            return registeredMatch(for: loaded.id)
+        }
+        if targetUUID != nil, !initialIdentityMatches.isEmpty { return nil }
+
+        let persistedLookup: ChatSessionLookupResult
+        do {
+            persistedLookup = try await chatData.findSessionResult(
+                for: workspace,
+                id: trimmedID,
+                composeTabID: tabID
+            )
+        } catch {
+            return nil
+        }
+        guard workspaceManager.activeWorkspaceID == workspaceID else { return nil }
+        let persisted: ChatSession?
+        switch persistedLookup {
+        case .notFound:
+            persisted = nil
+        case let .unique(session):
+            persisted = session
+        case .ambiguous:
+            return nil
+        }
+        if let persisted, !matchesRequestedTab(persisted) { return nil }
+
+        let refreshedIdentityMatches = sessions.filter(matchesIdentity)
+        let refreshedScopedMatches = refreshedIdentityMatches.filter(matchesRequestedTab)
+        guard refreshedScopedMatches.count <= 1 else { return nil }
+        if let persisted,
+           refreshedIdentityMatches.contains(where: { $0.id == persisted.id && !matchesRequestedTab($0) })
+        {
+            return nil
+        }
+        if let inMemory = refreshedScopedMatches.first {
+            guard persisted.map({ $0.id == inMemory.id }) ?? true,
+                  let loaded = await ensureSessionLoadedForBackground(inMemory),
+                  matchesRequestedTab(loaded)
+            else { return nil }
+            return registeredMatch(for: loaded.id)
+        }
+        if targetUUID != nil, !refreshedIdentityMatches.isEmpty { return nil }
+        guard let persisted else { return nil }
+
+        sessions.append(persisted)
+        guard let loaded = await ensureSessionLoadedForBackground(persisted), matchesRequestedTab(loaded) else {
+            return nil
+        }
+        return registeredMatch(for: loaded.id)
+    }
+
     var isAnySessionStreaming: Bool {
         !streamingSessions.isEmpty
     }
@@ -782,12 +966,43 @@ class OracleViewModel: ObservableObject {
     let aiQueriesService: AIQueriesService
     var promptViewModel: PromptViewModel
 
+    #if DEBUG
+        typealias OraclePostPackagingTransportOverride = @MainActor @Sendable (
+            _ message: AIMessage,
+            _ model: AIModel
+        ) async throws -> (
+            id: ChatStreamID,
+            stream: AsyncThrowingStream<ChatStreamOutput, Error>
+        )
+
+        var oracleReviewPackagingTraceObserverForTesting:
+            OracleReviewPackagingTraceContext.Observer?
+        private var oraclePostPackagingTransportOverrideForTesting:
+            OraclePostPackagingTransportOverride?
+
+        func setOracleReviewPackagingTraceObserverForTesting(
+            _ observer: OracleReviewPackagingTraceContext.Observer?
+        ) {
+            oracleReviewPackagingTraceObserverForTesting = observer
+        }
+
+        func setOraclePostPackagingTransportOverrideForTesting(
+            _ override: OraclePostPackagingTransportOverride?
+        ) {
+            oraclePostPackagingTransportOverrideForTesting = override
+        }
+    #endif
+
     /// Track the active retry task so it can be properly cancelled
     private var activeRetryTask: Task<Void, Error>?
 
     private var finalizationWatchdogs: [UUID: Task<Void, Never>] = [:]
     private var finalizationWatchdogTokens: [UUID: UUID] = [:]
     private var streamInactivityWatchdogs: [UUID: Task<Void, Never>] = [:]
+    typealias MessageLifecycleActivityObserver = @MainActor @Sendable (
+        _ event: OracleMessageLifecycleActivityEvent
+    ) -> Void
+    private var messageLifecycleActivityObservers: [UUID: [UUID: MessageLifecycleActivityObserver]] = [:]
     /// Prevents duplicate concurrent finalisers for the same assistant message.
     private var finalizingAIResponses: Set<UUID> = []
     private var lastAnyStreamActivityAt: [UUID: Date] = [:]
@@ -920,6 +1135,36 @@ class OracleViewModel: ObservableObject {
     // MARK: - Finalization Watchdog (prevents 'stuck in progress' state)
 
     @MainActor
+    func addMessageLifecycleActivityObserver(
+        for queryId: UUID,
+        observer: @escaping MessageLifecycleActivityObserver
+    ) -> UUID {
+        let observerID = UUID()
+        messageLifecycleActivityObservers[queryId, default: [:]][observerID] = observer
+        return observerID
+    }
+
+    @MainActor
+    func removeMessageLifecycleActivityObserver(for queryId: UUID, observerID: UUID) {
+        messageLifecycleActivityObservers[queryId]?.removeValue(forKey: observerID)
+        if messageLifecycleActivityObservers[queryId]?.isEmpty == true {
+            messageLifecycleActivityObservers.removeValue(forKey: queryId)
+        }
+    }
+
+    @MainActor
+    private func emitMessageLifecycleActivity(
+        _ kind: OracleMessageLifecycleActivityEvent.Kind,
+        for queryId: UUID
+    ) {
+        let event = OracleMessageLifecycleActivityEvent(kind: kind)
+        guard let observers = messageLifecycleActivityObservers[queryId] else { return }
+        for observer in observers.values {
+            observer(event)
+        }
+    }
+
+    @MainActor
     private func currentInactivityGrace(for queryId: UUID) -> TimeInterval {
         let seenText = hasSeenNonReasoningText.contains(queryId)
         return seenText ? postContentGrace : preContentGrace
@@ -1005,6 +1250,8 @@ class OracleViewModel: ObservableObject {
             return
         }
 
+        emitMessageLifecycleActivity(.streamInactivityWatchdogFired, for: queryId)
+
         // Targeted cancel for this specific stream
         if let streamId = streamIDsByQueryId[queryId] {
             await aiQueriesService.cancelStream(id: streamId)
@@ -1070,6 +1317,7 @@ class OracleViewModel: ObservableObject {
             await finalizationWatchdogFired(for: queryId)
         }
         finalizationWatchdogs[queryId] = task
+        emitMessageLifecycleActivity(.finalizationWatchdogArmed, for: queryId)
         EditFlowPerf.event(
             EditFlowPerf.Stage.Finalization.watchdogArm,
             finalizationWatchdogDimensions(for: queryId, status: "armed")
@@ -1092,6 +1340,9 @@ class OracleViewModel: ObservableObject {
         }
         finalizationWatchdogs[queryId] = nil
         finalizationWatchdogTokens[queryId] = nil
+        if shouldFire {
+            emitMessageLifecycleActivity(.finalizationWatchdogFired, for: queryId)
+        }
         EditFlowPerf.event(
             EditFlowPerf.Stage.Finalization.watchdogComplete,
             finalizationWatchdogDimensions(for: queryId, status: status)
@@ -1104,6 +1355,7 @@ class OracleViewModel: ObservableObject {
         guard let task = finalizationWatchdogs.removeValue(forKey: queryId) else { return }
         task.cancel()
         finalizationWatchdogTokens[queryId] = nil
+        emitMessageLifecycleActivity(.finalizationWatchdogCancelled, for: queryId)
         EditFlowPerf.event(
             EditFlowPerf.Stage.Finalization.watchdogCancel,
             finalizationWatchdogDimensions(for: queryId, status: "cancelled")
@@ -1188,14 +1440,19 @@ class OracleViewModel: ObservableObject {
             return
         }
 
-        // Use withTaskCancellationHandler to properly handle cancellation
+        let waiterID = UUID()
         await withTaskCancellationHandler {
             await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                Task { await finalisationHub.register(id, cont: cont) }
+                Task {
+                    await finalisationHub.register(
+                        id,
+                        waiterID: waiterID,
+                        cont: cont
+                    )
+                }
             }
         } onCancel: {
-            // If cancelled, notify the hub to clean up this waiter
-            Task { await finalisationHub.cancel(id) }
+            Task { await finalisationHub.cancel(id, waiterID: waiterID) }
         }
         try Task.checkCancellation()
     }
@@ -2517,6 +2774,7 @@ class OracleViewModel: ObservableObject {
         gitBaseOverride: String? = nil,
         selectionOverride: StoredSelection? = nil,
         lookupContextOverride: WorkspaceLookupContext? = nil,
+        reviewGitContextOverride: FrozenPromptGitReviewContext? = nil,
         overrideAIMessage: AIMessage? = nil,
         onProgress: ((_ text: String, _ reasoning: String?) -> Void)? = nil
     ) async {
@@ -2653,16 +2911,28 @@ class OracleViewModel: ObservableObject {
                         gitInclusionOverride: gitInclusionOverride,
                         gitBaseOverride: gitBaseOverride,
                         selectionOverride: selectionOverride,
-                        lookupContextOverride: lookupContextOverride
+                        lookupContextOverride: lookupContextOverride,
+                        reviewGitContextOverride: reviewGitContextOverride
                     )
                 }
                 guard await shouldContinueStreaming() else {
                     throw CancellationError()
                 }
-                let (streamID, stream) = try await aiQueriesService.sendPrompt(
-                    aiMessage,
-                    model: model
-                )
+                #if DEBUG
+                    OracleReviewPackagingDiagnostics.recordSubmission(aiMessage)
+                    let (streamID, stream) = if let transportOverride =
+                        oraclePostPackagingTransportOverrideForTesting
+                    {
+                        try await transportOverride(aiMessage, model)
+                    } else {
+                        try await aiQueriesService.sendPrompt(aiMessage, model: model)
+                    }
+                #else
+                    let (streamID, stream) = try await aiQueriesService.sendPrompt(
+                        aiMessage,
+                        model: model
+                    )
+                #endif
 
                 guard await shouldContinueStreaming() else {
                     await aiQueriesService.cancelStream(id: streamID)
@@ -2694,6 +2964,7 @@ class OracleViewModel: ObservableObject {
                         let now = Date()
                         if sawText || sawReasoning {
                             self.lastAnyStreamActivityAt[aiResponseId] = now
+                            self.emitMessageLifecycleActivity(.streamActivity, for: aiResponseId)
                             // Use throttled arm to reduce Task churn during fast streaming
                             self.armStreamInactivityWatchdogThrottled(for: aiResponseId, now: now)
                         }
@@ -2735,6 +3006,7 @@ class OracleViewModel: ObservableObject {
 
                         await MainActor.run {
                             self.providerStopSeen.insert(aiResponseId)
+                            self.emitMessageLifecycleActivity(.providerStopObserved, for: aiResponseId)
                             self.cancelStreamInactivityWatchdog(for: aiResponseId)
                         }
 
@@ -2751,6 +3023,9 @@ class OracleViewModel: ObservableObject {
                     Task { await self.finalizeAIResponse(aiResponseId: aiResponseId, sessionID: targetSessionID, partialBuffer: partialBuffer) }
                 }
             } catch {
+                #if DEBUG
+                    OracleReviewPackagingDiagnostics.recordFailure(error)
+                #endif
                 await MainActor.run {
                     self.clearSessionStreaming(targetSessionID)
                 }
@@ -2777,6 +3052,7 @@ class OracleViewModel: ObservableObject {
             return
         }
         finalizingAIResponses.insert(aiResponseId)
+        emitMessageLifecycleActivity(.finalizationStarted, for: aiResponseId)
         defer { finalizingAIResponses.remove(aiResponseId) }
 
         // Cancel any watchdog to prevent duplicate finalization
@@ -2821,7 +3097,8 @@ class OracleViewModel: ObservableObject {
         let shouldForceAutosave = (activeRetryTask != nil)
         autosaveChatHistory(for: sessionID, force: shouldForceAutosave)
 
-        // 5️⃣ Notify any waiters that this message is finalised
+        // 5️⃣ Notify observers and any waiters that this message is finalised
+        emitMessageLifecycleActivity(.finalizationCompleted, for: aiResponseId)
         Task { await finalisationHub.fulfil(aiResponseId) }
     }
 
@@ -2838,6 +3115,7 @@ class OracleViewModel: ObservableObject {
         streamIDsByQueryId.removeValue(forKey: aiResponseId)
 
         if error is CancellationError {
+            emitMessageLifecycleActivity(.streamCancelled, for: aiResponseId)
             print("AI response was cancelled.")
             guard let index = messageStore[sessionID]?.firstIndex(where: { $0.id == aiResponseId }) else {
                 clearSessionStreaming(sessionID)
@@ -2870,6 +3148,8 @@ class OracleViewModel: ObservableObject {
             }
             return
         }
+
+        emitMessageLifecycleActivity(.streamFailed, for: aiResponseId)
 
         // Pass token count to error message handler for non-cancellation errors
         let tokenCount = promptViewModel.totalTokenCount

@@ -32,6 +32,80 @@ enum ContextBuilderRunWaiterResolution {
     case cancellationError
 }
 
+enum ContextBuilderResponseDeliveryDrainOutcome: Equatable {
+    case drained
+    case peerEOFDetached
+    case failed
+
+    var succeeded: Bool {
+        self != .failed
+    }
+
+    var transportAlreadyClosed: Bool {
+        self == .peerEOFDetached
+    }
+}
+
+@MainActor
+enum ContextBuilderResponseDeliveryDrainResolver {
+    static func resolve(
+        initiallyDetached: Bool,
+        awaitDrain: @MainActor () async -> Bool,
+        isAuthoritativePeerEOFDetached: @MainActor () -> Bool,
+        awaitTeardownPublication: @MainActor () async -> MCPServerViewModel.ContextBuilderTeardownPublicationOutcome
+    ) async -> ContextBuilderResponseDeliveryDrainOutcome {
+        if initiallyDetached { return .peerEOFDetached }
+        if await awaitDrain() { return .drained }
+        if isAuthoritativePeerEOFDetached() { return .peerEOFDetached }
+
+        let publication = await awaitTeardownPublication()
+        guard publication == .peerEOFDetached,
+              isAuthoritativePeerEOFDetached()
+        else { return .failed }
+        return .peerEOFDetached
+    }
+}
+
+/// Coordinates successful child-connection finalization. Each tab-context snapshot must be
+/// positively committed before transport termination can trigger connection-backed cleanup.
+/// Termination completion is joined before connection/run mappings are removed.
+@MainActor
+enum ContextBuilderChildConnectionFinalizer {
+    typealias AwaitResponseDeliveryDrain = @MainActor (_ connectionID: UUID) async -> Bool
+    typealias RequestTermination = @MainActor (_ connectionID: UUID) -> Task<Void, Never>
+    typealias CommitContext = @MainActor (_ connectionID: UUID) async -> Bool
+    typealias BeforeTerminationRequest = @MainActor () async -> Void
+    typealias BeforeTerminationJoin = @MainActor () async -> Void
+    typealias CleanupMapping = @MainActor (_ connectionID: UUID) -> Void
+
+    static func finalize(
+        connectionIDs: [UUID],
+        awaitResponseDeliveryDrain: AwaitResponseDeliveryDrain,
+        commitContext: CommitContext,
+        beforeTerminationRequest: BeforeTerminationRequest,
+        requestTermination: RequestTermination,
+        beforeTerminationJoin: BeforeTerminationJoin,
+        cleanupMapping: CleanupMapping
+    ) async -> Bool {
+        for connectionID in connectionIDs {
+            guard await awaitResponseDeliveryDrain(connectionID) else { return false }
+            guard await commitContext(connectionID) else { return false }
+        }
+
+        await beforeTerminationRequest()
+        let terminationTasks = connectionIDs.map(requestTermination)
+        await beforeTerminationJoin()
+        for task in terminationTasks {
+            await task.value
+        }
+
+        for connectionID in connectionIDs {
+            cleanupMapping(connectionID)
+        }
+        return true
+    }
+}
+
 @MainActor
 final class ContextBuilderRunRecord {
     struct TeardownPayload {
@@ -46,15 +120,20 @@ final class ContextBuilderRunRecord {
     let origin: ContextBuilderRunOrigin
     let agentKind: AgentProviderKind
     let modelRaw: String
+    let progressReporter: ContextBuilderMCPProgressReporter?
+    let workspaceContext: ContextBuilderWorkspaceContext?
 
     var output = ContextBuilderAssistantOutputAccumulator()
     var executionTask: Task<Void, Never>?
     var previewPublicationTask: Task<Void, Never>?
     var lastPublishedPreview: String?
+    var finalContextConnectionIDForDiagnostics: UUID?
     var restoreConfiguration: (() -> Void)?
 
-    private var continuation: CheckedContinuation<ContextBuilderAgentViewModel.ContextBuilderRunSnapshot, Error>?
+    private(set) var committedTabSnapshot: MCPServerViewModel.ContextBuilderCommittedTabSnapshot?
+    private var continuation: CheckedContinuation<ContextBuilderAgentViewModel.MCPContextBuilderRunCompletion, Error>?
     private var provider: HeadlessAgentProvider?
+    private(set) var finalContextCommitClaimed = false
     private(set) var terminalOutcome: ContextBuilderRunTerminalOutcome?
     private(set) var teardownStartedAt: Date?
     private(set) var teardownFinishedAt: Date?
@@ -69,8 +148,10 @@ final class ContextBuilderRunRecord {
         origin: ContextBuilderRunOrigin,
         agentKind: AgentProviderKind,
         modelRaw: String,
-        continuation: CheckedContinuation<ContextBuilderAgentViewModel.ContextBuilderRunSnapshot, Error>? = nil,
-        restoreConfiguration: (() -> Void)? = nil
+        workspaceContext: ContextBuilderWorkspaceContext? = nil,
+        continuation: CheckedContinuation<ContextBuilderAgentViewModel.MCPContextBuilderRunCompletion, Error>? = nil,
+        restoreConfiguration: (() -> Void)? = nil,
+        progressReporter: ContextBuilderMCPProgressReporter? = nil
     ) {
         self.runID = runID
         self.tabID = tabID
@@ -79,16 +160,33 @@ final class ContextBuilderRunRecord {
         self.origin = origin
         self.agentKind = agentKind
         self.modelRaw = modelRaw
+        self.workspaceContext = workspaceContext
         self.continuation = continuation
         self.restoreConfiguration = restoreConfiguration
+        self.progressReporter = progressReporter
+    }
+
+    func reportProgress(_ phase: ContextBuilderMCPProgressPhase) async {
+        await progressReporter?(phase)
     }
 
     var isTerminal: Bool {
         terminalOutcome != nil
     }
 
+    var canAcceptCancellation: Bool {
+        terminalOutcome == nil && !finalContextCommitClaimed
+    }
+
     var isTeardownPending: Bool {
         teardownStartedAt != nil && teardownFinishedAt == nil
+    }
+
+    @discardableResult
+    func claimFinalContextCommit() -> Bool {
+        guard terminalOutcome == nil, !finalContextCommitClaimed else { return false }
+        finalContextCommitClaimed = true
+        return true
     }
 
     @discardableResult
@@ -106,7 +204,18 @@ final class ContextBuilderRunRecord {
         return true
     }
 
-    func takeContinuation() -> CheckedContinuation<ContextBuilderAgentViewModel.ContextBuilderRunSnapshot, Error>? {
+    func installCommittedTabSnapshot(
+        _ snapshot: MCPServerViewModel.ContextBuilderCommittedTabSnapshot
+    ) -> Bool {
+        guard snapshot.nestedRunID == runID,
+              snapshot.identity.tabID == tabID,
+              committedTabSnapshot == nil
+        else { return false }
+        committedTabSnapshot = snapshot
+        return true
+    }
+
+    func takeContinuation() -> CheckedContinuation<ContextBuilderAgentViewModel.MCPContextBuilderRunCompletion, Error>? {
         defer { continuation = nil }
         return continuation
     }

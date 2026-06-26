@@ -2,6 +2,7 @@
 
 import Foundation
 import MCP
+import RepoPromptShared
 
 #if DEBUG
     extension ServerNetworkManager {
@@ -20,6 +21,8 @@ import MCP
                 return debugDiagnosticsError(op: op, code: "invalid_params", message: "`max_samples` must be an integer between 100 and 100000.")
             }
 
+            MCPResponseDeliveryTracer.resetDebugEvents()
+            MCPToolWorkCountDiagnostics.resetDebugHistory()
             switch EditFlowPerf.beginDebugCapture(label: label, maxSamples: maxSamples) {
             case let .started(snapshot):
                 return debugDiagnosticsResult([
@@ -43,7 +46,266 @@ import MCP
             return debugDiagnosticsResult([
                 "ok": true,
                 "op": op,
-                "capture": snapshot.payload(includeTimeline: includeTimeline)
+                "capture": snapshot.payload(includeTimeline: includeTimeline),
+                "delivery_events": MCPResponseDeliveryTracer.debugEventSnapshot().map(\.payload)
+            ])
+        }
+
+        func debugMCPReadFileAutoSelectionProbeBeginPayload(
+            op: String,
+            arguments: [String: Value]
+        ) async -> CallTool.Result {
+            let windowID: Int
+            switch debugBoundedInt(arguments, "window_id", defaultValue: 0, range: 1 ... Int.max) {
+            case let .value(parsed):
+                windowID = parsed
+            case .defaulted, .invalid:
+                return debugDiagnosticsError(op: op, code: "invalid_params", message: "`window_id` is required and must be a positive integer.")
+            }
+
+            guard let targetConnectionID = debugOptionalUUID(arguments, "target_connection_id", op: op),
+                  let agentSessionID = debugOptionalUUID(arguments, "agent_session_id", op: op),
+                  let tabID = debugOptionalUUID(arguments, "tab_id", op: op),
+                  let expectedRunID = debugOptionalUUID(arguments, "expected_run_id", op: op)
+            else {
+                return debugDiagnosticsError(op: op, code: "invalid_params", message: "Connection, session, tab, and run identifiers must be UUID strings when provided.")
+            }
+
+            let forceAuthoritative = debugBool(arguments, "force_authoritative") ?? false
+            let expiryMilliseconds: Int
+            switch debugBoundedInt(
+                arguments,
+                "expiry_ms",
+                defaultValue: 30 * 60 * 1000,
+                range: 100 ... 30 * 60 * 1000
+            ) {
+            case let .value(parsed), let .defaulted(parsed):
+                expiryMilliseconds = parsed
+            case .invalid:
+                return debugDiagnosticsError(
+                    op: op,
+                    code: "invalid_params",
+                    message: "`expiry_ms` must be an integer between 100 and 1800000."
+                )
+            }
+
+            let usesConnectionTarget = targetConnectionID != nil
+            let usesSessionTarget = agentSessionID != nil || tabID != nil
+            guard usesConnectionTarget != usesSessionTarget,
+                  usesConnectionTarget || (agentSessionID != nil && tabID != nil)
+            else {
+                return debugDiagnosticsError(
+                    op: op,
+                    code: "invalid_params",
+                    message: "Provide either `target_connection_id`, or both `agent_session_id` and `tab_id`."
+                )
+            }
+
+            let resolved = await MainActor.run { () -> (
+                serverIdentity: ObjectIdentifier,
+                targets: [MCPServerViewModel.DebugReadFileAutoSelectionTarget]
+            )? in
+                guard let window = WindowStatesManager.shared.allWindows.first(where: { $0.windowID == windowID }) else {
+                    return nil
+                }
+                return (
+                    ObjectIdentifier(window.mcpServer),
+                    window.mcpServer.debugResolveReadFileAutoSelectionTargets(
+                        targetConnectionID: targetConnectionID,
+                        agentSessionID: agentSessionID,
+                        tabID: tabID,
+                        expectedRunID: expectedRunID
+                    )
+                )
+            }
+            guard let resolved else {
+                return debugDiagnosticsError(op: op, code: "no_window", message: "No RepoPrompt window matched window_id \(windowID).")
+            }
+            guard resolved.targets.count == 1, let target = resolved.targets.first else {
+                let code = resolved.targets.isEmpty ? "no_target" : "ambiguous_target"
+                return debugDiagnosticsError(
+                    op: op,
+                    code: code,
+                    message: resolved.targets.isEmpty
+                        ? "No current bound read-file auto-selection context matched the requested identity."
+                        : "Multiple current bound read-file auto-selection contexts matched the requested identity."
+                )
+            }
+            let probeID = UUID()
+            let createdAt = Date()
+            guard let reservation = await MCPReadFileAutoSelectionProbeRegistry.shared.reserve(
+                probeID: probeID,
+                createdAt: createdAt
+            ) else {
+                return debugDiagnosticsError(
+                    op: op,
+                    code: "probe_capacity",
+                    message: "The DEBUG read-file auto-selection probe registry is at its 16-probe capacity."
+                )
+            }
+            guard let baseline = await MainActor.run(body: {
+                WindowStatesManager.shared.allWindows
+                    .first(where: {
+                        $0.windowID == windowID && ObjectIdentifier($0.mcpServer) == resolved.serverIdentity
+                    })?
+                    .mcpServer.debugBeginReadFileAutoSelectionProbe(
+                        probeID: probeID,
+                        forceAuthoritative: forceAuthoritative,
+                        for: target
+                    )
+            }) else {
+                await MCPReadFileAutoSelectionProbeRegistry.shared.release(reservation)
+                return debugDiagnosticsError(
+                    op: op,
+                    code: "stale_target",
+                    message: "The matched auto-selection context became stale before the probe began."
+                )
+            }
+            let releaseForceAuthoritative: @Sendable () async -> Void = {
+                guard forceAuthoritative else { return }
+                await MainActor.run {
+                    WindowStatesManager.shared.allWindows
+                        .first(where: {
+                            $0.windowID == windowID && ObjectIdentifier($0.mcpServer) == resolved.serverIdentity
+                        })?
+                        .mcpServer.debugReleaseReadFileAutoSelectionForcedAuthoritativeProbe(
+                            probeID: probeID,
+                            for: target
+                        )
+                }
+            }
+            let entry = MCPReadFileAutoSelectionProbeRegistry.Entry(
+                probeID: probeID,
+                createdAt: createdAt,
+                expiryMilliseconds: expiryMilliseconds,
+                windowID: windowID,
+                serverIdentity: resolved.serverIdentity,
+                target: target,
+                baseline: baseline,
+                forceAuthoritative: forceAuthoritative,
+                releaseForceAuthoritative: releaseForceAuthoritative
+            )
+            let committed = await MCPReadFileAutoSelectionProbeRegistry.shared.commit(
+                reservation,
+                entry: entry
+            )
+            guard committed else {
+                await releaseForceAuthoritative()
+                return debugDiagnosticsError(
+                    op: op,
+                    code: "probe_admission_failed",
+                    message: "The reserved DEBUG read-file auto-selection probe admission could not be committed."
+                )
+            }
+
+            return debugDiagnosticsResult([
+                "ok": true,
+                "op": op,
+                "probe_id": probeID.uuidString,
+                "window_id": windowID,
+                "connection_id": target.connectionID.uuidString,
+                "run_id": Self.debugOptionalValue(target.runID?.uuidString),
+                "agent_session_id": Self.debugOptionalValue(target.agentSessionID?.uuidString),
+                "workspace_id": Self.debugOptionalValue(target.workspaceID?.uuidString),
+                "tab_id": target.tabID.uuidString,
+                "route": target.route,
+                "binding_generation": target.bindingGeneration,
+                "force_authoritative": forceAuthoritative,
+                "expiry_ms": expiryMilliseconds,
+                "baseline": readFileAutoSelectionContextPayload(baseline)
+            ])
+        }
+
+        func debugMCPReadFileAutoSelectionProbeDrainPayload(
+            op: String,
+            arguments: [String: Value]
+        ) async -> CallTool.Result {
+            guard let rawProbeID = debugString(arguments, "probe_id"),
+                  let probeID = UUID(uuidString: rawProbeID)
+            else {
+                return debugDiagnosticsError(op: op, code: "invalid_params", message: "`probe_id` is required and must be a UUID string.")
+            }
+            guard let entry = await MCPReadFileAutoSelectionProbeRegistry.shared.take(probeID) else {
+                return debugDiagnosticsError(op: op, code: "unknown_probe", message: "The probe was not found, expired, or already consumed.")
+            }
+
+            let server = await MainActor.run {
+                WindowStatesManager.shared.allWindows
+                    .first(where: {
+                        $0.windowID == entry.windowID && ObjectIdentifier($0.mcpServer) == entry.serverIdentity
+                    })?
+                    .mcpServer
+            }
+            guard let server,
+                  await server.debugReadFileAutoSelectionContextSnapshot(for: entry.target) != nil
+            else {
+                await entry.releaseForceAuthoritative()
+                return debugDiagnosticsResult(readFileAutoSelectionStaleProbePayload(op: op, entry: entry))
+            }
+
+            let clock = ContinuousClock()
+            let drainStartedAt = clock.now
+            guard let drain = await server.debugDrainReadFileAutoSelection(for: entry.target) else {
+                await entry.releaseForceAuthoritative()
+                return debugDiagnosticsResult(readFileAutoSelectionStaleProbePayload(op: op, entry: entry))
+            }
+            await entry.releaseForceAuthoritative()
+            let drainElapsedMS = Self.debugDurationMilliseconds(drainStartedAt.duration(to: clock.now))
+
+            let settleStartedAt = clock.now
+            let settleDeadline = settleStartedAt.advanced(by: .seconds(1))
+            var final = await server.debugReadFileAutoSelectionContextSnapshot(for: entry.target)
+            while let snapshot = final,
+                  snapshot.workerActive || snapshot.pendingWork,
+                  clock.now < settleDeadline
+            {
+                try? await Task.sleep(for: .milliseconds(10))
+                final = await server.debugReadFileAutoSelectionContextSnapshot(for: entry.target)
+            }
+            guard let final else {
+                return debugDiagnosticsResult(readFileAutoSelectionStaleProbePayload(op: op, entry: entry))
+            }
+            let settleElapsedMS = Self.debugDurationMilliseconds(settleStartedAt.duration(to: clock.now))
+            let result = drain.result == .completed ? "completed" : "cancelled"
+            let delta = readFileAutoSelectionDeltaPayload(baseline: entry.baseline, final: final)
+
+            return debugDiagnosticsResult([
+                "ok": true,
+                "op": op,
+                "probe_id": probeID.uuidString,
+                "result": result,
+                "captured_target_sequence": drain.capturedTargetSequence,
+                "drain_elapsed_ms": Self.debugRoundedMS(drainElapsedMS),
+                "settle_elapsed_ms": Self.debugRoundedMS(settleElapsedMS),
+                "completed_through_target": final.completedHighWaterSequence >= drain.capturedTargetSequence,
+                "baseline": readFileAutoSelectionContextPayload(entry.baseline),
+                "final": readFileAutoSelectionContextPayload(final),
+                "delta": delta,
+                "worker_idle": !final.workerActive,
+                "pending_work": final.pendingWork,
+                "waiter_count": final.waiterCount,
+                "sample_overflow_count": debugCounterDelta(final.sampleOverflowCount, entry.baseline.sampleOverflowCount)
+            ])
+        }
+
+        func debugMCPReadFileAutoSelectionProbeCancelPayload(
+            op: String,
+            arguments: [String: Value]
+        ) async -> CallTool.Result {
+            guard let rawProbeID = debugString(arguments, "probe_id"),
+                  let probeID = UUID(uuidString: rawProbeID)
+            else {
+                return debugDiagnosticsError(op: op, code: "invalid_params", message: "`probe_id` is required and must be a UUID string.")
+            }
+            guard let entry = await MCPReadFileAutoSelectionProbeRegistry.shared.cancel(probeID) else {
+                return debugDiagnosticsError(op: op, code: "unknown_probe", message: "The probe was not found, expired, or already consumed.")
+            }
+            return debugDiagnosticsResult([
+                "ok": true,
+                "op": op,
+                "probe_id": probeID.uuidString,
+                "result": "cancelled",
+                "force_authoritative": entry.forceAuthoritative
             ])
         }
 
@@ -96,6 +358,33 @@ import MCP
                 return debugDiagnosticsError(op: op, code: "invalid_params", message: "`retry_after_ms` must be an integer between 0 and 60000.")
             }
 
+            let productionConfiguration = StoreBackedWorkspaceSearchLane.Configuration.production
+            let maxActiveLeases: Int
+            switch debugBoundedInt(
+                arguments,
+                "max_active_leases",
+                defaultValue: productionConfiguration.maxActiveLeases,
+                range: 1 ... 64
+            ) {
+            case let .value(parsed), let .defaulted(parsed):
+                maxActiveLeases = parsed
+            case .invalid:
+                return debugDiagnosticsError(op: op, code: "invalid_params", message: "`max_active_leases` must be an integer between 1 and 64.")
+            }
+
+            let maxQueuedWaiters: Int
+            switch debugBoundedInt(
+                arguments,
+                "max_queued_waiters",
+                defaultValue: productionConfiguration.maxQueuedWaiters,
+                range: 1 ... 64
+            ) {
+            case let .value(parsed), let .defaulted(parsed):
+                maxQueuedWaiters = parsed
+            case .invalid:
+                return debugDiagnosticsError(op: op, code: "invalid_params", message: "`max_queued_waiters` must be an integer between 1 and 64.")
+            }
+
             let targets = await debugSearchLaneTargets(windowID: requestedWindowID)
             guard !targets.isEmpty else {
                 let message = requestedWindowID.map { "No RepoPrompt window matched window_id \($0)." }
@@ -115,6 +404,8 @@ import MCP
             }
 
             let configuration = StoreBackedWorkspaceSearchLane.Configuration(
+                maxActiveLeases: maxActiveLeases,
+                maxQueuedWaiters: maxQueuedWaiters,
                 maxQueueWait: .milliseconds(maxQueueWaitMilliseconds),
                 retryAfterMilliseconds: retryAfterMilliseconds
             )
@@ -209,12 +500,27 @@ import MCP
             }
 
             var windows: [[String: Any]] = []
+            var duplicationByPhysicalRoot: [String: DebugPhysicalRootDuplicationAccumulator] = [:]
             windows.reserveCapacity(targets.count)
             for target in targets {
                 let snapshots = await target.store.readSearchRootDiagnosticsSnapshot(
                     recentPublicationLimit: recentPublicationLimit
                 )
+                let storeWork = await target.store.storeWorkDiagnosticsSnapshot()
+                let searchWork = await target.searchService.workDiagnosticsSnapshot()
                 let ordered = snapshots.sorted { $0.rootToken.uuidString < $1.rootToken.uuidString }
+                for root in ordered {
+                    var duplication = duplicationByPhysicalRoot[root.rootPath]
+                        ?? DebugPhysicalRootDuplicationAccumulator(rootKinds: [])
+                    duplication.windowIDs.insert(target.windowID)
+                    duplication.rootKinds.insert(root.rootKind)
+                    duplication.watcherCount += root.watcherActive ? 1 : 0
+                    duplication.crawlCount += root.crawlCount
+                    duplication.currentFreshnessFlightCount += (root.barrier.active == nil ? 0 : 1)
+                        + (root.barrier.pending == nil ? 0 : 1)
+                    duplication.totalFreshnessFlightLaunchCount += root.barrier.launchCount
+                    duplicationByPhysicalRoot[root.rootPath] = duplication
+                }
                 let included = Array(ordered.prefix(rootLimit))
                 windows.append([
                     "window_id": target.windowID,
@@ -225,6 +531,9 @@ import MCP
                     "projection_direct_folder_id_lookup_count": target.projection.directFolderIDLookupCount,
                     "projection_direct_id_lookup_miss_count": target.projection.directIDLookupMissCount,
                     "projection_canonical_resync_count": target.projection.canonicalResyncCount,
+                    "ui_index_rebuild": uiIndexRebuildPayload(target.projection),
+                    "store_work": storeWorkPayload(storeWork),
+                    "search_rebuild": searchRebuildPayload(searchWork),
                     "read_file_auto_selection": readFileAutoSelectionPayload(target.readFileAutoSelection),
                     "roots": included.map { root in
                         readSearchRuntimeRootPayload(
@@ -235,6 +544,7 @@ import MCP
                 ])
             }
 
+            let toolWork = MCPToolWorkCountDiagnostics.debugSnapshots()
             let targetConnectionID = requestedConnectionID ?? connectionID
             let limiter = await connectionLimiterDiagnosticsSnapshot(connectionID: targetConnectionID)
             var limiterPayload = limiter.map { readSearchLimiterPayload($0) } ?? ["found": false]
@@ -246,11 +556,20 @@ import MCP
                     "consistency": "best_effort",
                     "limiter": limiterPayload,
                     "observers": [
-                        "tool_call_observer_count": toolCallObserverCount(),
                         "tool_event_observer_count": toolEventObserverCount()
                     ],
                     "window_count": windows.count,
-                    "windows": windows
+                    "windows": windows,
+                    "physical_root_duplication": duplicationByPhysicalRoot.keys.sorted().map { rootPath in
+                        physicalRootDuplicationPayload(
+                            rootPath: rootPath,
+                            accumulator: duplicationByPhysicalRoot[rootPath]!
+                        )
+                    },
+                    "tool_work": [
+                        "git_invocations": toolWork.git.map(gitWorkPayload),
+                        "read_file_invocations": toolWork.readFile.map(readFileWorkPayload)
+                    ]
                 ]
             ])
         }
@@ -258,8 +577,18 @@ import MCP
         private struct DebugReadSearchRuntimeTarget {
             let windowID: Int
             let store: WorkspaceFileContextStore
+            let searchService: WorkspaceSearchService
             let projection: WorkspaceFilesViewModel.AppliedIndexProjectionDiagnosticsSnapshot
             let readFileAutoSelection: MCPReadFileAutoSelectionCoordinator.DebugSnapshot
+        }
+
+        private struct DebugPhysicalRootDuplicationAccumulator {
+            var windowIDs = Set<Int>()
+            var rootKinds: Set<String>
+            var watcherCount = 0
+            var crawlCount = 0
+            var currentFreshnessFlightCount = 0
+            var totalFreshnessFlightLaunchCount = 0
         }
 
         private enum DebugSearchLaneWindowIDResult {
@@ -293,11 +622,295 @@ import MCP
                         DebugReadSearchRuntimeTarget(
                             windowID: window.windowID,
                             store: window.workspaceFileContextStore,
+                            searchService: window.workspaceSearchService,
                             projection: window.workspaceFilesViewModel.appliedIndexProjectionDiagnosticsSnapshot(),
                             readFileAutoSelection: window.mcpServer.readFileAutoSelectionDiagnosticsSnapshot()
                         )
                     }
             }
+        }
+
+        private func storeWorkPayload(
+            _ snapshot: WorkspaceFileContextStore.StoreWorkDiagnosticsSnapshot
+        ) -> [String: Any] {
+            [
+                "invalidations": snapshot.invalidations.map { event in
+                    [
+                        "sequence": event.sequence,
+                        "reasons": event.reasons,
+                        "affected_root_ids": event.affectedRootIDs.map(\.uuidString),
+                        "affected_root_kinds": event.affectedRootKinds,
+                        "evicted_scopes": event.evictedScopes
+                    ]
+                },
+                "catalog_rebuild": [
+                    "count": snapshot.catalogRebuild.rebuildCount,
+                    "filter_us": snapshot.catalogRebuild.filterMicroseconds,
+                    "sort_us": snapshot.catalogRebuild.sortMicroseconds,
+                    "materialization_us": snapshot.catalogRebuild.materializationMicroseconds,
+                    "total_us": snapshot.catalogRebuild.totalMicroseconds,
+                    "last_file_count": snapshot.catalogRebuild.lastFileCount,
+                    "last_root_count": snapshot.catalogRebuild.lastRootCount
+                ],
+                "root_catalog_shards": [
+                    "live_generation_cap_per_root": snapshot.rootCatalogShards.liveGenerationCapPerRoot,
+                    "max_patch_logical_mutation_count": snapshot.rootCatalogShards.maxPatchLogicalMutationCount,
+                    "published_shard_count": snapshot.rootCatalogShards.publishedShardCount,
+                    "total_build_count": snapshot.rootCatalogShards.totalBuildCount,
+                    "total_backstop_count": snapshot.rootCatalogShards.totalBackstopCount,
+                    "shadow_comparison_count": snapshot.rootCatalogShards.shadowComparisonCount,
+                    "shadow_mismatch_count": snapshot.rootCatalogShards.shadowMismatchCount,
+                    "last_shadow_byte_count": snapshot.rootCatalogShards.lastShadowByteCount,
+                    "roots": snapshot.rootCatalogShards.roots.map { root in
+                        [
+                            "root_id": root.rootID.uuidString,
+                            "lifetime_id": root.lifetimeID.map { $0.uuidString as Any } ?? NSNull(),
+                            "published_topology_generation": root.publishedTopologyGeneration.map { $0 as Any } ?? NSNull(),
+                            "live_topology_generations": root.liveTopologyGenerations,
+                            "retained_topology_generations": root.retainedTopologyGenerations,
+                            "build_count": root.buildCount,
+                            "patch_count": root.patchCount,
+                            "authoritative_rebuild_count": root.authoritativeRebuildCount,
+                            "fallback_count": root.fallbackCount,
+                            "fallback_reason_counts": Dictionary(uniqueKeysWithValues: root.fallbackReasonCounts.map {
+                                ($0.key.rawValue, $0.value)
+                            }),
+                            "last_applied_index_generation": root.lastAppliedIndexGeneration.map { $0 as Any } ?? NSNull(),
+                            "delta_state_dirty": root.deltaStateDirty,
+                            "backstop_count": root.backstopCount,
+                            "max_live_generation_count": root.maxLiveGenerationCount
+                        ]
+                    }
+                ]
+            ]
+        }
+
+        private func searchRebuildPayload(
+            _ snapshot: WorkspaceSearchService.RebuildWorkDiagnosticsSnapshot
+        ) -> [String: Any] {
+            [
+                "count": snapshot.rebuildCount,
+                "order_us": snapshot.orderMicroseconds,
+                "materialization_us": snapshot.materializationMicroseconds,
+                "c_index_build_us": snapshot.cIndexBuildMicroseconds,
+                "total_us": snapshot.totalMicroseconds,
+                "debounce_cancellation_count": snapshot.debounceCancellationCount,
+                "stale_discarded_count": snapshot.staleDiscardedCount,
+                "last_entry_count": snapshot.lastEntryCount
+            ]
+        }
+
+        private func uiIndexRebuildPayload(
+            _ snapshot: WorkspaceFilesViewModel.AppliedIndexProjectionDiagnosticsSnapshot
+        ) -> [String: Any] {
+            [
+                "count": snapshot.indexRebuildCount,
+                "total_duration_ms": snapshot.indexRebuildTotalDurationMS,
+                "traversal_duration_ms": snapshot.indexRebuildTraversalDurationMS,
+                "visited_folder_count": snapshot.indexRebuildVisitedFolderCount,
+                "visited_file_count": snapshot.indexRebuildVisitedFileCount
+            ]
+        }
+
+        private func physicalRootDuplicationPayload(
+            rootPath: String,
+            accumulator: DebugPhysicalRootDuplicationAccumulator
+        ) -> [String: Any] {
+            [
+                "physical_root": rootPath,
+                "root_kinds": accumulator.rootKinds.sorted(),
+                "window_count": accumulator.windowIDs.count,
+                "window_ids": accumulator.windowIDs.sorted(),
+                "watcher_count": accumulator.watcherCount,
+                "crawl_count": accumulator.crawlCount,
+                "current_freshness_flight_count": accumulator.currentFreshnessFlightCount,
+                "total_freshness_flight_launch_count": accumulator.totalFreshnessFlightLaunchCount
+            ]
+        }
+
+        private func gitWorkPayload(
+            _ snapshot: MCPToolWorkCountDiagnostics.GitInvocationSnapshot
+        ) -> [String: Any] {
+            [
+                "operation": snapshot.operation,
+                "request_identity": workRequestIdentityPayload(snapshot.requestIdentity),
+                "repositories": snapshot.repositories,
+                "command_count": snapshot.commandCount,
+                "command_counts_by_repository": snapshot.commandCountsByRepository,
+                "process_global_limit": GitProcessAdmissionController.defaultGlobalLimit,
+                "process_per_repository_limit": GitProcessAdmissionController.defaultPerRepositoryLimit,
+                "process_queue_wait_us": snapshot.processQueueWaitMicroseconds,
+                "spawn_us": snapshot.spawnMicroseconds,
+                "output_bytes": snapshot.outputBytes,
+                "parse_us": snapshot.parseMicroseconds,
+                "commands": snapshot.commands,
+                "outcome": snapshot.outcome
+            ]
+        }
+
+        private func readFileWorkPayload(
+            _ snapshot: MCPToolWorkCountDiagnostics.ReadFileInvocationSnapshot
+        ) -> [String: Any] {
+            [
+                "request_identity": workRequestIdentityPayload(snapshot.requestIdentity),
+                "source": snapshot.source,
+                "read_bytes": snapshot.readBytes,
+                "returned_bytes": snapshot.returnedBytes,
+                "returned_lines": snapshot.returnedLines,
+                "decode_us": snapshot.decodeMicroseconds,
+                "cache_hit": snapshot.cacheHit,
+                "outcome": snapshot.outcome
+            ]
+        }
+
+        private func workRequestIdentityPayload(_ identity: MCPRequestTimelineIdentity?) -> Any {
+            guard let identity else { return NSNull() }
+            return [
+                "jsonrpc_request_id": Self.debugOptionalValue(identity.jsonRPCRequestID?.description),
+                "connection_id": Self.debugOptionalValue(identity.connectionID),
+                "connection_generation": Self.debugOptionalValue(identity.connectionGeneration),
+                "app_invocation_id": Self.debugOptionalValue(identity.appInvocationID),
+                "request_ordinal": Self.debugOptionalValue(identity.requestOrdinal)
+            ] as [String: Any]
+        }
+
+        private func readFileAutoSelectionContextPayload(
+            _ snapshot: MCPReadFileAutoSelectionCoordinator.DebugContextSnapshot
+        ) -> [String: Any] {
+            [
+                "accepted_high_water_sequence": snapshot.acceptedHighWaterSequence,
+                "completed_high_water_sequence": snapshot.completedHighWaterSequence,
+                "accepted_intent_count": snapshot.acceptedIntentCount,
+                "completed_intent_count": snapshot.completedIntentCount,
+                "canonical_apply_attempt_count": snapshot.canonicalApplyAttemptCount,
+                "changed_apply_count": snapshot.changedApplyCount,
+                "semantic_noop_apply_count": snapshot.semanticNoOpApplyCount,
+                "rejected_apply_count": snapshot.rejectedApplyCount,
+                "changed_intent_count": snapshot.changedIntentCount,
+                "semantic_noop_intent_count": snapshot.semanticNoOpIntentCount,
+                "rejected_intent_count": snapshot.rejectedIntentCount,
+                "invalidated_intent_count": snapshot.invalidatedIntentCount,
+                "coverage_certificate_hit_count": snapshot.coverageCertificateHitCount,
+                "authoritative_fallback_count": snapshot.authoritativeFallbackCount,
+                "coverage_certificate_miss_reason_counts": Dictionary(uniqueKeysWithValues: snapshot.coverageCertificateMissReasonCounts.map {
+                    ($0.key.rawValue, $0.value)
+                }),
+                "mutation_total_ms": Self.debugRoundedMS(snapshot.mutationTotalMilliseconds),
+                "mutation_samples": snapshot.mutationSamples.map(readFileAutoSelectionMutationSamplePayload),
+                "sample_overflow_count": snapshot.sampleOverflowCount,
+                "worker_active": snapshot.workerActive,
+                "worker_idle": !snapshot.workerActive,
+                "pending_work": snapshot.pendingWork,
+                "waiter_count": snapshot.waiterCount
+            ]
+        }
+
+        private func readFileAutoSelectionMutationSamplePayload(
+            _ sample: MCPReadFileAutoSelectionCoordinator.DebugCanonicalApplySample
+        ) -> [String: Any] {
+            [
+                "ordinal": sample.ordinal,
+                "duration_ms": Self.debugRoundedMS(sample.durationMilliseconds),
+                "outcome": sample.outcome.rawValue,
+                "accepted_intent_count": sample.acceptedIntentCount,
+                "completed_high_water_sequence": sample.completedHighWaterSequence,
+                "coverage_certificate_outcome": readFileAutoSelectionCoverageCertificateOutcomePayload(
+                    sample.coverageCertificateOutcome
+                )
+            ]
+        }
+
+        private func readFileAutoSelectionDeltaPayload(
+            baseline: MCPReadFileAutoSelectionCoordinator.DebugContextSnapshot,
+            final: MCPReadFileAutoSelectionCoordinator.DebugContextSnapshot
+        ) -> [String: Any] {
+            let acceptedIntentCount = debugCounterDelta(final.acceptedIntentCount, baseline.acceptedIntentCount)
+            let baselineSampleOrdinal = baseline.mutationSamples.last?.ordinal ?? 0
+            let samples = final.mutationSamples
+                .filter { $0.ordinal > baselineSampleOrdinal }
+                .map(readFileAutoSelectionMutationSamplePayload)
+            let mutationTotalMS = max(0, final.mutationTotalMilliseconds - baseline.mutationTotalMilliseconds)
+            let missReasonCounts = Dictionary(uniqueKeysWithValues: ReadFileAutoSelectionCoverageCertificateMissReason.allCases.map { reason in
+                (
+                    reason.rawValue,
+                    debugCounterDelta(
+                        final.coverageCertificateMissReasonCounts[reason, default: 0],
+                        baseline.coverageCertificateMissReasonCounts[reason, default: 0]
+                    )
+                )
+            }.filter { $0.1 > 0 })
+            return [
+                "accepted_intent_count": acceptedIntentCount,
+                "completed_intent_count": debugCounterDelta(final.completedIntentCount, baseline.completedIntentCount),
+                "canonical_apply_attempt_count": debugCounterDelta(final.canonicalApplyAttemptCount, baseline.canonicalApplyAttemptCount),
+                "changed_apply_count": debugCounterDelta(final.changedApplyCount, baseline.changedApplyCount),
+                "semantic_noop_apply_count": debugCounterDelta(final.semanticNoOpApplyCount, baseline.semanticNoOpApplyCount),
+                "rejected_apply_count": debugCounterDelta(final.rejectedApplyCount, baseline.rejectedApplyCount),
+                "changed_intent_count": debugCounterDelta(final.changedIntentCount, baseline.changedIntentCount),
+                "semantic_noop_intent_count": debugCounterDelta(final.semanticNoOpIntentCount, baseline.semanticNoOpIntentCount),
+                "rejected_intent_count": debugCounterDelta(final.rejectedIntentCount, baseline.rejectedIntentCount),
+                "invalidated_intent_count": debugCounterDelta(final.invalidatedIntentCount, baseline.invalidatedIntentCount),
+                "coverage_certificate_hit_count": debugCounterDelta(
+                    final.coverageCertificateHitCount,
+                    baseline.coverageCertificateHitCount
+                ),
+                "authoritative_fallback_count": debugCounterDelta(
+                    final.authoritativeFallbackCount,
+                    baseline.authoritativeFallbackCount
+                ),
+                "coverage_certificate_miss_reason_counts": missReasonCounts,
+                "mutation_total_ms": Self.debugRoundedMS(mutationTotalMS),
+                "mutation_ms_per_accepted_intent": acceptedIntentCount > 0
+                    ? Self.debugRoundedMS(mutationTotalMS / Double(acceptedIntentCount))
+                    : 0,
+                "mutation_samples": samples
+            ]
+        }
+
+        private func readFileAutoSelectionCoverageCertificateOutcomePayload(
+            _ outcome: MCPReadFileAutoSelectionCoordinator.CoverageCertificateOutcome?
+        ) -> Any {
+            switch outcome {
+            case .hit:
+                ["kind": "hit"]
+            case let .authoritativeFallback(reason):
+                ["kind": "authoritative_fallback", "miss_reason": reason.rawValue]
+            case nil:
+                NSNull()
+            }
+        }
+
+        private func readFileAutoSelectionStaleProbePayload(
+            op: String,
+            entry: MCPReadFileAutoSelectionProbeRegistry.Entry
+        ) -> [String: Any] {
+            [
+                "ok": true,
+                "op": op,
+                "probe_id": entry.probeID.uuidString,
+                "result": "stale",
+                "captured_target_sequence": entry.baseline.acceptedHighWaterSequence,
+                "drain_elapsed_ms": 0,
+                "settle_elapsed_ms": 0,
+                "completed_through_target": false,
+                "baseline": readFileAutoSelectionContextPayload(entry.baseline),
+                "final": NSNull(),
+                "delta": [String: Any](),
+                "worker_idle": false,
+                "pending_work": false,
+                "waiter_count": 0,
+                "sample_overflow_count": 0
+            ]
+        }
+
+        private nonisolated func debugCounterDelta(_ final: UInt64, _ baseline: UInt64) -> UInt64 {
+            final >= baseline ? final - baseline : 0
+        }
+
+        private nonisolated static func debugDurationMilliseconds(_ duration: Duration) -> Double {
+            let components = duration.components
+            return Double(components.seconds) * 1000
+                + Double(components.attoseconds) / 1_000_000_000_000_000
         }
 
         private func readFileAutoSelectionPayload(
@@ -314,9 +927,33 @@ import MCP
             ]
         }
 
-        private func readSearchLimiterPayload(_ snapshot: AsyncLimiter.DebugSnapshot) -> [String: Any] {
+        private func readSearchLimiterPayload(
+            _ snapshot: MCPConnectionCallLimiterDebugSnapshot
+        ) -> [String: Any] {
             [
                 "found": true,
+                "lane_count": snapshot.laneCount,
+                "limit": snapshot.limit,
+                "permits": snapshot.permits,
+                "active_permit_count": snapshot.activePermitCount,
+                "waiter_count": snapshot.waiterCount,
+                "in_flight_count": snapshot.inFlight,
+                "oldest_waiter_age_ms": Self.debugOptionalValue(snapshot.oldestWaiterAgeMilliseconds),
+                "cancelled_waiter_count": snapshot.cancelledWaiterCount,
+                "is_closed": snapshot.isClosed,
+                "is_idle": snapshot.isIdle,
+                "lanes": [
+                    MCPConnectionCallLane.ordinary.rawValue: readSearchLimiterLanePayload(snapshot.ordinary),
+                    MCPConnectionCallLane.control.rawValue: readSearchLimiterLanePayload(snapshot.control),
+                    MCPConnectionCallLane.smallRead.rawValue: readSearchLimiterLanePayload(snapshot.smallRead),
+                    MCPConnectionCallLane.gitRead.rawValue: readSearchLimiterLanePayload(snapshot.gitRead),
+                    MCPConnectionCallLane.fileSearch.rawValue: readSearchLimiterLanePayload(snapshot.fileSearch)
+                ]
+            ]
+        }
+
+        private func readSearchLimiterLanePayload(_ snapshot: AsyncLimiter.DebugSnapshot) -> [String: Any] {
+            [
                 "limit": snapshot.limit,
                 "permits": snapshot.permits,
                 "active_permit_count": snapshot.activePermitCount,
@@ -338,9 +975,17 @@ import MCP
                 ? producedGeneration - handledGeneration
                 : 0
             return [
+                "root_id": root.rootID.uuidString,
                 "root_token": root.rootToken.uuidString,
+                "root_path": root.rootPath,
+                "root_kind": root.rootKind,
+                "crawl_count": root.crawlCount,
+                "watcher_active": root.watcherActive,
+                "explicit_watcher_demand": root.explicitWatcherDemand,
+                "session_worktree_owner_count": root.sessionWorktreeOwnerCount,
                 "ingress": readSearchIngressPayload(root.ingress),
                 "barrier": readSearchBarrierPayload(root.barrier),
+                "freshness": readSearchFreshnessPayload(root.freshness),
                 "invalidation": readSearchInvalidationPayload(root.invalidation),
                 "projection": [
                     "produced_generation": producedGeneration,
@@ -379,6 +1024,13 @@ import MCP
                     "age_ms": active.ageMilliseconds
                 ]
             }
+            let pending = snapshot.pending.map { pending in
+                [
+                    "target_watcher_watermark": pending.targetWatcherWatermark,
+                    "target_service_publication_sequence": pending.targetServicePublicationSequence,
+                    "age_ms": pending.ageMilliseconds
+                ]
+            }
             let completed = snapshot.lastCompleted.map { completed in
                 [
                     "token": completed.token,
@@ -394,9 +1046,28 @@ import MCP
                 "launch_count": snapshot.launchCount,
                 "join_count": snapshot.joinCount,
                 "successor_count": snapshot.successorCount,
+                "coalesced_successor_count": snapshot.coalescedSuccessorCount,
                 "completion_count": snapshot.completionCount,
+                "noop_count": snapshot.noopCount,
+                "total_wait_ms": snapshot.totalWaitMilliseconds,
+                "max_wait_ms": snapshot.maxWaitMilliseconds,
                 "active": Self.debugOptionalValue(active),
+                "pending": Self.debugOptionalValue(pending),
                 "last_completed": Self.debugOptionalValue(completed)
+            ]
+        }
+
+        private func readSearchFreshnessPayload(
+            _ snapshot: FileSystemService.FreshnessWorkDiagnosticsSnapshot
+        ) -> [String: Any] {
+            [
+                "flush_call_count": snapshot.flushCallCount,
+                "noop_flush_count": snapshot.noopFlushCount,
+                "debounce_cancellation_count": snapshot.debounceCancellationCount,
+                "watcher_batch_count": snapshot.watcherBatchCount,
+                "watcher_batch_event_count": snapshot.watcherBatchEventCount,
+                "last_watcher_batch_size": snapshot.lastWatcherBatchSize,
+                "max_watcher_batch_size": snapshot.maxWatcherBatchSize
             ]
         }
 
@@ -469,8 +1140,8 @@ import MCP
                     [
                         "window_id": entry.windowID,
                         "configuration": [
-                            "active_capacity": 1,
-                            "max_queued": 1,
+                            "active_capacity": entry.snapshot.configuration.maxActiveLeases,
+                            "max_queued": entry.snapshot.configuration.maxQueuedWaiters,
                             "max_queue_wait_ms": entry.snapshot.configuration.maxQueueWaitMilliseconds,
                             "retry_after_ms": entry.snapshot.configuration.retryAfterMilliseconds
                         ],
@@ -497,6 +1168,139 @@ import MCP
                 allowed.contains(scalar) ? scalar : replacement
             }
             return String(String.UnicodeScalarView(scalars.prefix(64)))
+        }
+    }
+
+    actor MCPReadFileAutoSelectionProbeRegistry {
+        struct Reservation {
+            fileprivate let probeID: UUID
+            fileprivate let token: UUID
+        }
+
+        struct Entry: @unchecked Sendable {
+            let probeID: UUID
+            let createdAt: Date
+            let expiryMilliseconds: Int
+            let windowID: Int
+            let serverIdentity: ObjectIdentifier
+            let target: MCPServerViewModel.DebugReadFileAutoSelectionTarget
+            let baseline: MCPReadFileAutoSelectionCoordinator.DebugContextSnapshot
+            let forceAuthoritative: Bool
+            let releaseForceAuthoritative: @Sendable () async -> Void
+        }
+
+        static let shared = MCPReadFileAutoSelectionProbeRegistry()
+        private static let capacity = 16
+        private static let expirySeconds: TimeInterval = 30 * 60
+        private var reservations: [UUID: UUID] = [:]
+        private var entries: [UUID: Entry] = [:]
+        private var expiryTasks: [UUID: Task<Void, Never>] = [:]
+
+        func reserve(probeID: UUID, createdAt: Date = Date()) async -> Reservation? {
+            await pruneExpired(now: createdAt)
+            guard entries[probeID] == nil,
+                  reservations[probeID] == nil,
+                  entries.count + reservations.count < Self.capacity
+            else { return nil }
+            let reservation = Reservation(probeID: probeID, token: UUID())
+            reservations[probeID] = reservation.token
+            return reservation
+        }
+
+        func commit(_ reservation: Reservation, entry: Entry) -> Bool {
+            guard entry.probeID == reservation.probeID,
+                  reservations[reservation.probeID] == reservation.token
+            else { return false }
+            reservations.removeValue(forKey: reservation.probeID)
+            entries[entry.probeID] = entry
+            expiryTasks[entry.probeID] = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(entry.expiryMilliseconds))
+                guard !Task.isCancelled else { return }
+                await self?.expire(entry.probeID)
+            }
+            return true
+        }
+
+        func release(_ reservation: Reservation) {
+            guard reservations[reservation.probeID] == reservation.token else { return }
+            reservations.removeValue(forKey: reservation.probeID)
+        }
+
+        func insert(_ entry: Entry) async -> Bool {
+            guard let reservation = await reserve(probeID: entry.probeID, createdAt: entry.createdAt) else {
+                return false
+            }
+            return commit(reservation, entry: entry)
+        }
+
+        func take(_ probeID: UUID) async -> Entry? {
+            await pruneExpired(now: Date())
+            expiryTasks.removeValue(forKey: probeID)?.cancel()
+            return entries.removeValue(forKey: probeID)
+        }
+
+        func cancel(_ probeID: UUID) async -> Entry? {
+            guard let entry = await take(probeID) else { return nil }
+            await entry.releaseForceAuthoritative()
+            return entry
+        }
+
+        func cancel(
+            serverIdentity: ObjectIdentifier,
+            contextKey: MCPReadFileAutoSelectionCoordinator.ContextKey
+        ) async {
+            let probeIDs = entries.values.compactMap { entry in
+                entry.serverIdentity == serverIdentity && entry.target.contextKey == contextKey
+                    ? entry.probeID
+                    : nil
+            }
+            for probeID in probeIDs {
+                _ = await cancel(probeID)
+            }
+        }
+
+        func expireForTesting(_ probeID: UUID) async {
+            await expire(probeID)
+        }
+
+        func containsForTesting(_ probeID: UUID) -> Bool {
+            entries[probeID] != nil
+        }
+
+        func entryCountForTesting() -> Int {
+            entries.count
+        }
+
+        func reservationCountForTesting() -> Int {
+            reservations.count
+        }
+
+        func resetForTesting() async {
+            let retainedEntries = Array(entries.values)
+            entries.removeAll()
+            reservations.removeAll()
+            for task in expiryTasks.values {
+                task.cancel()
+            }
+            expiryTasks.removeAll()
+            for entry in retainedEntries {
+                await entry.releaseForceAuthoritative()
+            }
+        }
+
+        private func expire(_ probeID: UUID) async {
+            expiryTasks.removeValue(forKey: probeID)?.cancel()
+            guard let entry = entries.removeValue(forKey: probeID) else { return }
+            await entry.releaseForceAuthoritative()
+        }
+
+        private func pruneExpired(now: Date) async {
+            let expired = entries.values.filter { entry in
+                now.timeIntervalSince(entry.createdAt) * 1000 >= Double(entry.expiryMilliseconds)
+            }
+            for entry in expired {
+                await expire(entry.probeID)
+            }
         }
     }
 

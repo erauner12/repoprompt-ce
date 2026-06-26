@@ -74,9 +74,7 @@
             session.codexController = nil
             session.codexControllerPermissionProfile = nil
             session.codexControllerTaskLabelKind = nil
-            session.claudeController = nil
-            session.claudeControllerRuntimeVariant = nil
-            session.claudeControllerPermissionMode = nil
+            claudeCoordinator.test_discardRuntimeState(for: session)
             session.codexEventTask?.cancel()
             session.codexEventTask = nil
             session.codexEventTaskRunID = nil
@@ -93,9 +91,14 @@
             session.pendingInstructions = []
             session.pendingClaudeSteeringInstructions = []
             session.pendingACPSteeringInstructions = []
-            session.pendingCodexCompactionInstructions = []
+            session.codexFallbackPumpTask?.cancel()
+            session.codexFallbackPumpTask = nil
+            session.codexFallbackQueue = []
+            session.codexFallbackDispatchInFlight = nil
             session.codexPendingTurnKind = nil
-            session.codexTurnKindsByID = [:]
+            session.codexAuthoritativeActiveTurn = nil
+            session.codexAnonymousActiveTurn = nil
+            session.codexRoutingObservedTurnID = nil
             session.pendingCommandRunningByKey = [:]
             session.pendingCommandRunningFlushTask?.cancel()
             session.pendingCommandRunningFlushTask = nil

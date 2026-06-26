@@ -394,16 +394,21 @@ final class ContextBuilderAgentViewModel: ObservableObject {
 
     // MARK: - MCP Programmatic Run Support
 
-    /// Snapshot of a completed discover run for MCP clients
-    struct ContextBuilderRunSnapshot {
+    /// Immutable terminal handoff for an MCP-controlled Context Builder run.
+    struct MCPContextBuilderRunCompletion {
         let runID: UUID
         let tabID: UUID
-        let finalState: ComposeTabState?
-        let runState: AgentRunState
-        /// Combined assistant output text from the agent run
+        let terminalDisposition: ContextBuilderRunTerminalOutcome
+        /// Combined assistant output text from the agent run.
         let agentOutput: String?
-        /// True if agent output was copied to the prompt area (prompt was empty)
+        /// True if agent output was copied to the prompt area (prompt was empty).
         let usedAgentOutputAsPrompt: Bool
+        /// Exact workspace/tab value captured by the terminal commit before child cleanup.
+        let committedTab: MCPServerViewModel.ContextBuilderCommittedTabSnapshot?
+
+        var runState: AgentRunState {
+            terminalDisposition.runState
+        }
     }
 
     /// Owns active and terminal-cleanup Context Builder attempts.
@@ -411,9 +416,39 @@ final class ContextBuilderAgentViewModel: ObservableObject {
 
     #if DEBUG
         struct RunTestHooks {
+            typealias MCPFollowUpModelSelection = (
+                model: AIModel,
+                chatPresetID: UUID?,
+                mcpControlInfo: String?
+            )
+            typealias MCPFollowUpRunner = @MainActor @Sendable (
+                _ mode: HeadlessMode,
+                _ prompt: String,
+                _ selection: StoredSelection
+            ) async throws -> ChatSendReply
+
             let beforeProcessingProviderEvent: ((_ result: AIStreamResult, _ runID: UUID) async -> Void)?
             let providerEventDisposition: ((_ result: AIStreamResult, _ runID: UUID, _ accepted: Bool) -> Void)?
             let teardownCompleted: ((_ runID: UUID) -> Void)?
+            let allowSyntheticRoutingWithoutFinalContext: Bool
+            let resolveMCPFollowUpModel: ((_ mode: String) async throws -> MCPFollowUpModelSelection)?
+            let runMCPFollowUp: MCPFollowUpRunner?
+
+            init(
+                beforeProcessingProviderEvent: ((_ result: AIStreamResult, _ runID: UUID) async -> Void)?,
+                providerEventDisposition: ((_ result: AIStreamResult, _ runID: UUID, _ accepted: Bool) -> Void)?,
+                teardownCompleted: ((_ runID: UUID) -> Void)?,
+                allowSyntheticRoutingWithoutFinalContext: Bool = false,
+                resolveMCPFollowUpModel: ((_ mode: String) async throws -> MCPFollowUpModelSelection)? = nil,
+                runMCPFollowUp: MCPFollowUpRunner? = nil
+            ) {
+                self.beforeProcessingProviderEvent = beforeProcessingProviderEvent
+                self.providerEventDisposition = providerEventDisposition
+                self.teardownCompleted = teardownCompleted
+                self.allowSyntheticRoutingWithoutFinalContext = allowSyntheticRoutingWithoutFinalContext
+                self.resolveMCPFollowUpModel = resolveMCPFollowUpModel
+                self.runMCPFollowUp = runMCPFollowUp
+            }
         }
 
         private var runTestHooks: RunTestHooks?
@@ -817,6 +852,8 @@ final class ContextBuilderAgentViewModel: ObservableObject {
     private var codexModelsSubscriptionTask: Task<Void, Never>?
     private var openCodeModelsSubscriptionTask: Task<Void, Never>?
     private var cursorModelsSubscriptionTask: Task<Void, Never>?
+    private let codexModelPollingService: CodexModelPollingService
+    private var hasPreparedForWindowClose = false
 
     // MARK: - Init / Deinit
 
@@ -825,12 +862,14 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         workspaceManager: WorkspaceManagerViewModel,
         mcpServer: MCPServerViewModel,
         oracleViewModel: OracleViewModel,
-        providerFactory: ProviderFactory? = nil
+        providerFactory: ProviderFactory? = nil,
+        codexModelPollingService: CodexModelPollingService = .shared
     ) {
         self.promptManager = promptManager
         self.workspaceManager = workspaceManager
         self.mcpServer = mcpServer
         self.oracleViewModel = oracleViewModel
+        self.codexModelPollingService = codexModelPollingService
         self.providerFactory = providerFactory ?? { agent, modelString, workspacePath in
             AgentRuntimeProviderService.shared.makeProvider(
                 for: agent,
@@ -869,20 +908,15 @@ final class ContextBuilderAgentViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        NotificationCenter.default.publisher(for: .claudeCodeGLMAvailabilityChanged)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.handleClaudeCodeGLMAvailabilityChanged()
-            }
-            .store(in: &cancellables)
-
         if let apiSettingsViewModel = promptManager.apiSettingsViewModel {
-            Publishers.MergeMany(
-                apiSettingsViewModel.$isClaudeCodeConnected.dropFirst().map { _ in () },
-                apiSettingsViewModel.$isCodexConnected.dropFirst().map { _ in () },
-                apiSettingsViewModel.$isOpenCodeConnected.dropFirst().map { _ in () },
-                apiSettingsViewModel.$isCursorConnected.dropFirst().map { _ in () }
-            )
+            // Level-triggered: `agentAvailability` replays the current provider
+            // availability on subscription, while the Context Builder validation publishers
+            // cover startup verification state that is intentionally not part of that value.
+            Publishers.MergeMany([
+                apiSettingsViewModel.$agentAvailability.map { _ in () }.eraseToAnyPublisher(),
+                apiSettingsViewModel.$isContextBuilderProviderValidationComplete.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+                apiSettingsViewModel.$contextBuilderVerifiedCLIProviders.dropFirst().map { _ in () }.eraseToAnyPublisher()
+            ])
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.handleAgentProviderAvailabilityChanged()
@@ -906,6 +940,22 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         updateDynamicModelPolling(startCursorPolling: false)
     }
 
+    func prepareForWindowClose() {
+        guard !hasPreparedForWindowClose else { return }
+        hasPreparedForWindowClose = true
+        backgroundPlanUIRefreshTask?.cancel()
+        backgroundPlanUIRefreshTask = nil
+        pendingBackgroundPlanRefreshTabIDs.removeAll()
+        stopCodexModelsSubscription()
+        stopOpenCodeModelsSubscription()
+        stopCursorModelsSubscription()
+        if let tabCloseListenerToken {
+            promptManager.removeComposeTabsWillCloseListener(tabCloseListenerToken)
+            self.tabCloseListenerToken = nil
+        }
+        cancellables.removeAll()
+    }
+
     private var agentAvailabilityContext: AgentModelCatalog.AvailabilityContext {
         promptManager.apiSettingsViewModel?.agentModeAvailabilityContext ?? .current
     }
@@ -923,6 +973,21 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         )
     }
 
+    private func resolvedPersistedContextBuilderSelection() -> AgentModelCatalog.NormalizedAgentSelection? {
+        guard let apiSettingsViewModel = promptManager.apiSettingsViewModel,
+              apiSettingsViewModel.isContextBuilderProviderValidationComplete
+        else {
+            return nil
+        }
+        let persisted = settingsManager.persistedGlobalContextBuilderAgentSelection()
+        return AutoRecommendationEngine.resolveContextBuilderSelection(
+            persistedAgentRaw: persisted.agentRaw,
+            persistedModelRaw: persisted.modelRaw,
+            availability: apiSettingsViewModel.contextBuilderRestorationAvailabilityContext,
+            enabledRecommendationProviders: settingsManager.globalRecommendationProviderFilter()
+        )
+    }
+
     private func refreshAvailableAgents() {
         availableAgents = AgentModelCatalog.selectableAgents(availability: agentAvailabilityContext)
     }
@@ -936,13 +1001,9 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         )
     }
 
-    private func handleClaudeCodeGLMAvailabilityChanged() {
-        handleAgentProviderAvailabilityChanged()
-    }
-
     private func handleAgentProviderAvailabilityChanged() {
         refreshAvailableAgents()
-        let normalized = normalizedSelection(agentRaw: selectedAgent.rawValue, modelRaw: selectedModelRaw)
+        guard let normalized = resolvedPersistedContextBuilderSelection() else { return }
         guard normalized.agent != selectedAgent || normalized.modelRaw.caseInsensitiveCompare(selectedModelRaw) != .orderedSame else {
             return
         }
@@ -969,10 +1030,12 @@ final class ContextBuilderAgentViewModel: ObservableObject {
     }
 
     private func startCodexModelsSubscriptionIfNeeded() {
+        guard !hasPreparedForWindowClose else { return }
         guard codexModelsSubscriptionTask == nil else { return }
-        codexModelsSubscriptionTask = Task { [weak self] in
+        let codexModelPollingService = codexModelPollingService
+        codexModelsSubscriptionTask = Task { [weak self, codexModelPollingService] in
             guard let self else { return }
-            let stream = await CodexModelPollingService.shared.subscribe()
+            let stream = await codexModelPollingService.subscribe()
             for await snapshot in stream {
                 guard !Task.isCancelled else { return }
                 await MainActor.run { [weak self] in
@@ -987,6 +1050,23 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         codexModelsSubscriptionTask = nil
     }
 
+    #if DEBUG
+        func test_startCodexModelsSubscriptionIfNeeded() {
+            startCodexModelsSubscriptionIfNeeded()
+        }
+
+        var test_hasCodexModelsSubscriptionTask: Bool {
+            codexModelsSubscriptionTask != nil
+        }
+
+        func test_cancelAndDrainCodexModelsSubscription() async {
+            let task = codexModelsSubscriptionTask
+            task?.cancel()
+            codexModelsSubscriptionTask = nil
+            await task?.value
+        }
+    #endif
+
     private func updateOpenCodeModelPolling() {
         if selectedAgent == .openCode {
             startOpenCodeModelsSubscriptionIfNeeded()
@@ -996,6 +1076,7 @@ final class ContextBuilderAgentViewModel: ObservableObject {
     }
 
     private func startOpenCodeModelsSubscriptionIfNeeded() {
+        guard !hasPreparedForWindowClose else { return }
         guard openCodeModelsSubscriptionTask == nil else { return }
         let workspacePath = currentWorkspacePath
         openCodeModelsSubscriptionTask = Task { [weak self, workspacePath] in
@@ -1005,6 +1086,7 @@ final class ContextBuilderAgentViewModel: ObservableObject {
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     acpDynamicModelRevision &+= 1
+                    handleAgentProviderAvailabilityChanged()
                     syncSelectedACPModelFromRegistryIfNeeded(for: .openCode)
                 }
             }
@@ -1030,6 +1112,7 @@ final class ContextBuilderAgentViewModel: ObservableObject {
     }
 
     private func startCursorModelsSubscriptionIfNeeded() {
+        guard !hasPreparedForWindowClose else { return }
         guard cursorModelsSubscriptionTask == nil else { return }
         let workspacePath = currentWorkspacePath
         cursorModelsSubscriptionTask = Task { [weak self, workspacePath] in
@@ -1039,6 +1122,7 @@ final class ContextBuilderAgentViewModel: ObservableObject {
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     acpDynamicModelRevision &+= 1
+                    handleAgentProviderAvailabilityChanged()
                     syncSelectedACPModelFromRegistryIfNeeded(for: .cursor)
                 }
             }
@@ -1131,8 +1215,7 @@ final class ContextBuilderAgentViewModel: ObservableObject {
 
         // Agent/model selection: always from GLOBAL settings (not workspace, not tab)
         // This ensures consistent behavior across all workspaces and tabs
-        let (globalAgentRaw, globalModelRaw) = settingsManager.globalContextBuilderAgentSelection()
-        let normalizedAgentSelection = normalizedSelection(agentRaw: globalAgentRaw, modelRaw: globalModelRaw)
+        let normalizedAgentSelection = resolvedPersistedContextBuilderSelection()
 
         // Load workspace-scoped settings (tokenBudget, enhancementMode, etc.)
         let workspaceSettings = settingsManager.chatSettings(for: manager.activeWorkspace?.id ?? currentWorkspaceID ?? UUID())
@@ -1175,10 +1258,12 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         // Plan token budget: workspace setting only, defaults to 120k
         planTokenBudget = workspaceSettings.discoveryPlanTokenBudget ?? 120_000
 
-        // Apply agent/model from global settings
-        selectedAgent = normalizedAgentSelection.agent
-        selectedModelRaw = normalizedAgentSelection.modelRaw
-        selectedModel = AgentModel.resolvedModel(forRaw: selectedModelRaw, agentKind: selectedAgent) ?? .defaultModel
+        // Apply agent/model from global settings when a configured provider is currently available.
+        if let normalizedAgentSelection {
+            selectedAgent = normalizedAgentSelection.agent
+            selectedModelRaw = normalizedAgentSelection.modelRaw
+            selectedModel = AgentModel.resolvedModel(forRaw: selectedModelRaw, agentKind: selectedAgent) ?? .defaultModel
+        }
 
         isRestoringState = false
         updateDynamicModelPolling(startCursorPolling: false)
@@ -1234,10 +1319,11 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         mcpResponseType = nil
         // Per-tab clarifying questions state
         pendingAskUser = nil
-        let normalized = normalizedSelection(agentRaw: nil, modelRaw: nil)
-        selectedAgent = normalized.agent
-        selectedModelRaw = normalized.modelRaw
-        selectedModel = AgentModel.resolvedModel(forRaw: normalized.modelRaw, agentKind: normalized.agent) ?? .defaultModel
+        if let normalized = resolvedPersistedContextBuilderSelection() {
+            selectedAgent = normalized.agent
+            selectedModelRaw = normalized.modelRaw
+            selectedModel = AgentModel.resolvedModel(forRaw: normalized.modelRaw, agentKind: normalized.agent) ?? .defaultModel
+        }
         contextBuilderInstructions = ""
         selectedContextBuilderPromptIDs = []
         tokenBudget = ContextBuilderDefaults.discoveryTokenBudget
@@ -1379,8 +1465,10 @@ final class ContextBuilderAgentViewModel: ObservableObject {
     /// Used during workspace switch to initialize agent/model from global settings.
     private func applyGlobalAgentModel() {
         // Agent/model are now GLOBAL (not workspace-scoped)
-        let (globalAgentRaw, globalModelRaw) = settingsManager.globalContextBuilderAgentSelection()
-        let normalized = normalizedSelection(agentRaw: globalAgentRaw, modelRaw: globalModelRaw)
+        guard let normalized = resolvedPersistedContextBuilderSelection() else {
+            refreshAvailableAgents()
+            return
+        }
 
         isRestoringState = true
         selectedAgent = normalized.agent
@@ -1546,8 +1634,16 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         modelOverrideRaw: String? = nil,
         responseType: String? = nil,
         planModelName: String? = nil,
-        mcpControlToken: UUID
-    ) async throws -> ContextBuilderRunSnapshot {
+        workspaceContext: ContextBuilderWorkspaceContext? = nil,
+        mcpControlToken: UUID,
+        progressReporter: ContextBuilderMCPProgressReporter? = nil
+    ) async throws -> MCPContextBuilderRunCompletion {
+        if let workspaceContext {
+            guard workspaceContext.tabID == tabID else {
+                throw ContextBuilderWorkspaceContextError.missingWorkspace
+            }
+            try workspaceContext.validateAvailability()
+        }
         let session = session(for: tabID)
         if lastProcessedTabID != tabID {
             lastProcessedTabID = tabID
@@ -1677,8 +1773,10 @@ final class ContextBuilderAgentViewModel: ObservableObject {
                     origin: .mcp(controlToken: mcpControlToken),
                     agentKind: runAgent,
                     modelRaw: runModelRaw,
+                    workspaceContext: workspaceContext,
                     continuation: continuation,
-                    restoreConfiguration: restoreConfiguration
+                    restoreConfiguration: restoreConfiguration,
+                    progressReporter: progressReporter
                 )
 
                 guard runRegistry.register(record) else {
@@ -1694,7 +1792,7 @@ final class ContextBuilderAgentViewModel: ObservableObject {
                     return
                 }
 
-                captureRunStartState(for: session)
+                captureRunStartState(for: session, workspaceContext: workspaceContext)
                 session.resetLog()
                 session.lastRunAgentKind = runAgent
                 session.lastRunModelRaw = runModelRaw
@@ -1749,6 +1847,7 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         let task = Task { @MainActor [weak self, weak record] in
             guard let self, let record else { return }
             let outcome = await performContextBuilderAgentRun(record: record)
+            await record.reportProgress(.runFinalization)
             finalizeContextBuilderRun(
                 record,
                 outcome: outcome,
@@ -1830,7 +1929,9 @@ final class ContextBuilderAgentViewModel: ObservableObject {
 
         switch outcome {
         case .completed:
-            copyAgentOutputToPromptIfEmpty(session: session)
+            if !record.origin.isMCP {
+                copyAgentOutputToPromptIfEmpty(session: session)
+            }
             session.appendLogEntry(
                 AgentLogEntry(
                     timestamp: Date(),
@@ -1880,20 +1981,20 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         updateRuntimeBindings(from: session)
 
         let continuation = record.takeContinuation()
-        let snapshot = ContextBuilderRunSnapshot(
+        let completion = MCPContextBuilderRunCompletion(
             runID: record.runID,
             tabID: record.tabID,
-            finalState: snapshotForTab(record.tabID),
-            runState: session.agentRunState,
+            terminalDisposition: outcome,
             agentOutput: session.lastAgentOutput,
-            usedAgentOutputAsPrompt: session.usedAgentOutputAsPrompt
+            usedAgentOutputAsPrompt: session.usedAgentOutputAsPrompt,
+            committedTab: record.committedTabSnapshot
         )
 
         scheduleRunTeardown(record, cancelExecution: cancelExecution)
 
         switch waiterResolution {
         case .snapshot:
-            continuation?.resume(returning: snapshot)
+            continuation?.resume(returning: completion)
         case .cancellationError:
             continuation?.resume(throwing: CancellationError())
         }
@@ -2082,10 +2183,20 @@ final class ContextBuilderAgentViewModel: ObservableObject {
                 return .failed("Failed to start MCP server. Check Local Network permission in System Settings.")
             }
 
+            do {
+                try record.workspaceContext?.validateAvailability()
+            } catch {
+                return .failed(error.localizedDescription)
+            }
+
             let mcpPreparedMessage: AgentMessage?
             if record.origin.isMCP {
                 debugLog("Building MCP-initiated agent message before acquiring the one-shot routing policy")
-                mcpPreparedMessage = await buildAgentMessage(for: session, runID: runID)
+                mcpPreparedMessage = await buildAgentMessage(
+                    for: session,
+                    runID: runID,
+                    workspaceContext: record.workspaceContext
+                )
                 guard acceptsEvents(from: record) else { return .cancelled }
             } else {
                 mcpPreparedMessage = nil
@@ -2108,7 +2219,7 @@ final class ContextBuilderAgentViewModel: ObservableObject {
             do {
                 lease = try await AgentRunCoordinator.shared.prepareAndInstallPolicy(
                     spec,
-                    tabID: record.tabID,
+                    tabID: record.workspaceContext == nil ? record.tabID : nil,
                     additionalTools: additionalTools,
                     reason: "discover-run",
                     gateID: runID
@@ -2126,8 +2237,28 @@ final class ContextBuilderAgentViewModel: ObservableObject {
             }
 
             activeAgentRuns.insert(runID)
+            if let workspaceContext = record.workspaceContext {
+                guard let clientName = record.agentKind.mcpClientNameHint else {
+                    await lease.failAndCleanup()
+                    return .failed("Failed to identify the nested Context Builder MCP client.")
+                }
+                _ = mcpServer.installFrozenTabContext(
+                    clientID: nil,
+                    clientName: clientName,
+                    context: workspaceContext.nestedDiscoveryTabContext(runID: runID)
+                )
+            }
+
+            do {
+                try record.workspaceContext?.validateAvailability()
+            } catch {
+                await lease.failAndCleanup()
+                return .failed(error.localizedDescription)
+            }
+
             let modelString = record.modelRaw == AgentModel.defaultModel.rawValue ? nil : record.modelRaw
-            let provider = providerFactory(record.agentKind, modelString, currentWorkspacePath)
+            let providerWorkspacePath = record.workspaceContext?.providerWorkspacePath ?? currentWorkspacePath
+            let provider = providerFactory(record.agentKind, modelString, providerWorkspacePath)
             guard record.installProvider(provider) else {
                 await provider.dispose()
                 await lease.failAndCleanup()
@@ -2140,7 +2271,11 @@ final class ContextBuilderAgentViewModel: ObservableObject {
                     message = mcpPreparedMessage
                 } else {
                     debugLog("Building agent message")
-                    message = await buildAgentMessage(for: session, runID: runID)
+                    message = await buildAgentMessage(
+                        for: session,
+                        runID: runID,
+                        workspaceContext: record.workspaceContext
+                    )
                     guard acceptsEvents(from: record) else {
                         await lease.failAndCleanup()
                         return .cancelled
@@ -2211,9 +2346,49 @@ final class ContextBuilderAgentViewModel: ObservableObject {
             }
 
             guard !Task.isCancelled, acceptsEvents(from: record) else { return .cancelled }
-            let committed = await commitTabContextForAgent(record: record)
-            guard committed, acceptsEvents(from: record) else { return .cancelled }
-            return .completed
+            record.session.lastAgentOutput = record.output.fullOutput()
+            let commitResult = await commitTabContextForAgent(record: record)
+            let terminalOutcome: ContextBuilderRunTerminalOutcome = if commitResult.outcome == .committed,
+                                                                       !acceptsEvents(from: record)
+            {
+                .cancelled
+            } else {
+                Self.terminalOutcome(forContextCommitResult: commitResult)
+            }
+            #if DEBUG
+                await ServerNetworkManager.shared.debugRecordRunRoutingEvent(
+                    runID: runID,
+                    event: "context_builder.final_terminal_classification",
+                    connectionID: record.finalContextConnectionIDForDiagnostics,
+                    fields: [
+                        "commit_outcome": String(describing: commitResult.outcome),
+                        "terminal_outcome": String(describing: terminalOutcome)
+                    ]
+                )
+            #endif
+            return terminalOutcome
+        }
+    }
+
+    static func terminalOutcome(
+        forContextCommitResult result: MCPServerViewModel.ContextBuilderTabContextCommitResult
+    ) -> ContextBuilderRunTerminalOutcome {
+        switch result.outcome {
+        case .committed:
+            if result.committedTab != nil {
+                .completed
+            } else {
+                .failed("Context Builder terminal commit did not capture an exact tab snapshot.")
+            }
+        case .staleOrNoLongerCurrent:
+            .cancelled
+        case let .missingFinalContext(runID, connectionID):
+            .failed(
+                "Context Builder final context is missing for run \(runID.uuidString) " +
+                    "(connection \(connectionID?.uuidString ?? "none"))."
+            )
+        case let .failed(message):
+            .failed(message)
         }
     }
 
@@ -2351,6 +2526,10 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         saveHistory: Bool
     ) {
         guard acceptsEvents(from: record) else { return }
+        guard record.canAcceptCancellation else {
+            debugLog("Cancel ignored after final context commit claim for run \(record.runID)")
+            return
+        }
         _ = beginCancellation(forTabID: record.tabID)
         debugLog("Cancel requested for run \(record.runID) tab \(record.tabID)")
 
@@ -2447,48 +2626,302 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         return matches
     }
 
-    private func commitTabContextForAgent(record: ContextBuilderRunRecord) async -> Bool {
+    private func commitTabContextForAgent(
+        record: ContextBuilderRunRecord
+    ) async -> MCPServerViewModel.ContextBuilderTabContextCommitResult {
         let runID = record.runID
         let agent = record.agentKind
         guard activeAgentRuns.contains(runID), acceptsEvents(from: record) else {
             debugLog("commitTabContextForAgent: runID=\(runID) not active, skipping")
-            return false
+            return MCPServerViewModel.ContextBuilderTabContextCommitResult(
+                outcome: .staleOrNoLongerCurrent,
+                committedTab: nil
+            )
         }
         debugLog("commitTabContextForAgent: runID=\(runID)")
 
         let windowID = mcpServer.windowID
         let agentClientName = agent.mcpClientNameHint
-        let agentConnections = await agentConnectionIDs(for: runID, agent: agent)
-        guard activeAgentRuns.contains(runID), acceptsEvents(from: record) else { return false }
-
-        for cid in agentConnections {
-            guard activeAgentRuns.contains(runID), acceptsEvents(from: record) else { return false }
-            debugLog("commitTabContextForAgent: terminating agent connection \(cid) runID=\(runID)")
-            await ServerNetworkManager.shared.terminateConnection(
-                cid,
-                reason: .runCompleted,
-                message: "context builder run completed successfully"
-            )
-            guard activeAgentRuns.contains(runID), acceptsEvents(from: record) else { return false }
-
-            await mcpServer.commitAndClearTabContext(
-                connectionID: cid,
-                expectedRunID: runID,
-                isStillCurrent: { [weak self, weak record] in
-                    guard let self, let record else { return false }
-                    return acceptsEvents(from: record)
+        guard let finalContextConnectionID = mcpServer.contextBuilderFinalContextConnectionID(runID: runID) else {
+            #if DEBUG
+                if runTestHooks?.allowSyntheticRoutingWithoutFinalContext == true {
+                    guard let manager = workspaceManager else {
+                        return MCPServerViewModel.ContextBuilderTabContextCommitResult(
+                            outcome: .failed("Context Builder workspace manager is unavailable."),
+                            committedTab: nil
+                        )
+                    }
+                    let matches = manager.workspaces.compactMap { workspace -> WorkspaceSelectionIdentity? in
+                        workspace.composeTabs.contains(where: { $0.id == record.tabID })
+                            ? WorkspaceSelectionIdentity(workspaceID: workspace.id, tabID: record.tabID)
+                            : nil
+                    }
+                    guard matches.count == 1,
+                          let identity = matches.first,
+                          var tab = manager.composeTab(for: identity),
+                          activeAgentRuns.remove(runID) != nil,
+                          acceptsEvents(from: record)
+                    else {
+                        return MCPServerViewModel.ContextBuilderTabContextCommitResult(
+                            outcome: .staleOrNoLongerCurrent,
+                            committedTab: nil
+                        )
+                    }
+                    var usedAgentOutputAsPrompt = false
+                    if tab.promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       let promptFallback = record.session.lastAgentOutput,
+                       !promptFallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    {
+                        tab.promptText = promptFallback
+                        tab.contextOverrides.useOverridePrompt = false
+                        tab.contextOverrides.overridePromptText = ""
+                        guard manager.updateComposeTabStoredOnly(
+                            tab,
+                            inWorkspaceID: identity.workspaceID
+                        ) else {
+                            return MCPServerViewModel.ContextBuilderTabContextCommitResult(
+                                outcome: .failed("Context Builder could not store its prompt fallback."),
+                                committedTab: nil
+                            )
+                        }
+                        usedAgentOutputAsPrompt = true
+                    }
+                    record.session.usedAgentOutputAsPrompt = usedAgentOutputAsPrompt
+                    let snapshot = MCPServerViewModel.ContextBuilderCommittedTabSnapshot(
+                        identity: identity,
+                        nestedRunID: runID,
+                        tab: tab,
+                        selectionRevision: manager.selectionRevisionForMCP(
+                            workspaceID: identity.workspaceID,
+                            tabID: identity.tabID
+                        ),
+                        usedAgentOutputAsPrompt: usedAgentOutputAsPrompt
+                    )
+                    guard record.installCommittedTabSnapshot(snapshot) else {
+                        return MCPServerViewModel.ContextBuilderTabContextCommitResult(
+                            outcome: .failed("Context Builder could not retain its committed tab snapshot."),
+                            committedTab: nil
+                        )
+                    }
+                    return MCPServerViewModel.ContextBuilderTabContextCommitResult(
+                        outcome: .committed,
+                        committedTab: snapshot
+                    )
                 }
+            #endif
+            return MCPServerViewModel.ContextBuilderTabContextCommitResult(
+                outcome: .missingFinalContext(runID: runID, connectionID: nil),
+                committedTab: nil
             )
-            guard activeAgentRuns.contains(runID), acceptsEvents(from: record) else { return false }
-            mcpServer.removeTabContext(
-                forConnectionID: cid,
-                clientName: agentClientName,
-                windowID: nil,
-                runID: runID
+        }
+        record.finalContextConnectionIDForDiagnostics = finalContextConnectionID
+        let initiallyDetached = mcpServer.isDetachedContextBuilderConnection(
+            connectionID: finalContextConnectionID,
+            runID: runID
+        )
+        guard activeAgentRuns.contains(runID), acceptsEvents(from: record) else {
+            mcpServer.discardDetachedContextBuilderTabContext(runID: runID)
+            return MCPServerViewModel.ContextBuilderTabContextCommitResult(
+                outcome: .staleOrNoLongerCurrent,
+                committedTab: nil
             )
         }
 
-        guard activeAgentRuns.remove(runID) != nil, acceptsEvents(from: record) else { return false }
+        var contextCommitResult: MCPServerViewModel.ContextBuilderTabContextCommitResult?
+        var drainOutcome: ContextBuilderResponseDeliveryDrainOutcome = .failed
+        let finalizedConnections = await ContextBuilderChildConnectionFinalizer.finalize(
+            connectionIDs: [finalContextConnectionID],
+            awaitResponseDeliveryDrain: { cid in
+                #if DEBUG
+                    let drainStartedAt = ProcessInfo.processInfo.systemUptime
+                    await ServerNetworkManager.shared.debugRecordRunRoutingEvent(
+                        runID: runID,
+                        event: "context_builder.response_drain_start",
+                        connectionID: cid,
+                        fields: ["initially_detached": String(initiallyDetached)]
+                    )
+                #endif
+                var rawDrainResult: Bool?
+                drainOutcome = await ContextBuilderResponseDeliveryDrainResolver.resolve(
+                    initiallyDetached: initiallyDetached,
+                    awaitDrain: {
+                        let result = await ServerNetworkManager.shared.waitUntilResponseDeliveryDrained(
+                            for: cid
+                        )
+                        rawDrainResult = result
+                        #if DEBUG
+                            await ServerNetworkManager.shared.debugRecordRunRoutingEvent(
+                                runID: runID,
+                                event: "context_builder.response_drain_raw_result",
+                                connectionID: cid,
+                                fields: [
+                                    "duration_ms": String(format: "%.3f", (
+                                        ProcessInfo.processInfo.systemUptime - drainStartedAt
+                                    ) * 1000),
+                                    "result": String(result)
+                                ]
+                            )
+                        #endif
+                        return result
+                    },
+                    isAuthoritativePeerEOFDetached: {
+                        mcpServer.isDetachedContextBuilderConnection(
+                            connectionID: cid,
+                            runID: runID
+                        )
+                    },
+                    awaitTeardownPublication: {
+                        #if DEBUG
+                            let handoffStartedAt = ProcessInfo.processInfo.systemUptime
+                            await ServerNetworkManager.shared.debugRecordRunRoutingEvent(
+                                runID: runID,
+                                event: "context_builder.handoff_wait_start",
+                                connectionID: cid,
+                                fields: [
+                                    "timeout_seconds": String(
+                                        ContextBuilderDefaults.peerEOFDetachmentHandoffTimeoutSeconds
+                                    )
+                                ]
+                            )
+                        #endif
+                        let publication = await mcpServer.contextBuilderTeardownPublicationCoordinator.wait(
+                            runID: runID,
+                            connectionID: cid,
+                            timeoutSeconds: ContextBuilderDefaults.peerEOFDetachmentHandoffTimeoutSeconds
+                        )
+                        #if DEBUG
+                            await ServerNetworkManager.shared.debugRecordRunRoutingEvent(
+                                runID: runID,
+                                event: "context_builder.handoff_wait_resolved",
+                                connectionID: cid,
+                                fields: [
+                                    "duration_ms": String(format: "%.3f", (
+                                        ProcessInfo.processInfo.systemUptime - handoffStartedAt
+                                    ) * 1000),
+                                    "source": publication.diagnosticSource
+                                ]
+                            )
+                        #endif
+                        return publication
+                    }
+                )
+                #if DEBUG
+                    await ServerNetworkManager.shared.debugRecordRunRoutingEvent(
+                        runID: runID,
+                        event: "context_builder.response_drain_result",
+                        connectionID: cid,
+                        fields: [
+                            "duration_ms": String(format: "%.3f", (
+                                ProcessInfo.processInfo.systemUptime - drainStartedAt
+                            ) * 1000),
+                            "final_outcome": String(describing: drainOutcome),
+                            "raw_result": rawDrainResult.map(String.init) ?? "not_attempted"
+                        ]
+                    )
+                #endif
+                return drainOutcome.succeeded
+            },
+            commitContext: { [weak self, weak record] cid in
+                guard let self, let record,
+                      activeAgentRuns.contains(runID),
+                      acceptsEvents(from: record)
+                else {
+                    contextCommitResult = MCPServerViewModel.ContextBuilderTabContextCommitResult(
+                        outcome: .staleOrNoLongerCurrent,
+                        committedTab: nil
+                    )
+                    return false
+                }
+                let didClaimCommit = record.claimFinalContextCommit()
+                #if DEBUG
+                    await ServerNetworkManager.shared.debugRecordRunRoutingEvent(
+                        runID: runID,
+                        event: "context_builder.commit_claim",
+                        connectionID: cid,
+                        fields: ["claimed": String(didClaimCommit)]
+                    )
+                #endif
+                guard didClaimCommit else {
+                    contextCommitResult = MCPServerViewModel.ContextBuilderTabContextCommitResult(
+                        outcome: .staleOrNoLongerCurrent,
+                        committedTab: nil
+                    )
+                    return false
+                }
+                let result = await mcpServer.commitContextBuilderTabContext(
+                    connectionID: cid,
+                    expectedRunID: runID,
+                    isStillCurrent: { [weak self, weak record] in
+                        guard let self, let record else { return false }
+                        return acceptsEvents(from: record)
+                    },
+                    progressReporter: record.progressReporter,
+                    deferRunMappingCleanupUntilCaller: true,
+                    promptFallback: record.session.lastAgentOutput
+                )
+                contextCommitResult = result
+                #if DEBUG
+                    await ServerNetworkManager.shared.debugRecordRunRoutingEvent(
+                        runID: runID,
+                        event: "context_builder.commit_outcome",
+                        connectionID: cid,
+                        fields: ["outcome": String(describing: result.outcome)]
+                    )
+                #endif
+                guard result.outcome == .committed,
+                      let committedTab = result.committedTab,
+                      record.installCommittedTabSnapshot(committedTab)
+                else { return false }
+                record.session.usedAgentOutputAsPrompt = committedTab.usedAgentOutputAsPrompt
+                return activeAgentRuns.contains(runID) && acceptsEvents(from: record)
+            },
+            beforeTerminationRequest: {
+                await record.reportProgress(.childConnectionTermination)
+            },
+            requestTermination: { [weak self] cid in
+                guard let self, !drainOutcome.transportAlreadyClosed else { return Task {} }
+                debugLog("commitTabContextForAgent: requesting termination for agent connection \(cid) runID=\(runID)")
+                return Task {
+                    await ServerNetworkManager.shared.terminateConnection(
+                        cid,
+                        reason: .runCompleted,
+                        message: "context builder run completed successfully"
+                    )
+                }
+            },
+            beforeTerminationJoin: {
+                await record.reportProgress(.childConnectionTerminationJoin)
+            },
+            cleanupMapping: { [weak self] cid in
+                guard let self else { return }
+                mcpServer.removeTabContext(
+                    forConnectionID: cid,
+                    clientName: agentClientName,
+                    windowID: nil,
+                    runID: runID
+                )
+            }
+        )
+        guard finalizedConnections else {
+            if let contextCommitResult { return contextCommitResult }
+            if !acceptsEvents(from: record) {
+                return MCPServerViewModel.ContextBuilderTabContextCommitResult(
+                    outcome: .staleOrNoLongerCurrent,
+                    committedTab: nil
+                )
+            }
+            return MCPServerViewModel.ContextBuilderTabContextCommitResult(
+                outcome: .failed("Context Builder response delivery did not finish for run \(runID.uuidString)."),
+                committedTab: nil
+            )
+        }
+
+        guard activeAgentRuns.remove(runID) != nil, acceptsEvents(from: record) else {
+            return MCPServerViewModel.ContextBuilderTabContextCommitResult(
+                outcome: .staleOrNoLongerCurrent,
+                committedTab: nil
+            )
+        }
         if let clientName = agentClientName {
             mcpServer.removeTabContext(
                 forConnectionID: nil,
@@ -2497,10 +2930,14 @@ final class ContextBuilderAgentViewModel: ObservableObject {
                 runID: runID
             )
         }
-        return true
+        return contextCommitResult ?? MCPServerViewModel.ContextBuilderTabContextCommitResult(
+            outcome: .failed("Context Builder final context commit result is missing."),
+            committedTab: nil
+        )
     }
 
     private func clearTabContextForAgent(agent: AgentProviderKind, runID: UUID) async {
+        mcpServer.discardDetachedContextBuilderTabContext(runID: runID)
         guard activeAgentRuns.remove(runID) != nil else {
             debugLog("clearTabContextForAgent: runID=\(runID) not tracked, skipping")
             return
@@ -2552,7 +2989,11 @@ final class ContextBuilderAgentViewModel: ObservableObject {
 
     // MARK: - Agent message assembly
 
-    private func buildAgentMessage(for session: TabSession, runID: UUID) async -> AgentMessage {
+    private func buildAgentMessage(
+        for session: TabSession,
+        runID: UUID,
+        workspaceContext: ContextBuilderWorkspaceContext?
+    ) async -> AgentMessage {
         // Determine token budget:
         // - MCP runs: prefer any explicit per-run override, otherwise derive budget from response_type
         // - UI runs with auto-generate enabled: use planTokenBudget (larger budget for plan/review/question context)
@@ -2599,11 +3040,19 @@ final class ContextBuilderAgentViewModel: ObservableObject {
 
         let systemPrompt = SystemPromptService.discoverPrompt(tokenBudget: adjustedBudget, agentKind: selectedAgent, enhancementMode: enhancementMode, allowClarifyingQuestions: clarifyingEnabledForRun, responseType: responseType, instructions: session.contextBuilderInstructions, questionTimeoutSeconds: questionTimeoutSeconds)
         debugLog("System prompt includes ask_user: \(systemPrompt.contains("ask_user"))")
-        let userMessage = await buildAgentUserMessage(for: session, adjustedBudget: adjustedBudget)
+        let userMessage = await buildAgentUserMessage(
+            for: session,
+            adjustedBudget: adjustedBudget,
+            workspaceContext: workspaceContext
+        )
         return AgentMessage(systemPrompt: systemPrompt, userMessage: userMessage)
     }
 
-    private func buildAgentUserMessage(for session: TabSession, adjustedBudget: Int) async -> String {
+    private func buildAgentUserMessage(
+        for session: TabSession,
+        adjustedBudget: Int,
+        workspaceContext: ContextBuilderWorkspaceContext?
+    ) async -> String {
         // Context builder prompt IDs captured at run start from viewmodel (always set by captureRunStartState)
         let contextBuilderPromptIDs = session.runStartContextBuilderPromptIDs ?? []
 
@@ -2611,7 +3060,7 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         if let promptText = session.runStartPromptText,
            let selection = session.runStartSelection
         {
-            let fileTree = await buildFileTree(from: selection)
+            let fileTree = await buildFileTree(from: selection, lookupContext: workspaceContext?.lookupContext)
             debugLog("Using run-start captured state for tab=\(session.tabID)")
             return makeUserMessage(
                 fileTree: fileTree,
@@ -2624,7 +3073,7 @@ final class ContextBuilderAgentViewModel: ObservableObject {
 
         // PRIORITY 2: Workspace snapshot (fallback, may be slightly stale)
         if let snapshot = snapshotForTab(session.tabID) {
-            let fileTree = await buildFileTree(from: snapshot.selection)
+            let fileTree = await buildFileTree(from: snapshot.selection, lookupContext: workspaceContext?.lookupContext)
             debugLog("Using workspace snapshot for tab=\(session.tabID)")
             return makeUserMessage(
                 fileTree: fileTree,
@@ -2651,7 +3100,7 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         debugLog("Using live UI state (tab still active) for tab=\(session.tabID)")
         workspaceManager?.publishActiveComposeTabSnapshot(commitToMemory: true)
         let liveSelection = snapshotForTab(session.tabID)?.selection ?? StoredSelection()
-        let fileTree = await buildFileTree(from: liveSelection)
+        let fileTree = await buildFileTree(from: liveSelection, lookupContext: workspaceContext?.lookupContext)
         return makeUserMessage(
             fileTree: fileTree,
             userPrompt: promptManager.promptText,
@@ -2733,7 +3182,18 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         return message
     }
 
-    private func buildFileTree(from selection: StoredSelection) async -> String {
+    private func buildFileTree(
+        from selection: StoredSelection,
+        lookupContext: WorkspaceLookupContext? = nil
+    ) async -> String {
+        if let lookupContext {
+            return await AgentProviderContextBuilder.initialFileTree(
+                selection: selection,
+                store: promptManager.workspaceFileContextStore,
+                lookupContext: lookupContext
+            )
+        }
+
         let snapshot = await promptManager.workspaceFileContextStore.makeFileTreeSelectionSnapshot(
             selection: selection,
             request: WorkspaceFileTreeSnapshotRequest(
@@ -2759,8 +3219,19 @@ final class ContextBuilderAgentViewModel: ObservableObject {
 
     /// Captures the tab's prompt and selection state at discovery run start.
     /// This prevents tab bleed when user switches tabs during a run.
-    private func captureRunStartState(for session: TabSession) {
-        // Capture context builder prompt IDs from the viewmodel (current UI state)
+    private func captureRunStartState(
+        for session: TabSession,
+        workspaceContext: ContextBuilderWorkspaceContext? = nil
+    ) {
+        if let workspaceContext {
+            session.runStartContextBuilderPromptIDs = Set(workspaceContext.frozenTabContext.selectedContextBuilderPromptIDs)
+            session.runStartPromptText = workspaceContext.frozenTabContext.promptText
+            session.runStartSelection = workspaceContext.frozenTabContext.selection
+            debugLog("Captured run-start state from frozen Agent Mode context for tab=\(session.tabID)")
+            return
+        }
+
+        // Ordinary UI runs retain the current view-model prompt selection behavior.
         session.runStartContextBuilderPromptIDs = selectedContextBuilderPromptIDs
 
         // First try: workspace snapshot (most reliable source)
@@ -3348,54 +3819,39 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         }
     }
 
-    private enum FollowUpFinalizationResult {
-        case finalised
-        case timedOut
-        case cancelled
-    }
-
     private func waitForFollowUpFinalization(
         in oracleViewModel: OracleViewModel,
         queryID: UUID,
         sessionID: UUID,
-        timeout: Duration = .seconds(4 * 60 * 60)
+        progressReporter: ContextBuilderMCPProgressReporter?,
+        activityReporter: ContextBuilderMCPActivityReporter?
     ) async throws {
-        let result = await withTaskGroup(of: FollowUpFinalizationResult.self) { group in
-            group.addTask {
-                do {
-                    try await oracleViewModel.waitUntilMessageFinalised(queryID)
-                    return .finalised
-                } catch is CancellationError {
-                    return .cancelled
-                } catch {
-                    return .cancelled
-                }
-            }
-            group.addTask {
-                do {
-                    try await Task.sleep(for: timeout)
-                    await oracleViewModel.cancelStreaming(in: sessionID)
-                    return .timedOut
-                } catch is CancellationError {
-                    return .cancelled
-                } catch {
-                    return .cancelled
-                }
-            }
-
-            let firstResult = await group.next() ?? .cancelled
-            group.cancelAll()
-            return firstResult
+        let (activityEvents, activityContinuation) = AsyncStream<OracleMessageLifecycleActivityEvent>.makeStream(
+            bufferingPolicy: .bufferingNewest(32)
+        )
+        let observerID = oracleViewModel.addMessageLifecycleActivityObserver(for: queryID) { event in
+            activityContinuation.yield(event)
+        }
+        defer {
+            oracleViewModel.removeMessageLifecycleActivityObserver(for: queryID, observerID: observerID)
+            activityContinuation.finish()
         }
 
-        switch result {
-        case .finalised:
-            return
-        case .timedOut:
-            throw ChatToolError.internalError("Follow-up response timed out before finalization")
-        case .cancelled:
-            try Task.checkCancellation()
-        }
+        try await ContextBuilderFollowUpFinalizationMonitor.wait(
+            activityEvents: activityEvents,
+            waitForFinalization: {
+                try await oracleViewModel.waitUntilMessageFinalised(queryID)
+            },
+            cancelStreaming: {
+                await oracleViewModel.cancelStreaming(in: sessionID)
+            },
+            reportPhase: { phase in
+                await progressReporter?(phase)
+            },
+            reportActivity: { phase, message in
+                await activityReporter?(phase, message)
+            }
+        )
     }
 
     /// Unified follow-up generator that always streams in a real chat session.
@@ -3407,12 +3863,19 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         mode: HeadlessMode,
         prompt: String,
         selection: StoredSelection,
+        lookupContext: WorkspaceLookupContext? = nil,
+        reviewGitContext: FrozenPromptGitReviewContext,
+        finalReviewAuthorization: ContextBuilderFinalReviewAuthorization? = nil,
+        agentModeSessionID: UUID? = nil,
+        agentModeRunID: UUID? = nil,
         chatName: String,
         model: AIModel,
         chatPresetID: UUID?,
         mcpSessionUIState: OracleViewModel.MCPSessionUIState? = nil,
         gitScopeOverride: GitInclusion? = nil,
-        onProgress: ((_ text: String, _ reasoning: String?) -> Void)? = nil
+        onProgress: ((_ text: String, _ reasoning: String?) -> Void)? = nil,
+        progressReporter: ContextBuilderMCPProgressReporter? = nil,
+        activityReporter: ContextBuilderMCPActivityReporter? = nil
     ) async throws -> ChatSendReply {
         let session = session(for: tabID)
 
@@ -3440,11 +3903,15 @@ final class ContextBuilderAgentViewModel: ObservableObject {
                 throw CancellationError()
             }
 
-            let aiMessage = await promptManager.buildHeadlessAIMessage(
+            await progressReporter?(.payloadPackaging)
+            let aiMessage = try await promptManager.buildHeadlessAIMessage(
                 from: HeadlessContextSnapshot(
                     tabID: tabID,
                     promptText: prompt,
-                    selection: selection
+                    selection: selection,
+                    lookupContext: lookupContext,
+                    reviewGitContext: reviewGitContext,
+                    finalReviewAuthorization: finalReviewAuthorization
                 ),
                 model: model,
                 mode: mode,
@@ -3456,11 +3923,14 @@ final class ContextBuilderAgentViewModel: ObservableObject {
                 throw CancellationError()
             }
 
+            await progressReporter?(.sessionCreationAndPersist)
             let createdSession = try await oracleViewModel.createSession(
                 named: chatName,
                 tabID: tabID,
                 activateInUI: shouldActivate,
-                setActiveForTab: true
+                setActiveForTab: true,
+                agentModeSessionID: agentModeSessionID,
+                agentModeRunID: agentModeRunID
             )
             createdSessionID = createdSession.id
             session.followUpOracleSessionID = createdSession.id
@@ -3483,6 +3953,7 @@ final class ContextBuilderAgentViewModel: ObservableObject {
                 throw CancellationError()
             }
 
+            await progressReporter?(.messageSend)
             await oracleViewModel.sendMessage(
                 prompt,
                 sessionID: createdSession.id,
@@ -3491,6 +3962,7 @@ final class ContextBuilderAgentViewModel: ObservableObject {
                 overrideMode: promptMode,
                 gitInclusionOverride: mode == .review ? gitScopeOverride : nil,
                 selectionOverride: selection,
+                lookupContextOverride: lookupContext,
                 overrideAIMessage: aiMessage,
                 onProgress: { [weak self] text, reasoning in
                     guard let self,
@@ -3507,13 +3979,17 @@ final class ContextBuilderAgentViewModel: ObservableObject {
             guard session.isBackgroundPlanGenerating else {
                 throw CancellationError()
             }
+            await progressReporter?(.activeQueryAcquisition)
             guard let queryId = oracleViewModel.activeQueryId(for: createdSession.id) else {
                 throw ChatToolError.internalError("Failed to start follow-up stream")
             }
+            await progressReporter?(.streaming)
             try await waitForFollowUpFinalization(
                 in: oracleViewModel,
                 queryID: queryId,
-                sessionID: createdSession.id
+                sessionID: createdSession.id,
+                progressReporter: progressReporter,
+                activityReporter: activityReporter
             )
             guard session.isBackgroundPlanGenerating else {
                 throw CancellationError()
@@ -3578,13 +4054,40 @@ final class ContextBuilderAgentViewModel: ObservableObject {
     func runMCPPlanOrQuestion(
         for tabID: UUID,
         oracleViewModel: OracleViewModel,
+        agentModeSessionID: UUID? = nil,
+        agentModeRunID: UUID? = nil,
         mode: HeadlessMode,
         prompt: String,
         selection: StoredSelection,
-        gitScopeOverride: GitInclusion? = nil
+        lookupContext: WorkspaceLookupContext? = nil,
+        reviewGitContext: FrozenPromptGitReviewContext,
+        finalReviewAuthorization: ContextBuilderFinalReviewAuthorization? = nil,
+        gitScopeOverride: GitInclusion? = nil,
+        progressReporter: ContextBuilderMCPProgressReporter? = nil,
+        activityReporter: ContextBuilderMCPActivityReporter? = nil
     ) async throws -> ChatSendReply {
+        #if DEBUG
+            if let runner = runTestHooks?.runMCPFollowUp {
+                return try await runner(mode, prompt, selection)
+            }
+        #endif
+
         let modeName = mode.mcpModeName
-        let modelSelection = try await oracleViewModel.resolveMCPFollowUpModel(mode: modeName)
+        await progressReporter?(.modelResolution)
+        let modelSelection: (
+            model: AIModel,
+            chatPresetID: UUID?,
+            mcpControlInfo: String?
+        )
+        #if DEBUG
+            if let resolver = runTestHooks?.resolveMCPFollowUpModel {
+                modelSelection = try await resolver(modeName)
+            } else {
+                modelSelection = try await oracleViewModel.resolveMCPFollowUpModel(mode: modeName)
+            }
+        #else
+            modelSelection = try await oracleViewModel.resolveMCPFollowUpModel(mode: modeName)
+        #endif
         let mcpSessionUIState: OracleViewModel.MCPSessionUIState? = {
             guard let mcpModelInfo = modelSelection.mcpControlInfo else { return nil }
             let overrideChatPresetName = modelSelection.chatPresetID
@@ -3602,11 +4105,18 @@ final class ContextBuilderAgentViewModel: ObservableObject {
             mode: mode,
             prompt: prompt,
             selection: selection,
+            lookupContext: lookupContext,
+            reviewGitContext: reviewGitContext,
+            finalReviewAuthorization: finalReviewAuthorization,
+            agentModeSessionID: agentModeSessionID,
+            agentModeRunID: agentModeRunID,
             chatName: chatNameForTab(tabID),
             model: modelSelection.model,
             chatPresetID: modelSelection.chatPresetID,
             mcpSessionUIState: mcpSessionUIState,
-            gitScopeOverride: gitScopeOverride
+            gitScopeOverride: gitScopeOverride,
+            progressReporter: progressReporter,
+            activityReporter: activityReporter
         )
     }
 
@@ -3700,6 +4210,9 @@ final class ContextBuilderAgentViewModel: ObservableObject {
         case .review: "Review"
         case .chat: "Answer"
         }
+        let reviewGitContext = mode == .review
+            ? await promptManager.freezePromptGitReviewContext(tabID: tabID, base: "HEAD")
+            : .automaticOnly()
 
         return try await runFollowUpOracleStream(
             for: tabID,
@@ -3707,6 +4220,7 @@ final class ContextBuilderAgentViewModel: ObservableObject {
             mode: mode,
             prompt: prompt,
             selection: selection,
+            reviewGitContext: reviewGitContext,
             chatName: chatName ?? defaultChatName,
             model: promptManager.preferredAIModel,
             chatPresetID: nil,

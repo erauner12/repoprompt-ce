@@ -41,8 +41,11 @@ and local development.
 For development and quick evaluation, double-click
 [`Launch RepoPrompt CE.command`](Launch%20RepoPrompt%20CE.command) in Finder.
 
-The launcher builds RepoPrompt CE from source, opens the debug app, and keeps a
-small terminal window available for rebuild, status, and stop controls.
+The launcher requires Python 3, builds RepoPrompt CE through the coordinated
+developer daemon, opens the debug app, and keeps a small terminal window
+available for rebuild, status, and stop controls. It does not provide an
+uncoordinated no-Python fallback because lifecycle actions validate the exact
+debug executable path.
 
 The debug launcher uses an available `Apple Development:` signing identity. If
 your Mac does not have one, run the same debug app from Terminal with explicit
@@ -93,6 +96,24 @@ another Mac or redistributed.
 - macOS 26 or later
 - Xcode 26, or matching Command Line Tools with the macOS 26 SDK
 
+### Develop in Xcode
+
+Generate and open the disposable contributor workspace with:
+
+```bash
+make xcode
+```
+
+In Xcode 26.3, use `RepoPrompt CE App` for the packaged debug app,
+`RepoPrompt CE MCP` for the coordinated MCP executable, and `RepoPrompt CE
+Tests` for tests. The test scheme delegates to conductor because
+`RepoPromptMCP` is an executable-only SwiftPM target. Xcode also exposes the
+native `RepoPrompt` and `repoprompt-mcp` product schemes.
+
+See [`docs/architecture/xcode-workspace.md`](docs/architecture/xcode-workspace.md)
+for generation, validation, cleanup, and workflow boundaries. Release packaging
+is unchanged and does not use the generated workspace.
+
 ## Features
 
 - **Context engineering**: Build dense, reviewable prompts with the files and
@@ -131,6 +152,8 @@ third-party notices in
   source ownership and placement rules
 - [`docs/architecture/provider-plugins.md`](docs/architecture/provider-plugins.md):
   Agent Mode provider architecture
+- [`docs/architecture/xcode-workspace.md`](docs/architecture/xcode-workspace.md):
+  generated Xcode developer workflow and boundaries
 - [`docs/releasing.md`](docs/releasing.md): release-candidate and publishing
   workflows
 - [`docs/open-source-readiness.md`](docs/open-source-readiness.md): public

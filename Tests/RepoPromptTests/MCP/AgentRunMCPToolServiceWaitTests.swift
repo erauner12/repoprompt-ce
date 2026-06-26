@@ -66,7 +66,8 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
             ])
         }
         try await waitForWaiter(registration: fixture.registration)
-        let terminal = makeSnapshot(sessionID: fixture.sessionID, status: .completed)
+        let terminalRunID = UUID()
+        let terminal = makeSnapshot(sessionID: fixture.sessionID, runID: terminalRunID, status: .completed)
         await liveSnapshots.set(terminal)
         _ = await AgentRunSessionStore.publishTerminal(
             .init(epoch: fixture.epoch, snapshot: terminal),
@@ -77,6 +78,7 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
 
         let resumedValue = try await secondWait.value
         XCTAssertEqual(resumedValue.objectValue?["status"]?.stringValue, AgentRunMCPSnapshot.Status.completed.rawValue)
+        XCTAssertEqual(resumedValue.objectValue?["run_id"]?.stringValue, terminalRunID.uuidString)
         XCTAssertNil(resumedValue.objectValue?["_meta"]?.objectValue?["wake_reason"])
         let allCompletions = await recorder.completions()
         XCTAssertEqual(allCompletions.count, 2)
@@ -314,6 +316,85 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
         XCTAssertEqual(completions[0].pendingSessionIDs, [second.sessionID])
     }
 
+    func testParkedWaitPollAndLaterWaitUseStoredTerminalSnapshot() async throws {
+        let window = makeWindow()
+        defer { WindowStatesManager.shared.unregisterWindowState(window) }
+        let liveSnapshots = LiveSnapshots()
+        let recorder = WaitScopeRecorder()
+        let viewModel = makeViewModel(windowID: window.windowID)
+        let fixture = try await installRunningSession(
+            in: viewModel,
+            liveSnapshots: liveSnapshots
+        )
+        defer { Task { await AgentRunSessionStore.cleanup(registration: fixture.registration) } }
+        let service = makeService(
+            window: window,
+            viewModel: viewModel,
+            liveSnapshots: liveSnapshots,
+            recorder: recorder
+        )
+        let sentinel = "complete-terminal-sentinel."
+        let liveRunning = makeSnapshot(
+            sessionID: fixture.sessionID,
+            status: .running,
+            latestAssistantPreview: "live-running-sentinel"
+        )
+        await liveSnapshots.set(liveRunning)
+
+        let preterminalPoll = try await service.execute(args: [
+            "op": .string("poll"),
+            "session_id": .string(fixture.sessionID.uuidString)
+        ])
+        XCTAssertEqual(
+            preterminalPoll.objectValue?["assistant_text"]?.stringValue,
+            "live-running-sentinel"
+        )
+
+        let firstWait = Task { @MainActor in
+            try await service.execute(args: [
+                "op": .string("wait"),
+                "session_id": .string(fixture.sessionID.uuidString),
+                "timeout": .double(2)
+            ])
+        }
+        try await waitForWaiter(registration: fixture.registration)
+
+        let terminal = makeSnapshot(
+            sessionID: fixture.sessionID,
+            status: .completed,
+            latestAssistantPreview: sentinel
+        )
+        _ = await AgentRunSessionStore.publishTerminal(
+            .init(epoch: fixture.epoch, snapshot: terminal),
+            registration: fixture.registration,
+            commitID: UUID(),
+            successorKind: nil
+        )
+
+        let firstValue = try await firstWait.value
+        XCTAssertEqual(firstValue.objectValue?["assistant_text"]?.stringValue, sentinel)
+
+        let pollValue = try await service.execute(args: [
+            "op": .string("poll"),
+            "session_id": .string(fixture.sessionID.uuidString)
+        ])
+        XCTAssertEqual(pollValue.objectValue?["assistant_text"]?.stringValue, sentinel)
+
+        let laterWaitValue = try await service.execute(args: [
+            "op": .string("wait"),
+            "session_id": .string(fixture.sessionID.uuidString),
+            "timeout": .double(2)
+        ])
+        XCTAssertEqual(
+            laterWaitValue.objectValue?["assistant_text"]?.stringValue,
+            sentinel
+        )
+        XCTAssertEqual(
+            laterWaitValue.objectValue?["status"]?.stringValue,
+            AgentRunMCPSnapshot.Status.completed.rawValue
+        )
+    }
+
     private func makeWindow() -> WindowState {
         let previousAutoStart = GlobalSettingsStore.shared.mcpAutoStart()
         GlobalSettingsStore.shared.setMCPAutoStart(false, commit: false)
@@ -384,11 +465,11 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
             },
             requireTargetWindow: { window },
             resolveRequestedTabID: { _ in nil },
-            resolveSpawnSourceTabID: { _ in nil },
+            resolveSpawnParentSourceTabID: { _ in nil },
             resolveSpawnParentSessionID: { _, _ in nil },
             bindCurrentRequestToTab: { _, _ in },
             withHeartbeat: { _, _, _, _, operation in try await operation() },
-            startRun: { _, _, _, _, _, _, _, _, _, _ in
+            startRun: { _, _, _, _, _, _, _, _, _, _, _, _ in
                 throw MCPError.internalError("startRun should not be used by wait tests")
             }
         )
@@ -424,11 +505,13 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
 
     private func makeSnapshot(
         sessionID: UUID,
+        runID: UUID? = nil,
         status: AgentRunMCPSnapshot.Status,
         latestAssistantPreview: String? = nil
     ) -> AgentRunMCPSnapshot {
         AgentRunMCPSnapshot(
             sessionID: sessionID,
+            runID: runID,
             tabID: nil,
             sessionName: "Child Agent",
             agentRaw: AgentProviderKind.codexExec.rawValue,
@@ -469,7 +552,7 @@ private actor LiveSnapshots {
     }
 }
 
-private final class WaitTestCodexController: CodexSessionControlling {
+private final class WaitTestCodexController: CodexSessionControllerTurnDispatchTestDefaults {
     var hasActiveThread: Bool {
         false
     }
@@ -525,23 +608,6 @@ private final class WaitTestCodexController: CodexSessionControlling {
     }
 
     func setThreadName(_: String, threadID _: String?) async throws {}
-    func sendUserMessage(_: String) async throws {}
-    func sendUserTurn(text _: String, images _: [AgentImageAttachment]) async throws {}
-    func sendUserTurn(
-        text _: String,
-        images _: [AgentImageAttachment],
-        model _: String?,
-        reasoningEffort _: String?
-    ) async throws {}
-
-    func sendUserTurn(
-        text _: String,
-        images _: [AgentImageAttachment],
-        model _: String?,
-        reasoningEffort _: String?,
-        serviceTier _: String?
-    ) async throws {}
-
     func compactThread() async throws {}
     func getThreadGoal() async throws -> CodexNativeSessionController.ThreadGoal? {
         nil

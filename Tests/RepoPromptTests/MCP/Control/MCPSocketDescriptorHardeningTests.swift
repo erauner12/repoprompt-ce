@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import MCP
 @testable import RepoPrompt
 import RepoPromptShared
 import XCTest
@@ -71,6 +72,266 @@ final class MCPSocketDescriptorHardeningTests: XCTestCase {
             }
         #else
             throw XCTSkip("Bootstrap socket listener descriptor seam is DEBUG-only")
+        #endif
+    }
+
+    func testSuccessiveSameSessionBootstrapAdmissionsDoNotDoubleDiscountReplacement() async throws {
+        #if DEBUG
+            try await Self.withIsolatedManagerSocket(prefix: "same-token-reservation") { manager, socketURL in
+                await manager.setConnectionApprovalHandler { _, _ in true }
+                await manager.start()
+                let listenerReady = await Self.waitForCurrentBootstrapListener(manager, at: socketURL)
+                XCTAssertTrue(listenerReady)
+
+                let sessionToken = "same-token-reservation-\(UUID().uuidString)"
+                let replacementID = UUID()
+                let unrelatedID = UUID()
+                let replacementStopGate = SuspendedAdmissionGate()
+                await manager.debugConfigureGlobalAdmissionForTesting(
+                    maxGlobalConnections: 2,
+                    preserveOnePerClient: false
+                )
+                await manager.debugInstallAdmissionEvictionCandidateForTesting(
+                    connectionID: replacementID,
+                    connection: BootstrapAdmissionTestConnection(
+                        idleSeconds: 180,
+                        stopGate: replacementStopGate
+                    ),
+                    clientID: "same-token-replacement",
+                    totalToolCalls: 0,
+                    createdAt: .distantPast
+                )
+                await manager.debugInstallAdmissionEvictionCandidateForTesting(
+                    connectionID: unrelatedID,
+                    connection: BootstrapAdmissionTestConnection(idleSeconds: 60),
+                    clientID: "same-token-unrelated",
+                    totalToolCalls: 1,
+                    createdAt: Date()
+                )
+                await manager.debugBindSessionTokenForAdmissionTesting(sessionToken, to: replacementID)
+
+                let firstFD = try Self.connectRawUnixClient(to: socketURL)
+                defer { Self.closeIfOpen(firstFD) }
+                let secondFD = try Self.connectRawUnixClient(to: socketURL)
+                defer { Self.closeIfOpen(secondFD) }
+
+                do {
+                    try Self.writeBootstrapRequest(
+                        to: firstFD,
+                        sessionToken: sessionToken,
+                        clientName: "same-token-first"
+                    )
+                    let firstResponse = try Self.readBootstrapResponse(from: firstFD)
+                    let replacementRemovalStarted = await Self.waitUntil { await replacementStopGate.hasEntered }
+                    let firstCommitCompleted = await Self.waitUntil {
+                        await manager.debugBootstrapReservationCount() == 0
+                    }
+                    XCTAssertEqual(firstResponse.type, "accepted")
+                    XCTAssertTrue(replacementRemovalStarted)
+                    XCTAssertTrue(firstCommitCompleted)
+
+                    try Self.writeBootstrapRequest(
+                        to: secondFD,
+                        sessionToken: sessionToken,
+                        clientName: "same-token-second"
+                    )
+                    let secondResponse = try Self.readBootstrapResponse(from: secondFD)
+                    let unrelatedRetained = await manager.debugContainsConnection(unrelatedID)
+                    let secondCommitCompleted = await Self.waitUntil {
+                        await manager.debugBootstrapReservationCount() == 0
+                    }
+                    let reservationCountAfterSecondAdmission = await manager.debugBootstrapReservationCount()
+                    let effectiveConnectionCount = await manager.debugEffectiveRegisteredConnectionCountForTesting()
+                    XCTAssertEqual(secondResponse.type, "accepted")
+                    XCTAssertTrue(
+                        unrelatedRetained,
+                        "A successive admission for the same durable token must not evict an unrelated client"
+                    )
+                    XCTAssertTrue(secondCommitCompleted)
+                    XCTAssertEqual(reservationCountAfterSecondAdmission, 0)
+                    XCTAssertEqual(
+                        effectiveConnectionCount,
+                        2,
+                        "Only the latest same-session successor and unrelated connection may remain logically registered"
+                    )
+                } catch {
+                    await replacementStopGate.release()
+                    throw error
+                }
+
+                await replacementStopGate.release()
+                let reservationDrained = await Self.waitUntil {
+                    await manager.debugBootstrapReservationCount() == 0
+                }
+                XCTAssertTrue(reservationDrained)
+                await manager.debugRemoveConnection(unrelatedID)
+                await manager.debugRemoveConnection(replacementID)
+                await manager.debugConfigureGlobalAdmissionForTesting(
+                    maxGlobalConnections: nil,
+                    preserveOnePerClient: nil
+                )
+            }
+        #else
+            throw XCTSkip("Bootstrap admission reservation seam is DEBUG-only")
+        #endif
+    }
+
+    func testBootstrapReplacementPublishesSuccessorBeforeHungPredecessorStop() async throws {
+        #if DEBUG
+            try await Self.withIsolatedManagerSocket(prefix: "replacement-commit-expiry") { manager, _ in
+                await manager.setConnectionApprovalHandler { _, _ in true }
+                await manager.start()
+                let sessionToken = "replacement-commit-expiry-\(UUID().uuidString)"
+                let predecessorID = UUID()
+                let replacementID = UUID()
+                let predecessorStopGate = SuspendedAdmissionGate()
+                let predecessorStopDeadlineGate = SuspendedAdmissionGate()
+                await manager.debugSetBootstrapPredecessorStopGraceSleepForTesting { _ in
+                    await predecessorStopDeadlineGate.suspendUntilReleased()
+                }
+                await manager.debugInstallAdmissionEvictionCandidateForTesting(
+                    connectionID: predecessorID,
+                    connection: BootstrapAdmissionTestConnection(
+                        idleSeconds: 120,
+                        stopGate: predecessorStopGate
+                    ),
+                    clientID: "replacement-commit-expiry-predecessor",
+                    totalToolCalls: 0,
+                    createdAt: .distantPast
+                )
+                await manager.debugBindSessionTokenForAdmissionTesting(sessionToken, to: predecessorID)
+
+                let descriptors = try Self.makeSocketPair()
+                defer { Self.closeIfOpen(descriptors[1]) }
+                let optionalAdmission = await manager.debugMakeReservedBootstrapAdmissionForShutdownTest(
+                    connectionID: replacementID,
+                    sessionToken: sessionToken,
+                    clientPid: Int(getpid()),
+                    clientName: "replacement-commit-expiry-successor",
+                    clientFD: descriptors[0]
+                )
+                let admission = try XCTUnwrap(optionalAdmission)
+                let commitCompleted = OptionalBoolRecorder()
+                let commitTask = Task {
+                    await admission.postAccept?()
+                    await commitCompleted.record(true)
+                }
+
+                let predecessorStopStarted = await Self.waitUntil {
+                    await predecessorStopGate.hasEntered
+                }
+                XCTAssertTrue(predecessorStopStarted)
+
+                let commitFinishedWhilePredecessorStopWasBlocked = await Self.waitUntil {
+                    await commitCompleted.value == true
+                }
+                let predecessorStillTracked = await manager.debugContainsConnection(predecessorID)
+                let replacementRegistered = await manager.debugContainsConnection(replacementID)
+                let boundConnectionID = await manager.debugConnectionIDForSessionTokenForTesting(sessionToken)
+                let reservationCountDuringCleanup = await manager.debugBootstrapReservationCount()
+                let transferredCountDuringCleanup = await manager.debugTransferredBootstrapSocketCountForShutdownTest()
+                XCTAssertTrue(
+                    commitFinishedWhilePredecessorStopWasBlocked,
+                    "A hung predecessor stop must not keep post-accept commit suspended"
+                )
+                XCTAssertTrue(
+                    predecessorStillTracked,
+                    "The exact predecessor may remain tracked only while identity-fenced cleanup is pending"
+                )
+                XCTAssertTrue(
+                    replacementRegistered,
+                    "The successor must register before awaiting predecessor cleanup"
+                )
+                XCTAssertEqual(boundConnectionID, replacementID)
+                XCTAssertEqual(
+                    reservationCountDuringCleanup,
+                    0,
+                    "Published successors must not retain a permanent committing reservation"
+                )
+                XCTAssertEqual(transferredCountDuringCleanup, 0)
+                XCTAssertFalse(
+                    Self.isClosed(descriptors[0]),
+                    "The registered successor must retain ownership of its transferred descriptor"
+                )
+
+                let predecessorStopDeadlineStarted = await Self.waitUntil {
+                    await predecessorStopDeadlineGate.hasEntered
+                }
+                XCTAssertTrue(predecessorStopDeadlineStarted)
+                await predecessorStopDeadlineGate.release()
+                let predecessorRemovedBeforeStopReturned = await Self.waitUntil {
+                    await manager.debugContainsConnection(predecessorID) == false
+                }
+                XCTAssertTrue(
+                    predecessorRemovedBeforeStopReturned,
+                    "The bounded handoff grace must detach exact predecessor state even if stop remains hung"
+                )
+                let predecessorStopStillBlocked = await predecessorStopGate.hasEntered
+                XCTAssertTrue(predecessorStopStillBlocked)
+
+                await predecessorStopGate.release()
+                await commitTask.value
+                await manager.debugSetBootstrapPredecessorStopGraceSleepForTesting(nil)
+                await manager.debugRemoveConnection(replacementID)
+                await manager.debugRemoveConnection(predecessorID)
+            }
+        #else
+            throw XCTSkip("Bootstrap replacement commit seam is DEBUG-only")
+        #endif
+    }
+
+    func testBootstrapReplacementPreparationFailurePreservesUsablePredecessor() async throws {
+        #if DEBUG
+            try await Self.withIsolatedManagerSocket(prefix: "replacement-prepare-rollback") { manager, _ in
+                await manager.start()
+                let sessionToken = "replacement-prepare-rollback-\(UUID().uuidString)"
+                let predecessorID = UUID()
+                let replacementID = UUID()
+                await manager.debugInstallAdmissionEvictionCandidateForTesting(
+                    connectionID: predecessorID,
+                    connection: BootstrapAdmissionTestConnection(idleSeconds: 120),
+                    clientID: "replacement-prepare-rollback-predecessor",
+                    totalToolCalls: 0,
+                    createdAt: .distantPast
+                )
+                await manager.debugBindSessionTokenForAdmissionTesting(sessionToken, to: predecessorID)
+
+                let optionalAdmission = await manager.debugMakeReservedBootstrapAdmissionForShutdownTest(
+                    connectionID: replacementID,
+                    sessionToken: sessionToken,
+                    clientPid: Int(getpid()),
+                    clientName: "replacement-prepare-rollback-successor",
+                    clientFD: -1
+                )
+                let admission = try XCTUnwrap(optionalAdmission)
+                await admission.postAccept?()
+
+                let predecessorRetained = await manager.debugContainsConnection(predecessorID)
+                let replacementRegistered = await manager.debugContainsConnection(replacementID)
+                let reservationCount = await manager.debugBootstrapReservationCount()
+                let transferredCount = await manager.debugTransferredBootstrapSocketCountForShutdownTest()
+                XCTAssertTrue(
+                    predecessorRetained,
+                    "Successor preparation must fail before disconnecting the predecessor"
+                )
+                XCTAssertFalse(replacementRegistered)
+                XCTAssertEqual(reservationCount, 0)
+                XCTAssertEqual(transferredCount, 0)
+
+                let predecessorCallRan = AsyncCounter()
+                try await manager.withConnectionCallPermitForTesting(
+                    connectionID: predecessorID,
+                    lane: .ordinary
+                ) {
+                    await predecessorCallRan.increment()
+                }
+                let callCount = await predecessorCallRan.value
+                XCTAssertEqual(callCount, 1, "Rollback must leave the predecessor usable")
+
+                await manager.debugRemoveConnection(predecessorID)
+            }
+        #else
+            throw XCTSkip("Bootstrap replacement rollback seam is DEBUG-only")
         #endif
     }
 
@@ -347,7 +608,8 @@ final class MCPSocketDescriptorHardeningTests: XCTestCase {
                 await manager.stop()
                 let transferredSocketCountAfterStop = await manager.debugTransferredBootstrapSocketCountForShutdownTest()
                 XCTAssertEqual(transferredSocketCountAfterStop, 0)
-                XCTAssertTrue(Self.isClosed(descriptors[0]))
+                // The descriptor number can be reused quickly by unrelated full-suite work
+                // after manager.stop() closes it, so peer EOF is the stable ownership proof.
                 XCTAssertTrue(Self.peerObservedEOF(on: descriptors[1]))
 
                 await manager.start()
@@ -538,59 +800,157 @@ final class MCPSocketDescriptorHardeningTests: XCTestCase {
         #endif
     }
 
-    func testNonImportableCLISourcesUseSharedDescriptorHardening() throws {
-        let root = try RepoRoot.url()
-        let main = try Self.sourceText("Sources/RepoPromptMCP/main.swift", relativeTo: root)
-        let interactive = try Self.sourceText(
-            "Sources/RepoPromptMCP/Interactive/InteractiveMCPClientSession.swift",
-            relativeTo: root
-        )
-        let transport = try Self.sourceText(
-            "Sources/RepoPromptMCP/Transports/BootstrapSocketMCPTransport.swift",
-            relativeTo: root
-        )
+    func testNonImportableCLISourcesHardenDescriptorsAndFenceAdoptedSocketReconnects() throws {
+        do {
+            let caseLabel = "testNonImportableCLISourcesUseSharedDescriptorHardening"
+            let root = try RepoRoot.url()
+            let main = try Self.sourceText("Sources/RepoPromptMCP/main.swift", relativeTo: root)
+            let interactive = try Self.sourceText(
+                "Sources/RepoPromptMCP/Interactive/InteractiveMCPClientSession.swift",
+                relativeTo: root
+            )
+            let transport = try Self.sourceText(
+                "Sources/RepoPromptMCP/Transports/BootstrapSocketMCPTransport.swift",
+                relativeTo: root
+            )
 
-        XCTAssertGreaterThanOrEqual(
-            main.occurrenceCount(of: "POSIXDescriptorSupport.setCloseOnExec"),
-            2,
-            "Proxy sockets and kill-signal watcher descriptors should both be hardened"
-        )
-        XCTAssertTrue(main.contains("POSIXDescriptorSupport.shutdownSocketReadWrite(socketFD)"))
-        XCTAssertTrue(interactive.contains("POSIXDescriptorSupport.setCloseOnExec(fd)"))
-        XCTAssertTrue(interactive.contains("POSIXDescriptorSupport.shutdownSocketReadWrite(fd)"))
-        XCTAssertTrue(transport.contains("POSIXDescriptorSupport.setCloseOnExec(connectedFD)"))
-        XCTAssertTrue(transport.contains("POSIXDescriptorSupport.shutdownSocketReadWrite(socketFD)"))
+            XCTAssertGreaterThanOrEqual(
+                main.occurrenceCount(of: "POSIXDescriptorSupport.setCloseOnExec"),
+                2,
+                caseLabel + ": Proxy sockets and kill-signal watcher descriptors should both be hardened"
+            )
+            XCTAssertTrue(main.contains("POSIXDescriptorSupport.shutdownSocketReadWrite(socketFD)"), caseLabel)
+            XCTAssertTrue(interactive.contains("POSIXDescriptorSupport.setCloseOnExec(fd)"), caseLabel)
+            XCTAssertTrue(interactive.contains("POSIXDescriptorSupport.shutdownSocketReadWrite(fd)"), caseLabel)
+            XCTAssertTrue(transport.contains("POSIXDescriptorSupport.setCloseOnExec(connectedFD)"), caseLabel)
+            XCTAssertTrue(transport.contains("POSIXDescriptorSupport.shutdownSocketReadWrite(socketFD)"), caseLabel)
+        }
+
+        do {
+            let caseLabel = "testNonImportableCLISourcesCaptureKillWatcherFDAndFenceAdoptedTransportReconnects"
+            let root = try RepoRoot.url()
+            let main = try Self.sourceText("Sources/RepoPromptMCP/main.swift", relativeTo: root)
+            let transport = try Self.sourceText(
+                "Sources/RepoPromptMCP/Transports/BootstrapSocketMCPTransport.swift",
+                relativeTo: root
+            )
+
+            Self.assertSourceContains(
+                [
+                    "source.setCancelHandler {\n            close(fd)\n        }",
+                    "let source = killSignalSource\n        killSignalSource = nil\n        killSignalFD = -1\n        source?.cancel()"
+                ],
+                in: main,
+                label: caseLabel
+            )
+            Self.assertSourceContains(
+                [
+                    "private var connectionAttempted = false",
+                    "guard !isConnected else { return }",
+                    "guard !connectionAttempted, !socketClosed, !streamFinished else {",
+                    "throw MCPError.connectionClosed",
+                    "connectionAttempted = true"
+                ],
+                in: transport,
+                label: caseLabel
+            )
+            XCTAssertEqual(
+                transport.occurrenceCount(of: "connectionAttempted = false"),
+                1,
+                caseLabel + ": An adopted CLI socket must never become reconnectable after teardown."
+            )
+            XCTAssertFalse(
+                transport.contains("streamFinished = false\n        socketClosed = false"),
+                caseLabel + ": CLI reconnect must not reset torn-down adopted-socket state."
+            )
+        }
     }
 
-    func testAppAndCLIReadersShareFairOneShotTerminalCancellationLifecycle() throws {
-        let root = try RepoRoot.url()
-        let appReader = try Self.sourceText(
-            "Sources/RepoPrompt/Infrastructure/MCP/AppShared/NewlineDelimitedSocketReader.swift",
-            relativeTo: root
-        )
-        let cliReader = try Self.sourceText(
-            "Sources/RepoPromptMCP/Shared/NewlineDelimitedSocketReader.swift",
-            relativeTo: root
-        )
+    func testAppAndCLIReadersPreserveOneShotTerminalCancellationOwnership() throws {
+        do {
+            let caseLabel = "testAppAndCLIReadersShareFairOneShotTerminalCancellationLifecycle"
+            let root = try RepoRoot.url()
+            let appReader = try Self.sourceText(
+                "Sources/RepoPrompt/Infrastructure/MCP/AppShared/NewlineDelimitedSocketReader.swift",
+                relativeTo: root
+            )
+            let cliReader = try Self.sourceText(
+                "Sources/RepoPromptMCP/Shared/NewlineDelimitedSocketReader.swift",
+                relativeTo: root
+            )
 
-        XCTAssertEqual(appReader, cliReader)
-        Self.assertSourceContains(
-            [
-                "public enum NewlineDelimitedSocketReaderTerminal: @unchecked Sendable",
-                "onTerminal: @escaping (NewlineDelimitedSocketReaderTerminal) -> Void",
-                "onEOF: { onTerminal(.eof(hasResidualData: $0)) }",
-                "onError: { onTerminal(.error($0)) }",
-                "private enum Lifecycle: Equatable",
-                "private var generation: UInt64 = 0",
-                "private var pendingCancelledSources: [ObjectIdentifier: ReadEventSource] = [:]",
-                "finishTerminalOnQueue(.failure(posixError), generation: pumpGeneration)",
-                "finishTerminalOnQueue(.success(!buffer.isEmpty), generation: pumpGeneration)",
-                "guard terminalGeneration == generation, lifecycle == .running else { return }",
-                "cancelCurrentSourceOnQueue()",
-                "guard pendingCancelledSources.removeValue(forKey: sourceID) != nil else { return }"
-            ],
-            in: appReader
-        )
+            XCTAssertEqual(appReader, cliReader, caseLabel)
+            Self.assertSourceContains(
+                [
+                    "public enum NewlineDelimitedSocketReaderTerminal: @unchecked Sendable",
+                    "onTerminal: @escaping (NewlineDelimitedSocketReaderTerminal) -> Void",
+                    "onEOF: { onTerminal(.eof(hasResidualData: $0)) }",
+                    "onError: { onTerminal(.error($0)) }",
+                    "private enum Lifecycle: Equatable",
+                    "private var generation: UInt64 = 0",
+                    "private var pendingCancelledSources: [ObjectIdentifier: ReadEventSource] = [:]",
+                    "finishTerminalOnQueue(.failure(posixError), generation: pumpGeneration)",
+                    "finishTerminalOnQueue(.success(!buffer.isEmpty), generation: pumpGeneration)",
+                    "guard terminalGeneration == generation, lifecycle == .running else { return }",
+                    "cancelCurrentSourceOnQueue()",
+                    "guard pendingCancelledSources.removeValue(forKey: sourceID) != nil else { return }"
+                ],
+                in: appReader,
+                label: caseLabel
+            )
+        }
+
+        do {
+            let caseLabel = "testNonImportableCLITransportClaimsEarlyAndDelayedReaderCancellationExactlyOnce"
+            let root = try RepoRoot.url()
+            let transport = try Self.sourceText(
+                "Sources/RepoPromptMCP/Transports/BootstrapSocketMCPTransport.swift",
+                relativeTo: root
+            )
+
+            Self.assertSourceContains(
+                [
+                    "private struct ReaderIdentity: Hashable {",
+                    "private struct ActiveReaderOwnership {",
+                    "private struct PendingReaderCancellation {",
+                    "let reader: NewlineDelimitedSocketReader",
+                    "let transportRetainer: BootstrapSocketMCPTransport",
+                    "private var activeReaderOwnership: ActiveReaderOwnership?",
+                    "private var pendingReaderCancellations: [UInt64: PendingReaderCancellation] = [:]",
+                    "private var earlyReaderCancellations: Set<ReaderIdentity> = []",
+                    "activeReaderOwnership = ActiveReaderOwnership(identity: identity, reader: newReader)",
+                    "activeReaderOwnership = nil\n\n        let identity = activeOwnership.identity",
+                    "pendingReaderCancellations[identity.token] = PendingReaderCancellation(",
+                    "transportRetainer: self",
+                    "activeOwnership.reader.stop()",
+                    "if earlyReaderCancellations.contains(identity) {\n            finalizeReaderCancellation(identity)",
+                    "if pendingReaderCancellations[identity.token]?.identity == identity {",
+                    "if activeReaderOwnership?.identity == identity {\n            earlyReaderCancellations.insert(identity)",
+                    "let ownership = pendingReaderCancellations.removeValue(forKey: identity.token)",
+                    "earlyReaderCancellations.remove(identity)",
+                    "withExtendedLifetime(ownership) {",
+                    "Task { await transport.handleReaderTerminal(terminal, from: identity) }",
+                    "guard activeReaderOwnership?.identity == identity else {",
+                    "if !pendingReaderCancellationOwnsCurrentSocket() {",
+                    "closeSocketIfNeeded()"
+                ],
+                in: transport,
+                label: caseLabel
+            )
+
+            XCTAssertTrue(
+                transport.contains(
+                    "onTerminal: { [weak self] terminal in\n                guard let transport = self else { return }"
+                ),
+                caseLabel + ": Reader terminal delivery must avoid a permanent reader/transport cycle."
+            )
+            XCTAssertTrue(
+                transport.contains(
+                    "transport.scheduleReaderCancellationCallback {\n                    Task { await transport.readSourceDidCancel(identity) }"
+                ),
+                caseLabel + ": Cancellation delivery must strongly retain the transport until the actor claims the identity."
+            )
+        }
     }
 
     func testAppTransportReplacesTerminalInboundChannelsBeforeReconnect() throws {
@@ -620,100 +980,18 @@ final class MCPSocketDescriptorHardeningTests: XCTestCase {
         )
     }
 
-    func testNonImportableCLITransportClaimsEarlyAndDelayedReaderCancellationExactlyOnce() throws {
-        let root = try RepoRoot.url()
-        let transport = try Self.sourceText(
-            "Sources/RepoPromptMCP/Transports/BootstrapSocketMCPTransport.swift",
-            relativeTo: root
-        )
-
-        Self.assertSourceContains(
-            [
-                "private struct ReaderIdentity: Hashable {",
-                "private struct ActiveReaderOwnership {",
-                "private struct PendingReaderCancellation {",
-                "let reader: NewlineDelimitedSocketReader",
-                "let transportRetainer: BootstrapSocketMCPTransport",
-                "private var activeReaderOwnership: ActiveReaderOwnership?",
-                "private var pendingReaderCancellations: [UInt64: PendingReaderCancellation] = [:]",
-                "private var earlyReaderCancellations: Set<ReaderIdentity> = []",
-                "activeReaderOwnership = ActiveReaderOwnership(identity: identity, reader: newReader)",
-                "activeReaderOwnership = nil\n\n        let identity = activeOwnership.identity",
-                "pendingReaderCancellations[identity.token] = PendingReaderCancellation(",
-                "transportRetainer: self",
-                "activeOwnership.reader.stop()",
-                "if earlyReaderCancellations.contains(identity) {\n            finalizeReaderCancellation(identity)",
-                "if pendingReaderCancellations[identity.token]?.identity == identity {",
-                "if activeReaderOwnership?.identity == identity {\n            earlyReaderCancellations.insert(identity)",
-                "let ownership = pendingReaderCancellations.removeValue(forKey: identity.token)",
-                "earlyReaderCancellations.remove(identity)",
-                "withExtendedLifetime(ownership) {",
-                "Task { await transport.handleReaderTerminal(terminal, from: identity) }",
-                "guard activeReaderOwnership?.identity == identity else {",
-                "if !pendingReaderCancellationOwnsCurrentSocket() {",
-                "closeSocketIfNeeded()"
-            ],
-            in: transport
-        )
-
-        XCTAssertTrue(
-            transport.contains(
-                "onTerminal: { [weak self] terminal in\n                guard let transport = self else { return }"
-            ),
-            "Reader terminal delivery must avoid a permanent reader/transport cycle."
-        )
-        XCTAssertTrue(
-            transport.contains(
-                "transport.scheduleReaderCancellationCallback {\n                    Task { await transport.readSourceDidCancel(identity) }"
-            ),
-            "Cancellation delivery must strongly retain the transport until the actor claims the identity."
-        )
-    }
-
-    func testNonImportableCLISourcesCaptureKillWatcherFDAndFenceAdoptedTransportReconnects() throws {
-        let root = try RepoRoot.url()
-        let main = try Self.sourceText("Sources/RepoPromptMCP/main.swift", relativeTo: root)
-        let transport = try Self.sourceText(
-            "Sources/RepoPromptMCP/Transports/BootstrapSocketMCPTransport.swift",
-            relativeTo: root
-        )
-
-        Self.assertSourceContains(
-            [
-                "source.setCancelHandler {\n            close(fd)\n        }",
-                "let source = killSignalSource\n        killSignalSource = nil\n        killSignalFD = -1\n        source?.cancel()"
-            ],
-            in: main
-        )
-        Self.assertSourceContains(
-            [
-                "private var connectionAttempted = false",
-                "guard !isConnected else { return }",
-                "guard !connectionAttempted, !socketClosed, !streamFinished else {",
-                "throw MCPError.connectionClosed",
-                "connectionAttempted = true"
-            ],
-            in: transport
-        )
-        XCTAssertEqual(
-            transport.occurrenceCount(of: "connectionAttempted = false"),
-            1,
-            "An adopted CLI socket must never become reconnectable after teardown."
-        )
-        XCTAssertFalse(
-            transport.contains("streamFinished = false\n        socketClosed = false"),
-            "CLI reconnect must not reset torn-down adopted-socket state."
-        )
-    }
-
     private static func assertSourceContains(
         _ requiredSnippets: [String],
         in source: String,
+        label: String? = nil,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
         for snippet in requiredSnippets {
-            XCTAssertTrue(source.contains(snippet), "Missing CLI transport cleanup invariant: \(snippet)", file: file, line: line)
+            let message = [label, "Missing CLI transport cleanup invariant: \(snippet)"]
+                .compactMap(\.self)
+                .joined(separator: ": ")
+            XCTAssertTrue(source.contains(snippet), message, file: file, line: line)
         }
     }
 
@@ -798,11 +1076,15 @@ final class MCPSocketDescriptorHardeningTests: XCTestCase {
         throw TestError.bootstrapResponseTimedOut
     }
 
-    private static func writeBootstrapRequest(to fd: Int32) throws {
+    private static func writeBootstrapRequest(
+        to fd: Int32,
+        sessionToken: String = "fd-hardening-\(UUID().uuidString)",
+        clientName: String = "fd-hardening-test"
+    ) throws {
         var payload = try JSONEncoder().encode(MCPBootstrapRequest(
-            sessionToken: "fd-hardening-\(UUID().uuidString)",
+            sessionToken: sessionToken,
             clientPid: Int(getpid()),
-            clientName: "fd-hardening-test"
+            clientName: clientName
         ))
         payload.append(UInt8(ascii: "\n"))
         try writeAll(payload, to: fd)
@@ -1029,6 +1311,62 @@ private actor SuspendedAdmissionGate {
         releaseWaiters.forEach { $0.resume() }
         releaseWaiters.removeAll()
     }
+}
+
+private actor BootstrapAdmissionTestConnection: MCPServerConnection {
+    private let idleSeconds: TimeInterval
+    private let stopGate: SuspendedAdmissionGate?
+
+    init(idleSeconds: TimeInterval, stopGate: SuspendedAdmissionGate? = nil) {
+        self.idleSeconds = idleSeconds
+        self.stopGate = stopGate
+    }
+
+    nonisolated var isFilesystemBacked: Bool {
+        false
+    }
+
+    nonisolated var connectionFolderURL: URL? {
+        nil
+    }
+
+    nonisolated var capabilityToken: String? {
+        nil
+    }
+
+    func start(approvalHandler _: @escaping (MCP.Client.Info) async -> Bool) async throws {}
+
+    func stop() async {
+        await stopGate?.suspendUntilReleased()
+    }
+
+    func abortForExecutionWatchdog() async {}
+    func notifyToolListChanged() async {}
+
+    func connectionState() -> ConnectionStateSnapshot {
+        .ready
+    }
+
+    func isViableForRetention() -> Bool {
+        true
+    }
+
+    func secondsSinceLastActivity() async -> TimeInterval {
+        idleSeconds
+    }
+
+    func transportIngressSnapshot() async -> MCPTransportIngressSnapshot? {
+        nil
+    }
+
+    func terminate(reason _: TerminationReason, message _: String?) async {}
+
+    func sendProgress(
+        tool _: String,
+        kind _: RepoPromptProgressKind,
+        stage _: String,
+        message _: String
+    ) async {}
 }
 
 private enum TestError: Error {

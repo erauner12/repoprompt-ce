@@ -17,6 +17,7 @@ extension MCPServerViewModel {
 
         var collections: SelectionReplyAssembler.SelectionCollections? = nil
         var selectionReply: ToolResultDTOs.SelectedFilesReply? = nil
+        var preparedTokenAccounting: MCPPreparedTokenAccounting? = nil
         let lookupContext = await lookupContext(for: context)
         let effectiveSelection = lookupContext.physicalizeSelection(context.selection)
         let emitsFilesystemIdentity = includeSelection
@@ -50,10 +51,19 @@ extension MCPServerViewModel {
             )
             let formatter = PathFormatter(format: .relative, owner: self, projection: lookupContext.bindingProjection)
             let tokens = TokenServices(owner: self)
-            let gathered = await SelectionReplyAssembler.collect(from: source, owner: self, rootScope: lookupContext.rootScope)
-            let evaluation = await evaluateVirtualPromptEntries(
-                for: effectiveSelection,
-                codeMapUsage: gathered.codeMapUsage
+            let gathered = await SelectionReplyAssembler.collect(
+                from: source,
+                owner: self,
+                rootScope: lookupContext.rootScope,
+                contentPolicy: include.contains("files") ? .loadContent : .cachedOnly
+            )
+            let preparedAccounting = await prepareMCPTokenAccounting(
+                context: context,
+                effectiveSelection: effectiveSelection,
+                collections: gathered,
+                resolvedContext: resolvedCfg,
+                lookupContext: lookupContext,
+                activeTabCompatibility: activeTabCompatibility
             )
             let reply = await SelectionReplyAssembler.buildSelectedFilesReply(
                 collections: gathered,
@@ -62,13 +72,11 @@ extension MCPServerViewModel {
                 userPresetState: userPresetState,
                 copyUsage: copyUsage != .auto ? copyUsage : nil,
                 projection: projectionConfig,
-                entryResultsByFileID: evaluation.entryResultsByFileID
+                entryResultsByFileID: preparedAccounting.entryResultsByFileID
             )
             collections = gathered
             selectionReply = reply
-        } else if includeSelection {
-            // Always use .auto mode for normalized view
-            selectionReply = await (buildTabSelectedFilesReply(from: context.selection, codeMapUsageOverride: .auto)).0
+            preparedTokenAccounting = preparedAccounting
         }
 
         let selectionDTO = includeSelection ? selectionReply : nil
@@ -88,7 +96,7 @@ extension MCPServerViewModel {
 
         var codeStructDTO: ToolResultDTOs.SelectedCodeStructureDTO? = nil
         if include.contains("code"), !promptVM.codeMapsGloballyDisabled, let coll = collections {
-            let builder = CodeStructureBuilder(owner: self, projection: lookupContext.bindingProjection)
+            let builder = CodeStructureBuilder(owner: self, lookupContext: lookupContext)
             let combined = coll.selected.map(\.file) + coll.codemap.map(\.file)
             codeStructDTO = try await builder.build(for: combined)
         }
@@ -147,69 +155,17 @@ extension MCPServerViewModel {
             let filesContentTokens = (selectionReply?.summary?.fullTokens ?? 0) + (selectionReply?.summary?.sliceTokens ?? 0)
             let codemapsTokens = selectionReply?.summary?.codemapTokens ?? 0
 
-            if activeTabCompatibility {
-                await promptVM.tokenCountingViewModel.forceImmediateRecount()
-                let breakdown = latestTokenBreakdown()
-                let promptTokens = breakdown.prompt
-                var treeTokens = breakdown.fileTree
-                if treeTokens == 0 && fileTreeTokens > 0 {
-                    treeTokens = fileTreeTokens
-                }
-                let metaTokens = breakdown.meta
-                let gitTokens = breakdown.git
-                var totalTokens = breakdown.total
-                let componentSum = promptTokens + fileTokens + treeTokens + metaTokens + gitTokens
-                if totalTokens == 0 || totalTokens < componentSum {
-                    totalTokens = componentSum
-                }
-                let otherTokens = max(totalTokens - componentSum, 0)
-                tokenStatsDTO = .init(
-                    total: totalTokens,
-                    files: fileTokens,
-                    prompt: promptTokens,
-                    fileTree: treeTokens,
-                    meta: metaTokens,
-                    git: gitTokens,
-                    other: otherTokens,
-                    filesContent: filesContentTokens > 0 ? filesContentTokens : nil,
-                    codemaps: codemapsTokens > 0 ? codemapsTokens : nil
-                )
-
-                if let userFileTokens = selectionReply?.userCopyTokens, userFileTokens != fileTokens {
-                    let userContentTokens = selectionReply?.userCopyContentTokens ?? 0
-                    let userCodemapTokens = selectionReply?.userCopyCodemapTokens ?? 0
-                    let userComponentSum = promptTokens + userFileTokens + treeTokens + metaTokens + gitTokens
-                    let userTotalTokens = max(userComponentSum, totalTokens - fileTokens + userFileTokens)
-                    let userOtherTokens = max(userTotalTokens - userComponentSum, 0)
-                    userTokenStatsDTO = .init(
-                        total: userTotalTokens,
-                        files: userFileTokens,
-                        prompt: promptTokens,
-                        fileTree: treeTokens,
-                        meta: metaTokens,
-                        git: gitTokens,
-                        other: userOtherTokens,
-                        filesContent: userContentTokens > 0 ? userContentTokens : nil,
-                        codemaps: userCodemapTokens > 0 ? userCodemapTokens : nil
+            if let prepared = preparedTokenAccounting {
+                if let published = prepared.activePublishedSnapshot {
+                    tokenStatsDTO = Self.publishedTokenStats(published)
+                } else {
+                    tokenStatsDTO = Self.makeTokenStats(
+                        filesTokens: fileTokens,
+                        filesContentTokens: filesContentTokens > 0 ? filesContentTokens : nil,
+                        codemapsTokens: codemapsTokens > 0 ? codemapsTokens : nil,
+                        breakdown: prepared.breakdown
                     )
-                    let codemapDelta = fileTokens - userFileTokens
-                    tokenStatsNote = "Difference: \(codemapDelta) codemap tokens (API signatures). Your preset excludes these, so exports use \(userFileTokens) file tokens, not \(fileTokens)."
                 }
-            } else {
-                let selectedFiles = collections?.selected.map(\.file) ?? []
-                let codemapFiles = collections?.codemap.map(\.file) ?? []
-                let breakdown = await buildVirtualTokenBreakdown(
-                    for: context,
-                    resolvedContext: resolvedCfg,
-                    selectedFiles: selectedFiles,
-                    codemapFiles: codemapFiles
-                )
-                tokenStatsDTO = Self.makeTokenStats(
-                    filesTokens: fileTokens,
-                    filesContentTokens: filesContentTokens > 0 ? filesContentTokens : nil,
-                    codemapsTokens: codemapsTokens > 0 ? codemapsTokens : nil,
-                    breakdown: breakdown
-                )
 
                 if let userFileTokens = selectionReply?.userCopyTokens, userFileTokens != fileTokens {
                     let userContentTokens = selectionReply?.userCopyContentTokens ?? 0
@@ -218,7 +174,7 @@ extension MCPServerViewModel {
                         filesTokens: userFileTokens,
                         filesContentTokens: userContentTokens > 0 ? userContentTokens : nil,
                         codemapsTokens: userCodemapTokens > 0 ? userCodemapTokens : nil,
-                        breakdown: breakdown
+                        breakdown: prepared.breakdown
                     )
                     let codemapDelta = fileTokens - userFileTokens
                     tokenStatsNote = "Difference: \(codemapDelta) codemap tokens (API signatures). Your preset excludes these, so exports use \(userFileTokens) file tokens, not \(fileTokens)."
@@ -240,6 +196,7 @@ extension MCPServerViewModel {
             tokenStats: tokenStatsDTO,
             userTokenStats: userTokenStatsDTO,
             tokenStatsNote: tokenStatsNote,
+            tokenAccounting: preparedTokenAccounting?.tokenAccounting,
             copyPreset: copyPresetContextDTO,
             copyPresets: nil,
             worktreeScope: worktreeScope
@@ -299,7 +256,8 @@ extension MCPServerViewModel {
         let entryResultsByFileID: [UUID: PromptEntriesEvaluation.EntryResult]? = if let evaluationSelection {
             await evaluateVirtualPromptEntries(
                 for: evaluationSelection,
-                codeMapUsage: collections.codeMapUsage
+                codeMapUsage: collections.codeMapUsage,
+                rootScope: lookupContext.rootScope
             ).entryResultsByFileID
         } else {
             nil
@@ -324,6 +282,13 @@ extension MCPServerViewModel {
         let lookupContext = await lookupContext(for: context)
         let effectivePromptText = context.promptText
         let store = promptVM.workspaceFileContextStore
+        let reviewGitContext = await promptVM.freezePromptGitReviewContext(
+            workspaceID: context.workspaceID,
+            tabID: context.tabID,
+            sessionID: context.activeAgentSessionID,
+            bindings: context.worktreeBindings
+        )
+        let coordinator = AutomaticReviewGitDiffCoordinator()
         var effectiveCfg = cfg
         effectiveCfg.codeMapUsage = effectiveMCPCodeMapUsage(cfg.codeMapUsage)
         let preAssembly = await PromptContextPreAssemblyService.resolve(
@@ -338,8 +303,9 @@ extension MCPServerViewModel {
                 selectedGitDiffFolderPolicy: .filesOnly,
                 selectedGitDiffLookupProfile: .mcpSelection,
                 selectedGitDiffArtifactPolicy: .respectGitInclusion,
-                selectedGitDiffProvider: { [gitViewModel = promptVM.gitViewModel] paths in
-                    await gitViewModel.getDiffForAbsolutePaths(paths, forceRefreshStatus: true)
+                reviewGitContext: reviewGitContext,
+                selectedGitDiffProvider: { request in
+                    await coordinator.resolve(request)
                 },
                 completeGitDiffProvider: { [gitViewModel = promptVM.gitViewModel] in
                     await gitViewModel.getDiffUsing(inclusionMode: .all, forceRefreshStatus: true)
@@ -363,7 +329,7 @@ extension MCPServerViewModel {
             includeFiles: cfg.includeFiles,
             includeUserPrompt: cfg.includeUserPrompt,
             filePathDisplay: promptVM.filePathDisplayOption,
-            codemapSnapshots: preAssembly.codemapSnapshots,
+            codemapSnapshotBundle: preAssembly.codemapSnapshotBundle,
             includeDatetimeInUserInstructions: promptVM.includeDatetimeInUserInstructions,
             promptSectionsOrder: promptVM.promptSectionsOrder,
             disabledPromptSections: promptVM.disabledPromptSections,

@@ -16,6 +16,7 @@ struct AgentContextExportSource: Equatable {
     var exportContextIdentity: AgentContextExportIdentity {
         AgentContextExportIdentity(
             tabID: tabID,
+            selection: selection,
             activeAgentSessionID: activeAgentSessionID,
             worktreeBindingFingerprint: Self.worktreeBindingFingerprint(worktreeBindings)
         )
@@ -28,6 +29,7 @@ struct AgentContextExportSource: Equatable {
 
 struct AgentContextExportIdentity: Equatable {
     let tabID: UUID?
+    let selection: StoredSelection
     let activeAgentSessionID: UUID?
     let worktreeBindingFingerprint: String
 }
@@ -126,6 +128,22 @@ extension AgentContextExportRow {
     }
 }
 
+enum AgentContextPreviewContentPolicy {
+    static let maximumBytes = 256_000
+    static let maximumCharacters = 200_000
+
+    static func boundedPreviewText(_ text: String, wasTruncated: Bool = false) -> String {
+        let exceedsCharacterLimit = text.count > maximumCharacters
+        guard wasTruncated || exceedsCharacterLimit else { return text }
+        let preview = exceedsCharacterLimit ? String(text.prefix(maximumCharacters)) : text
+        return """
+        \(preview)
+
+        … Preview truncated to avoid retaining large file content. Copy the file content for the full text.
+        """
+    }
+}
+
 struct AgentContextClipboardRequest {
     let cfg: PromptContextResolved
     let source: AgentContextExportSource
@@ -139,7 +157,7 @@ struct AgentContextClipboardRequest {
     let promptSectionsOrder: [PromptSection]
     let disabledPromptSections: Set<PromptSection>
     let duplicateUserInstructionsAtTop: Bool
-    let selectedGitDiffProvider: ([String]) async -> String
+    let reviewGitContext: FrozenPromptGitReviewContext
     let completeGitDiffProvider: () async -> String
 }
 
@@ -149,12 +167,9 @@ enum AgentContextExportResolver {
         let canRemove: Bool
     }
 
-    static func selectionFileCount(_ selection: StoredSelection) -> Int {
+    static func explicitSelectionFileCount(_ selection: StoredSelection) -> Int {
         var seen = Set<String>()
         for path in selection.selectedPaths {
-            seen.insert(normalizedSelectionKey(path))
-        }
-        for path in selection.autoCodemapPaths {
             seen.insert(normalizedSelectionKey(path))
         }
         for (path, ranges) in selection.slices where !ranges.isEmpty {
@@ -164,13 +179,10 @@ enum AgentContextExportResolver {
     }
 
     static func displayFileCount(
-        resolvedModel: AgentContextExportModel?,
+        resolvedModel _: AgentContextExportModel?,
         sourceSelection: StoredSelection
     ) -> Int {
-        if let resolvedModel {
-            return resolvedModel.fileCount
-        }
-        return selectionFileCount(sourceSelection)
+        explicitSelectionFileCount(sourceSelection)
     }
 
     static func lookupContext(
@@ -225,6 +237,7 @@ enum AgentContextExportResolver {
 
     static func buildClipboardContent(_ request: AgentContextClipboardRequest) async -> String {
         let cfg = request.cfg
+        let coordinator = AutomaticReviewGitDiffCoordinator()
         let preAssembly = await PromptContextPreAssemblyService.resolve(
             PromptContextPreAssemblyRequest(
                 cfg: cfg,
@@ -237,8 +250,9 @@ enum AgentContextExportResolver {
                 selectedGitDiffFolderPolicy: .filesOnly,
                 selectedGitDiffLookupProfile: .mcpSelection,
                 selectedGitDiffArtifactPolicy: .respectGitInclusion,
-                selectedGitDiffProvider: { paths in
-                    await request.selectedGitDiffProvider(paths)
+                reviewGitContext: request.reviewGitContext,
+                selectedGitDiffProvider: { automaticRequest in
+                    await coordinator.resolve(automaticRequest)
                 },
                 completeGitDiffProvider: {
                     await request.completeGitDiffProvider()
@@ -256,7 +270,7 @@ enum AgentContextExportResolver {
             includeFiles: cfg.includeFiles,
             includeUserPrompt: cfg.includeUserPrompt,
             filePathDisplay: request.filePathDisplay,
-            codemapSnapshots: preAssembly.codemapSnapshots,
+            codemapSnapshotBundle: preAssembly.codemapSnapshotBundle,
             includeDatetimeInUserInstructions: request.includeDatetimeInUserInstructions,
             promptSectionsOrder: request.promptSectionsOrder,
             disabledPromptSections: request.disabledPromptSections,
@@ -276,17 +290,33 @@ enum AgentContextExportResolver {
         case .codemap:
             let snapshots = await store.codemapSnapshotDictionary()
             let text = snapshots[row.id.fileID]?.fileAPI?.getFullAPIDescription(displayPath: row.displayPath)
-            return text?.isEmpty == false ? text : nil
+            guard let text, !text.isEmpty else { return nil }
+            return purpose == .preview ? AgentContextPreviewContentPolicy.boundedPreviewText(text) : text
         case .full:
+            if purpose == .preview {
+                guard let prefix = try? await store.readContentPrefix(
+                    rootID: row.rootID,
+                    relativePath: row.relativePath,
+                    maximumBytes: AgentContextPreviewContentPolicy.maximumBytes
+                ) else {
+                    return nil
+                }
+                return AgentContextPreviewContentPolicy.boundedPreviewText(
+                    prefix.content,
+                    wasTruncated: prefix.truncated
+                )
+            }
             return try? await store.readContent(rootID: row.rootID, relativePath: row.relativePath)
         case .slices:
             guard let content = try? await store.readContent(rootID: row.rootID, relativePath: row.relativePath) else {
                 return nil
             }
-            guard purpose == .copy, let ranges = row.lineRanges, !ranges.isEmpty else {
-                return content
+            let renderedContent: String = if let ranges = row.lineRanges, !ranges.isEmpty {
+                SliceAssemblyBuilder.build(from: content, ranges: ranges).combinedText
+            } else {
+                content
             }
-            return SliceAssemblyBuilder.build(from: content, ranges: ranges).combinedText
+            return purpose == .preview ? AgentContextPreviewContentPolicy.boundedPreviewText(renderedContent) : renderedContent
         }
     }
 
@@ -397,8 +427,19 @@ enum AgentContextExportResolver {
             }
         }
 
+        let slicePaths = selection.slices.compactMap { path, ranges in
+            ranges.isEmpty || selectedLookupResults[path] != nil ? nil : path
+        }
+        let sliceLookupRequests = slicePaths.map {
+            WorkspacePathLookupRequest(userPath: $0, profile: profile, rootScope: rootScope)
+        }
+        let sliceLookupResults: [String: WorkspacePathLookupResult] = if sliceLookupRequests.isEmpty {
+            [:]
+        } else {
+            await store.lookupPaths(sliceLookupRequests)
+        }
         for (path, ranges) in selection.slices where !ranges.isEmpty {
-            guard let result = await store.lookupPath(path, profile: profile, rootScope: rootScope) else {
+            guard let result = selectedLookupResults[path] ?? sliceLookupResults[path] else {
                 missingPaths.append(path)
                 continue
             }
@@ -435,8 +476,16 @@ enum AgentContextExportResolver {
             }
         }
 
+        let codemapLookupRequests = codemapPaths.map {
+            WorkspacePathLookupRequest(userPath: $0, profile: profile, rootScope: rootScope)
+        }
+        let codemapLookupResults: [String: WorkspacePathLookupResult] = if codemapLookupRequests.isEmpty {
+            [:]
+        } else {
+            await store.lookupPaths(codemapLookupRequests)
+        }
         for path in codemapPaths {
-            guard let result = await store.lookupPath(path, profile: profile, rootScope: rootScope) else {
+            guard let result = codemapLookupResults[path] else {
                 missingPaths.append(path)
                 continue
             }

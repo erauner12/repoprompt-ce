@@ -1,4 +1,5 @@
 import Foundation
+import MCP
 
 extension MCPServerViewModel {
     nonisolated static let codeMapsGloballyDisabledMCPMessage = "Code Maps are globally disabled in Advanced Settings; codemap-only selection modes and get_code_structure are unavailable."
@@ -55,8 +56,12 @@ extension MCPServerViewModel {
     /// Returns selection-aware workspace records for the resolved tab context snapshot.
     @MainActor
     func selectedRecordsForCurrentTabContext() async throws -> [WorkspaceFileRecord] {
-        let collections = try await selectionCollectionsForCurrentTabContext()
-        return collections.selected.map(\.entry.file)
+        do {
+            let collections = try await selectionCollectionsForCurrentTabContext()
+            return collections.selected.map(\.entry.file)
+        } catch let error as StabilizedSelectionReadSnapshotError {
+            throw MCPError.invalidParams(error.localizedDescription)
+        }
     }
 
     /// Returns the identifiers of files selected in the resolved tab context snapshot.
@@ -83,14 +88,16 @@ extension MCPServerViewModel {
 
     @MainActor
     func lookupContext(for context: TabContextSnapshot) async -> WorkspaceLookupContext {
-        guard let sessionID = context.activeAgentSessionID,
-              !context.worktreeBindings.isEmpty,
-              let projection = await materializeWorkspaceBindingProjection(sessionID: sessionID, bindings: context.worktreeBindings),
-              !projection.isEmpty
-        else {
-            return .visibleWorkspace
+        if let frozenLookupContext = context.frozenLookupContext {
+            return frozenLookupContext
         }
-        return WorkspaceLookupContext(rootScope: projection.lookupRootScope, bindingProjection: projection)
+        return await AgentWorkspaceLookupContextResolver.authoritativeLookupContextOrFailClosed(
+            source: AgentWorkspaceLookupContextSource(
+                activeAgentSessionID: context.activeAgentSessionID,
+                worktreeBindingState: context.worktreeBindingState
+            ),
+            store: promptVM.workspaceFileContextStore
+        )
     }
 
     @MainActor
@@ -99,23 +106,43 @@ extension MCPServerViewModel {
         let resolved = try resolveTabContextSnapshot(
             from: metadata,
             toolName: "selection",
-            policy: .allowLegacyImplicitRouting
+            policy: .allowLegacyImplicitRouting,
+            startMirroring: false
         )
-        return await selectionCollections(for: resolved.snapshot)
+        let stabilized = try stabilizedSelectionReadSnapshot(resolved)
+        return await selectionCollections(for: stabilized.snapshot)
     }
 
     struct PathFormatter {
+        struct RootMetadata {
+            let rootPath: String
+            let pathWithinRoot: String
+        }
+
         let format: FilePathDisplay
         unowned let owner: MCPServerViewModel
         let projection: WorkspaceRootBindingProjection?
+        let displayPathOverrides: [String: String]
+        let rootMetadataOverrides: [String: RootMetadata]
 
-        init(format: FilePathDisplay, owner: MCPServerViewModel, projection: WorkspaceRootBindingProjection? = nil) {
+        init(
+            format: FilePathDisplay,
+            owner: MCPServerViewModel,
+            projection: WorkspaceRootBindingProjection? = nil,
+            displayPathOverrides: [String: String] = [:],
+            rootMetadataOverrides: [String: RootMetadata] = [:]
+        ) {
             self.format = format
             self.owner = owner
             self.projection = projection
+            self.displayPathOverrides = displayPathOverrides
+            self.rootMetadataOverrides = rootMetadataOverrides
         }
 
         func displayPath(for file: WorkspaceFileRecord) async -> String {
+            if let override = displayPathOverrides[file.standardizedFullPath] {
+                return override
+            }
             if let projection,
                let projected = projection.projectedLogicalDisplayPath(forPhysicalPath: file.standardizedFullPath, display: format)
             {
@@ -154,10 +181,12 @@ extension MCPServerViewModel {
             return TokenCalculationService.estimateTokens(for: selected)
         }
 
-        func codemapTokens(for file: WorkspaceFileRecord, displayPath: String) async -> Int {
-            let snapshots = await owner.promptVM.workspaceFileContextStore.codemapSnapshotDictionary()
-            guard let api = snapshots[file.id]?.fileAPI else { return 0 }
-            return api.estimatedFullAPIDescriptionTokens(displayPath: displayPath)
+        func codemapTokens(
+            for file: WorkspaceFileRecord,
+            displayPath: String,
+            codemapSnapshotBundle: WorkspaceCodemapSnapshotBundle
+        ) -> Int {
+            codemapSnapshotBundle.renderedCodemap(for: file, displayPath: displayPath)?.tokenCount ?? 0
         }
     }
 
@@ -179,10 +208,17 @@ extension MCPServerViewModel {
             let codemapAutoEnabled: Bool
             let codeMapUsage: CodeMapUsage
             let invalid: [String]
-            let codemapSnapshots: [UUID: WorkspaceCodemapSnapshot]
+            let codemapSnapshotBundle: WorkspaceCodemapSnapshotBundle
 
             static func empty(codeMapUsage: CodeMapUsage) -> SelectionCollections {
-                SelectionCollections(selected: [], codemap: [], codemapAutoEnabled: false, codeMapUsage: codeMapUsage, invalid: [], codemapSnapshots: [:])
+                SelectionCollections(
+                    selected: [],
+                    codemap: [],
+                    codemapAutoEnabled: false,
+                    codeMapUsage: codeMapUsage,
+                    invalid: [],
+                    codemapSnapshotBundle: .empty
+                )
             }
         }
 
@@ -198,18 +234,30 @@ extension MCPServerViewModel {
             let normalizedCodeMapUsage: String
         }
 
-        static func collect(from source: SelectionSource, owner: MCPServerViewModel, rootScope: WorkspaceLookupRootScope = .allLoaded) async -> SelectionCollections {
+        static func collect(
+            from source: SelectionSource,
+            owner: MCPServerViewModel,
+            rootScope: WorkspaceLookupRootScope = .allLoaded,
+            codemapSnapshotBundle frozenCodemaps: WorkspaceCodemapSnapshotBundle? = nil,
+            contentPolicy: PromptContextAccountingContentPolicy = .loadContent
+        ) async -> SelectionCollections {
             let selection = await source.resolvedSelection()
             let usage = await source.currentCodeMapUsage()
             let store = await MainActor.run { owner.promptVM.workspaceFileContextStore }
-            let codemapSnapshots = await store.codemapSnapshotDictionary()
+            let codemapSnapshotBundle: WorkspaceCodemapSnapshotBundle = if let frozenCodemaps {
+                frozenCodemaps
+            } else {
+                await store.codemapSnapshotBundle(rootScope: rootScope)
+            }
             let accounting = PromptContextAccountingService()
             let resolution = await accounting.resolveEntries(
                 selection: selection,
                 store: store,
                 rootScope: rootScope,
                 profile: .uiAssisted,
-                codeMapUsage: usage
+                codeMapUsage: usage,
+                codemapSnapshotBundle: codemapSnapshotBundle,
+                contentPolicy: contentPolicy
             )
 
             let selected = resolution.entries.compactMap { entry -> SelectedEntry? in
@@ -231,12 +279,24 @@ extension MCPServerViewModel {
                 codemapAutoEnabled: selection.codemapAutoEnabled,
                 codeMapUsage: usage,
                 invalid: resolution.missingPaths + resolution.invalidPaths,
-                codemapSnapshots: codemapSnapshots
+                codemapSnapshotBundle: codemapSnapshotBundle
             )
         }
 
-        private static func pathMetadata(for file: WorkspaceFileRecord, entry: ResolvedPromptFileEntry? = nil) -> (rootPath: String, pathWithinRoot: String) {
-            (entry?.rootFolderPath.map { StandardizedPath.absolute($0) } ?? (file.standardizedFullPath as NSString).deletingLastPathComponent, file.standardizedRelativePath)
+        private static func pathMetadata(
+            for file: WorkspaceFileRecord,
+            entry: ResolvedPromptFileEntry? = nil,
+            formatter: PathFormatter
+        ) -> (rootPath: String, pathWithinRoot: String) {
+            if let override = formatter.rootMetadataOverrides[file.standardizedFullPath] {
+                return (override.rootPath, override.pathWithinRoot)
+            }
+            if let projected = formatter.projection?.projectedLogicalRootMetadata(forPhysicalPath: file.standardizedFullPath) {
+                return projected
+            }
+            let rootPath = entry?.rootFolderPath.map { StandardizedPath.absolute($0) }
+                ?? (file.standardizedFullPath as NSString).deletingLastPathComponent
+            return (rootPath, file.standardizedRelativePath)
         }
 
         /// Computes how a file would render under a given codemap usage mode
@@ -337,7 +397,7 @@ extension MCPServerViewModel {
             for entry in collections.selected {
                 let file = entry.file
                 let displayPath = await formatter.displayPath(for: file)
-                let metadata = pathMetadata(for: file, entry: entry.entry)
+                let metadata = pathMetadata(for: file, entry: entry.entry, formatter: formatter)
                 let ranges = entry.ranges ?? []
                 let hasSlices = !ranges.isEmpty
                 let entryResult = entryResultsByFileID?[file.id]
@@ -371,11 +431,13 @@ extension MCPServerViewModel {
                 // Compute copy preset projection if copy usage differs from auto
                 var copyPreset: ToolResultDTOs.SelectedFileInfo.CopyPresetProjection? = nil
                 if let copyUsage, copyUsage != .auto {
-                    let hasCodemap = collections.codemapSnapshots[file.id]?.fileAPI != nil
-                    let codemapTokenCount = if let entryResult {
-                        entryResult.codemapTokens
-                    } else if hasCodemap {
-                        await tokens.codemapTokens(for: file, displayPath: displayPath)
+                    let hasCodemap = collections.codemapSnapshotBundle.hasRenderableCodemap(for: file)
+                    let codemapTokenCount = if hasCodemap {
+                        tokens.codemapTokens(
+                            for: file,
+                            displayPath: displayPath,
+                            codemapSnapshotBundle: collections.codemapSnapshotBundle
+                        )
                     } else {
                         0
                     }
@@ -423,18 +485,16 @@ extension MCPServerViewModel {
             for entry in collections.codemap {
                 let file = entry.file
                 let displayPath = await formatter.displayPath(for: file)
-                let metadata = pathMetadata(for: file, entry: entry.entry)
-                let entryResult = entryResultsByFileID?[file.id]
-                let tokenCount: Int
-                if let entryResult {
-                    tokenCount = entryResult.displayTokens
+                let metadata = pathMetadata(for: file, entry: entry.entry, formatter: formatter)
+                let rawCodemapTokens = tokens.codemapTokens(
+                    for: file,
+                    displayPath: displayPath,
+                    codemapSnapshotBundle: collections.codemapSnapshotBundle
+                )
+                let tokenCount = if rawCodemapTokens == 0, collections.codeMapUsage == .selected {
+                    tokens.fullTokens(for: entry.entry)
                 } else {
-                    let rawCodemapTokens = await tokens.codemapTokens(for: file, displayPath: displayPath)
-                    if rawCodemapTokens == 0, collections.codeMapUsage == .selected {
-                        tokenCount = tokens.fullTokens(for: entry.entry)
-                    } else {
-                        tokenCount = rawCodemapTokens
-                    }
+                    rawCodemapTokens
                 }
                 codemapCount += 1
                 codemapTokens += tokenCount
@@ -591,11 +651,20 @@ extension MCPServerViewModel {
             userPresetState: UserPresetState? = nil,
             tokens: TokenServices? = nil,
             tokenStatsOverride: ToolResultDTOs.TokenStats? = nil,
-            pathProjection: WorkspaceRootBindingProjection? = nil
+            tokenAccountingOverride: ToolResultDTOs.TokenAccountingDTO? = nil,
+            pathProjection: WorkspaceRootBindingProjection? = nil,
+            displayPathOverrides: [String: String] = [:]
         ) async -> ToolResultDTOs.SelectionReply {
             var blocks: [String]? = nil
             if includeBlocks {
-                let generated = await generateBlocks(selected: collections.selected, display: display, projection: pathProjection)
+                let generated = generateBlocks(
+                    selected: collections.selected,
+                    codemap: collections.codemap,
+                    codemapSnapshotBundle: collections.codemapSnapshotBundle,
+                    display: display,
+                    projection: pathProjection,
+                    displayPathOverrides: displayPathOverrides
+                )
                 blocks = generated
             }
 
@@ -604,23 +673,20 @@ extension MCPServerViewModel {
                 invalid.append(candidate)
             }
 
-            // Compute workspace token stats if tokens service is available
-            let tokenStats: ToolResultDTOs.TokenStats? = if let tokenStatsOverride {
-                tokenStatsOverride
-            } else {
-                await {
-                    guard let tokens else { return nil }
-                    // Force immediate token recount to avoid stale breakdown values
-                    await tokens.owner.promptVM.tokenCountingViewModel.forceImmediateRecount()
-                    // Extract content vs codemap breakdown from summary
-                    let filesContentTokens = (filesReply.summary?.fullTokens ?? 0) + (filesReply.summary?.sliceTokens ?? 0)
-                    let codemapsTokens = filesReply.summary?.codemapTokens ?? 0
-                    return await tokens.owner.computeWorkspaceTokenStats(
-                        filesTokens: filesReply.totalTokens,
-                        filesContentTokens: filesContentTokens > 0 ? filesContentTokens : nil,
-                        codemapsTokens: codemapsTokens > 0 ? codemapsTokens : nil
-                    )
-                }()
+            // MCP replies never await an immediate recount. Use the latest published
+            // active-tab snapshot when no tab-scoped override was prepared.
+            let fallbackPublished = await MainActor.run {
+                tokens?.owner.promptVM.tokenCountingViewModel.latestPublishedTokenSnapshot(for: nil)
+            }
+            let tokenStats: ToolResultDTOs.TokenStats? = tokenStatsOverride
+                ?? fallbackPublished.map(MCPServerViewModel.publishedTokenStats)
+            let tokenAccounting = tokenAccountingOverride ?? fallbackPublished.map { snapshot in
+                ToolResultDTOs.TokenAccountingDTO(
+                    status: !snapshot.isComplete ? "incomplete" : (snapshot.isStale ? "stale" : "fresh"),
+                    source: "active_tab_published",
+                    refreshPending: snapshot.refreshPending,
+                    incompleteComponents: snapshot.isComplete ? nil : ["published_snapshot"]
+                )
             }
 
             return ToolResultDTOs.SelectionReply(
@@ -641,6 +707,7 @@ extension MCPServerViewModel {
                 userChatTokens: filesReply.userChatTokens ?? userPresetState?.chatTokens,
                 normalizedCodeMapUsage: filesReply.normalizedCodeMapUsage ?? userPresetState?.normalizedCodeMapUsage,
                 tokenStats: tokenStats,
+                tokenAccounting: tokenAccounting,
                 copyPresetProjection: filesReply.copyPresetProjection
             )
         }
@@ -651,13 +718,45 @@ extension MCPServerViewModel {
             projection: WorkspaceRootBindingProjection? = nil
         ) async -> [String] {
             guard !selected.isEmpty else { return [] }
-            return await PromptPackagingService.generateFileContents(
+            return PromptPackagingService.generateFileContents(
                 selected.map(\.entry),
                 filePathDisplay: display,
+                codemapSnapshotBundle: .empty,
                 displayPathResolver: { entry in
                     projection?.projectedLogicalDisplayPath(forPhysicalPath: entry.file.standardizedFullPath, display: display)
                 }
             )
+        }
+
+        static func generateBlocks(
+            selected: [SelectedEntry],
+            codemap: [CodemapEntry],
+            codemapSnapshotBundle: WorkspaceCodemapSnapshotBundle,
+            display: FilePathDisplay,
+            projection: WorkspaceRootBindingProjection? = nil,
+            displayPathOverrides: [String: String] = [:]
+        ) -> [String] {
+            let renderableCodemaps = codemap.compactMap { item -> ResolvedPromptFileEntry? in
+                if item.origin == .selectedMode || codemapSnapshotBundle.hasRenderableCodemap(for: item.file) {
+                    return item.entry
+                }
+                return nil
+            }
+            let entries = selected.map(\.entry) + renderableCodemaps
+            guard !entries.isEmpty else { return [] }
+            let (codemapBlocks, contentBlocks) = PromptPackagingService.generatePartitionedFileBlocks(
+                entries,
+                filePathDisplay: display,
+                codemapSnapshotBundle: codemapSnapshotBundle,
+                displayPathResolver: { entry in
+                    displayPathOverrides[entry.file.standardizedFullPath]
+                        ?? projection?.projectedLogicalDisplayPath(
+                            forPhysicalPath: entry.file.standardizedFullPath,
+                            display: display
+                        )
+                }
+            )
+            return contentBlocks + codemapBlocks
         }
 
         /// Builds lightweight FileSliceDTO array from collections without token calculations.
@@ -675,7 +774,7 @@ extension MCPServerViewModel {
                 guard !ranges.isEmpty else { continue }
 
                 let displayPath = await formatter.displayPath(for: file)
-                let metadata = pathMetadata(for: file, entry: entry.entry)
+                let metadata = pathMetadata(for: file, entry: entry.entry, formatter: formatter)
                 let dtoRanges = ranges.map { ToolResultDTOs.LineRangeDTO(range: $0) }
                 slices.append(.init(
                     path: displayPath,
@@ -726,14 +825,15 @@ extension MCPServerViewModel {
                 userChatTokens: reply.userChatTokens,
                 normalizedCodeMapUsage: reply.normalizedCodeMapUsage,
                 // Preserve workspace token stats (total breakdown stays the same even for filtered view)
-                tokenStats: reply.tokenStats
+                tokenStats: reply.tokenStats,
+                tokenAccounting: reply.tokenAccounting
             )
         }
     }
 
     struct CodeStructureBuilder {
         unowned let owner: MCPServerViewModel
-        let projection: WorkspaceRootBindingProjection?
+        let lookupContext: WorkspaceLookupContext
 
         func build(for files: [WorkspaceFileRecord]) async throws -> ToolResultDTOs.SelectedCodeStructureDTO? {
             guard !files.isEmpty else { return nil }
@@ -744,7 +844,7 @@ extension MCPServerViewModel {
                 fromRecords: files,
                 maxResults: 25,
                 includeUnmappedPaths: true,
-                projection: projection
+                lookupContext: lookupContext
             )
         }
     }

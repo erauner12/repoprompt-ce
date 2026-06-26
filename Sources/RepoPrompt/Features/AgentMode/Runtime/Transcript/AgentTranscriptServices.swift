@@ -2701,6 +2701,44 @@ enum AgentTranscriptIO {
         return nil
     }
 
+    /// Assemble the terminal MCP response from the contiguous trailing assistant run.
+    ///
+    /// This intentionally leaves historical activities and conclusion selection unchanged.
+    static func terminalAssistantResponseText(in turn: AgentTranscriptTurn) -> String? {
+        contiguousTrailingAssistantText(
+            turn.allActivities.map { (kind: $0.itemKind, text: $0.text) }
+        )
+    }
+
+    /// Source-item fallback for terminal MCP snapshots whose derived transcript is missing or stale.
+    static func terminalAssistantResponseText(from items: [AgentChatItem]) -> String? {
+        let orderedItems = items.sorted { lhs, rhs in
+            if lhs.sequenceIndex == rhs.sequenceIndex {
+                return lhs.timestamp < rhs.timestamp
+            }
+            return lhs.sequenceIndex < rhs.sequenceIndex
+        }
+        return contiguousTrailingAssistantText(
+            orderedItems.map { (kind: $0.kind, text: $0.text) }
+        )
+    }
+
+    private static func contiguousTrailingAssistantText(
+        _ fragments: [(kind: AgentChatItemKind, text: String)]
+    ) -> String? {
+        var trailingFragments: [String] = []
+        for fragment in fragments.reversed() {
+            guard fragment.kind == .assistant || fragment.kind == .assistantInline else {
+                break
+            }
+            trailingFragments.append(fragment.text)
+        }
+        guard !trailingFragments.isEmpty else { return nil }
+        let text = trailingFragments.reversed().joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return AgentDisplayableText.hasDisplayableBody(text) ? text : nil
+    }
+
     /// Extract the latest error text from the transcript.
     static func latestErrorText(from transcript: AgentTranscript, latestTurnOnly: Bool) -> String? {
         let turns = latestTurnOnly ? transcript.turns.suffix(1) : transcript.turns[...]
@@ -5102,12 +5140,25 @@ enum AgentTranscriptProjectionBuilder {
     /// Also intentionally tightens `frozenDetailedToolTailLimit` when an eligible completed
     /// full turn emits grouped history under the current newest-first allocation. Callers
     /// must use the returned transcript; this method is not cache-only.
-    static func refreshCompletedFullTurnGroupedHistoryCaches(in transcript: AgentTranscript) -> AgentTranscript {
+    static func refreshCompletedFullTurnGroupedHistoryCaches(
+        in transcript: AgentTranscript,
+        reusablePrefixTurnCount: Int? = nil
+    ) -> AgentTranscript {
         var updatedTranscript = transcript
         let context = AgentTranscriptProjectionBuildContext()
+        let firstTurnIndex = min(max(0, reusablePrefixTurnCount ?? 0), updatedTranscript.turns.count)
         let detailedToolTailLimits = detailedToolTailLimits(for: updatedTranscript)
         for turnIndex in updatedTranscript.turns.indices {
             let turn = updatedTranscript.turns[turnIndex]
+            let detailedToolTailLimit = detailedToolTailLimits[turn.id] ?? 0
+            if turnIndex < firstTurnIndex,
+               canReuseGroupedHistoryState(
+                   for: turn,
+                   detailedToolTailLimit: detailedToolTailLimit
+               )
+            {
+                continue
+            }
             let isEligible = turn.retentionTier == .full
                 && turn.isCompleted
                 && !turn.responseSpans.contains(where: { $0.lifecycle == .open })
@@ -5117,7 +5168,6 @@ enum AgentTranscriptProjectionBuilder {
                 }
                 continue
             }
-            let detailedToolTailLimit = detailedToolTailLimits[turn.id] ?? 0
             var didCollapseTurn = false
             var emittedConclusionActivityIDs = Set<UUID>()
             for spanIndex in updatedTranscript.turns[turnIndex].responseSpans.indices {
@@ -5162,6 +5212,27 @@ enum AgentTranscriptProjectionBuilder {
             }
         }
         return updatedTranscript
+    }
+
+    private static func canReuseGroupedHistoryState(
+        for turn: AgentTranscriptTurn,
+        detailedToolTailLimit: Int
+    ) -> Bool {
+        let isEligible = turn.retentionTier == .full
+            && turn.isCompleted
+            && !turn.responseSpans.contains(where: { $0.lifecycle == .open })
+        guard isEligible else {
+            return turn.responseSpans.allSatisfy { $0.fullRenderGroupedHistoryCache == nil }
+        }
+        if let frozenLimit = normalizedFrozenDetailedToolTailLimit(for: turn) {
+            guard frozenLimit == detailedToolTailLimit else { return false }
+            return turn.responseSpans.allSatisfy { span in
+                span.fullRenderGroupedHistoryCache?.detailedToolTailLimit == detailedToolTailLimit
+                    || span.fullRenderGroupedHistoryCache == nil
+            }
+        }
+        return standaloneToolBlockCount(for: turn) <= detailedToolTailLimit
+            && turn.responseSpans.allSatisfy { $0.fullRenderGroupedHistoryCache == nil }
     }
 
     static func build(

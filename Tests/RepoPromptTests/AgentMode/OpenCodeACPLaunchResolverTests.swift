@@ -19,7 +19,7 @@ final class OpenCodeACPLaunchResolverTests: XCTestCase {
 
         let launch = try provider.makeLaunchConfiguration(for: makeRunRequest(workspacePath: directory.path))
 
-        XCTAssertEqual(launch.command, executable.resolvingSymlinksInPath().standardizedFileURL.path)
+        XCTAssertEqual(launch.command, try canonicalExecutablePath(executable))
         XCTAssertEqual(launch.arguments, ["acp"])
         XCTAssertEqual(launch.expectedExecutableIdentity?.canonicalPath, launch.command)
     }
@@ -45,7 +45,7 @@ final class OpenCodeACPLaunchResolverTests: XCTestCase {
         let probedPath = try String(contentsOf: probePathRecord, encoding: .utf8)
 
         XCTAssertEqual(support, .supported)
-        XCTAssertEqual(launch.command, executable.resolvingSymlinksInPath().standardizedFileURL.path)
+        XCTAssertEqual(launch.command, try canonicalExecutablePath(executable))
         XCTAssertEqual(probedPath, launch.command)
     }
 
@@ -53,8 +53,11 @@ final class OpenCodeACPLaunchResolverTests: XCTestCase {
         let fakeHome = try makeTemporaryDirectory()
         let minimalPath = try makeTemporaryDirectory()
         let openCodeBin = fakeHome.appendingPathComponent(".opencode/bin", isDirectory: true)
+        let nativeFallbackBin = fakeHome.appendingPathComponent(".local/bin", isDirectory: true)
         try FileManager.default.createDirectory(at: openCodeBin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: nativeFallbackBin, withIntermediateDirectories: true)
         let executable = try makeExecutable(in: openCodeBin)
+        _ = try makeExecutable(in: nativeFallbackBin, output: "Native fallback OpenCode ACP support")
         let environment = [
             "HOME": fakeHome.path,
             "PATH": minimalPath.path,
@@ -70,14 +73,14 @@ final class OpenCodeACPLaunchResolverTests: XCTestCase {
         let launch = try resolver.resolvedLaunch(for: config)
 
         XCTAssertEqual(support, .supported)
-        XCTAssertEqual(launch.command, executable.resolvingSymlinksInPath().standardizedFileURL.path)
+        XCTAssertEqual(launch.command, try canonicalExecutablePath(executable))
     }
 
     func testOpenCodeHomeBinHintDoesNotLeakIntoNativeDefaultsOrOtherProviders() {
         let openCodeHomeBin = "~/.opencode/bin"
 
         XCTAssertEqual(CLILaunchProfiles.openCodeProviderSpecificPaths, [openCodeHomeBin])
-        XCTAssertTrue(CLILaunchProfiles.openCode.supplementalSearchPaths.contains(openCodeHomeBin))
+        XCTAssertEqual(CLILaunchProfiles.openCode.supplementalSearchPaths.first, openCodeHomeBin)
         XCTAssertFalse(CLINativePathDefaults.defaultAdditionalPaths.contains(openCodeHomeBin))
         XCTAssertFalse(CLILaunchProfiles.claudeCode.supplementalSearchPaths.contains(openCodeHomeBin))
         XCTAssertFalse(CLILaunchProfiles.codex.supplementalSearchPaths.contains(openCodeHomeBin))
@@ -101,7 +104,7 @@ final class OpenCodeACPLaunchResolverTests: XCTestCase {
         let firstSupport = try await resolver.probeSupport(for: config)
         let firstLaunch = try resolver.resolvedLaunch(for: config)
         XCTAssertEqual(firstSupport, .supported)
-        XCTAssertEqual(firstLaunch.command, firstExecutable.resolvingSymlinksInPath().path)
+        XCTAssertEqual(firstLaunch.command, try canonicalExecutablePath(firstExecutable))
 
         await environmentBox.set([
             "PATH": secondDirectory.path,
@@ -110,7 +113,7 @@ final class OpenCodeACPLaunchResolverTests: XCTestCase {
         let secondSupport = try await resolver.probeSupport(for: config)
         let secondLaunch = try resolver.resolvedLaunch(for: config)
         XCTAssertEqual(secondSupport, .supported)
-        XCTAssertEqual(secondLaunch.command, secondExecutable.resolvingSymlinksInPath().path)
+        XCTAssertEqual(secondLaunch.command, try canonicalExecutablePath(secondExecutable))
     }
 
     func testBareCommandWithoutSuccessfulPreflightFailsClosed() {
@@ -197,7 +200,7 @@ final class OpenCodeACPLaunchResolverTests: XCTestCase {
         XCTAssertEqual(replacementSupport, .supported)
         XCTAssertEqual(
             try resolver.resolvedLaunch(for: config).command,
-            replacement.resolvingSymlinksInPath().standardizedFileURL.path
+            try canonicalExecutablePath(replacement)
         )
     }
 
@@ -228,6 +231,10 @@ final class OpenCodeACPLaunchResolverTests: XCTestCase {
             attachments: [],
             taskLabelKind: nil
         )
+    }
+
+    private func canonicalExecutablePath(_ url: URL) throws -> String {
+        try XCTUnwrap(FileSystemService.realpathString(url.path))
     }
 
     private func makeTemporaryDirectory() throws -> URL {

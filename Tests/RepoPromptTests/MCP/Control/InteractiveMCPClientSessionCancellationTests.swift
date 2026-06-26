@@ -1,13 +1,143 @@
 import Foundation
 import MCP
 @testable import RepoPromptMCP
+import RepoPromptShared
 import XCTest
 
 #if DEBUG
     final class InteractiveMCPClientSessionCancellationTests: XCTestCase {
-        func testImmediateTimeoutRegistersAndSendsBeforeCancellationWithoutWaitingForHandlerStartup() async throws {
+        func testContextBuilderAndAskOracleDefaultsHaveNoClientDeadline() async {
+            let session = makeUnconnectedSession()
+
+            let contextBuilderTimeout = await session.test_resolvedToolCallTimeout(
+                toolName: "context_builder"
+            )
+            let askOracleTimeout = await session.test_resolvedToolCallTimeout(
+                toolName: "ask_oracle"
+            )
+
+            XCTAssertNil(contextBuilderTimeout)
+            XCTAssertNil(askOracleTimeout)
+        }
+
+        func testOrdinaryToolRetains300SecondClientDeadline() async {
+            let session = makeUnconnectedSession()
+
+            let timeout = await session.test_resolvedToolCallTimeout(
+                toolName: "read_file"
+            )
+
+            XCTAssertEqual(timeout, MCPTimeoutPolicy.cliDefaultToolCallTimeoutSeconds)
+        }
+
+        func testAgentRun600SecondWaitUsesRequestedWaitPlusDeliveryMargin() async {
+            let session = makeUnconnectedSession()
+
+            let timeout = await session.test_resolvedToolCallTimeout(
+                toolName: "agent_run",
+                arguments: [
+                    "op": .string("wait"),
+                    "session_id": .string(UUID().uuidString),
+                    "timeout": .double(600)
+                ]
+            )
+
+            XCTAssertEqual(
+                timeout,
+                600 + MCPTimeoutPolicy.cliSemanticWaitResponseMarginSeconds
+            )
+            XCTAssertNotEqual(timeout, MCPTimeoutPolicy.cliDefaultToolCallTimeoutSeconds)
+        }
+
+        func testAnotherControlToolWaitUsesRequestedWaitPlusDeliveryMargin() async {
+            let session = makeUnconnectedSession()
+
+            let timeout = await session.test_resolvedToolCallTimeout(
+                toolName: "wait_for_next_user_instruction",
+                arguments: ["timeout_seconds": .int(900)]
+            )
+
+            XCTAssertEqual(
+                timeout,
+                900 + MCPTimeoutPolicy.cliSemanticWaitResponseMarginSeconds
+            )
+        }
+
+        func testExplicitCLITimeoutPolicyOverridesToolDefaults() async {
+            let session = makeUnconnectedSession()
+            await session.setDefaultToolCallTimeout(.seconds(450))
+
+            let explicitDeadline = await session.test_resolvedToolCallTimeout(
+                toolName: "context_builder"
+            )
+            XCTAssertEqual(explicitDeadline, 450)
+
+            await session.setDefaultToolCallTimeout(.none)
+            let explicitNone = await session.test_resolvedToolCallTimeout(
+                toolName: "read_file"
+            )
+            XCTAssertNil(explicitNone)
+        }
+
+        func testExplicitPerCallTimeoutPolicyOverridesSemanticWait() async {
+            let session = makeUnconnectedSession()
+            let arguments: [String: Value] = [
+                "op": .string("wait"),
+                "session_id": .string(UUID().uuidString),
+                "timeout": .double(1200)
+            ]
+
+            let explicitDeadline = await session.test_resolvedToolCallTimeout(
+                .seconds(777),
+                toolName: "agent_run",
+                arguments: arguments
+            )
+            let explicitNone = await session.test_resolvedToolCallTimeout(
+                .none,
+                toolName: "agent_run",
+                arguments: arguments
+            )
+            let explicitZero = await session.test_resolvedToolCallTimeout(
+                .seconds(0),
+                toolName: "agent_run",
+                arguments: arguments
+            )
+
+            XCTAssertEqual(explicitDeadline, 777)
+            XCTAssertNil(explicitNone)
+            XCTAssertNil(explicitZero)
+        }
+
+        func testZeroSemanticWaitLeavesClientDeadlineUnbounded() async {
+            let session = makeUnconnectedSession()
+
+            let timeout = await session.test_resolvedToolCallTimeout(
+                toolName: "agent_run",
+                arguments: [
+                    "op": .string("wait"),
+                    "session_id": .string(UUID().uuidString),
+                    "timeout": .int(0)
+                ]
+            )
+
+            XCTAssertNil(timeout)
+        }
+
+        private func makeUnconnectedSession() -> InteractiveMCPClientSession {
+            InteractiveMCPClientSession(
+                sessionToken: "timeout-contract-test",
+                clientName: "timeout-contract-test"
+            )
+        }
+
+        func testImmediateTimeoutWaitsForCancellationAttemptToFinish() async throws {
+            let cancellationDeliveryFinished = CLIAsyncSignal()
             let fixture = try await makeFixture(
                 cancellationBehavior: .ignoreUntilReleased,
+                cancellationDeliveryOverride: { client, requestID, reason in
+                    try? await client.cancelRequest(requestID, reason: reason)
+                    await cancellationDeliveryFinished.signal()
+                },
                 timeoutSleep: { _ in }
             )
             do {
@@ -31,8 +161,9 @@ import XCTest
                     XCTAssertEqual(seconds, 42)
                 }
 
+                let cancellationDelivered = await cancellationDeliveryFinished.isSignalled()
+                XCTAssertTrue(cancellationDelivered)
                 await fixture.handlerCancelled.wait()
-                await fixture.ignoredCancellationRelease.signal()
                 await fixture.cleanup()
             } catch {
                 await fixture.cleanup()
@@ -40,7 +171,54 @@ import XCTest
             }
         }
 
-        func testCallerCancellationBeforeRequestTaskStartupStillSendsThenCancels() async throws {
+        func testTimeoutCancellationDrainIsBoundedWhenAttemptStalls() async throws {
+            let cancellationStartGate = CLIAsyncGate()
+            let cancellationDeliveryFinished = CLIAsyncSignal()
+            let fixture = try await makeFixture(
+                cancellationDeliveryOverride: { client, requestID, reason in
+                    await cancellationStartGate.arriveAndWait()
+                    try? await client.cancelRequest(requestID, reason: reason)
+                    await cancellationDeliveryFinished.signal()
+                },
+                timeoutSleep: { _ in },
+                cancellationDeliveryDrainTimeoutNanoseconds: 42,
+                cancellationDeliveryDrainSleep: { _ in }
+            )
+            do {
+                let call = Task {
+                    try await fixture.session.callTool(
+                        name: "slow_tool",
+                        arguments: nil,
+                        timeout: .seconds(42)
+                    )
+                }
+                await cancellationStartGate.waitUntilArrived()
+
+                do {
+                    _ = try await call.value
+                    XCTFail("Expected tool timeout")
+                } catch let error as InteractiveSessionError {
+                    guard case .toolCallTimeout = error else {
+                        XCTFail("Expected tool timeout, got \(error)")
+                        await cancellationStartGate.release()
+                        await fixture.cleanup()
+                        return
+                    }
+                }
+
+                let didFinishBeforeRelease = await cancellationDeliveryFinished.isSignalled()
+                XCTAssertFalse(didFinishBeforeRelease)
+                await cancellationStartGate.release()
+                await cancellationDeliveryFinished.wait()
+                await fixture.cleanup()
+            } catch {
+                await cancellationStartGate.release()
+                await fixture.cleanup()
+                throw error
+            }
+        }
+
+        func testCallerCancellationBeforeRequestTaskStartupDoesNotSend() async throws {
             let requestStartGate = CLIAsyncGate()
             let fixture = try await makeFixture(
                 requestSendWillStart: {
@@ -66,7 +244,8 @@ import XCTest
                     // Expected.
                 }
 
-                await fixture.handlerCancelled.wait()
+                let handlerStarted = await fixture.handlerStarted.isSignalled()
+                XCTAssertFalse(handlerStarted)
                 await fixture.cleanup()
             } catch {
                 await fixture.cleanup()
@@ -77,11 +256,17 @@ import XCTest
         private func makeFixture(
             cancellationBehavior: CLICancellationBehavior = .cooperative,
             requestSendWillStart: (@Sendable () async -> Void)? = nil,
+            cancellationDeliveryOverride: InteractiveMCPClientSession.CancellationDeliveryOverride? = nil,
             timeoutSleep: @escaping @Sendable (UInt64) async throws -> Void = { nanoseconds in
+                try await Task.sleep(nanoseconds: nanoseconds)
+            },
+            cancellationDeliveryDrainTimeoutNanoseconds: UInt64 = 2_000_000_000,
+            cancellationDeliveryDrainSleep: @escaping @Sendable (UInt64) async throws -> Void = { nanoseconds in
                 try await Task.sleep(nanoseconds: nanoseconds)
             }
         ) async throws -> CLISessionCancellationFixture {
             let transports = await InMemoryTransport.createConnectedPair()
+            let handlerStarted = CLIAsyncSignal()
             let handlerCancelled = CLIAsyncSignal()
             let ignoredCancellationRelease = CLIAsyncSignal()
             let cancellationSuspension = CLICancellationSuspension()
@@ -91,6 +276,7 @@ import XCTest
                 capabilities: .init(tools: .init())
             )
             await server.withMethodHandler(CallTool.self) { _ in
+                await handlerStarted.signal()
                 do {
                     try await cancellationSuspension.wait()
                     return .init(
@@ -125,12 +311,16 @@ import XCTest
                 connectedClientForTesting: client,
                 requestSendBarrier: requestSendBarrier,
                 requestSendWillStart: requestSendWillStart,
-                timeoutSleep: timeoutSleep
+                cancellationDeliveryOverride: cancellationDeliveryOverride,
+                timeoutSleep: timeoutSleep,
+                cancellationDeliveryDrainTimeoutNanoseconds: cancellationDeliveryDrainTimeoutNanoseconds,
+                cancellationDeliveryDrainSleep: cancellationDeliveryDrainSleep
             )
             return CLISessionCancellationFixture(
                 client: client,
                 server: server,
                 session: session,
+                handlerStarted: handlerStarted,
                 handlerCancelled: handlerCancelled,
                 ignoredCancellationRelease: ignoredCancellationRelease
             )
@@ -146,6 +336,7 @@ import XCTest
         let client: Client
         let server: Server
         let session: InteractiveMCPClientSession
+        let handlerStarted: CLIAsyncSignal
         let handlerCancelled: CLIAsyncSignal
         let ignoredCancellationRelease: CLIAsyncSignal
 
@@ -212,6 +403,10 @@ import XCTest
             await withCheckedContinuation { continuation in
                 waiters.append(continuation)
             }
+        }
+
+        func isSignalled() -> Bool {
+            signalled
         }
     }
 
