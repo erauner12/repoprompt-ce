@@ -127,7 +127,7 @@ struct CoordinatorModeView: View {
     @State private var isSubmittingChildDirective = false
     @State private var isStoppingCoordinatorMission = false
     @State private var coordinatorTextFieldResetTrigger = false
-    @State private var coordinatorTextFieldHeight = ResizableTextField.height(forPresetIndex: 1, preset: .normal)
+    @State private var coordinatorTextFieldHeight = ResizableTextField.height(forPresetIndex: 0, preset: .normal)
     @State private var isCoordinatorToolsPopoverPresented = false
     @State private var coordinatorToolsRevision = 0
     @State private var isChildComposerExpanded = false
@@ -5763,7 +5763,7 @@ private struct CoordinatorVisualMetrics {
     }
 
     var composerTextMinHeight: CGFloat {
-        fontPreset.scaledClamped(54, min: 54, max: 72)
+        fontPreset.scaledClamped(38, min: 36, max: 48)
     }
 
     var composerControlStripHeight: CGFloat {
