@@ -45,7 +45,6 @@ struct GitWorkspacePolicyIdentity: Hashable {
     let searchABI: GitWorkspaceSearchABIIdentity
     let resolvedExcludesFileIdentity: GitWorkspaceAuthorityContentIdentity?
     let resolvedAttributesFileIdentity: GitWorkspaceAuthorityContentIdentity?
-    let prefixControlIdentities: [GitWorkspacePrefixControlIdentity]
 }
 
 struct GitWorkspaceAuthorityContentIdentity: Hashable {

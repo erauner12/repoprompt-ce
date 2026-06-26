@@ -425,8 +425,7 @@ private struct GitAuthorityFixture {
                 sparsePolicyDigest: "sparse-disabled",
                 searchABI: searchABI,
                 resolvedExcludesFileIdentity: nil,
-                resolvedAttributesFileIdentity: nil,
-                prefixControlIdentities: []
+                resolvedAttributesFileIdentity: nil
             )
         )
     }

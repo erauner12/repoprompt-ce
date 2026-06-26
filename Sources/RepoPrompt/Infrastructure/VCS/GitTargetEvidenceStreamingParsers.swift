@@ -12,6 +12,78 @@ struct GitTargetEvidencePathPolicy: Equatable {
     }
 }
 
+struct GitLoadedRootTreeInventoryRecord: Equatable {
+    let modeBytes: Data
+    let kind: GitTreeEntryKind
+    let objectIDBytes: Data
+    let repositoryRelativePathBytes: Data
+}
+
+struct GitLoadedRootTreeInventoryStreamingParser {
+    typealias Emit = @Sendable (GitLoadedRootTreeInventoryRecord) async throws -> Void
+
+    private let objectFormat: GitObjectFormat
+    private let validator: GitTargetEvidencePathValidator
+    private let emit: Emit
+    private var framer: GitTargetEvidenceNULFramer
+
+    init(
+        objectFormat: GitObjectFormat,
+        rootPrefix: GitRepositoryRelativeRootPrefix,
+        pathPolicy: GitTargetEvidencePathPolicy = .init(),
+        emit: @escaping Emit
+    ) {
+        self.objectFormat = objectFormat
+        validator = GitTargetEvidencePathValidator(rootPrefix: rootPrefix, policy: pathPolicy)
+        self.emit = emit
+        framer = GitTargetEvidenceNULFramer(maximumFrameBytes: pathPolicy.maximumPathBytes + 4096)
+    }
+
+    mutating func consume(_ chunk: Data) async throws {
+        var activeFramer = framer
+        do {
+            try await activeFramer.consume(chunk) { frame in
+                try await consumeFrame(frame)
+            }
+            framer = activeFramer
+        } catch {
+            framer = activeFramer
+            throw error
+        }
+    }
+
+    mutating func finish() async throws {
+        try Task.checkCancellation()
+        try framer.finish()
+    }
+
+    private func consumeFrame(_ frame: Data) async throws {
+        guard let tab = frame.firstIndex(of: UInt8(ascii: "\t")) else {
+            throw GitWorktreeInitializationError.malformedOutput("ls-tree record has no path separator")
+        }
+        let header = frame[..<tab]
+        try GitTargetEvidenceBytes.requireUTF8(header, context: "ls-tree header")
+        let fields = GitTargetEvidenceBytes.splitFields(header, maximumSplits: 2)
+        guard fields.count == 3,
+              GitTargetEvidenceBytes.isMode(fields[0]),
+              let kind = GitTreeEntryKind(rawValue: String(decoding: fields[1], as: UTF8.self))
+        else {
+            throw GitWorktreeInitializationError.malformedOutput("invalid ls-tree metadata")
+        }
+        try GitTargetEvidenceBytes.validateObjectID(fields[2], objectFormat: objectFormat)
+
+        let rawPath = frame[frame.index(after: tab)...]
+        try GitTargetEvidenceBytes.requireUTF8(rawPath, context: "path")
+        let path = try validator.validate(rawPath)
+        try await emit(GitLoadedRootTreeInventoryRecord(
+            modeBytes: Data(fields[0]),
+            kind: kind,
+            objectIDBytes: Data(fields[2]),
+            repositoryRelativePathBytes: path
+        ))
+    }
+}
+
 struct GitTargetTreeDeltaStreamingParser {
     typealias Emit = @Sendable (GitTargetTreeDeltaEvidenceRecord) async throws -> Void
 

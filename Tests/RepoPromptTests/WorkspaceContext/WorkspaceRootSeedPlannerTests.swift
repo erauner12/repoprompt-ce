@@ -15,7 +15,7 @@ final class WorkspaceRootSeedPlannerTests: XCTestCase {
     func testStreamingReconciliationPreservesEmptyDirectoriesAndAllPlanDispositions() async throws {
         let root = try roots.makeRoot(suiteName: "WorkspaceRootSeedPlanner-exact-root")
         let storeRoot = try roots.makeRoot(suiteName: "WorkspaceRootSeedPlanner-exact-store")
-        let snapshot = SeedSupport.snapshot(
+        let snapshot = try await SeedSupport.snapshot(
             paths: [
                 ("Deleted.swift", "100644"),
                 ("Ignored/Tracked.swift", "100644"),
@@ -68,40 +68,23 @@ final class WorkspaceRootSeedPlannerTests: XCTestCase {
     }
 
     func testStreamingReconciliationPreservesByteDistinctUnicodePaths() async throws {
-        let root = try roots.makeRoot(suiteName: "WorkspaceRootSeedPlanner-unicode-root")
-        let storeRoot = try roots.makeRoot(suiteName: "WorkspaceRootSeedPlanner-unicode-store")
         let composed = "Caf\u{00E9}.swift"
         let decomposed = "Cafe\u{0301}.swift"
         let paths = [decomposed, composed].sorted {
             Data($0.utf8).lexicographicallyPrecedes(Data($1.utf8))
         }
-        let snapshot = SeedSupport.snapshot(paths: paths.map { ($0, "100644") })
-        let fixture = try await FixtureSupport.makeFixture(
-            root: root,
-            storeRoot: storeRoot,
-            snapshot: snapshot,
-            namespaceRecords: paths.map {
-                WorkspaceRootNamespaceRecord(
-                    relativePath: $0,
-                    kind: .file,
-                    isSymbolicLink: false,
-                    fileSystemMode: 0o100644
-                )
-            },
-            indexRecords: snapshot.inventory.entries.map {
-                FixtureSupport.indexRecord(path: $0.relativePath, objectID: $0.objectID)
-            }
-        )
-        let records = try FixtureSupport.readAll(fixture.handle)
-        XCTAssertEqual(records.count, 2)
-        XCTAssertEqual(Set(records.map(\.relativePathBytes)), Set(paths.map { Data($0.utf8) }))
-        XCTAssertNotEqual(records[0].relativePathBytes, records[1].relativePathBytes)
+        do {
+            _ = try await SeedSupport.snapshot(paths: paths.map { ($0, "100644") })
+            XCTFail("Expected canonical-equivalent inventory paths to fail closed")
+        } catch let error as WorkspaceRootReusableInventoryManifestError {
+            XCTAssertEqual(error, .canonicalPathCollision)
+        }
     }
 
     func testStreamingReconciliationFailsClosedForSparseAndAssumeUnchangedIndex() async throws {
         let root = try roots.makeRoot(suiteName: "WorkspaceRootSeedPlanner-flags-root")
         let storeRoot = try roots.makeRoot(suiteName: "WorkspaceRootSeedPlanner-flags-store")
-        let snapshot = SeedSupport.snapshot(paths: [("A.swift", "100644")])
+        let snapshot = try await SeedSupport.snapshot(paths: [("A.swift", "100644")])
         let entry = snapshot.inventory.entries[0]
         let namespace = [WorkspaceRootNamespaceRecord(
             relativePath: "A.swift",
@@ -141,7 +124,7 @@ final class WorkspaceRootSeedPlannerTests: XCTestCase {
     func testStreamingReconciliationFailsClosedForSymlinkAndNestedRepositoryMarkers() async throws {
         let root = try roots.makeRoot(suiteName: "WorkspaceRootSeedPlanner-topology-root")
         let storeRoot = try roots.makeRoot(suiteName: "WorkspaceRootSeedPlanner-topology-store")
-        let emptySnapshot = SeedSupport.snapshot(paths: [])
+        let emptySnapshot = try await SeedSupport.snapshot(paths: [])
 
         do {
             _ = try await FixtureSupport.makeFixture(

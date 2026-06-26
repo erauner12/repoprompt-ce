@@ -199,15 +199,8 @@ final class GitWorktreeInitializationAPITests: XCTestCase {
         XCTAssertEqual(policy.resolvedExcludesFileIdentity?.byteCount, "*.temporary\n".utf8.count)
         XCTAssertEqual(policy.resolvedAttributesFileIdentity?.exists, true)
         XCTAssertEqual(Set(baseline.resolvedExternalAuthorityPaths), Set([excludes, attributes]))
-        XCTAssertEqual(
-            policy.prefixControlIdentities.map(\.repositoryRelativePath),
-            [
-                ".gitignore",
-                "Root/.repo_ignore",
-                "Root/Nested/.cursorignore",
-                "Root/Nested/Deep/.gitattributes"
-            ]
-        )
+        XCTAssertFalse(policy.committedIgnoreControlDigest.isEmpty)
+        XCTAssertFalse(policy.attributePolicyDigest.isEmpty)
 
         try fixture.git(["config", "core.excludesFile", equivalentExcludes.path])
         let equivalentLocation = try await git.authorityMetadata(in: layout, prefix: prefix)
@@ -231,10 +224,6 @@ final class GitWorktreeInitializationAPITests: XCTestCase {
 
         try fixture.write("Root/Nested/.cursorignore", "changed-prefix-control\n")
         let hierarchicalMutation = try await git.authorityMetadata(in: layout, prefix: prefix)
-        XCTAssertNotEqual(
-            hierarchicalMutation.policyIdentity.prefixControlIdentities,
-            externalMutation.policyIdentity.prefixControlIdentities
-        )
         XCTAssertNotEqual(
             hierarchicalMutation.policyIdentity.committedIgnoreControlDigest,
             externalMutation.policyIdentity.committedIgnoreControlDigest

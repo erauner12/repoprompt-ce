@@ -2,6 +2,54 @@ import CryptoKit
 import Darwin
 import Foundation
 
+struct GitLoadedRootTreeInventorySpool: @unchecked Sendable {
+    static let commandFormat = "git-ls-tree-recursive-full-tree-z-v1"
+
+    let rawOutput: GitRawOutputSpoolLease
+    let stdoutSHA256: Data
+    let treeOID: GitObjectID
+    let rootPrefix: GitRepositoryRelativeRootPrefix
+}
+
+protocol GitPrefixControlCandidateSource: AnyObject {
+    func nextCandidate() throws -> URL?
+    func skipDescendants()
+}
+
+private final class GitFileManagerPrefixControlCandidateSource: GitPrefixControlCandidateSource {
+    private final class ErrorBox {
+        var error: Error?
+    }
+
+    private let enumerator: FileManager.DirectoryEnumerator
+    private let errorBox: ErrorBox
+
+    init?(root: URL) {
+        let errorBox = ErrorBox()
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey],
+            options: [.skipsPackageDescendants],
+            errorHandler: { _, error in
+                errorBox.error = error
+                return false
+            }
+        ) else { return nil }
+        self.enumerator = enumerator
+        self.errorBox = errorBox
+    }
+
+    func nextCandidate() throws -> URL? {
+        if let url = enumerator.nextObject() as? URL { return url }
+        if let error = errorBox.error { throw error }
+        return nil
+    }
+
+    func skipDescendants() {
+        enumerator.skipDescendants()
+    }
+}
+
 /// Async Git helper for fetching repository information
 /// Based on the macOS 14+ Swift Git integration guide
 actor GitService {
@@ -3342,6 +3390,56 @@ actor GitService {
         )
     }
 
+    /// Captures a loaded-root tree inventory without aggregating stdout or
+    /// imposing a repository-cardinality ceiling. The returned descriptor-bound
+    /// spool is evidence only; callers must separately preserve authority and
+    /// currentness fences around its consumption.
+    func spoolLoadedRootTreeInventory(
+        _ treeOID: GitObjectID,
+        in layout: GitRepositoryLayout,
+        prefix: GitRepositoryRelativeRootPrefix,
+        resourcePolicy: GitRawOutputSpoolResourcePolicy = .default,
+        priority: GitProcessAdmissionPriority = .rootBootstrap
+    ) async throws -> GitLoadedRootTreeInventorySpool {
+        let objectFormat = try await boundedObjectFormat(
+            in: layout,
+            priority: priority,
+            timeout: resourcePolicy.activityTimeout
+        )
+        guard objectFormat == treeOID.objectFormat else {
+            throw GitWorktreeInitializationError.malformedOutput("tree object format changed")
+        }
+        var arguments = [
+            "ls-tree", "-r", "-t", "-z", "--full-tree",
+            "--format=%(objectmode) %(objecttype) %(objectname)%x09%(path)",
+            treeOID.lowercaseHex
+        ]
+        appendLiteralPrefix(prefix, to: &arguments)
+        let environment = await Self.capabilityBoundObjectReadEnvironment(
+            baseEnvironment: processEnvironment(),
+            layout: layout
+        )
+        let rawOutput = try await runSpoolingAuthorityGit(
+            arguments,
+            layout: layout,
+            environment: environment,
+            resourcePolicy: resourcePolicy,
+            priority: priority,
+            family: .treeInventory
+        )
+        do {
+            return try GitLoadedRootTreeInventorySpool(
+                rawOutput: rawOutput,
+                stdoutSHA256: rawOutput.sha256Digest(),
+                treeOID: treeOID,
+                rootPrefix: prefix
+            )
+        } catch {
+            // Dropping the only lease unlinks the spool directory.
+            throw error
+        }
+    }
+
     func diffTrees(
         baseTreeOID: GitObjectID,
         targetTreeOID: GitObjectID,
@@ -4222,13 +4320,10 @@ actor GitService {
         let resolvedAttributesFileIdentity = try resolvedAttributesFileURL.map {
             try Self.boundedAuthorityContentIdentity(at: $0)
         }
-        let prefixControlIdentities = try Self.boundedPrefixControlIdentities(
+        let prefixControlEvidence = try await Self.streamedPrefixControlEvidence(
             layout: layout,
-            prefix: prefix,
-            limits: .delta
+            prefix: prefix
         )
-        let ignoreControlIdentities = prefixControlIdentities.filter { $0.kind != .gitAttributes }
-        let attributeControlIdentities = prefixControlIdentities.filter { $0.kind == .gitAttributes }
         let indexDigest = try Self.boundedAuthorityFileDigest([
             ("index", layout.gitDir.appendingPathComponent("index"))
         ], maximumBytesPerFile: 32 * 1024 * 1024)
@@ -4248,8 +4343,8 @@ actor GitService {
             ("config", layout.commonDir.appendingPathComponent("config")),
             ("config.worktree", layout.gitDir.appendingPathComponent("config.worktree"))
         ])
-        let committedIgnoreControlDigest = Self.canonicalControlIdentityDigest(ignoreControlIdentities)
-        let prefixAttributeDigest = Self.canonicalControlIdentityDigest(attributeControlIdentities)
+        let committedIgnoreControlDigest = Self.hex(prefixControlEvidence.ignoreControlDigest)
+        let prefixAttributeDigest = Self.hex(prefixControlEvidence.attributeControlDigest)
         let configuredIgnoreAuthorityDigest = Self.sha256Hex(
             rootNeutralPolicyConfigData
                 + Data(repositoryIgnoreDigest.utf8)
@@ -4269,8 +4364,7 @@ actor GitService {
             sparsePolicyDigest: Self.sha256Hex(rootNeutralPolicyConfigData + Data(sparseDigest.utf8)),
             searchABI: .current,
             resolvedExcludesFileIdentity: resolvedExcludesFileIdentity,
-            resolvedAttributesFileIdentity: resolvedAttributesFileIdentity,
-            prefixControlIdentities: prefixControlIdentities
+            resolvedAttributesFileIdentity: resolvedAttributesFileIdentity
         )
         return GitWorkspaceAuthorityMetadata(
             repositoryKey: GitWorkspaceAuthorityRepositoryKey(layout: layout),
@@ -4517,6 +4611,170 @@ actor GitService {
             sha256: sha256Hex(data),
             byteCount: data.count
         )
+    }
+
+    static func streamedPrefixControlEvidence(
+        layout: GitRepositoryLayout,
+        prefix: GitRepositoryRelativeRootPrefix,
+        candidateSource suppliedSource: GitPrefixControlCandidateSource? = nil,
+        resourcePolicy: GitPrefixControlEvidenceResourcePolicy = .default
+    ) async throws -> GitPrefixControlEvidenceManifestFooter {
+        let controlKinds: [String: GitWorkspacePrefixControlKind] = [
+            ".gitignore": .gitignore,
+            ".repo_ignore": .repoIgnore,
+            ".cursorignore": .cursorIgnore,
+            ".gitattributes": .gitAttributes
+        ]
+        let root = layout.workTreeRoot.standardizedFileURL
+        let prefixRoot = prefix.value.isEmpty
+            ? root
+            : root.appendingPathComponent(prefix.value, isDirectory: true).standardizedFileURL
+        var rootStatus = stat()
+        guard lstat(prefixRoot.path, &rootStatus) == 0,
+              rootStatus.st_mode & S_IFMT == S_IFDIR
+        else {
+            throw GitWorktreeInitializationError.malformedOutput("loaded-root prefix directory is unavailable")
+        }
+        let store = try GitPrefixControlEvidenceManifestStore()
+        let writer = try store.makeWriter(
+            rootPrefixBytes: Data(prefix.value.utf8),
+            resourcePolicy: resourcePolicy
+        )
+
+        func appendCandidate(_ url: URL, kind: GitWorkspacePrefixControlKind) async throws {
+            let standardized = url.standardizedFileURL
+            let rootPath = root.path
+            guard standardized.path.hasPrefix(rootPath + "/") else {
+                throw GitWorktreeInitializationError.malformedOutput("control path escapes repository root")
+            }
+            let relative = String(standardized.path.dropFirst(rootPath.count + 1))
+            let components = relative.split(separator: "/", omittingEmptySubsequences: false)
+            guard !relative.isEmpty,
+                  relative.utf8.count <= 16 * 1024,
+                  components.count <= 512,
+                  !components.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
+            else { throw GitWorktreeInitializationError.pathLimitExceeded }
+            let content = try streamedAuthorityContentIdentity(at: standardized)
+            try await writer.append(GitPrefixControlEvidenceRecord(
+                repositoryRelativePathBytes: Data(relative.utf8),
+                kind: kind,
+                content: content
+            ))
+        }
+
+        do {
+            var ancestor = root
+            let components = prefix.value.isEmpty ? [] : prefix.value.split(separator: "/").map(String.init)
+            for depth in 0 ... components.count {
+                for (name, kind) in controlKinds {
+                    let url = ancestor.appendingPathComponent(name)
+                    var status = stat()
+                    if lstat(url.path, &status) == 0 {
+                        try await appendCandidate(url, kind: kind)
+                    } else if errno != ENOENT {
+                        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    }
+                }
+                if depth < components.count {
+                    ancestor.appendPathComponent(components[depth], isDirectory: true)
+                }
+            }
+
+            let source: GitPrefixControlCandidateSource
+            if let suppliedSource {
+                source = suppliedSource
+            } else {
+                guard let productionSource = GitFileManagerPrefixControlCandidateSource(root: prefixRoot) else {
+                    throw GitWorktreeInitializationError.malformedOutput("prefix control enumeration failed")
+                }
+                source = productionSource
+            }
+            while let url = try source.nextCandidate() {
+                try Task.checkCancellation()
+                let standardized = url.standardizedFileURL
+                let rootPath = root.path
+                guard standardized.path.hasPrefix(rootPath + "/") else {
+                    throw GitWorktreeInitializationError.malformedOutput("control path escapes repository root")
+                }
+                let relative = standardized.path.dropFirst(rootPath.count + 1)
+                let relativeComponents = relative.split(separator: "/", omittingEmptySubsequences: false)
+                if relativeComponents.contains(".git") {
+                    if relativeComponents.last == ".git" {
+                        source.skipDescendants()
+                    }
+                    continue
+                }
+                guard let kind = controlKinds[url.lastPathComponent] else { continue }
+                try await appendCandidate(url, kind: kind)
+            }
+            let lease = try await writer.finish()
+            let reader = try lease.makeReader()
+            while try await reader.next() != nil {
+                try Task.checkCancellation()
+            }
+            guard await reader.validationState == .verified else {
+                throw GitPrefixControlEvidenceManifestError.corrupt("prefix-control reader did not verify")
+            }
+            return lease.footer
+        } catch {
+            await writer.cancel()
+            throw error
+        }
+    }
+
+    private nonisolated static func streamedAuthorityContentIdentity(
+        at url: URL,
+        maximumBytes: Int = 4 * 1024 * 1024
+    ) throws -> GitWorkspaceAuthorityContentIdentity {
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { Darwin.close(descriptor) }
+        var before = stat()
+        guard fstat(descriptor, &before) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        guard before.st_mode & S_IFMT == S_IFREG else {
+            throw GitWorktreeInitializationError.malformedOutput("control authority is not a regular file")
+        }
+        var digest = SHA256()
+        var byteCount = 0
+        var buffer = Data(count: 64 * 1024)
+        while true {
+            try Task.checkCancellation()
+            let amount = buffer.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, $0.count) }
+            if amount == 0 { break }
+            if amount < 0 {
+                if errno == EINTR { continue }
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            let (nextCount, overflow) = byteCount.addingReportingOverflow(amount)
+            guard !overflow, nextCount <= maximumBytes else {
+                throw GitWorktreeInitializationError.outputLimitExceeded
+            }
+            byteCount = nextCount
+            digest.update(data: buffer.prefix(amount))
+        }
+        var after = stat()
+        guard fstat(descriptor, &after) == 0,
+              before.st_dev == after.st_dev,
+              before.st_ino == after.st_ino,
+              before.st_size == after.st_size,
+              before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec,
+              before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec,
+              before.st_ctimespec.tv_sec == after.st_ctimespec.tv_sec,
+              before.st_ctimespec.tv_nsec == after.st_ctimespec.tv_nsec
+        else { throw GitPrefixControlEvidenceManifestError.corrupt("control identity changed during hashing") }
+        return GitWorkspaceAuthorityContentIdentity(
+            exists: true,
+            sha256: hex(Data(digest.finalize())),
+            byteCount: byteCount
+        )
+    }
+
+    private nonisolated static func hex(_ data: Data) -> String {
+        data.map { String(format: "%02x", $0) }.joined()
     }
 
     private nonisolated static func boundedPrefixControlIdentities(

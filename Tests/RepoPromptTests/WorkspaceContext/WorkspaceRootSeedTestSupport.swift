@@ -28,8 +28,7 @@ enum WorkspaceRootSeedTestSupport {
             sparsePolicyDigest: "sparse-disabled",
             searchABI: .current,
             resolvedExcludesFileIdentity: nil,
-            resolvedAttributesFileIdentity: nil,
-            prefixControlIdentities: []
+            resolvedAttributesFileIdentity: nil
         )
         let authority = GitWorkspaceAuthoritySnapshot(
             repositoryKey: GitWorkspaceAuthorityRepositoryKey(layout: layout),
@@ -55,25 +54,49 @@ enum WorkspaceRootSeedTestSupport {
         prefix: GitRepositoryRelativeRootPrefix = try! GitRepositoryRelativeRootPrefix(""),
         policyIgnoredPaths: Set<String> = [],
         catalogPolicyIdentity: WorkspaceRootCatalogPolicyIdentity = .canonicalDefaults
-    ) -> WorkspaceRootReusableSnapshot {
-        let entries = paths.enumerated().map { ordinal, value in
-            RootNeutralTreeInventoryEntry(
-                ordinal: ordinal,
-                parentOrdinal: nil,
-                relativePath: value.0,
+    ) async throws -> WorkspaceRootReusableSnapshot {
+        let compatibility = compatibilityKey(treeOID: treeOID, prefix: prefix)
+        let store = try WorkspaceRootReusableInventoryManifestStore()
+        let writer = try store.makeWriter(header: WorkspaceRootReusableInventoryManifestHeader(
+            compatibilityDomain: WorkspaceRootReusableSnapshot.manifestCompatibilityDomain,
+            compatibilityDigest: WorkspaceRootReusableSnapshot.compatibilityDigest(compatibility),
+            treeOID: treeOID,
+            objectFormat: treeOID.objectFormat,
+            repositoryRelativeRootPrefix: prefix,
+            commandFormat: "test-fixture-v1",
+            rawStandardOutputDigest: Data(repeating: 0, count: 32),
+            catalogPolicyDigest: WorkspaceRootReusableSnapshot.catalogPolicyDigest(catalogPolicyIdentity)
+        ))
+        for (ordinal, value) in paths.enumerated() {
+            try await writer.append(WorkspaceRootReusableInventoryManifestRecord(
+                rootRelativePath: value.0,
                 mode: value.1,
                 kind: .blob,
                 objectID: oid(Character(String((ordinal % 8) + 1))),
-                provenance: .committedTree,
                 catalogProjection: policyIgnoredPaths.contains(value.0)
                     ? .policyIgnoredRegularFile
-                    : nil
-            )
+                    : .searchableRegularFile
+            ))
+        }
+        let manifest = try await writer.finish()
+        let reader = try manifest.makeReader()
+        var searchablePaths: [String] = []
+        var ordinals: [Int] = []
+        while let entry = try reader.next() {
+            if entry.isSearchableFile {
+                searchablePaths.append(entry.relativePath)
+                ordinals.append(entry.ordinal)
+            }
         }
         return WorkspaceRootReusableSnapshot(
-            compatibilityKey: compatibilityKey(treeOID: treeOID, prefix: prefix),
-            inventory: RootNeutralTreeInventory(entries: entries),
-            catalogPolicyIdentity: catalogPolicyIdentity
+            compatibilityKey: compatibility,
+            inventoryManifest: manifest,
+            searchBase: WorkspaceSearchRelativePathBase(
+                relativePaths: searchablePaths,
+                stableOrdinals: ordinals
+            ),
+            catalogPolicyIdentity: catalogPolicyIdentity,
+            estimatedByteCount: searchablePaths.reduce(0) { $0 + $1.utf8.count + 96 }
         )
     }
 

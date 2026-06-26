@@ -60,7 +60,7 @@ It is correctness evidence, not campaign latency evidence.
 | iteration | single change | forced-full artifact | serving artifact | widths/process states | primary values ms | primary p50/p95/CV | serving vs forced p95 | secondary gates | route/correctness | decision |
 |---:|---|---|---|---|---|---|---:|---|---|---|
 | 0 | DEBUG instrumentation/schema-v5 and baseline only | `<pending>` | `<pending>` | warm width 1 first; 4/8 and aged only after valid serving | `<pending>` | `<pending>` | `<pending>` | `<pending>` | serving not yet established | pending |
-| 1 | sparse/delta-proportional seed plan | `<pending>` | `<pending>` | same valid matrix | `<pending>` | `<pending>` | `<pending>` | `<pending>` | `<pending>` | pending |
+| 1 | streamed loaded-root Git authority evidence | `20260626T172258Z-warm-forced-full-w1-75e14e0f` | `20260626T172537Z-warm-projected-w1-1558494c` | warm width 1 only | valid `[]`; invalid forced `[738.472, 871.169, 839.719]` | unavailable / unavailable / unavailable | unavailable | correctness and projected export incomplete | setup reached `diffSeedServing`; exact serving/fallback sample absent | incomplete |
 | 2 | narrowed Git worktree mutation lock | `<pending>` | `<pending>` | same valid matrix | `<pending>` | `<pending>` | `<pending>` | `<pending>` | `<pending>` | pending |
 | 3 | demand-reserved CodeMap capacity, only if attributed | `<pending>` | `<pending>` | same valid matrix | `<pending>` | `<pending>` | `<pending>` | `<pending>` | `<pending>` | pending |
 | 4 | reserved one-variable refinement | `<pending>` | `<pending>` | same valid matrix | `<pending>` | `<pending>` | `<pending>` | `<pending>` | `<pending>` | pending |
@@ -344,3 +344,164 @@ Artifact:
   `discovery_authority_capture/git_record_limit_exceeded`. No timing comparison,
   p95 improvement, or serving claim is made. No repair, relaunch, build, test,
   width 4/8, aged run, or commit was attempted.
+
+## 2026-06-26 — Iteration 1 streamed loaded-root Git authority evidence (append-only)
+
+### Attributed implementation and focused validation
+
+- Implemented only the iteration-1 loaded-root Git authority optimization:
+  prefix-control evidence and full `ls-tree` inventory are streamed through
+  authenticated spill-backed manifests instead of being accumulated under the
+  legacy 10,000-record all-or-nothing limit. Memory, record/batch bytes, open
+  runs/files, and aggregate spool bytes are bounded; total repository records
+  are not capped. Snapshot schema/content domains advanced to v5.
+- Exact fail-closed currentness checks remain around authority capture, catalog
+  batching, manifest finalization, and admission. Corrupt/truncated manifests,
+  stale catalog batches, cancellation, resource exhaustion, sparse/submodule/
+  nested/external/ambiguous topology, and unsupported Git evidence still reject
+  reuse or fall back to the existing full crawl. Non-Git roots and non-Git
+  search/read were not routed through the new representation.
+- Focused compile passed: coordinated RepoPrompt product build ticket
+  `299fe0bc-8eff-4a47-aba2-1fbc92fc1119`.
+- New focused authority suite passed: ticket
+  `0dcae8d8-4139-4129-9b2e-04200cdffde2`. It includes a control file after
+  10,001 lazy non-control candidates, lazy 100,000 candidate and tree records,
+  corruption/cancellation/resource cleanup, and stale-currentness zero-admission
+  coverage. The large-record test asserts buffered bytes, open runs, aggregate
+  artifact bytes, verified EOF, exact record count, and zero active artifacts
+  after lease release without first materializing the logical stream.
+- The opt-in 1,000,000 logical candidate/tree-record test passed in `100.489 s`
+  with the same bounded assertions. It was run directly with
+  `RPCE_RUN_MILLION_RECORD_GIT_AUTHORITY_TESTS=1` because conductor does not
+  forward that opt-in environment key.
+- Touched-path compatibility tests passed: seed planner ticket
+  `30490418-bfb6-4832-b02a-b214d28745d9`, initialization API
+  `d9115991-...`, authority `bc1fd509-...`, projected path search
+  `4c2f152a-...`, and creation receipt final rerun
+  `d1a89a6d-f7dc-4453-a8b0-f4b69bee7aee`. No release build, full suite, lint,
+  benchmark-gate change, or unrelated repair was performed.
+
+### Post-relaunch frozen scope and preflight
+
+- Coordinated DEBUG relaunch ticket
+  `987de240-65ad-4752-922f-89f5146d5650` exited 0; visible app PID `71554`.
+  App/CLI SHA-256:
+  `a28a4c93e4193cd2fbd2a4a62bb73a8c670436996ebc1b748093627c297ed32a` /
+  `457eed710e7537a06e83ba129ad085e41d827c6f857066bea6c757e3f7b7acf6`.
+  CLI version: `repoprompt_ce_cli_debug (repoprompt-mcp) 1.0.21`.
+- Window/workspace/context/current root: `1` /
+  `163E658F-4313-4894-B003-595287E59AE9` /
+  `E7BC2FDA-0CBD-4DE9-9C94-C31984E5F783` /
+  `54F3CDD8-BC02-4863-9B5C-24A7A88ADFA2`.
+- Real root `/Users/pvncher/Documents/Git/repoprompt-ce-release`, commit
+  `8103b122f23f1087ada2e0a5db16eb69feef2fc3`, 2,138 tracked files.
+- Primary/confirmation plans:
+  `/tmp/rpce-worktree-startup/iteration1-20260626/primary-plan.json` and
+  `confirmation-plan.json`. Plan SHA fields:
+  `818759584a3e38237fc2e8c99781750b1194d5f16dc2e476fe87db2fa112a385` /
+  `7cc2fa332e71902f1c9d5fd70b32a32cdaed725498225ab3f489259daa84fa23`;
+  file SHA-256:
+  `7d7d62fc09cbc1dff1ecd92dbc64c634bc7e3ae84a774f54257fe23f2278538e` /
+  `bd166647033be89fd6d1701fda16b33f67ee5aeb4919667256f5a5bb31918eeb`.
+- Exact post-relaunch preflights passed:
+  `/tmp/rpce-worktree-startup/v1/20260626T172215Z-preflight-10bb0b9a` and
+  `/tmp/rpce-worktree-startup/v1/20260626T172216Z-preflight-e5a548f7`.
+  Both froze the same scope/commit and read blob
+  `a2133dce4c6c67cfdfaa47173e2ce03c8b8f818b486eadf985ba8fa7b5e170e8`.
+- Host: `Mac16,7`, 48 GiB RAM, macOS 26.5 (25F71), AC power, battery 80%.
+
+### Width-1 forced-full, run first
+
+Artifact:
+`/tmp/rpce-worktree-startup/v1/20260626T172258Z-warm-forced-full-w1-75e14e0f`
+
+- Frozen count: one warmup + five retained. Three samples were exported
+  (warmup plus ordinals 2–3); ordinal 4 then stopped on exact
+  `get_code_structure returned 'timeout', not ready`. No ordinal was replaced.
+- Valid retained raw primary values: `[]`.
+- Valid retained p50 / p95 / CV: unavailable / unavailable / unavailable.
+- Invalid raw diagnostic readiness values were warmup `738.472 ms` and retained
+  `[871.169, 839.719] ms`. For transparency only, that excluded two-value
+  diagnostic series has p50 `855.444 ms`, nearest-rank p95 `871.169 ms`, and
+  population CV `0.018382`; it is **not** retained performance evidence.
+- Every exported sample reported actual route/fallback
+  `{"fullCrawl":1}` / `{}` and was invalid as `content_oracle_mismatch`.
+
+| ordinal | class | readiness ms | materialize→root/search/read ms | direct search/read ms | first/warm codemap ms | tree/selection ms | Git count; duration/queue ms | filesystem ms | lock held/mutation/finalize/queue ms |
+|---:|---|---:|---|---|---|---|---|---:|---|
+| 1 | invalid warmup | 738.472 | 338.446 / 738.472 / 698.924 | 136.332 / 135.701 | 4168.747 / 91.569 | 8168.621 / 10519.256 | 1024; 10234.858 / 9128.258 | 281.798 | 384.345 / 337.819 / 29.598 / 0.002 |
+| 2 | invalid retained | 871.169 | 381.561 / 871.169 / 791.191 | 243.268 / 96.117 | 4906.019 / 84.144 | 10937.180 / 10728.058 | 1024; 10190.607 / 9240.803 | 323.752 | 332.766 / 285.996 / 30.118 / 0.000 |
+| 3 | invalid retained | 839.719 | 352.772 / 839.719 / 760.905 | 248.653 / 93.897 | 7345.174 / 97.974 | 5571.362 / 10835.733 | 1024; 10286.848 / 9236.798 | 299.882 | 386.359 / 342.375 / 27.350 / 0.000 |
+
+- Phase attribution: interactive readiness was dominated after root readiness by
+  first search; Git diagnostic work was almost entirely queued
+  (`9.13–9.24 s` of `10.19–10.29 s`) and attributed to 896–897 codemap-authority
+  plus 127–128 tree-resolution commands. Codemap demand recorded 92 requests in
+  warmup and 68 in each retained diagnostic sample; no codemap builds or permit
+  waits were attributed. Content-read admission wait/execution stayed below
+  `0.010 / 0.262 ms`.
+- Secondary correctness gates failed exactly as before the optimization: direct
+  read reported `read_file expected file content missing`, passive tree omitted
+  the required exact current marker/legend, and selection omitted structured
+  `worktree_scope`; search and both codemap calls returned expected content.
+  These are out-of-scope validator/codemap readiness issues and were not repaired.
+- Resource session: 1,184 samples over 122.3 s; average/peak core
+  119.0%/346.4%; resident baseline/peak/final 316.2/379.5/379.5 MiB
+  (peak delta 63.3 MiB); physical footprint baseline/peak/final
+  115.4/176.1/176.1 MiB (peak delta 60.6 MiB); session CPU 145,456.1 ms.
+
+### Width-1 projected/diff-seed, run second
+
+Artifact:
+`/tmp/rpce-worktree-startup/v1/20260626T172537Z-warm-projected-w1-1558494c`
+
+- The iteration-0 blocker is removed: projected route setup successfully
+  prepared base snapshot identity
+  `bcf385c2e8163e4000272f45a8b90139e204da1ce6a9dfade4f59c0a4fe23053`
+  and returned route `diffSeedServing`. There was no
+  `discovery_authority_capture/git_record_limit_exceeded`.
+- The first sample then stopped on exact
+  `get_code_structure returned 'timeout', not ready` before export. Recorded
+  samples `[]`; valid retained primary values `[]`; p50/p95/CV unavailable.
+- Because no sample export exists, actual per-sample route counts and fallback
+  counts are unavailable. Setup route `diffSeedServing` is not accepted as proof
+  of the required exact `{"diffSeedServing":1}` / `{}` serving series.
+- Per the frozen stop rule, no replacement, confirmation, width 4/8, aged, or
+  additional repair was attempted.
+- Resource session: 137 samples over 14.1 s; average/peak core
+  117.1%/346.8%; resident baseline/peak/final 496.0/508.1/508.0 MiB
+  (peak delta 12.1 MiB); physical footprint baseline/peak/final
+  187.9/203.0/202.9 MiB (peak delta 15.1 MiB); session CPU 16,531.8 ms.
+
+### Cleanup, artifacts, and recommendation
+
+- Both original run summaries recorded `cleanup_complete: true`. State and raw
+  cleanup calls prove all five owned Agent sessions terminal, all five owned
+  worktrees removed, both memory samplers stopped, routes restored, diagnostics
+  reset, and the one-root workspace restored. The raw proof remains under each
+  artifact (`raw/`, `state.json`, `resources.json`, and `samples.ndjson`).
+- A later explicit idempotence recheck rewrote the forced-full `cleanup.json`;
+  it correctly refused to re-delete the already-absent worktrees because a live
+  session/worktree relationship could no longer be proven, while independently
+  verifying sampler stopped, route restored, diagnostics reset, and roots
+  restored. The pre-recheck proof remains in raw calls `0097`–`0104` and
+  `state.json`; the projected original `cleanup.json` was unchanged.
+- The dedicated real-root ownership marker was removed only after SHA, owner
+  token, workspace/root IDs, canonical path, and purpose all matched. Proof:
+  `/tmp/rpce-worktree-startup/iteration1-20260626/marker-cleanup.json`.
+- Recommendation: **do not retain from current measurement; revert unless the
+  independent reviewer explicitly accepts another measurement cycle**. The
+  attributed optimization clears the 10,000-record authority blocker and its
+  focused boundedness/fail-closed tests pass, but the mandatory valid projected
+  serving cohort, correctness gates, p95 improvement, and memory-regression
+  comparison were not established. No commit was created.
+
+## 2026-06-26 — Iteration 1 scoreboard-row correction (append-only)
+
+The top iteration-1 summary row previously named a planned
+`sparse/delta-proportional seed plan`, which was not the implemented change.
+It now names the actual single change, **streamed loaded-root Git authority
+evidence**, points to the recorded forced-full and projected artifacts, and
+marks the measurement **incomplete**. This correction changes only the campaign
+index row; it does not replace or reinterpret any raw sample or appended
+iteration-1 measurement detail above.

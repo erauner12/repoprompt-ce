@@ -4,13 +4,13 @@ import XCTest
 final class WorkspaceProjectedPathSearchTests: XCTestCase {
     private typealias Support = WorkspaceRootSeedTestSupport
 
-    func testProjectedMatcherExactlyMatchesFullTargetIndexAcrossQueriesAndLimits() throws {
+    func testProjectedMatcherExactlyMatchesFullTargetIndexAcrossQueriesAndLimits() async throws {
         let root = WorkspaceRootRecord(
             name: "Projected Root",
             fullPath: "/tmp/Projected Root",
             kind: .sessionWorktree
         )
-        let snapshot = Support.snapshot(paths: [
+        let snapshot = try await Support.snapshot(paths: [
             ("A.swift", "100644"),
             ("Deleted.swift", "100644"),
             ("Old.swift", "100644"),
@@ -57,13 +57,13 @@ final class WorkspaceProjectedPathSearchTests: XCTestCase {
         XCTAssertEqual(projected.tombstoneCount, 2)
     }
 
-    func testRealProjectedRootIndexExactlyMatchesMaterializedSearchAndEntryOrdering() throws {
+    func testRealProjectedRootIndexExactlyMatchesMaterializedSearchAndEntryOrdering() async throws {
         let root = WorkspaceRootRecord(
             name: "Serving Root",
             fullPath: "/tmp/Serving Root",
             kind: .sessionWorktree
         )
-        let snapshot = Support.snapshot(paths: [
+        let snapshot = try await Support.snapshot(paths: [
             ("A.swift", "100644"),
             ("Deleted.swift", "100644"),
             ("Sources/Keep.swift", "100644"),
@@ -108,10 +108,10 @@ final class WorkspaceProjectedPathSearchTests: XCTestCase {
         }
     }
 
-    func testRealProjectedPatchesCross32CompactSegmentsAndRetainOlderGenerations() throws {
+    func testRealProjectedPatchesCross32CompactSegmentsAndRetainOlderGenerations() async throws {
         let root = WorkspaceRootRecord(name: "Patch Target", fullPath: "/tmp/Patch Target", kind: .sessionWorktree)
         let basePaths = (0 ..< 40).map { "File\($0).swift" }
-        let snapshot = Support.snapshot(paths: basePaths.map { ($0, "100644") })
+        let snapshot = try await Support.snapshot(paths: basePaths.map { ($0, "100644") })
         let idsByBasePath = Dictionary(uniqueKeysWithValues: basePaths.map { ($0, UUID()) })
         var entries = makeEntries(paths: basePaths, root: root, idsByPath: idsByBasePath)
         let lifetimeID = UUID()
@@ -211,10 +211,10 @@ final class WorkspaceProjectedPathSearchTests: XCTestCase {
         XCTAssertEqual(retainedAt31.search("Renamed.swift", limit: 10).map(\.entry.id), [renamedID])
     }
 
-    func testProjectionHasNoEntryCountFallbackAndPreservesCrossRootIsolation() throws {
+    func testProjectionHasNoEntryCountFallbackAndPreservesCrossRootIsolation() async throws {
         let root = WorkspaceRootRecord(name: "Target", fullPath: "/tmp/Target", kind: .sessionWorktree)
         let paths = (0 ..< 40).map { "File\($0).swift" }
-        let snapshot = Support.snapshot(paths: paths.map { ($0, "100644") })
+        let snapshot = try await Support.snapshot(paths: paths.map { ($0, "100644") })
         let entries = makeEntries(paths: paths, root: root)
 
         let retained = try XCTUnwrap(WorkspaceProjectedPathSearchIndex(
@@ -363,7 +363,7 @@ final class WorkspaceProjectedPathSearchTests: XCTestCase {
     func testFirstParityMismatchAtomicallyDisablesRetainedShadow() async throws {
         WorktreeStartupInstrumentation.resetForTesting()
         let root = WorkspaceRootRecord(name: "Isolated", fullPath: "/tmp/Isolated", kind: .sessionWorktree)
-        let snapshot = Support.snapshot(paths: [("A.swift", "100644")])
+        let snapshot = try await Support.snapshot(paths: [("A.swift", "100644")])
         let projectedEntries = makeEntries(paths: ["A.swift"], root: root)
         let authoritativeEntries = makeEntries(paths: ["A.swift", "B.swift"], root: root)
         let projection = try XCTUnwrap(WorkspaceProjectedPathSearchIndex(

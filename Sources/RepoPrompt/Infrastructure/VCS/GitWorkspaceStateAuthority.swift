@@ -69,6 +69,10 @@ actor GitWorkspaceStateAuthority {
             let reusableSnapshotCount: Int
             let reusableSnapshotAliasCount: Int
             let reusableSnapshotEstimatedBytes: Int
+            let reusableSnapshotArtifactBytes: UInt64
+            let pendingReusableSnapshotAdmissionCount: Int
+            let pendingReusableSnapshotArtifactBytes: UInt64
+            let reusableSnapshotArtifactBudgetRejectionCount: UInt64
             let invalidationSubscriberCount: Int
         }
     #endif
@@ -108,6 +112,7 @@ actor GitWorkspaceStateAuthority {
         let snapshot: WorkspaceRootReusableSnapshot
         let lease: GitWorkspaceAuthorityLease
         let observationToken: GitWorkspaceMetadataMonitor.RetainToken
+        let reservedArtifactBytes: UInt64
     }
 
     private let metadataMonitor: GitWorkspaceMetadataMonitor
@@ -120,6 +125,9 @@ actor GitWorkspaceStateAuthority {
     private var pendingReusableSnapshotAdmissions: [UUID: PendingReusableSnapshotAdmission] = [:]
     private var reusableSnapshotAccessOrdinal: UInt64 = 0
     private var reusableSnapshotEstimatedBytes = 0
+    private var reusableSnapshotArtifactBytes: UInt64 = 0
+    private var pendingReusableSnapshotArtifactBytes: UInt64 = 0
+    private var reusableSnapshotArtifactBudgetRejectionCount: UInt64 = 0
     private var invalidationContinuations: [UUID: AsyncStream<GitWorkspaceAuthorityInvalidationEvent>.Continuation] = [:]
 
     init(
@@ -129,6 +137,7 @@ actor GitWorkspaceStateAuthority {
         precondition(reusableSnapshotCacheLimits.maximumSnapshotCount > 0)
         precondition(reusableSnapshotCacheLimits.maximumSnapshotsPerRepository > 0)
         precondition(reusableSnapshotCacheLimits.maximumEstimatedBytes > 0)
+        precondition(reusableSnapshotCacheLimits.maximumArtifactBytes > 0)
         self.metadataMonitor = metadataMonitor
         self.reusableSnapshotCacheLimits = reusableSnapshotCacheLimits
     }
@@ -402,11 +411,27 @@ actor GitWorkspaceStateAuthority {
             return nil
         }
 
+        let (retainedAndPendingBytes, retainedAndPendingOverflow) = reusableSnapshotArtifactBytes
+            .addingReportingOverflow(pendingReusableSnapshotArtifactBytes)
+        let (reservedTotal, reservationOverflow) = retainedAndPendingBytes
+            .addingReportingOverflow(snapshot.artifactByteCount)
+        guard !retainedAndPendingOverflow,
+              !reservationOverflow,
+              snapshot.artifactByteCount <= reusableSnapshotCacheLimits.maximumArtifactBytes,
+              reservedTotal <= reusableSnapshotCacheLimits.maximumArtifactBytes
+        else {
+            reusableSnapshotArtifactBudgetRejectionCount &+= 1
+            await metadataMonitor.release(observationToken)
+            return nil
+        }
+
         let prepared = PreparedReusableSnapshotAdmission(id: UUID())
+        pendingReusableSnapshotArtifactBytes += snapshot.artifactByteCount
         pendingReusableSnapshotAdmissions[prepared.id] = PendingReusableSnapshotAdmission(
             snapshot: snapshot,
             lease: lease,
-            observationToken: observationToken
+            observationToken: observationToken,
+            reservedArtifactBytes: snapshot.artifactByteCount
         )
         return prepared
     }
@@ -421,14 +446,14 @@ actor GitWorkspaceStateAuthority {
     func cancelPreparedReusableSnapshotAdmission(
         _ prepared: PreparedReusableSnapshotAdmission
     ) async {
-        guard let pending = pendingReusableSnapshotAdmissions.removeValue(forKey: prepared.id) else { return }
+        guard let pending = takePendingReusableSnapshotAdmission(prepared) else { return }
         await metadataMonitor.release(pending.observationToken)
     }
 
     func admitPreparedReusableSnapshot(
         _ prepared: PreparedReusableSnapshotAdmission
     ) async -> ReusableSnapshotAdmissionReceipt? {
-        guard let pending = pendingReusableSnapshotAdmissions.removeValue(forKey: prepared.id) else { return nil }
+        guard let pending = takePendingReusableSnapshotAdmission(prepared) else { return nil }
         let snapshot = pending.snapshot
         let lease = pending.lease
         let observationToken = pending.observationToken
@@ -443,7 +468,9 @@ actor GitWorkspaceStateAuthority {
         reusableSnapshotAccessOrdinal &+= 1
         if var existing = reusableSnapshotsByIdentity[snapshot.identity] {
             guard existing.snapshot.compatibilityKey == snapshot.compatibilityKey,
-                  existing.snapshot.inventory == snapshot.inventory,
+                  existing.snapshot.inventoryManifest.manifestDigest
+                  == snapshot.inventoryManifest.manifestDigest,
+                  existing.snapshot.inventoryManifest.footer == snapshot.inventoryManifest.footer,
                   existing.snapshot.hasValidContentAddress()
             else {
                 await metadataMonitor.release(observationToken)
@@ -457,6 +484,7 @@ actor GitWorkspaceStateAuthority {
                 lastAccessOrdinal: reusableSnapshotAccessOrdinal
             )
             reusableSnapshotEstimatedBytes += snapshot.estimatedByteCount
+            reusableSnapshotArtifactBytes += snapshot.artifactByteCount
         }
 
         let previous = reusableSnapshotAliasesByScope.updateValue(
@@ -577,6 +605,7 @@ actor GitWorkspaceStateAuthority {
     private func evictReusableSnapshotsIfNeeded() async -> Bool {
         while reusableSnapshotsByIdentity.count > reusableSnapshotCacheLimits.maximumSnapshotCount
             || reusableSnapshotEstimatedBytes > reusableSnapshotCacheLimits.maximumEstimatedBytes
+            || reusableSnapshotArtifactBytes > reusableSnapshotCacheLimits.maximumArtifactBytes
             || repositorySnapshotCountExceedsLimit()
         {
             let pinnedIdentities = Set(reusableSnapshotAliasesByScope.values.map(\.snapshotIdentity))
@@ -613,6 +642,9 @@ actor GitWorkspaceStateAuthority {
     private func removeReusableSnapshot(_ identity: WorkspaceRootReusableSnapshotIdentity) async {
         guard let removed = reusableSnapshotsByIdentity.removeValue(forKey: identity) else { return }
         reusableSnapshotEstimatedBytes = max(0, reusableSnapshotEstimatedBytes - removed.snapshot.estimatedByteCount)
+        reusableSnapshotArtifactBytes = reusableSnapshotArtifactBytes >= removed.snapshot.artifactByteCount
+            ? reusableSnapshotArtifactBytes - removed.snapshot.artifactByteCount
+            : 0
         let aliases = reusableSnapshotAliasesByScope.filter { $0.value.snapshotIdentity == identity }
         for (scopeKey, alias) in aliases {
             reusableSnapshotAliasesByScope.removeValue(forKey: scopeKey)
@@ -630,6 +662,19 @@ actor GitWorkspaceStateAuthority {
             0,
             reusableSnapshotEstimatedBytes - removed.snapshot.estimatedByteCount
         )
+        reusableSnapshotArtifactBytes = reusableSnapshotArtifactBytes >= removed.snapshot.artifactByteCount
+            ? reusableSnapshotArtifactBytes - removed.snapshot.artifactByteCount
+            : 0
+    }
+
+    private func takePendingReusableSnapshotAdmission(
+        _ prepared: PreparedReusableSnapshotAdmission
+    ) -> PendingReusableSnapshotAdmission? {
+        guard let pending = pendingReusableSnapshotAdmissions.removeValue(forKey: prepared.id) else { return nil }
+        pendingReusableSnapshotArtifactBytes = pendingReusableSnapshotArtifactBytes >= pending.reservedArtifactBytes
+            ? pendingReusableSnapshotArtifactBytes - pending.reservedArtifactBytes
+            : 0
+        return pending
     }
 
     func beginMutation(
@@ -784,6 +829,10 @@ actor GitWorkspaceStateAuthority {
                 reusableSnapshotCount: reusableSnapshotsByIdentity.count,
                 reusableSnapshotAliasCount: reusableSnapshotAliasesByScope.count,
                 reusableSnapshotEstimatedBytes: reusableSnapshotEstimatedBytes,
+                reusableSnapshotArtifactBytes: reusableSnapshotArtifactBytes,
+                pendingReusableSnapshotAdmissionCount: pendingReusableSnapshotAdmissions.count,
+                pendingReusableSnapshotArtifactBytes: pendingReusableSnapshotArtifactBytes,
+                reusableSnapshotArtifactBudgetRejectionCount: reusableSnapshotArtifactBudgetRejectionCount,
                 invalidationSubscriberCount: invalidationContinuations.count
             )
         }

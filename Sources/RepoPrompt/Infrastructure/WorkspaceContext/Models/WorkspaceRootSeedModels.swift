@@ -153,7 +153,7 @@ struct WorkspaceRootValidatedCatalogProjection {
 }
 
 struct WorkspaceRootSeedCompatibilityKey: Hashable {
-    static let currentInventorySchemaVersion = 4
+    static let currentInventorySchemaVersion = 5
 
     let repositoryNamespace: GitBlobRepositoryNamespace
     let objectFormat: GitObjectFormat
@@ -270,126 +270,127 @@ final class WorkspaceSearchRelativePathBase: @unchecked Sendable {
 }
 
 final class WorkspaceRootReusableSnapshot: @unchecked Sendable {
+    static let contentAddressDomain = "workspace-root-reusable-snapshot-v5"
+    static let manifestCompatibilityDomain = "workspace-root-reusable-inventory-v1"
+
     let identity: WorkspaceRootReusableSnapshotIdentity
     let compatibilityKey: WorkspaceRootSeedCompatibilityKey
-    let inventory: RootNeutralTreeInventory
+    let inventoryManifest: WorkspaceRootReusableInventoryManifestLease
     let searchBase: WorkspaceSearchRelativePathBase
     let catalogPolicyIdentity: WorkspaceRootCatalogPolicyIdentity
     let estimatedByteCount: Int
+    let artifactByteCount: UInt64
+
+    #if DEBUG
+        /// Small-fixture inspection only. Production consumers must stream the
+        /// leased manifest rather than materializing the inventory.
+        var inventory: RootNeutralTreeInventory {
+            RootNeutralTreeInventory(
+                entries: (try? inventoryManifest.materializeForTesting()) ?? []
+            )
+        }
+    #endif
 
     init(
         compatibilityKey: WorkspaceRootSeedCompatibilityKey,
-        inventory: RootNeutralTreeInventory,
-        catalogPolicyIdentity: WorkspaceRootCatalogPolicyIdentity = .canonicalDefaults
+        inventoryManifest: WorkspaceRootReusableInventoryManifestLease,
+        searchBase: WorkspaceSearchRelativePathBase,
+        catalogPolicyIdentity: WorkspaceRootCatalogPolicyIdentity = .canonicalDefaults,
+        estimatedByteCount: Int
     ) {
         self.compatibilityKey = compatibilityKey
-        self.inventory = inventory
+        self.inventoryManifest = inventoryManifest
+        self.searchBase = searchBase
         self.catalogPolicyIdentity = catalogPolicyIdentity
-        let searchable = inventory.entries.filter(\.isSearchableFile)
-        searchBase = WorkspaceSearchRelativePathBase(
-            relativePaths: searchable.map(\.relativePath),
-            stableOrdinals: searchable.map(\.ordinal)
-        )
         identity = WorkspaceRootReusableSnapshotIdentity(
             sha256: Self.contentDigest(
                 compatibilityKey: compatibilityKey,
-                inventory: inventory,
+                inventoryManifest: inventoryManifest,
                 catalogPolicyIdentity: catalogPolicyIdentity
             ),
             searchABI: compatibilityKey.searchABI
         )
-        estimatedByteCount = inventory.entries.reduce(0) { partial, entry in
-            partial + entry.relativePath.utf8.count + entry.mode.utf8.count
-                + entry.objectID.lowercaseHex.utf8.count + entry.catalogProjection.rawValue.utf8.count + 96
-        } + searchBase.relativePaths.reduce(0) { $0 + $1.utf8.count + 48 }
+        self.estimatedByteCount = estimatedByteCount
+        artifactByteCount = inventoryManifest.artifactByteCount
     }
 
     func hasValidContentAddress() -> Bool {
-        identity.searchABI == compatibilityKey.searchABI
+        guard (try? inventoryManifest.makeReader()) != nil else { return false }
+        return identity.searchABI == compatibilityKey.searchABI
+            && inventoryManifest.header.compatibilityDomain == Self.manifestCompatibilityDomain
+            && inventoryManifest.header.compatibilityDigest == Self.compatibilityDigest(compatibilityKey)
+            && inventoryManifest.header.catalogPolicyDigest == Self.catalogPolicyDigest(catalogPolicyIdentity)
             && identity.sha256 == Self.contentDigest(
                 compatibilityKey: compatibilityKey,
-                inventory: inventory,
+                inventoryManifest: inventoryManifest,
                 catalogPolicyIdentity: catalogPolicyIdentity
             )
     }
 
     static func make(
         authority: GitWorkspaceAuthoritySnapshot,
-        tree: GitTreeInventorySnapshot,
-        catalogProjection: WorkspaceRootValidatedCatalogProjection
+        inventoryManifest: WorkspaceRootReusableInventoryManifestLease,
+        catalogPolicyIdentity: WorkspaceRootCatalogPolicyIdentity,
+        maximumResidentBytes: Int = WorkspaceRootReusableSnapshotCacheLimits.production.maximumEstimatedBytes
     ) -> WorkspaceRootReusableSnapshot? {
-        guard authority.treeOID == tree.treeOID,
-              authority.repositoryRelativeRootPrefix == tree.rootPrefix,
-              authority.policyIdentity.searchABI == .current
+        let compatibilityKey = WorkspaceRootSeedCompatibilityKey(authority: authority)
+        let header = inventoryManifest.header
+        let footer = inventoryManifest.footer
+        guard authority.policyIdentity.searchABI == .current,
+              header.schemaVersion == WorkspaceRootReusableInventoryManifestHeader.currentSchemaVersion,
+              header.compatibilityDomain == manifestCompatibilityDomain,
+              header.compatibilityDigest == compatibilityDigest(compatibilityKey),
+              header.treeOID == authority.treeOID,
+              header.objectFormat == authority.objectFormat,
+              header.repositoryRelativeRootPrefix == authority.repositoryRelativeRootPrefix,
+              header.catalogPolicyDigest == catalogPolicyDigest(catalogPolicyIdentity),
+              footer.totalRecordCount == inventoryManifest.statistics.recordCount,
+              footer.searchableRegularFileCount
+              + footer.policyIgnoredRegularFileCount
+              + footer.nonRegularTopologyCount == footer.totalRecordCount,
+              maximumResidentBytes > 0
         else { return nil }
-
-        var relativeEntries: [(source: GitTreeInventoryEntry, pathKey: WorkspaceRootByteExactPathKey)] = []
-        relativeEntries.reserveCapacity(tree.entries.count)
-        for entry in tree.entries {
-            guard let relativePath = WorkspaceRootByteExactPathKey.rootRelativePath(
-                repositoryRelativePath: entry.repositoryRelativePath,
-                prefix: tree.rootPrefix
-            ), !relativePath.isEmpty else { continue }
-            relativeEntries.append((entry, WorkspaceRootByteExactPathKey(relativePath)))
-        }
-        guard WorkspaceRootByteExactPathSet(
-            relativeEntries.map(\.pathKey.value),
-            rejectExactDuplicates: true
-        ) != nil else {
-            return nil
-        }
-        relativeEntries.sort { $0.pathKey < $1.pathKey }
-
-        var ordinalByPath: [WorkspaceRootByteExactPathKey: Int] = [:]
-        var entries: [RootNeutralTreeInventoryEntry] = []
-        entries.reserveCapacity(relativeEntries.count)
-        for (ordinal, value) in relativeEntries.enumerated() {
-            let parentOrdinal = value.pathKey.parent.flatMap { ordinalByPath[$0] }
-            let committedRegular = value.source.kind == .blob
-                && (value.source.mode == "100644" || value.source.mode == "100755")
-            let entryCatalogProjection: RootNeutralTreeInventoryEntry.CatalogProjection
-            if committedRegular {
-                let isDiscoverable = catalogProjection.discoverableRelativeFilePaths.contains(value.pathKey)
-                let isPolicyIgnored = catalogProjection.policyIgnoredCommittedRegularRelativePaths
-                    .contains(value.pathKey)
-                switch (isDiscoverable, isPolicyIgnored) {
-                case (true, false):
-                    entryCatalogProjection = .searchableRegularFile
-                case (false, true):
-                    entryCatalogProjection = .policyIgnoredRegularFile
-                case (false, false), (true, true):
+        do {
+            let reader = try inventoryManifest.makeReader()
+            var relativePaths: [String] = []
+            var stableOrdinals: [Int] = []
+            var residentBytes = 0
+            while let entry = try reader.next() {
+                guard entry.isSearchableFile else { continue }
+                let (pathBytes, pathOverflow) = entry.relativePath.utf8.count.addingReportingOverflow(96)
+                let (proposed, totalOverflow) = residentBytes.addingReportingOverflow(pathBytes)
+                guard !pathOverflow, !totalOverflow, proposed <= maximumResidentBytes else {
                     return nil
                 }
-            } else {
-                entryCatalogProjection = .nonRegularTopology
+                relativePaths.append(entry.relativePath)
+                stableOrdinals.append(entry.ordinal)
+                residentBytes = proposed
             }
-            let projected = RootNeutralTreeInventoryEntry(
-                ordinal: ordinal,
-                parentOrdinal: parentOrdinal,
-                relativePath: value.pathKey.value,
-                mode: value.source.mode,
-                kind: value.source.kind,
-                objectID: value.source.objectID,
-                provenance: .committedTree,
-                catalogProjection: entryCatalogProjection
+            guard reader.validationState == .verified,
+                  UInt64(relativePaths.count) == footer.searchableRegularFileCount
+            else { return nil }
+            return WorkspaceRootReusableSnapshot(
+                compatibilityKey: compatibilityKey,
+                inventoryManifest: inventoryManifest,
+                searchBase: WorkspaceSearchRelativePathBase(
+                    relativePaths: relativePaths,
+                    stableOrdinals: stableOrdinals
+                ),
+                catalogPolicyIdentity: catalogPolicyIdentity,
+                estimatedByteCount: residentBytes
             )
-            entries.append(projected)
-            ordinalByPath[value.pathKey] = ordinal
+        } catch {
+            return nil
         }
-        return WorkspaceRootReusableSnapshot(
-            compatibilityKey: WorkspaceRootSeedCompatibilityKey(authority: authority),
-            inventory: RootNeutralTreeInventory(entries: entries),
-            catalogPolicyIdentity: catalogProjection.policyIdentity
-        )
     }
 
     private static func contentDigest(
         compatibilityKey: WorkspaceRootSeedCompatibilityKey,
-        inventory: RootNeutralTreeInventory,
+        inventoryManifest: WorkspaceRootReusableInventoryManifestLease,
         catalogPolicyIdentity: WorkspaceRootCatalogPolicyIdentity
     ) -> String {
         var writer = CanonicalWriter()
-        writer.append("workspace-root-reusable-snapshot-v4")
+        writer.append(contentAddressDomain)
         writer.append(compatibilityKey.repositoryNamespace.rawValue)
         writer.append(compatibilityKey.objectFormat.rawValue)
         writer.append(compatibilityKey.treeOID.lowercaseHex)
@@ -413,30 +414,50 @@ final class WorkspaceRootReusableSnapshot: @unchecked Sendable {
         writer.append(catalogPolicyIdentity.skipSymlinks ? "1" : "0")
         writer.append(contentIdentity: compatibilityKey.policyIdentity.resolvedExcludesFileIdentity)
         writer.append(contentIdentity: compatibilityKey.policyIdentity.resolvedAttributesFileIdentity)
-        for control in compatibilityKey.policyIdentity.prefixControlIdentities.sorted(by: {
-            let lhsPath = WorkspaceRootByteExactPathKey($0.repositoryRelativePath)
-            let rhsPath = WorkspaceRootByteExactPathKey($1.repositoryRelativePath)
-            if lhsPath != rhsPath {
-                return lhsPath < rhsPath
-            }
-            return $0.kind.rawValue < $1.kind.rawValue
-        }) {
-            writer.append(control.repositoryRelativePath)
-            writer.append(control.kind.rawValue)
-            writer.append(contentIdentity: control.content)
-        }
-        for entry in inventory.entries {
-            writer.append(entry.ordinal)
-            writer.append(entry.parentOrdinal ?? -1)
-            writer.append(entry.relativePath)
-            writer.append(entry.mode)
-            writer.append(entry.kind.rawValue)
-            writer.append(entry.objectID.objectFormat.rawValue)
-            writer.append(entry.objectID.lowercaseHex)
-            writer.append(entry.provenance.rawValue)
-            writer.append(entry.catalogProjection.rawValue)
-        }
+        writer.append(inventoryManifest.header.commandFormat)
+        writer.append(inventoryManifest.header.rawStandardOutputDigest.hexString)
+        writer.append(inventoryManifest.manifestDigest.hexString)
+        writer.append(String(inventoryManifest.footer.totalRecordCount))
+        writer.append(String(inventoryManifest.footer.searchableRegularFileCount))
+        writer.append(String(inventoryManifest.footer.policyIgnoredRegularFileCount))
+        writer.append(String(inventoryManifest.footer.nonRegularTopologyCount))
         return Data(SHA256.hash(data: writer.data)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func compatibilityDigest(_ key: WorkspaceRootSeedCompatibilityKey) -> Data {
+        var writer = CanonicalWriter()
+        writer.append(manifestCompatibilityDomain)
+        writer.append(key.repositoryNamespace.rawValue)
+        writer.append(key.objectFormat.rawValue)
+        writer.append(key.treeOID.lowercaseHex)
+        writer.append(key.repositoryRelativeRootPrefix.value)
+        writer.append(key.inventorySchemaVersion)
+        writer.append(key.policyIdentity.mandatoryIgnorePolicyIdentity)
+        writer.append(key.policyIdentity.committedIgnoreControlDigest)
+        writer.append(key.policyIdentity.configuredIgnoreAuthorityDigest)
+        writer.append(key.policyIdentity.attributePolicyDigest)
+        writer.append(key.policyIdentity.sparsePolicyDigest)
+        writer.append(contentIdentity: key.policyIdentity.resolvedExcludesFileIdentity)
+        writer.append(contentIdentity: key.policyIdentity.resolvedAttributesFileIdentity)
+        return Data(SHA256.hash(data: writer.data))
+    }
+
+    static func catalogPolicyDigest(_ identity: WorkspaceRootCatalogPolicyIdentity) -> Data {
+        var writer = CanonicalWriter()
+        writer.append(identity.schemaVersion)
+        writer.append(identity.mandatoryIgnorePolicyIdentity)
+        writer.append(identity.globalIgnoreDefaultsDigest)
+        writer.append(identity.respectRepoIgnore ? "1" : "0")
+        writer.append(identity.respectCursorignore ? "1" : "0")
+        writer.append(identity.enableHierarchicalIgnores ? "1" : "0")
+        writer.append(identity.skipSymlinks ? "1" : "0")
+        return Data(SHA256.hash(data: writer.data))
+    }
+}
+
+private extension Data {
+    var hexString: String {
+        map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -444,11 +465,25 @@ struct WorkspaceRootReusableSnapshotCacheLimits: Equatable {
     let maximumSnapshotCount: Int
     let maximumSnapshotsPerRepository: Int
     let maximumEstimatedBytes: Int
+    let maximumArtifactBytes: UInt64
+
+    init(
+        maximumSnapshotCount: Int,
+        maximumSnapshotsPerRepository: Int,
+        maximumEstimatedBytes: Int,
+        maximumArtifactBytes: UInt64 = 4 * 1024 * 1024 * 1024
+    ) {
+        self.maximumSnapshotCount = maximumSnapshotCount
+        self.maximumSnapshotsPerRepository = maximumSnapshotsPerRepository
+        self.maximumEstimatedBytes = maximumEstimatedBytes
+        self.maximumArtifactBytes = maximumArtifactBytes
+    }
 
     static let production = WorkspaceRootReusableSnapshotCacheLimits(
         maximumSnapshotCount: 32,
         maximumSnapshotsPerRepository: 8,
-        maximumEstimatedBytes: 512 * 1024 * 1024
+        maximumEstimatedBytes: 512 * 1024 * 1024,
+        maximumArtifactBytes: 4 * 1024 * 1024 * 1024
     )
 }
 

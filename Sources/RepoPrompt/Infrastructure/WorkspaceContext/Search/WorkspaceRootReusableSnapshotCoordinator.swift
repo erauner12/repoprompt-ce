@@ -9,6 +9,14 @@ actor WorkspaceRootReusableSnapshotCoordinator {
     typealias CurrentnessValidator = @Sendable () async -> CurrentnessValidation
     typealias CatalogEvidenceProvider = @Sendable (WorkspaceRootByteExactPathSet) async -> WorkspaceRootCatalogProjectionEvidence?
 
+    enum CatalogBatchEvidenceResult {
+        case evidence(WorkspaceRootCatalogProjectionEvidence)
+        case catalogMismatch
+        case stale(ObservationFailureCause)
+    }
+
+    typealias CatalogBatchEvidenceProvider = @Sendable ([String]) async -> CatalogBatchEvidenceResult
+
     enum ObservationFailureStage: String, Equatable {
         case loadedRootValidation = "loaded_root_validation"
         case initialCurrentness = "initial_currentness"
@@ -32,6 +40,9 @@ actor WorkspaceRootReusableSnapshotCoordinator {
         case loadedRootOwnerStale
         case loadedRootCatalogStale
         case loadedRootWatcherStale
+        case authorityEvidenceResourceUnavailable
+        case authorityEvidenceIOFailure
+        case authorityEvidenceCorrupt
         case boundedGitFailure(GitWorktreeInitializationFailureReason)
         case admissionRejected
         case unexpectedFailure
@@ -43,6 +54,9 @@ actor WorkspaceRootReusableSnapshotCoordinator {
             case .loadedRootOwnerStale: "loaded_root_owner_stale"
             case .loadedRootCatalogStale: "loaded_root_catalog_stale"
             case .loadedRootWatcherStale: "loaded_root_watcher_stale"
+            case .authorityEvidenceResourceUnavailable: "authority_evidence_resource_unavailable"
+            case .authorityEvidenceIOFailure: "authority_evidence_io_failure"
+            case .authorityEvidenceCorrupt: "authority_evidence_corrupt"
             case .boundedGitFailure(.timeout): "git_timeout"
             case .boundedGitFailure(.gitError): "git_error"
             case .boundedGitFailure(.malformedOutput): "git_malformed_output"
@@ -100,6 +114,49 @@ actor WorkspaceRootReusableSnapshotCoordinator {
         guard let authoritativeExactPaths = WorkspaceRootByteExactPathSet(authoritativeRelativeFilePaths) else {
             return .catalogMismatch
         }
+        let batchProvider: CatalogBatchEvidenceProvider = { paths in
+            guard let batch = WorkspaceRootByteExactPathSet(paths, rejectExactDuplicates: true) else {
+                return .catalogMismatch
+            }
+            let missing = batch.subtracting(authoritativeExactPaths)
+            var dispositions: [WorkspaceRootByteExactPathKey: WorkspaceRootCommittedRegularProjectionDisposition] = [:]
+            dispositions.reserveCapacity(batch.count)
+            for path in batch.sortedKeys where authoritativeExactPaths.contains(path) {
+                dispositions[path] = .searchableRegularFile
+            }
+            var revision: UInt64 = 0
+            if !missing.isEmpty {
+                guard let catalogEvidenceProvider,
+                      let evidence = await catalogEvidenceProvider(missing),
+                      evidence.policyIdentity == catalogPolicyIdentity,
+                      Set(evidence.dispositionsByRelativePath.keys) == missing.keys
+                else { return .catalogMismatch }
+                revision = evidence.ignoreRulesRevision
+                for (path, disposition) in evidence.dispositionsByRelativePath {
+                    guard disposition == .policyIgnoredRegularFile else { return .catalogMismatch }
+                    dispositions[path] = disposition
+                }
+            }
+            return .evidence(WorkspaceRootCatalogProjectionEvidence(
+                policyIdentity: catalogPolicyIdentity,
+                dispositionsByRelativePath: dispositions,
+                ignoreRulesRevision: revision
+            ))
+        }
+        return await observeStreamedAuthoritativeFullLoad(
+            rootURL: rootURL,
+            catalogPolicyIdentity: catalogPolicyIdentity,
+            catalogBatchEvidenceProvider: batchProvider,
+            currentnessValidator: currentnessValidator
+        )
+    }
+
+    func observeStreamedAuthoritativeFullLoad(
+        rootURL: URL,
+        catalogPolicyIdentity: WorkspaceRootCatalogPolicyIdentity = .canonicalDefaults,
+        catalogBatchEvidenceProvider: @escaping CatalogBatchEvidenceProvider,
+        currentnessValidator: @escaping CurrentnessValidator = { .current }
+    ) async -> ObservationResult {
         if let failure = await Self.currentnessFailure(
             stage: .initialCurrentness,
             validator: currentnessValidator
@@ -222,7 +279,7 @@ actor WorkspaceRootReusableSnapshotCoordinator {
                 return failure
             }
             activeStage = .treeInventory
-            let tree = try await gitService.listTree(
+            let treeSpool = try await gitService.spoolLoadedRootTreeInventory(
                 captured.snapshot.treeOID,
                 in: layout,
                 prefix: prefix
@@ -234,60 +291,25 @@ actor WorkspaceRootReusableSnapshotCoordinator {
                 await authority.releaseMetadataObservation(observation)
                 return failure
             }
-
-            guard let committedRegularRelativePaths = Self.committedRegularRelativePaths(in: tree) else {
+            activeStage = .catalogClassification
+            let inventoryManifest: WorkspaceRootReusableInventoryManifestLease
+            do {
+                inventoryManifest = try await Self.buildInventoryManifest(
+                    spool: treeSpool,
+                    authority: captured.snapshot,
+                    catalogPolicyIdentity: catalogPolicyIdentity,
+                    catalogBatchEvidenceProvider: catalogBatchEvidenceProvider,
+                    currentnessValidator: currentnessValidator
+                )
+            } catch let error as WorkspaceRootReusableInventoryProjectionError {
                 await authority.releaseMetadataObservation(observation)
-                return .catalogMismatch
-            }
-            let missingCommittedRegularPaths = committedRegularRelativePaths
-                .subtracting(authoritativeExactPaths)
-            guard let emptyExactPaths = WorkspaceRootByteExactPathSet([String]()) else {
-                await authority.releaseMetadataObservation(observation)
-                return .catalogMismatch
-            }
-            var policyIgnoredCommittedRegularPaths = emptyExactPaths
-            if !missingCommittedRegularPaths.isEmpty {
-                activeStage = .catalogClassification
-                if let failure = await Self.currentnessFailure(
-                    stage: .catalogClassification,
-                    validator: currentnessValidator
-                ) {
-                    await authority.releaseMetadataObservation(observation)
-                    return failure
-                }
-                guard let catalogEvidenceProvider else {
-                    await authority.releaseMetadataObservation(observation)
+                switch error {
+                case .catalogMismatch:
                     return .catalogMismatch
-                }
-                guard let evidence = await catalogEvidenceProvider(missingCommittedRegularPaths) else {
-                    await authority.releaseMetadataObservation(observation)
-                    return .failed(.init(stage: .catalogClassification, cause: .loadedRootCatalogStale))
-                }
-                guard evidence.policyIdentity == catalogPolicyIdentity else {
-                    await authority.releaseMetadataObservation(observation)
-                    return .failed(.init(stage: .catalogClassification, cause: .loadedRootCatalogStale))
-                }
-                guard Set(evidence.dispositionsByRelativePath.keys) == missingCommittedRegularPaths.keys,
-                      evidence.dispositionsByRelativePath.values.allSatisfy({ $0 == .policyIgnoredRegularFile })
-                else {
-                    await authority.releaseMetadataObservation(observation)
-                    return .catalogMismatch
-                }
-                policyIgnoredCommittedRegularPaths = missingCommittedRegularPaths
-                if let failure = await Self.currentnessFailure(
-                    stage: .catalogClassification,
-                    validator: currentnessValidator
-                ) {
-                    await authority.releaseMetadataObservation(observation)
-                    return failure
+                case let .stale(cause):
+                    return .failed(.init(stage: .catalogClassification, cause: cause))
                 }
             }
-
-            let validatedCatalogProjection = WorkspaceRootValidatedCatalogProjection(
-                discoverableRelativeFilePaths: authoritativeExactPaths,
-                policyIgnoredCommittedRegularRelativePaths: policyIgnoredCommittedRegularPaths,
-                policyIdentity: catalogPolicyIdentity
-            )
             let lease: GitWorkspaceAuthorityLease
             switch await authority.install(captured.snapshot, capturedUsing: captureToken) {
             case let .success(installed):
@@ -305,8 +327,8 @@ actor WorkspaceRootReusableSnapshotCoordinator {
             }
             guard let snapshot = WorkspaceRootReusableSnapshot.make(
                 authority: captured.snapshot,
-                tree: tree,
-                catalogProjection: validatedCatalogProjection
+                inventoryManifest: inventoryManifest,
+                catalogPolicyIdentity: catalogPolicyIdentity
             ) else {
                 await authority.releaseMetadataObservation(observation)
                 return .catalogMismatch
@@ -397,6 +419,32 @@ actor WorkspaceRootReusableSnapshotCoordinator {
                 .cancelled
             } else if let gitError = error as? GitWorktreeInitializationError {
                 .boundedGitFailure(gitError.reason)
+            } else if let manifestError = error as? WorkspaceRootReusableInventoryManifestError {
+                switch manifestError {
+                case .resourceAdmission: .authorityEvidenceResourceUnavailable
+                case .io: .authorityEvidenceIOFailure
+                case .invalidConfiguration, .invalidRecord, .duplicateRecord,
+                     .canonicalPathCollision, .outOfOrder, .closed, .corrupt:
+                    .authorityEvidenceCorrupt
+                }
+            } else if let spoolError = error as? GitRawOutputSpoolError {
+                switch spoolError {
+                case .resourceAdmission: .authorityEvidenceResourceUnavailable
+                case .io: .authorityEvidenceIOFailure
+                case .invalidConfiguration, .closed, .corrupt: .authorityEvidenceCorrupt
+                }
+            } else if let prefixError = error as? GitPrefixControlEvidenceManifestError {
+                switch prefixError {
+                case .resourceAdmission: .authorityEvidenceResourceUnavailable
+                case .io: .authorityEvidenceIOFailure
+                case .invalidConfiguration, .invalidRecord, .duplicateRecord,
+                     .outOfOrder, .closed, .corrupt:
+                    .authorityEvidenceCorrupt
+                }
+            } else if let collectionError = error as? GitTargetEvidenceCollectionError {
+                Self.observationCause(for: collectionError)
+            } else if Self.isAuthorityEvidenceIOError(error) {
+                .authorityEvidenceIOFailure
             } else {
                 .unexpectedFailure
             }
@@ -412,24 +460,89 @@ actor WorkspaceRootReusableSnapshotCoordinator {
         }
     #endif
 
-    private nonisolated static func committedRegularRelativePaths(
-        in tree: GitTreeInventorySnapshot
-    ) -> WorkspaceRootByteExactPathSet? {
-        WorkspaceRootByteExactPathSet(tree.entries.compactMap { entry in
-            guard entry.kind == .blob,
-                  entry.mode == "100644" || entry.mode == "100755",
-                  let relativePath = WorkspaceRootByteExactPathKey.rootRelativePath(
-                      repositoryRelativePath: entry.repositoryRelativePath,
-                      prefix: tree.rootPrefix
-                  ),
-                  !relativePath.isEmpty
-            else { return nil }
-            return relativePath
-        })
+    private nonisolated static func buildInventoryManifest(
+        spool: GitLoadedRootTreeInventorySpool,
+        authority: GitWorkspaceAuthoritySnapshot,
+        catalogPolicyIdentity: WorkspaceRootCatalogPolicyIdentity,
+        catalogBatchEvidenceProvider: @escaping CatalogBatchEvidenceProvider,
+        currentnessValidator: @escaping CurrentnessValidator
+    ) async throws -> WorkspaceRootReusableInventoryManifestLease {
+        let compatibilityKey = WorkspaceRootSeedCompatibilityKey(authority: authority)
+        let header = WorkspaceRootReusableInventoryManifestHeader(
+            compatibilityDomain: WorkspaceRootReusableSnapshot.manifestCompatibilityDomain,
+            compatibilityDigest: WorkspaceRootReusableSnapshot.compatibilityDigest(compatibilityKey),
+            treeOID: authority.treeOID,
+            objectFormat: authority.objectFormat,
+            repositoryRelativeRootPrefix: authority.repositoryRelativeRootPrefix,
+            commandFormat: GitLoadedRootTreeInventorySpool.commandFormat,
+            rawStandardOutputDigest: spool.stdoutSHA256,
+            catalogPolicyDigest: WorkspaceRootReusableSnapshot.catalogPolicyDigest(catalogPolicyIdentity)
+        )
+        let store = try WorkspaceRootReusableInventoryManifestStore()
+        let resourcePolicy = WorkspaceRootReusableInventoryResourcePolicy.default
+        let writer = try store.makeWriter(header: header, resourcePolicy: resourcePolicy)
+        let builder = WorkspaceRootReusableInventoryProjectionBuilder(
+            writer: writer,
+            prefix: authority.repositoryRelativeRootPrefix,
+            objectFormat: authority.objectFormat,
+            catalogPolicyIdentity: catalogPolicyIdentity,
+            resourcePolicy: resourcePolicy,
+            catalogBatchEvidenceProvider: catalogBatchEvidenceProvider,
+            currentnessValidator: currentnessValidator
+        )
+        do {
+            var parser = GitLoadedRootTreeInventoryStreamingParser(
+                objectFormat: authority.objectFormat,
+                rootPrefix: authority.repositoryRelativeRootPrefix
+            ) { record in
+                try await builder.consume(record)
+            }
+            let reader = try spool.rawOutput.makeReader()
+            while let chunk = try reader.nextChunk() {
+                try await parser.consume(chunk)
+            }
+            try await parser.finish()
+            return try await builder.finish()
+        } catch {
+            await builder.cancel()
+            throw error
+        }
     }
 
     private nonisolated static func canonicalPathSet(_ paths: [URL]) -> Set<String> {
         Set(paths.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
+    }
+
+    private nonisolated static func observationCause(
+        for error: GitTargetEvidenceCollectionError
+    ) -> ObservationFailureCause {
+        switch error {
+        case .activityTimeout:
+            .boundedGitFailure(.timeout)
+        case .malformedGitOutput:
+            .boundedGitFailure(.malformedOutput)
+        case let .gitInitialization(error):
+            .boundedGitFailure(error.reason)
+        case .gitFailure, .gitSignal, .processLaunch:
+            .boundedGitFailure(.gitError)
+        case .admission, .processCapture, .resourceAdmission:
+            .authorityEvidenceResourceUnavailable
+        case let .spool(spool):
+            switch spool {
+            case .resourceAdmission: .authorityEvidenceResourceUnavailable
+            case .io: .authorityEvidenceIOFailure
+            case .invalidConfiguration, .closed, .corrupt: .authorityEvidenceCorrupt
+            }
+        case .io:
+            .authorityEvidenceIOFailure
+        case .artifact, .authorityChanged:
+            .authorityEvidenceCorrupt
+        }
+    }
+
+    private nonisolated static func isAuthorityEvidenceIOError(_ error: Error) -> Bool {
+        let value = error as NSError
+        return value.domain == NSPOSIXErrorDomain || value.domain == NSCocoaErrorDomain
     }
 
     private nonisolated static func currentnessFailure(
@@ -481,5 +594,196 @@ actor WorkspaceRootReusableSnapshotCoordinator {
         return try GitRepositoryRelativeRootPrefix(
             String(decoding: rootBytes.dropFirst(requiredPrefix.count), as: UTF8.self)
         )
+    }
+}
+
+private enum WorkspaceRootReusableInventoryProjectionError: Error {
+    case catalogMismatch
+    case stale(WorkspaceRootReusableSnapshotCoordinator.ObservationFailureCause)
+}
+
+private actor WorkspaceRootReusableInventoryProjectionBuilder {
+    private struct PendingRecord {
+        let source: GitLoadedRootTreeInventoryRecord
+        let rootRelativePathBytes: Data
+    }
+
+    private let writer: WorkspaceRootReusableInventoryManifestWriter
+    private let prefix: GitRepositoryRelativeRootPrefix
+    private let objectFormat: GitObjectFormat
+    private let catalogPolicyIdentity: WorkspaceRootCatalogPolicyIdentity
+    private let resourcePolicy: WorkspaceRootReusableInventoryResourcePolicy
+    private let catalogBatchEvidenceProvider: WorkspaceRootReusableSnapshotCoordinator.CatalogBatchEvidenceProvider
+    private let currentnessValidator: WorkspaceRootReusableSnapshotCoordinator.CurrentnessValidator
+    private var pending: [PendingRecord] = []
+    private var pendingBytes = 0
+    private var ignoreRulesRevision: UInt64?
+    private var closed = false
+
+    init(
+        writer: WorkspaceRootReusableInventoryManifestWriter,
+        prefix: GitRepositoryRelativeRootPrefix,
+        objectFormat: GitObjectFormat,
+        catalogPolicyIdentity: WorkspaceRootCatalogPolicyIdentity,
+        resourcePolicy: WorkspaceRootReusableInventoryResourcePolicy,
+        catalogBatchEvidenceProvider: @escaping WorkspaceRootReusableSnapshotCoordinator.CatalogBatchEvidenceProvider,
+        currentnessValidator: @escaping WorkspaceRootReusableSnapshotCoordinator.CurrentnessValidator
+    ) {
+        self.writer = writer
+        self.prefix = prefix
+        self.objectFormat = objectFormat
+        self.catalogPolicyIdentity = catalogPolicyIdentity
+        self.resourcePolicy = resourcePolicy
+        self.catalogBatchEvidenceProvider = catalogBatchEvidenceProvider
+        self.currentnessValidator = currentnessValidator
+        pending.reserveCapacity(min(resourcePolicy.maximumRecordsPerBatch, 1024))
+    }
+
+    func consume(_ record: GitLoadedRootTreeInventoryRecord) async throws {
+        guard !closed else { throw WorkspaceRootReusableInventoryManifestError.closed }
+        guard let rootRelative = rootRelativePath(record.repositoryRelativePathBytes) else {
+            if record.repositoryRelativePathBytes == Data(prefix.value.utf8), record.kind == .tree {
+                return
+            }
+            throw WorkspaceRootReusableInventoryProjectionError.catalogMismatch
+        }
+        let estimated = rootRelative.count + record.modeBytes.count + record.objectIDBytes.count + 64
+        guard estimated <= resourcePolicy.maximumRecordByteCount else {
+            throw WorkspaceRootReusableInventoryManifestError.resourceAdmission
+        }
+        if !pending.isEmpty,
+           pending.count >= resourcePolicy.maximumRecordsPerBatch
+           || pendingBytes + estimated > resourcePolicy.maximumBufferedRecordBytes
+        {
+            try await flush()
+        }
+        pending.append(PendingRecord(source: record, rootRelativePathBytes: rootRelative))
+        pendingBytes += estimated
+        if pending.count >= resourcePolicy.maximumRecordsPerBatch
+            || pendingBytes >= resourcePolicy.maximumBufferedRecordBytes
+        {
+            try await flush()
+        }
+    }
+
+    func finish() async throws -> WorkspaceRootReusableInventoryManifestLease {
+        guard !closed else { throw WorkspaceRootReusableInventoryManifestError.closed }
+        do {
+            try await flush()
+            try await requireCurrent()
+            let lease = try await writer.finish()
+            try await requireCurrent()
+            closed = true
+            return lease
+        } catch {
+            closed = true
+            await writer.cancel()
+            throw error
+        }
+    }
+
+    func cancel() async {
+        guard !closed else { return }
+        closed = true
+        pending.removeAll(keepingCapacity: false)
+        await writer.cancel()
+    }
+
+    private func flush() async throws {
+        guard !pending.isEmpty else { return }
+        try await requireCurrent()
+        let regular = pending.filter { value in
+            value.source.kind == .blob
+                && (
+                    value.source.modeBytes == Data("100644".utf8)
+                        || value.source.modeBytes == Data("100755".utf8)
+                )
+        }
+        var dispositions: [WorkspaceRootByteExactPathKey: WorkspaceRootCommittedRegularProjectionDisposition] = [:]
+        if !regular.isEmpty {
+            let paths = try regular.map { value -> String in
+                guard let path = String(data: value.rootRelativePathBytes, encoding: .utf8) else {
+                    throw WorkspaceRootReusableInventoryManifestError.invalidRecord("path is not UTF-8")
+                }
+                return path
+            }
+            switch await catalogBatchEvidenceProvider(paths) {
+            case let .evidence(evidence):
+                try await requireCurrent()
+                guard evidence.policyIdentity == catalogPolicyIdentity,
+                      let exact = WorkspaceRootByteExactPathSet(paths, rejectExactDuplicates: true),
+                      Set(evidence.dispositionsByRelativePath.keys) == exact.keys
+                else { throw WorkspaceRootReusableInventoryProjectionError.catalogMismatch }
+                if let ignoreRulesRevision, ignoreRulesRevision != evidence.ignoreRulesRevision {
+                    throw WorkspaceRootReusableInventoryProjectionError.stale(.loadedRootCatalogStale)
+                }
+                ignoreRulesRevision = evidence.ignoreRulesRevision
+                dispositions = evidence.dispositionsByRelativePath
+            case .catalogMismatch:
+                throw WorkspaceRootReusableInventoryProjectionError.catalogMismatch
+            case let .stale(cause):
+                throw WorkspaceRootReusableInventoryProjectionError.stale(cause)
+            }
+        }
+        var projected: [WorkspaceRootReusableInventoryManifestRecord] = []
+        projected.reserveCapacity(pending.count)
+        for value in pending {
+            guard let mode = String(data: value.source.modeBytes, encoding: .utf8),
+                  let objectIDValue = String(data: value.source.objectIDBytes, encoding: .utf8)
+            else { throw WorkspaceRootReusableInventoryManifestError.invalidRecord("metadata is not UTF-8") }
+            let regular = value.source.kind == .blob && (mode == "100644" || mode == "100755")
+            let projection: RootNeutralTreeInventoryEntry.CatalogProjection
+            if regular {
+                guard let path = String(data: value.rootRelativePathBytes, encoding: .utf8),
+                      let disposition = dispositions[WorkspaceRootByteExactPathKey(path)]
+                else { throw WorkspaceRootReusableInventoryProjectionError.catalogMismatch }
+                switch disposition {
+                case .searchableRegularFile:
+                    projection = .searchableRegularFile
+                case .policyIgnoredRegularFile:
+                    projection = .policyIgnoredRegularFile
+                case .ineligible:
+                    throw WorkspaceRootReusableInventoryProjectionError.catalogMismatch
+                }
+            } else {
+                projection = .nonRegularTopology
+            }
+            try projected.append(WorkspaceRootReusableInventoryManifestRecord(
+                rootRelativePathBytes: value.rootRelativePathBytes,
+                mode: mode,
+                kind: value.source.kind,
+                objectID: GitObjectID(
+                    objectFormat: objectFormat,
+                    lowercaseHex: objectIDValue
+                ),
+                catalogProjection: projection
+            ))
+        }
+        try await requireCurrent()
+        try await writer.append(contentsOf: projected)
+        try await requireCurrent()
+        pending.removeAll(keepingCapacity: true)
+        pendingBytes = 0
+    }
+
+    private func requireCurrent() async throws {
+        try Task.checkCancellation()
+        switch await currentnessValidator() {
+        case .current:
+            try Task.checkCancellation()
+        case let .stale(cause):
+            throw WorkspaceRootReusableInventoryProjectionError.stale(cause)
+        }
+    }
+
+    private func rootRelativePath(_ repositoryRelative: Data) -> Data? {
+        let prefixBytes = Data(prefix.value.utf8)
+        guard !prefixBytes.isEmpty else { return repositoryRelative }
+        var required = prefixBytes
+        required.append(UInt8(ascii: "/"))
+        guard repositoryRelative.starts(with: required), repositoryRelative.count > required.count else {
+            return nil
+        }
+        return Data(repositoryRelative.dropFirst(required.count))
     }
 }

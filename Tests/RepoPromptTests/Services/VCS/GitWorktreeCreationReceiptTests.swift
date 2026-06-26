@@ -1139,9 +1139,15 @@ final class GitWorktreeCreationReceiptTests: XCTestCase {
             (5, .collection),
             (7, .capturedAuthority),
             (9, .treeInventory),
-            (10, .admissionPreparation),
-            (11, .preparedAdmissionCurrentness),
-            (13, .committedAdmissionCurrentness)
+            (10, .catalogClassification),
+            (11, .catalogClassification),
+            (12, .catalogClassification),
+            (13, .catalogClassification),
+            (14, .catalogClassification),
+            (15, .catalogClassification),
+            (16, .admissionPreparation),
+            (17, .preparedAdmissionCurrentness),
+            (19, .committedAdmissionCurrentness)
         ]
 
         for testCase in cases {
@@ -1182,7 +1188,7 @@ final class GitWorktreeCreationReceiptTests: XCTestCase {
                 gitService: GitService(workspaceStateAuthority: authority),
                 authority: authority
             )
-            let currentness = CurrentnessFailureGate(failureCall: 11, failureCause: cause)
+            let currentness = CurrentnessFailureGate(failureCall: 17, failureCause: cause)
             let result = await coordinator.observeAuthoritativeFullLoad(
                 rootURL: fixture.root,
                 authoritativeRelativeFilePaths: fixture.authoritativeRelativeFilePaths,
@@ -1206,7 +1212,7 @@ final class GitWorktreeCreationReceiptTests: XCTestCase {
             gitService: GitService(workspaceStateAuthority: authority),
             authority: authority
         )
-        let currentness = CurrentnessFailureGate(failureCall: 11, cancelOnFailure: true)
+        let currentness = CurrentnessFailureGate(failureCall: 17, cancelOnFailure: true)
 
         let result = await coordinator.observeAuthoritativeFullLoad(
             rootURL: fixture.root,

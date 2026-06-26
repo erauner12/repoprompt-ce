@@ -572,6 +572,7 @@ actor WorkspaceRootSeedPlanner {
         let indexReader = try evidence.makeIndexReader()
         let statusReader = try evidence.makeStatusReader()
         let namespaceReader = try namespace.makeReader()
+        let baseReader = try snapshot.inventoryManifest.makeReader()
         let header = WorkspaceRootTargetSeedPlanManifestHeader(
             snapshotIdentityBytes: Data(snapshot.identity.sha256.utf8),
             targetTreeOIDBytes: Data(targetTreeOID.lowercaseHex.utf8),
@@ -587,13 +588,7 @@ actor WorkspaceRootSeedPlanner {
         )
         let writer = try planStore.makeWriter(header: header, resourcePolicy: resourcePolicy)
 
-        var baseIndex = 0
-        var previousBasePath: Data?
-        var base: BaseValue? = try nextBase(
-            snapshot: snapshot,
-            index: &baseIndex,
-            previousPath: &previousBasePath
-        )
+        var base: BaseValue? = try nextBase(baseReader)
         var delta = try nextDelta(treeReader, prefix: prefix)
         var index = try nextIndex(indexReader, prefix: prefix)
         var status = try nextStatus(statusReader, prefix: prefix)
@@ -639,11 +634,7 @@ actor WorkspaceRootSeedPlanner {
                 }
 
                 if baseAtPath != nil {
-                    base = try nextBase(
-                        snapshot: snapshot,
-                        index: &baseIndex,
-                        previousPath: &previousBasePath
-                    )
+                    base = try nextBase(baseReader)
                 }
                 if deltaAtPath != nil { delta = try nextDelta(treeReader, prefix: prefix) }
                 if indexAtPath != nil { index = try nextIndex(indexReader, prefix: prefix) }
@@ -651,7 +642,8 @@ actor WorkspaceRootSeedPlanner {
                 if namespaceAtPath != nil { namespaceRecord = try namespaceReader.next() }
             }
 
-            guard treeReader.validationState == .verified,
+            guard baseReader.validationState == .verified,
+                  treeReader.validationState == .verified,
                   indexReader.validationState == .verified,
                   statusReader.validationState == .verified,
                   namespaceReader.validationState == .verified
@@ -896,18 +888,11 @@ actor WorkspaceRootSeedPlanner {
     }
 
     private static func nextBase(
-        snapshot: WorkspaceRootReusableSnapshot,
-        index: inout Int,
-        previousPath: inout Data?
+        _ reader: WorkspaceRootReusableInventoryManifestReader
     ) throws -> BaseValue? {
-        guard index < snapshot.inventory.entries.count else { return nil }
-        let entry = snapshot.inventory.entries[index]
-        index += 1
+        guard let entry = try reader.next() else { return nil }
         let path = Data(entry.relativePath.utf8)
-        guard !path.isEmpty,
-              previousPath == nil || previousPath!.lexicographicallyPrecedes(path)
-        else { throw PlanningFailure.fallback(.compatibilityMismatch) }
-        previousPath = path
+        guard !path.isEmpty else { throw PlanningFailure.fallback(.compatibilityMismatch) }
         return BaseValue(entry: entry, path: path)
     }
 
@@ -1028,7 +1013,7 @@ actor WorkspaceRootSeedPlanner {
 
     private static func authoritySnapshotIdentity(_ snapshot: GitWorkspaceAuthoritySnapshot) -> Data {
         let policy = snapshot.policyIdentity
-        var fields = [
+        let fields = [
             snapshot.repositoryKey.standardizedCommonDirectoryPath,
             snapshot.repositoryKey.standardizedGitDirectoryPath,
             snapshot.repositoryKey.commonDirectoryDevice.map(String.init) ?? "nil",
@@ -1050,15 +1035,6 @@ actor WorkspaceRootSeedPlanner {
             policy.attributePolicyDigest,
             policy.sparsePolicyDigest
         ]
-        fields.append(contentsOf: policy.prefixControlIdentities.flatMap { control in
-            [
-                control.repositoryRelativePath,
-                control.kind.rawValue,
-                control.content.exists ? "1" : "0",
-                control.content.sha256,
-                String(control.content.byteCount)
-            ]
-        })
         return digestFields(fields)
     }
 
@@ -1170,6 +1146,15 @@ actor WorkspaceRootSeedPlanner {
             case .io: .evidenceIOFailure
             case .invalidConfiguration, .invalidRecord, .duplicatePath, .outOfOrder,
                  .closed, .corrupt: .targetEvidenceIncoherent
+            }
+        }
+        if let error = error as? WorkspaceRootReusableInventoryManifestError {
+            return switch error {
+            case .resourceAdmission: .evidenceResourceUnavailable
+            case .io: .evidenceIOFailure
+            case .invalidConfiguration, .invalidRecord, .duplicateRecord,
+                 .canonicalPathCollision, .outOfOrder, .closed, .corrupt:
+                .gitEvidenceCorrupt
             }
         }
         return .gitError

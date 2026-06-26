@@ -29,10 +29,30 @@ struct SpillBackedSortedArtifactResourcePolicy: Equatable {
     let maximumRecordByteCount: Int
     let maximumOpenRuns: Int
     let minimumFreeDiskBytes: UInt64
+    /// Optional store-wide quota for published artifacts plus bytes reserved by
+    /// active writers. `nil` preserves the legacy behavior for existing users.
+    let maximumAggregateArtifactBytes: UInt64?
+
+    init(
+        maximumBufferedRecordBytes: Int,
+        maximumRecordsPerBatch: Int,
+        maximumRecordByteCount: Int,
+        maximumOpenRuns: Int,
+        minimumFreeDiskBytes: UInt64,
+        maximumAggregateArtifactBytes: UInt64? = nil
+    ) {
+        self.maximumBufferedRecordBytes = maximumBufferedRecordBytes
+        self.maximumRecordsPerBatch = maximumRecordsPerBatch
+        self.maximumRecordByteCount = maximumRecordByteCount
+        self.maximumOpenRuns = maximumOpenRuns
+        self.minimumFreeDiskBytes = minimumFreeDiskBytes
+        self.maximumAggregateArtifactBytes = maximumAggregateArtifactBytes
+    }
 
     var isValid: Bool {
         maximumBufferedRecordBytes > 0 && maximumRecordsPerBatch > 0 &&
             maximumRecordByteCount > 0 && maximumOpenRuns >= 2
+            && maximumAggregateArtifactBytes.map { $0 > 0 } != false
     }
 }
 
@@ -42,6 +62,8 @@ struct SpillBackedSortedArtifactStatistics: Equatable {
     let peakBufferedRecordBytes: Int
     let recordCount: UInt64
     let finalByteCount: UInt64
+    let peakWorkspaceByteCount: UInt64
+    let peakAggregateArtifactByteCount: UInt64
 }
 
 struct SpillBackedSortedArtifactDescriptorIdentity: Equatable {
@@ -229,6 +251,9 @@ final class SpillBackedSortedArtifactStore: @unchecked Sendable {
     private let lock = NSLock()
     private var artifacts: [UUID: Artifact] = [:]
     private var activeWorkspaces: Set<String> = []
+    private var reservedBytesByWorkspace: [String: UInt64] = [:]
+    private var peakReservedBytesByWorkspace: [String: UInt64] = [:]
+    private var peakAggregateBytesByWorkspace: [String: UInt64] = [:]
     #if DEBUG
         private var cleanupWillEnumerateHandlerForTesting: (@Sendable () -> Void)?
     #endif
@@ -266,6 +291,9 @@ final class SpillBackedSortedArtifactStore: @unchecked Sendable {
                 throw format.error(.io(operation: "workspace-mkdir", code: errno))
             }
             activeWorkspaces.insert(workspaceName)
+            reservedBytesByWorkspace[workspaceName] = 0
+            peakReservedBytesByWorkspace[workspaceName] = 0
+            peakAggregateBytesByWorkspace[workspaceName] = 0
         }
         return SpillBackedSortedArtifactWriter(
             store: self,
@@ -319,6 +347,57 @@ final class SpillBackedSortedArtifactStore: @unchecked Sendable {
         }
     }
 
+    fileprivate func reserve(
+        _ byteCount: UInt64,
+        workspaceName: String,
+        policy: SpillBackedSortedArtifactResourcePolicy,
+        format: some SpillBackedSortedArtifactFormat
+    ) throws {
+        guard byteCount > 0, policy.maximumAggregateArtifactBytes != nil else { return }
+        try lock.withArtifactLock {
+            guard activeWorkspaces.contains(workspaceName),
+                  let current = reservedBytesByWorkspace[workspaceName]
+            else { throw format.error(.closed) }
+            let (workspaceTotal, workspaceOverflow) = current.addingReportingOverflow(byteCount)
+            guard !workspaceOverflow else { throw format.error(.resourceAdmission) }
+            if let maximum = policy.maximumAggregateArtifactBytes {
+                let artifactBytes = artifacts.values.reduce(UInt64(0)) { partial, artifact in
+                    let (sum, overflow) = partial.addingReportingOverflow(artifact.identity.byteCount)
+                    return overflow ? UInt64.max : sum
+                }
+                let otherReservations = reservedBytesByWorkspace.reduce(UInt64(0)) { partial, item in
+                    let value = item.key == workspaceName ? workspaceTotal : item.value
+                    let (sum, overflow) = partial.addingReportingOverflow(value)
+                    return overflow ? UInt64.max : sum
+                }
+                let (aggregate, overflow) = artifactBytes.addingReportingOverflow(otherReservations)
+                guard !overflow, aggregate <= maximum else {
+                    throw format.error(.resourceAdmission)
+                }
+                peakAggregateBytesByWorkspace[workspaceName] = max(
+                    peakAggregateBytesByWorkspace[workspaceName] ?? 0,
+                    aggregate
+                )
+            }
+            reservedBytesByWorkspace[workspaceName] = workspaceTotal
+            peakReservedBytesByWorkspace[workspaceName] = max(
+                peakReservedBytesByWorkspace[workspaceName] ?? 0,
+                workspaceTotal
+            )
+        }
+    }
+
+    fileprivate func resourceHighWaterMarks(
+        workspaceName: String
+    ) -> (workspaceBytes: UInt64, aggregateBytes: UInt64) {
+        lock.withArtifactLock {
+            (
+                peakReservedBytesByWorkspace[workspaceName] ?? 0,
+                peakAggregateBytesByWorkspace[workspaceName] ?? 0
+            )
+        }
+    }
+
     fileprivate func publish<Format: SpillBackedSortedArtifactFormat>(
         temporaryURL: URL,
         workspaceName: String,
@@ -345,6 +424,9 @@ final class SpillBackedSortedArtifactStore: @unchecked Sendable {
                 }
                 artifacts[token] = Artifact(url: finalURL, identity: identity, leaseCount: 1)
                 activeWorkspaces.remove(workspaceName)
+                reservedBytesByWorkspace.removeValue(forKey: workspaceName)
+                peakReservedBytesByWorkspace.removeValue(forKey: workspaceName)
+                peakAggregateBytesByWorkspace.removeValue(forKey: workspaceName)
                 try? FileManager.default.removeItem(
                     at: directoryURL.appendingPathComponent(workspaceName, isDirectory: true)
                 )
@@ -370,6 +452,9 @@ final class SpillBackedSortedArtifactStore: @unchecked Sendable {
     fileprivate func discardWorkspace(name: String) {
         lock.withArtifactLock {
             activeWorkspaces.remove(name)
+            reservedBytesByWorkspace.removeValue(forKey: name)
+            peakReservedBytesByWorkspace.removeValue(forKey: name)
+            peakAggregateBytesByWorkspace.removeValue(forKey: name)
             try? FileManager.default.removeItem(
                 at: directoryURL.appendingPathComponent(name, isDirectory: true)
             )
@@ -727,12 +812,15 @@ actor SpillBackedSortedArtifactWriter<Format: SpillBackedSortedArtifactFormat> {
             let result = try writeFinalArtifact(from: finalRuns)
             remove(finalRuns)
             try? FileManager.default.removeItem(at: catalog.url)
+            let highWaterMarks = store.resourceHighWaterMarks(workspaceName: workspaceName)
             let statistics = SpillBackedSortedArtifactStatistics(
                 initialRunCount: initialRunCount,
                 mergePassCount: mergePassCount,
                 peakBufferedRecordBytes: peakBufferedRecordBytes,
                 recordCount: result.recordCount,
-                finalByteCount: result.byteCount
+                finalByteCount: result.byteCount,
+                peakWorkspaceByteCount: highWaterMarks.workspaceBytes,
+                peakAggregateArtifactByteCount: highWaterMarks.aggregateBytes
             )
             let lease = try store.publish(
                 temporaryURL: result.url,
@@ -786,6 +874,32 @@ actor SpillBackedSortedArtifactWriter<Format: SpillBackedSortedArtifactFormat> {
             uniqueRecords.append(record)
         }
         bufferedRecords = uniqueRecords
+        var reservedRunBytes = UInt64(4 + 8 + SHA256.byteCount)
+        for record in bufferedRecords {
+            let payloadCount = try encodedRecord(record).count
+            let frameCount = try SpillBackedSortedArtifactChecked.add(
+                payloadCount,
+                4,
+                label: "reserved run frame byte count",
+                format: format
+            )
+            reservedRunBytes = try SpillBackedSortedArtifactChecked.add(
+                reservedRunBytes,
+                SpillBackedSortedArtifactChecked.uint64(
+                    frameCount,
+                    label: "reserved run frame byte count",
+                    format: format
+                ),
+                label: "reserved run byte count",
+                format: format
+            )
+        }
+        try store.reserve(
+            reservedRunBytes,
+            workspaceName: workspaceName,
+            policy: policy,
+            format: format
+        )
         let run = try makeRunReference()
         let descriptor = try SpillBackedSortedArtifactStore.createSecureFile(at: run.url, format: format)
         var descriptorIsOpen = true
@@ -851,6 +965,7 @@ actor SpillBackedSortedArtifactWriter<Format: SpillBackedSortedArtifactFormat> {
             throw error
         }
         do {
+            try store.reserve(8, workspaceName: workspaceName, policy: policy, format: format)
             try initialCatalogWriter().append(run.id)
         } catch {
             try? FileManager.default.removeItem(at: run.url)
@@ -862,6 +977,24 @@ actor SpillBackedSortedArtifactWriter<Format: SpillBackedSortedArtifactFormat> {
 
     private func mergeRunsToRun(_ input: [URL]) throws -> SpillRunReference {
         try store.admit(policy, format: format)
+        let maximumOutputBytes = try input.reduce(UInt64(0)) { partial, url in
+            let values = try url.resourceValues(forKeys: [.fileSizeKey])
+            guard let fileSize = values.fileSize, fileSize >= 0 else {
+                throw format.error(.io(operation: "merged-run-size", code: EIO))
+            }
+            return try SpillBackedSortedArtifactChecked.add(
+                partial,
+                UInt64(fileSize),
+                label: "reserved merged run byte count",
+                format: format
+            )
+        }
+        try store.reserve(
+            maximumOutputBytes,
+            workspaceName: workspaceName,
+            policy: policy,
+            format: format
+        )
         let output = try makeRunReference()
         let descriptor = try SpillBackedSortedArtifactStore.createSecureFile(at: output.url, format: format)
         var descriptorIsOpen = true
@@ -936,6 +1069,37 @@ actor SpillBackedSortedArtifactWriter<Format: SpillBackedSortedArtifactFormat> {
         recordCount: UInt64,
         byteCount: UInt64
     ) {
+        let inputBytes = try input.reduce(UInt64(0)) { partial, inputURL in
+            let values = try inputURL.resourceValues(forKeys: [.fileSizeKey])
+            guard let fileSize = values.fileSize, fileSize >= 0 else {
+                throw format.error(.io(operation: "final-input-size", code: EIO))
+            }
+            return try SpillBackedSortedArtifactChecked.add(
+                partial,
+                UInt64(fileSize),
+                label: "reserved final input byte count",
+                format: format
+            )
+        }
+        let doubledInput = try SpillBackedSortedArtifactChecked.add(
+            inputBytes,
+            inputBytes,
+            label: "reserved final artifact byte count",
+            format: format
+        )
+        let framingAllowance = UInt64(formatBounds.header + formatBounds.footer)
+        let maximumOutputBytes = try SpillBackedSortedArtifactChecked.add(
+            doubledInput,
+            framingAllowance,
+            label: "reserved final artifact byte count",
+            format: format
+        )
+        try store.reserve(
+            maximumOutputBytes,
+            workspaceName: workspaceName,
+            policy: policy,
+            format: format
+        )
         let url = workspaceURL.appendingPathComponent("artifact.incomplete")
         let descriptor = try SpillBackedSortedArtifactStore.createSecureFile(at: url, format: format)
         var descriptorIsOpen = true
@@ -1097,6 +1261,7 @@ actor SpillBackedSortedArtifactWriter<Format: SpillBackedSortedArtifactFormat> {
 
     private func finishInitialRunCatalog() throws -> SpillRunCatalog {
         let writer = try initialCatalogWriter()
+        try store.reserve(64, workspaceName: workspaceName, policy: policy, format: format)
         let catalog = try writer.finish()
         initialRunCatalogWriter = nil
         return catalog
@@ -1116,12 +1281,14 @@ actor SpillBackedSortedArtifactWriter<Format: SpillBackedSortedArtifactFormat> {
                 guard !group.isEmpty else { break }
                 peakResidentScheduledRunCount = max(peakResidentScheduledRunCount, group.count)
                 let output = try mergeRunsToRun(group)
+                try store.reserve(8, workspaceName: workspaceName, policy: policy, format: format)
                 try outputWriter.append(output.id)
                 remove(group)
             }
             guard cursor.recordCount == inputCatalog.count else {
                 throw format.error(.corrupt("catalog count mismatch"))
             }
+            try store.reserve(64, workspaceName: workspaceName, policy: policy, format: format)
             let outputCatalog = try outputWriter.finish()
             try? FileManager.default.removeItem(at: inputCatalog.url)
             return outputCatalog

@@ -5425,6 +5425,51 @@ actor WorkspaceFileContextStore {
         return .current
     }
 
+    private func loadedRootCatalogBatchEvidence(
+        currentness: LoadedRootReusableSnapshotCurrentness,
+        relativePaths: [String],
+        service: FileSystemService,
+        expectedPolicyIdentity: WorkspaceRootCatalogPolicyIdentity
+    ) async -> WorkspaceRootReusableSnapshotCoordinator.CatalogBatchEvidenceResult {
+        switch loadedRootReusableSnapshotCurrentness(currentness) {
+        case .current:
+            break
+        case let .stale(cause):
+            return .stale(cause)
+        }
+        guard let state = rootStatesByID[currentness.rootID], state.service === service,
+              let exactPaths = WorkspaceRootByteExactPathSet(relativePaths, rejectExactDuplicates: true)
+        else { return .stale(.loadedRootOwnerStale) }
+        var discoverableByPath: [WorkspaceRootByteExactPathKey: Bool] = [:]
+        discoverableByPath.reserveCapacity(exactPaths.count)
+        for path in exactPaths.sortedKeys {
+            discoverableByPath[path] = state.fileIDsByRelativePath[path.value]
+                .map(isDiscoverableFileID) ?? false
+        }
+        guard let evidence = await service.catalogProjectionEvidence(
+            forCommittedRegularPaths: exactPaths
+        ) else { return .stale(.loadedRootCatalogStale) }
+        switch loadedRootReusableSnapshotCurrentness(currentness) {
+        case .current:
+            break
+        case let .stale(cause):
+            return .stale(cause)
+        }
+        guard evidence.policyIdentity == expectedPolicyIdentity,
+              Set(evidence.dispositionsByRelativePath.keys) == exactPaths.keys
+        else { return .stale(.loadedRootCatalogStale) }
+        for (path, disposition) in evidence.dispositionsByRelativePath {
+            let discoverable = discoverableByPath[path] == true
+            switch (discoverable, disposition) {
+            case (true, .searchableRegularFile), (false, .policyIgnoredRegularFile):
+                break
+            case (true, _), (false, _):
+                return .catalogMismatch
+            }
+        }
+        return .evidence(evidence)
+    }
+
     func admitReusableSnapshotForLoadedRoot(
         rootID: UUID,
         expectedStandardizedPath: String
@@ -5492,19 +5537,19 @@ actor WorkspaceFileContextStore {
             return .failed(.init(stage: .initialCurrentness, cause: cause))
         }
         let rootURL = URL(fileURLWithPath: expectedStandardizedPath).standardizedFileURL
-        let authoritativeRelativeFilePaths = state.fileIDsByRelativePath.compactMap { relativePath, fileID in
-            isDiscoverableFileID(fileID) ? relativePath : nil
-        }
         let service = state.service
         let catalogPolicyIdentity = await service.currentWorkspaceRootCatalogPolicyIdentity()
 
-        let result = await rootReusableSnapshotCoordinator.observeAuthoritativeFullLoad(
+        let result = await rootReusableSnapshotCoordinator.observeStreamedAuthoritativeFullLoad(
             rootURL: rootURL,
-            authoritativeRelativeFilePaths: authoritativeRelativeFilePaths,
             catalogPolicyIdentity: catalogPolicyIdentity,
-            catalogEvidenceProvider: { missingCommittedRegularPaths in
-                await service.catalogProjectionEvidence(
-                    forCommittedRegularPaths: missingCommittedRegularPaths
+            catalogBatchEvidenceProvider: { [weak self] relativePaths in
+                guard let self else { return .stale(.loadedRootOwnerStale) }
+                return await loadedRootCatalogBatchEvidence(
+                    currentness: currentness,
+                    relativePaths: relativePaths,
+                    service: service,
+                    expectedPolicyIdentity: catalogPolicyIdentity
                 )
             },
             currentnessValidator: { [weak self] in
