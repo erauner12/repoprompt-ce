@@ -1,188 +1,1964 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Bundled Page</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RepoPrompt CE Coordinator Mode Mock</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #1E1E1E; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
-    #__bundler_loading { position: fixed; bottom: 20px; right: 20px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: #636366; background: #fff; padding: 8px 14px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); z-index: 10000; }
-    #__bundler_thumbnail { position: fixed; inset: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #1E1E1E; z-index: 9999; }
-    #__bundler_thumbnail svg { width: 100%; height: 100%; object-fit: contain; }
-    #__bundler_placeholder { color: #98989F; font-size: 14px; }
+    :root {
+      color-scheme: dark;
+      --bg: #17191b;
+      --panel: #202326;
+      --panel-2: #24282c;
+      --panel-3: #171a1d;
+      --line: rgba(255,255,255,.09);
+      --line-strong: rgba(255,255,255,.16);
+      --text: #e8eaed;
+      --muted: #a6abb3;
+      --faint: #707781;
+      --blue: #3f86ff;
+      --green: #64d66d;
+      --amber: #c7924b;
+      --red: #d95f5f;
+      --purple: #b86be8;
+      --cyan: #40c8e0;
+      --shadow: 0 20px 60px rgba(0,0,0,.38);
+      --radius: 8px;
+      --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+      --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: #0f1113;
+      color: var(--text);
+      font-family: var(--font);
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
+    }
+
+    button, input, textarea { font: inherit; }
+    button { color: inherit; }
+    .app {
+      height: 100vh;
+      display: grid;
+      grid-template-rows: 54px 1fr;
+      background:
+        radial-gradient(circle at 15% 0%, rgba(54,119,210,.10), transparent 28%),
+        linear-gradient(180deg, #1e2225 0, #151719 58%, #111315 100%);
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 16px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(31,35,38,.82);
+      backdrop-filter: blur(18px);
+      min-width: 0;
+    }
+    .titlebar-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+    }
+    .traffic { display: flex; gap: 8px; flex: none; }
+    .traffic span { width: 12px; height: 12px; border-radius: 50%; display: block; }
+    .traffic span:nth-child(1) { background: #ff6159; }
+    .traffic span:nth-child(2) { background: #ffbd2e; }
+    .traffic span:nth-child(3) { background: #28c840; }
+    .workspace-title {
+      font-size: 14px;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .surface-switch {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 4px;
+      border: 1px solid var(--line-strong);
+      border-radius: 18px;
+      background: rgba(255,255,255,.04);
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,.18);
+    }
+    .surface-switch button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 14px;
+      padding: 6px 22px;
+      min-width: 100px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .surface-switch button.active {
+      background: rgba(63,134,255,.25);
+      color: #6fa4ff;
+    }
+    .toolbar-right {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.055);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .pill.blue { color: #75a8ff; background: rgba(63,134,255,.16); border-color: rgba(63,134,255,.25); }
+    .pill.green { color: #8be68f; background: rgba(100,214,109,.12); border-color: rgba(100,214,109,.20); }
+    .pill.amber { color: #d4a667; background: rgba(199,146,75,.13); border-color: rgba(199,146,75,.22); }
+    .pill.red { color: #e07a7a; background: rgba(217,95,95,.13); border-color: rgba(217,95,95,.24); }
+    .pill.purple { color: #cf92f1; background: rgba(184,107,232,.14); border-color: rgba(184,107,232,.24); }
+    .pill.cyan { color: #66d6e8; background: rgba(64,200,224,.12); border-color: rgba(64,200,224,.22); }
+    .pill.icon-pill {
+      width: 34px;
+      height: 28px;
+      justify-content: center;
+      padding: 0;
+    }
+    .pill.icon-pill svg {
+      width: 16px;
+      height: 16px;
+      display: block;
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      display: inline-block;
+      flex: none;
+    }
+
+    .main { min-height: 0; overflow: hidden; }
+    .surface { height: 100%; min-height: 0; }
+
+    .coordinator-shell {
+      display: grid;
+      grid-template-columns: 260px minmax(540px, 1.05fr) minmax(500px, .95fr);
+      gap: 10px;
+      padding: 10px;
+      min-height: 0;
+      height: 100%;
+    }
+    .coordinator-shell.all-board {
+      grid-template-columns: 280px 1fr;
+    }
+    .agent-shell {
+      display: grid;
+      grid-template-columns: 292px 1fr;
+      gap: 10px;
+      padding: 10px;
+      min-height: 0;
+      height: 100%;
+    }
+    .panel {
+      background: rgba(32,35,38,.82);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      min-height: 0;
+      overflow: hidden;
+    }
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      padding: 14px;
+      gap: 14px;
+    }
+    .side-top {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+    .nav-button, .row-button {
+      width: 100%;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-align: left;
+      cursor: pointer;
+      padding: 10px;
+      min-width: 0;
+    }
+    .nav-button { font-weight: 700; }
+    .nav-button.active, .row-button.active {
+      border-color: rgba(63,134,255,.36);
+      background: rgba(63,134,255,.18);
+      color: var(--text);
+    }
+    .nav-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 7px;
+      background: rgba(255,255,255,.06);
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      color: #82aefb;
+      flex: none;
+    }
+    .nav-copy, .row-copy {
+      min-width: 0;
+      display: block;
+      overflow: hidden;
+    }
+    .nav-title, .row-title {
+      display: block;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 13px;
+      line-height: 1.2;
+    }
+    .nav-sub, .row-sub {
+      display: block;
+      margin-top: 3px;
+      color: var(--faint);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .01em;
+      padding: 0 2px;
+    }
+    .rows {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-height: 0;
+      overflow: auto;
+    }
+    .row-button {
+      padding: 9px 10px;
+      background: rgba(255,255,255,.025);
+      border-color: rgba(255,255,255,.05);
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+    }
+    .row-button.child-row {
+      margin-left: 22px;
+      width: calc(100% - 22px);
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      background: rgba(255,255,255,.018);
+      position: relative;
+    }
+    .row-button.child-row::before {
+      content: "";
+      position: absolute;
+      left: -12px;
+      top: -8px;
+      bottom: 50%;
+      width: 12px;
+      border-left: 1px solid rgba(255,255,255,.16);
+      border-bottom: 1px solid rgba(255,255,255,.16);
+      border-bottom-left-radius: 7px;
+    }
+    .row-leading {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: #8fb6ff;
+      background: rgba(63,134,255,.16);
+      flex: none;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .row-trailing {
+      min-width: 0;
+      max-width: 118px;
+      overflow: hidden;
+    }
+    .new-mission {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: rgba(255,255,255,.035);
+      padding: 10px;
+      cursor: pointer;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+    }
+    .sidebar-footer {
+      margin-top: auto;
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .footer-root {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .footer-actions { display: flex; gap: 8px; }
+    .workspace-card {
+      display: grid;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .workspace-heading {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .workspace-switch {
+      margin-left: auto;
+      max-width: 150px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.045);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 12px;
+      font-weight: 800;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .repo-list {
+      display: grid;
+      gap: 6px;
+    }
+    .repo-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+      border-radius: 8px;
+      padding: 6px 8px;
+      background: rgba(255,255,255,.026);
+    }
+    .repo-name {
+      display: block;
+      color: var(--text);
+      font-weight: 800;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .repo-branch {
+      display: block;
+      color: var(--faint);
+      margin-top: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .repo-row.add-folder {
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .ghost-button {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.04);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .conversation {
+      display: grid;
+      grid-template-rows: auto 1fr auto auto;
+      min-height: 0;
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid rgba(255,255,255,.055);
+      min-width: 0;
+    }
+    .panel-title {
+      font-size: 14px;
+      font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .panel-sub {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .spacer { flex: 1; }
+    .link-button {
+      border: 0;
+      background: transparent;
+      color: #70a7ff;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .scroll {
+      min-height: 0;
+      overflow: auto;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .mission-card, .message, .checkpoint, .delegated-card, .node-card, .inspector-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255,255,255,.035);
+    }
+    .mission-card {
+      padding: 12px;
+      background: rgba(63,134,255,.08);
+      border-color: rgba(63,134,255,.22);
+    }
+    .mission-head, .node-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .mission-head strong, .node-head strong {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+    }
+    .mission-objective, .message-body, .node-desc {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      margin-top: 8px;
+    }
+    .message {
+      padding: 11px 12px;
+      background: rgba(255,255,255,.026);
+    }
+    .message.user {
+      align-self: flex-end;
+      max-width: 72%;
+      background: rgba(63,134,255,.18);
+      border-color: rgba(63,134,255,.22);
+    }
+    .message-label {
+      display: flex;
+      gap: 8px;
+      color: #6ea4ff;
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 5px;
+    }
+    .message.user .message-label { color: var(--muted); }
+    .message-body ul { margin: 8px 0 0 18px; padding: 0; }
+    .message-body li { margin: 4px 0; }
+    .delegated-card {
+      padding: 10px 12px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+      cursor: pointer;
+      border-color: rgba(63,134,255,.18);
+    }
+    .delegated-card.active {
+      background: rgba(63,134,255,.16);
+      border-color: rgba(63,134,255,.55);
+    }
+    .small-icon {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: rgba(63,134,255,.18);
+      color: #70a7ff;
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .card-title {
+      font-size: 13px;
+      font-weight: 800;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .card-sub {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .checkpoint {
+      margin: 0 16px 12px;
+      padding: 12px;
+      background: rgba(63,134,255,.10);
+      border-color: rgba(63,134,255,.28);
+    }
+    .checkpoint-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 900;
+      color: #8fb6ff;
+    }
+    .checkpoint-question {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .option-grid {
+      margin-top: 10px;
+      display: grid;
+      gap: 7px;
+    }
+    .option {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.035);
+      border-radius: 8px;
+      padding: 9px 10px;
+      display: flex;
+      gap: 10px;
+      cursor: pointer;
+      text-align: left;
+      align-items: flex-start;
+    }
+    .radio {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 2px solid var(--muted);
+      margin-top: 1px;
+      flex: none;
+    }
+    .option strong {
+      display: block;
+      font-size: 12px;
+      line-height: 1.2;
+    }
+    .option span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .checkpoint-actions {
+      margin-top: 10px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .primary-button, .secondary-button {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 7px 12px;
+      cursor: pointer;
+      font-weight: 800;
+      font-size: 12px;
+    }
+    .primary-button {
+      background: rgba(63,134,255,.85);
+      color: white;
+      border-color: rgba(63,134,255,.9);
+    }
+    .secondary-button {
+      background: rgba(255,255,255,.05);
+      color: var(--muted);
+    }
+    .composer {
+      padding: 10px 16px 14px;
+      border-top: 1px solid var(--line);
+    }
+    .composer-box {
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      background: rgba(15,17,19,.7);
+      overflow: hidden;
+    }
+    .composer textarea, .agent-composer textarea {
+      width: 100%;
+      min-height: 38px;
+      max-height: 110px;
+      resize: vertical;
+      display: block;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      padding: 10px 12px;
+    }
+    .composer-strip, .agent-strip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      border-top: 1px solid var(--line);
+      padding: 7px 8px;
+    }
+    .seg {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px;
+      background: rgba(255,255,255,.035);
+    }
+    .seg button {
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+      padding: 4px 10px;
+      font-weight: 800;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .seg button.active {
+      background: rgba(63,134,255,.28);
+      color: #8fb6ff;
+    }
+    .send {
+      margin-left: auto;
+      width: 30px;
+      height: 30px;
+      border: 0;
+      border-radius: 50%;
+      background: rgba(63,134,255,.24);
+      color: #86b4ff;
+      cursor: pointer;
+      font-weight: 900;
+    }
+    .checkpoint-trigger {
+      border: 1px solid rgba(63,134,255,.26);
+      background: rgba(63,134,255,.14);
+      color: #8fb6ff;
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .work-panel {
+      display: grid;
+      grid-template-rows: auto minmax(220px, 1fr) minmax(160px, auto);
+      min-height: 0;
+      overflow: hidden;
+    }
+    .work-panel.inspector-collapsed {
+      grid-template-rows: auto minmax(0, 1fr) 38px;
+    }
+    .panel-tabs {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.025);
+    }
+    .tabseg {
+      display: inline-flex;
+      gap: 3px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255,255,255,.035);
+    }
+    .tabseg button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 12px;
+      padding: 6px 22px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .tabseg button.active {
+      background: rgba(63,134,255,.28);
+      color: #8fb6ff;
+    }
+    .board {
+      min-height: 0;
+      overflow: auto;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(0, 1fr);
+      gap: 10px;
+      padding: 14px;
+    }
+    .all-board .board {
+      grid-auto-columns: minmax(220px, 1fr);
+    }
+    .lane {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 0;
+      background: rgba(255,255,255,.026);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .lane-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 900;
+    }
+    .lane-count {
+      margin-left: auto;
+      color: var(--muted);
+      background: rgba(255,255,255,.06);
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 12px;
+    }
+    .lane-body {
+      min-height: 180px;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 0 10px 10px;
+    }
+    .work-card {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: rgba(255,255,255,.04);
+      padding: 10px;
+      cursor: pointer;
+    }
+    .work-card.active {
+      border-color: rgba(63,134,255,.65);
+      background: rgba(63,134,255,.16);
+    }
+    .work-card .card-title {
+      white-space: normal;
+      line-height: 1.3;
+      font-size: 12px;
+    }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 8px;
+      min-width: 0;
+    }
+    .chip {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.06);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 3px 7px;
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+      display: inline-block;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: top;
+    }
+    .chip.blue { color: #8fb6ff; background: rgba(63,134,255,.14); border-color: rgba(63,134,255,.22); }
+    .chip.green { color: #8be68f; background: rgba(100,214,109,.11); border-color: rgba(100,214,109,.20); }
+    .chip.purple { color: #cf92f1; background: rgba(184,107,232,.12); border-color: rgba(184,107,232,.20); }
+    .chip.amber { color: #d4a667; background: rgba(199,146,75,.12); border-color: rgba(199,146,75,.22); }
+    .chip.cyan { color: #66d6e8; background: rgba(64,200,224,.11); border-color: rgba(64,200,224,.20); }
+    .chip.red { color: #e07a7a; background: rgba(217,95,95,.12); border-color: rgba(217,95,95,.20); }
+    .work-card .chip { max-width: 126px; }
+    .empty {
+      color: var(--faint);
+      font-size: 12px;
+      display: grid;
+      place-items: center;
+      min-height: 80px;
+    }
+
+    .plan {
+      min-height: 0;
+      height: 100%;
+      overflow-y: auto;
+      overflow-x: hidden;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .workstream {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,.032);
+      overflow: hidden;
+    }
+    .workstream-head {
+      padding: 10px;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+    }
+    .workstream-title {
+      display: block;
+      font-size: 13px;
+      font-weight: 900;
+      min-width: 0;
+    }
+    .workstream-name {
+      display: -webkit-box;
+      min-width: 0;
+      overflow: hidden;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .workstream-chips {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      flex-wrap: wrap;
+      gap: 5px;
+      min-width: 0;
+      max-width: 100%;
+      margin-top: 7px;
+    }
+    .workstream-purpose {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      margin-top: 6px;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .nodes { padding: 8px; display: grid; gap: 7px; }
+    .node-card {
+      padding: 9px;
+      cursor: pointer;
+    }
+    .node-card.active {
+      border-color: rgba(63,134,255,.65);
+      background: rgba(63,134,255,.14);
+    }
+    .node-card.continuation { margin-left: 18px; }
+    .node-desc {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .inspector {
+      border-top: 1px solid var(--line);
+      background: rgba(255,255,255,.025);
+      padding: 0 14px 14px;
+      max-height: 230px;
+      min-height: 160px;
+      overflow: auto;
+    }
+    .inspector.collapsed {
+      min-height: 38px;
+      max-height: 38px;
+      padding-bottom: 0;
+      overflow: hidden;
+    }
+    .inspector-handle {
+      width: 100%;
+      height: 34px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      cursor: ns-resize;
+      font-size: 12px;
+      font-weight: 800;
+      touch-action: none;
+    }
+    .inspector-handle::before {
+      content: "";
+      width: 48px;
+      height: 4px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.22);
+      display: block;
+    }
+    .inspector.collapsed .inspector-handle::before {
+      background: rgba(111,164,255,.46);
+    }
+    .inspector-body {
+      min-height: 0;
+    }
+    .inspector.collapsed .inspector-body {
+      display: none;
+    }
+    .inspector-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .inspector-title {
+      font-size: 15px;
+      font-weight: 900;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: 130px 1fr;
+      gap: 8px 14px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .kv span:nth-child(odd) { color: var(--muted); }
+    .kv code { font-family: var(--mono); font-size: 11px; color: var(--text); }
+
+    .agent-sidebar {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 12px;
+      padding: 14px;
+    }
+    .search {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.035);
+      border-radius: 999px;
+      padding: 8px 11px;
+      color: var(--text);
+      width: 100%;
+      outline: 0;
+    }
+    .agent-chat {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 0;
+    }
+    .agent-transcript {
+      padding: 18px 24px;
+      overflow: auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .tool-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255,255,255,.05);
+      padding: 10px 12px;
+      color: var(--muted);
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .subagent-panel {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255,255,255,.028);
+      padding: 12px;
+      display: grid;
+      gap: 9px;
+    }
+    .subagent-panel-title {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .subagent-card {
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 9px;
+      background: rgba(255,255,255,.038);
+      padding: 10px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      cursor: pointer;
+    }
+    .subagent-card.active {
+      border-color: rgba(63,134,255,.55);
+      background: rgba(63,134,255,.14);
+    }
+    .agent-composer {
+      padding: 12px 24px 18px;
+      border-top: 1px solid var(--line);
+    }
+    .agent-composer-box {
+      border: 1px solid var(--line-strong);
+      border-radius: 11px;
+      background: rgba(15,17,19,.72);
+      overflow: hidden;
+    }
+
+    .hidden { display: none !important; }
+
+    @media (max-width: 1180px) {
+      .coordinator-shell {
+        grid-template-columns: 246px 1fr;
+        grid-template-rows: minmax(0, 1fr) minmax(360px, 48vh);
+      }
+      .work-panel { grid-column: 1 / -1; }
+      .coordinator-shell.all-board { grid-template-columns: 246px 1fr; grid-template-rows: 1fr; }
+      .coordinator-shell.all-board .work-panel { grid-column: auto; }
+      .toolbar-right .pill.version { display: none; }
+    }
+
+    @media (max-width: 780px) {
+      .coordinator-shell, .agent-shell, .coordinator-shell.all-board {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto minmax(0,1fr) minmax(360px,45vh);
+      }
+      .sidebar { max-height: 230px; }
+      .surface-switch button { min-width: 80px; padding-left: 12px; padding-right: 12px; }
+      .workspace-title { max-width: 180px; }
+    }
   </style>
-  <noscript>
-    <style>#__bundler_loading { display: none; }</style>
-    <div style="position:fixed;bottom:12px;left:12px;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;color:#98989F;background:rgba(255,255,255,0.9);padding:6px 12px;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,0.08);z-index:10000;">
-      This page requires JavaScript to display.
-    </div>
-  </noscript>
 </head>
 <body>
-  <div id="__bundler_thumbnail">
-  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
-    <rect x="60" y="120" width="220" height="560" rx="14" fill="#232323"></rect>
-    <rect x="320" y="120" width="180" height="220" rx="12" fill="#2A2A2A"></rect>
-    <rect x="320" y="360" width="180" height="180" rx="12" fill="#2A2A2A"></rect>
-    <rect x="530" y="120" width="180" height="300" rx="12" fill="#2A2A2A"></rect>
-    <rect x="740" y="120" width="180" height="240" rx="12" fill="#2A2A2A"></rect>
-    <rect x="960" y="120" width="180" height="560" rx="14" fill="#232323"></rect>
-    <circle cx="95" cy="160" r="9" fill="#FF9F0A"></circle>
-    <circle cx="355" cy="160" r="9" fill="#30D158"></circle>
-    <circle cx="565" cy="160" r="9" fill="#FF453A"></circle>
-    <circle cx="775" cy="160" r="9" fill="#BF5AF2"></circle>
-    <rect x="60" y="60" width="160" height="14" rx="7" fill="#0A84FF"></rect>
-  </svg>
-</div>
-  <div id="__bundler_loading">Unpacking...</div>
+  <div class="app">
+    <header class="toolbar">
+      <div class="titlebar-left">
+        <div class="traffic"><span></span><span></span><span></span></div>
+        <div class="workspace-title">repoprompt-ce-coordinator-runtime-demo</div>
+      </div>
+      <div class="toolbar-right">
+        <div class="surface-switch" aria-label="Main surface">
+          <button id="surfaceCoordinator" type="button">Coordinator</button>
+          <button id="surfaceAgent" type="button">Agent</button>
+        </div>
+        <span class="pill amber icon-pill" title="Lightbulb" aria-label="Lightbulb">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 18h6"></path>
+            <path d="M10 22h4"></path>
+            <path d="M8.5 14.5c-1.5-1.1-2.5-2.9-2.5-5A6 6 0 0 1 18 9.5c0 2.1-1 3.9-2.5 5-.8.6-1.2 1.3-1.3 2.1H9.8c-.1-.8-.5-1.5-1.3-2.1Z"></path>
+          </svg>
+        </span>
+        <span class="pill green">MCP Server</span>
+        <span class="pill blue version">Update v1.0.21</span>
+      </div>
+    </header>
+
+    <main id="appRoot" class="main"></main>
+  </div>
 
   <script>
-
-document.addEventListener('DOMContentLoaded', async function() {
-  const loading = document.getElementById('__bundler_loading');
-  function setStatus(msg) { if (loading) loading.textContent = msg; }
-
-  // Error sink persists across replaceWith since it's on window, not the DOM.
-  window.addEventListener('error', function(e) {
-    var p = document.body || document.documentElement;
-    var d = document.getElementById('__bundler_err') || p.appendChild(document.createElement('div'));
-    d.id = '__bundler_err';
-    d.style.cssText = 'position:fixed;bottom:12px;left:12px;right:12px;font:12px/1.4 ui-monospace,monospace;background:#2a1215;color:#ff8a80;padding:10px 14px;border-radius:8px;border:1px solid #5c2b2e;z-index:99999;white-space:pre-wrap;max-height:40vh;overflow:auto';
-    d.textContent = (d.textContent ? d.textContent + String.fromCharCode(10) : '') +
-      '[bundle] ' + (e.message || e.type) +
-      (e.filename ? ' (' + e.filename.slice(0, 60) + ':' + e.lineno + ')' : '');
-  }, true);
-
-  try {
-    const manifestEl = document.querySelector('script[type="__bundler/manifest"]');
-    const templateEl = document.querySelector('script[type="__bundler/template"]');
-    if (!manifestEl || !templateEl) {
-      setStatus('Error: missing bundle data');
-      console.error('[bundler] Missing script tags — manifestEl:', !!manifestEl, 'templateEl:', !!templateEl);
-      return;
-    }
-
-    const manifest = JSON.parse(manifestEl.textContent);
-    let template = JSON.parse(templateEl.textContent);
-
-    const uuids = Object.keys(manifest);
-    setStatus('Unpacking ' + uuids.length + ' assets...');
-
-    const blobUrls = {};
-    await Promise.all(uuids.map(async (uuid) => {
-      const entry = manifest[uuid];
-      try {
-        const binaryStr = atob(entry.data);
-        const bytes = new Uint8Array(binaryStr.length);
-        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-
-        let finalBytes = bytes;
-        if (entry.compressed) {
-          if (typeof DecompressionStream !== 'undefined') {
-            const ds = new DecompressionStream('gzip');
-            const writer = ds.writable.getWriter();
-            const reader = ds.readable.getReader();
-            writer.write(bytes);
-            writer.close();
-            const chunks = [];
-            let totalLen = 0;
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              chunks.push(value);
-              totalLen += value.length;
-            }
-            finalBytes = new Uint8Array(totalLen);
-            let offset = 0;
-            for (const chunk of chunks) { finalBytes.set(chunk, offset); offset += chunk.length; }
-          } else {
-            console.warn('DecompressionStream not available, asset ' + uuid + ' may not render');
+    const missions = [
+      {
+        id: "m298",
+        title: "Issue #298 provider cleanup",
+        subtitle: "Demo runtime",
+        status: "Running",
+        approval: "Approved",
+        revision: "r4",
+        objective: "Implement GitHub issue #298: provider-side cleanup for RepoPrompt Agent Mode and Oracle sessions.",
+        template: "Scoped Change",
+        pace: "Auto",
+        checkpoint: "step",
+        messages: [
+          { role: "user", text: "Coordinator mission: implement GitHub issue #298, provider-side cleanup for RepoPrompt Agent Mode and Oracle sessions." },
+          { role: "coordinator", text: "I created a visible Mission Plan before delegation, gathered read-only evidence, and approved the isolated implementation lane. Current mutable work is running in a fresh worktree." },
+          { role: "coordinator", text: "The implementation child owns the active worktree. Review will run as a fresh sibling on the same worktree after the primary lane reaches a stable handoff." }
+        ],
+        workstreams: [
+          {
+            id: "ws-discovery",
+            title: "Provider cleanup surface discovery",
+            role: "explore",
+            policy: "Read-only child",
+            strategy: "Read-only",
+            purpose: "Map Agent Mode cleanup, provider metadata, Codex app-server thread APIs, and Oracle finalization paths before editing.",
+            nodes: ["n1", "n2"]
+          },
+          {
+            id: "ws-impl",
+            title: "Provider-side cleanup implementation",
+            role: "engineer",
+            policy: "Fresh worktree",
+            strategy: "New isolated worktree",
+            purpose: "Add provider cleanup contract, Agent Mode setting/defaults, cleanup call sites, Oracle deletion, and tests.",
+            nodes: ["n3", "n4"]
+          },
+          {
+            id: "ws-review",
+            title: "Fresh review and validation",
+            role: "pair",
+            policy: "Sibling on same worktree",
+            strategy: "Same workstream worktree",
+            purpose: "Review the implementation diff from an independent session and run focused validation.",
+            nodes: ["n5", "n6"]
           }
+        ],
+        nodes: {
+          n1: { title: "Map Agent Mode cleanup and provider metadata paths", status: "Completed", workflow: "agent_explore", policy: "Read-only child", deps: 0, session: "s-explore", desc: "Lightweight disposable probe for cleanup entry points and provider session ownership." },
+          n2: { title: "Map provider archive-delete capability seams", status: "Completed", workflow: "Investigate", policy: "Read-only child", deps: 0, session: "s-investigate", desc: "Formal investigation of provider protocols/adapters and unsupported-provider reporting." },
+          n3: { title: "Implement provider cleanup contract, Agent setting, and Oracle deletion", status: "Running", workflow: "Orchestrate", policy: "Fresh worktree", deps: 2, session: "s-impl", desc: "Primary mutable lane. Base ref: main. Worktree: rp-agent-2c4a8595-agent." },
+          n4: { title: "Add and run focused provider cleanup tests", status: "Pending", workflow: "Orchestrate", policy: "Steer primary", deps: 1, session: "s-impl", desc: "Continue the primary implementation session after core behavior lands." },
+          n5: { title: "Review provider cleanup implementation from a fresh session", status: "Pending", workflow: "Review", policy: "Sibling on same worktree", deps: 1, session: "s-review", desc: "Fresh review on the implementation worktree after the primary child completes." },
+          n6: { title: "Run coordinated validation and prepare handoff summary", status: "Pending", workflow: "Review", policy: "Steer primary", deps: 1, session: "s-review", desc: "Final status, changed files, tests, and residual risk." }
         }
-
-        blobUrls[uuid] = URL.createObjectURL(new Blob([finalBytes], { type: entry.mime }));
-      } catch (err) {
-        console.error('Failed to decode asset ' + uuid + ':', err);
-        blobUrls[uuid] = URL.createObjectURL(new Blob([], { type: entry.mime }));
+      },
+      {
+        id: "m-readme",
+        title: "README purpose evidence",
+        subtitle: "No-edit smoke",
+        status: "Awaiting approval",
+        approval: "Awaiting approval",
+        revision: "r1",
+        objective: "No-edit smoke mission: inspect README.md and report the repository purpose.",
+        template: "None",
+        pace: "Step",
+        checkpoint: "approval",
+        messages: [
+          { role: "user", text: "Create a visible Mission Plan with approval_state awaiting_approval and one read-only evidence node. Do not start a child yet." },
+          { role: "coordinator", text: "Mission Plan created and visible. Child sessions started: none. Held for approval before inspecting README.md." }
+        ],
+        workstreams: [
+          {
+            id: "ws-readme",
+            title: "README purpose evidence",
+            role: "explore",
+            policy: "Read-only child",
+            strategy: "Read-only",
+            purpose: "Read README.md and summarize repository purpose without editing files.",
+            nodes: ["n-readme"]
+          }
+        ],
+        nodes: {
+          "n-readme": { title: "Inspect README.md and report repository purpose", status: "Pending", workflow: "agent_explore", policy: "Read-only child", deps: 0, session: "s-readme", desc: "Narrow workflow-less read-only probe, not a formal Investigate workflow." }
+        }
+      },
+      {
+        id: "m-dag",
+        title: "DAG-lite status smoke",
+        subtitle: "MCP lineage root",
+        status: "Completed",
+        approval: "Approved",
+        revision: "r8",
+        objective: "Validate Mission Plan status, node counts, dependency satisfaction, and stopped/completed rendering.",
+        template: "State-only",
+        pace: "Auto",
+        checkpoint: null,
+        messages: [
+          { role: "coordinator", text: "The state-only mission completed. Plan, Orchestrate, and Review nodes reached terminal state without launching child agents." }
+        ],
+        workstreams: [
+          {
+            id: "ws-status",
+            title: "Status surface",
+            role: "coordinator",
+            policy: "Coordinator only",
+            strategy: "No worktree",
+            purpose: "Validate app-side plan status projection.",
+            nodes: ["n-plan", "n-orch", "n-review"]
+          }
+        ],
+        nodes: {
+          "n-plan": { title: "Plan", status: "Completed", workflow: null, policy: "Coordinator only", deps: 0, session: null, desc: "Record initial Mission Plan state." },
+          "n-orch": { title: "Orchestrate", status: "Completed", workflow: null, policy: "Coordinator only", deps: 1, session: null, desc: "State-only Orchestrate node completed." },
+          "n-review": { title: "Review", status: "Completed", workflow: null, policy: "Coordinator only", deps: 1, session: null, desc: "Review completed after dependency satisfaction." }
+        }
       }
-    }));
+    ];
 
-    const extResEl = document.querySelector('script[type="__bundler/ext_resources"]');
-    const extResources = extResEl ? JSON.parse(extResEl.textContent) : [];
-    const resourceMap = {};
-    for (const entry of extResources) {
-      if (blobUrls[entry.uuid]) resourceMap[entry.id] = blobUrls[entry.uuid];
-    }
-
-    setStatus('Rendering...');
-    for (const uuid of uuids) template = template.split(uuid).join(blobUrls[uuid]);
-
-    // Strip integrity + crossorigin — blob URLs from a file:// document inherit
-    // a null origin, so crossorigin forces a CORS fetch that SRI then rejects.
-    // The manifest bytes are ours; SRI protects against CDN compromise, not this.
-    template = template.replace(/\s+integrity="[^"]*"/gi, '').replace(/\s+crossorigin="[^"]*"/gi, '');
-
-    const resourceScript = '<script>window.__resources = ' +
-      JSON.stringify(resourceMap).split('</' + 'script>').join('<\\/' + 'script>') +
-      ';</' + 'script>';
-    // Inject after <head> so the DOCTYPE stays first; prepending the script
-    // would push the parser into quirks mode. DOMParser always emits a <head>
-    // (synthesizing one if the source HTML omitted it) but may carry
-    // attributes through, so match the full opening tag. slice() rather than
-    // replace() keeps us clear of $-pattern substitution in resourceScript.
-    const headOpen = template.match(/<head[^>]*>/i);
-    if (headOpen) {
-      const i = headOpen.index + headOpen[0].length;
-      template = template.slice(0, i) + resourceScript + template.slice(i);
-    }
-
-    // Parse the template and swap the root element. Scripts inserted via
-    // DOMParser/replaceWith are inert per spec — re-create each with
-    // createElement so they execute, awaiting onload for src scripts to
-    // preserve ordering (React before ReactDOM before Babel before text/babel).
-    const doc = new DOMParser().parseFromString(template, 'text/html');
-    document.documentElement.replaceWith(doc.documentElement);
-    const dead = Array.from(document.scripts);
-    for (const old of dead) {
-      const s = document.createElement('script');
-      for (const a of old.attributes) s.setAttribute(a.name, a.value);
-      s.textContent = old.textContent;
-      // text/babel scripts with a src: fetch and inline. transformScriptTags
-      // does XHR against the src, but blob:null/ from a file:// origin is
-      // silently dropped. Inlining makes it a plain inline babel script,
-      // which transformScriptTags handles unconditionally.
-      if ((s.type === 'text/babel' || s.type === 'text/jsx') && s.src) {
-        const r = await fetch(s.src);
-        s.textContent = await r.text();
-        s.removeAttribute('src');
+    const sessions = [
+      {
+        id: "s-explore",
+        title: "Explore issue #298 cleanup paths",
+        mission: "m298",
+        coordinatorChild: true,
+        owner: "Issue #298 provider cleanup",
+        status: "Done",
+        workflow: "agent_explore",
+        policy: "Read-only child",
+        worktree: "parent checkout",
+        branch: "coordinator/runtime-demo",
+        model: "explore",
+        transcript: [
+          "Read-only probe: found cleanup entry points in Agent Mode session cleanup and provider metadata.",
+          "Reported file references and stopped without edits."
+        ],
+        tools: ["Read File", "Search", "Explored codebase x14"]
+      },
+      {
+        id: "s-investigate",
+        title: "Investigate Agent cleanup #298",
+        mission: "m298",
+        coordinatorChild: true,
+        owner: "Issue #298 provider cleanup",
+        status: "Done",
+        workflow: "Investigate",
+        policy: "Read-only child",
+        worktree: "rp-agent-01-investigate",
+        branch: "rp/agent/investigate-cleanup",
+        model: "gpt-5.5",
+        transcript: [
+          "Formal Investigate workflow: mapped provider archive/delete seams and unsupported-provider behavior.",
+          "Returned evidence and recommended implementation boundaries."
+        ],
+        tools: ["Workflow: Investigate", "Read File", "Search", "Report"]
+      },
+      {
+        id: "s-impl",
+        title: "Issue 298 Provider Cleanup",
+        mission: "m298",
+        coordinatorChild: true,
+        owner: "Issue #298 provider cleanup",
+        status: "Working",
+        workflow: "Orchestrate",
+        policy: "Fresh worktree",
+        worktree: "rp-agent-2c4a8595-agent",
+        branch: "rp/agent/issue-298-provider-cleanup",
+        model: "gpt-5.5",
+        transcript: [
+          "I will inspect existing cleanup, provider, and settings/test patterns first.",
+          "Edited AIQueriesService.swift and AgentRuntimeProviderService.swift.",
+          "Next: add focused tests and report behavior."
+        ],
+        tools: ["Explored & edited 41", "Edit x5", "Search", "Build pending"]
+      },
+      {
+        id: "s-review",
+        title: "Review Worktree rp-agent-2c4a8595-agent",
+        mission: "m298",
+        coordinatorChild: true,
+        owner: "Issue #298 provider cleanup",
+        status: "Working",
+        workflow: "Review",
+        policy: "Sibling on same worktree",
+        worktree: "rp-agent-2c4a8595-agent",
+        branch: "rp/agent/issue-298-provider-cleanup",
+        model: "design",
+        transcript: [
+          "Fresh review will inspect the uncommitted diff from the implementation worktree.",
+          "Waiting for primary implementation lane to reach handoff."
+        ],
+        tools: ["Workflow: Review", "Same worktree", "Pending"]
+      },
+      {
+        id: "s-readme",
+        title: "README purpose probe",
+        mission: "m-readme",
+        coordinatorChild: true,
+        owner: "README purpose evidence",
+        status: "Needs you",
+        workflow: "agent_explore",
+        policy: "Read-only child",
+        worktree: "parent checkout",
+        branch: "coordinator/runtime-demo",
+        model: "explore",
+        transcript: [
+          "Queued read-only README probe. Waiting for approval before launch."
+        ],
+        tools: ["Planned only"]
+      },
+      {
+        id: "s-impl-tests",
+        title: "Focused cleanup test scout",
+        parentSession: "s-impl",
+        owner: "Issue 298 Provider Cleanup",
+        status: "Working",
+        workflow: "agent_explore",
+        policy: "Agent-owned sub-agent",
+        worktree: "rp-agent-2c4a8595-agent",
+        branch: "rp/agent/issue-298-provider-cleanup",
+        model: "explore",
+        transcript: [
+          "Sub-agent launched by the implementation session to map existing cleanup tests.",
+          "Looking for narrow regression coverage without touching files."
+        ],
+        tools: ["Search", "Read File", "Test map"]
+      },
+      {
+        id: "s-impl-review",
+        title: "Provider API safety review",
+        parentSession: "s-impl",
+        owner: "Issue 298 Provider Cleanup",
+        status: "Done",
+        workflow: "Review",
+        policy: "Agent-owned sub-agent",
+        worktree: "rp-agent-2c4a8595-agent",
+        branch: "rp/agent/issue-298-provider-cleanup",
+        model: "design",
+        transcript: [
+          "Sub-agent reviewed the proposed provider cleanup contract.",
+          "Recommended best-effort cleanup with local fallback preserved."
+        ],
+        tools: ["Review", "Diff read", "Safety notes"]
+      },
+      {
+        id: "s-docs",
+        title: "Docs polish",
+        mission: null,
+        owner: null,
+        status: "Working",
+        workflow: null,
+        policy: "Normal Agent session",
+        worktree: "current checkout",
+        branch: "docs/polish",
+        model: "gpt-5.5",
+        transcript: [
+          "Normal Agent Mode session unrelated to Coordinator Missions.",
+          "This appears in Agent Mode but not in the Coordinator selected-Mission board."
+        ],
+        tools: ["Read File", "Edit", "Preview"]
       }
-      const p = s.src ? new Promise(function(r) { s.onload = s.onerror = r; }) : null;
-      old.replaceWith(s);
-      if (p) await p;
+    ];
+
+    const state = {
+      surface: "coordinator",
+      coordDestination: "chat",
+      selectedMission: "m298",
+      rightTab: "plan",
+      selectedSession: "s-impl",
+      selectedNode: "n3",
+      pace: "Auto",
+      agentSession: "s-impl",
+      checkpointOpen: false,
+      inspectorCollapsed: false,
+      inspectorDragY: null,
+      inspectorSuppressClick: false
+    };
+
+    const lanes = ["Needs you", "Working", "Done"];
+    const statusClass = {
+      "Needs you": "amber",
+      "Working": "blue",
+      "Review": "purple",
+      "Done": "green",
+      "Pending": "amber",
+      "Running": "blue",
+      "Completed": "green",
+      "Awaiting approval": "amber",
+      "Approved": "green",
+      "Stopped": "red"
+    };
+
+    function mission(id) { return missions.find(m => m.id === id) || missions[0]; }
+    function session(id) { return sessions.find(s => s.id === id) || sessions[0]; }
+    function coordinatorSessions(missionID) {
+      return sessions.filter(s => s.coordinatorChild && (!missionID || s.mission === missionID));
     }
-    // Babel standalone auto-transforms type=text/babel on DOMContentLoaded,
-    // which fired before we swapped the document. Trigger manually if present.
-    if (window.Babel && typeof window.Babel.transformScriptTags === 'function') {
-      window.Babel.transformScriptTags();
+    function subagentsFor(sessionID) {
+      return sessions.filter(s => s.parentSession === sessionID);
     }
-  } catch (err) {
-    setStatus('Error unpacking: ' + err.message);
-    console.error('Bundle unpack error:', err);
-  }
-});
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+    function chip(text, cls = "") {
+      if (!text) return "";
+      return `<span class="chip ${cls}">${escapeHtml(text)}</span>`;
+    }
+    function pill(text, cls = "") {
+      return `<span class="pill ${cls}">${escapeHtml(text)}</span>`;
+    }
+    function workflowClass(workflow) {
+      if (workflow === "Review") return "purple";
+      if (workflow === "Investigate") return "cyan";
+      if (workflow === "Deep Plan") return "amber";
+      if (workflow === "Orchestrate") return "green";
+      if (workflow === "agent_explore") return "blue";
+      return "";
+    }
 
-  </script>
+    function render() {
+      document.getElementById("surfaceCoordinator").classList.toggle("active", state.surface === "coordinator");
+      document.getElementById("surfaceAgent").classList.toggle("active", state.surface === "agent");
+      document.getElementById("appRoot").innerHTML = state.surface === "coordinator" ? renderCoordinator() : renderAgent();
+      bindEvents();
+    }
 
-  <script type="__bundler/manifest">
-{"17060c37-db6b-4811-b633-f19bb0f70b3d":{"mime":"text/javascript","compressed":true,"data":"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"}}
-  </script>
+    function renderCoordinator() {
+      const all = state.coordDestination === "all";
+      return `
+        <section class="surface coordinator-shell ${all ? "all-board" : ""}">
+          ${renderCoordinatorSidebar()}
+          ${all ? "" : renderConversation()}
+          ${renderWorkPanel(all)}
+        </section>
+      `;
+    }
 
-  <script type="__bundler/ext_resources">
-[]
-  </script>
+    function renderCoordinatorSidebar() {
+      const m = mission(state.selectedMission);
+      return `
+        <aside class="panel sidebar">
+          <div class="side-top">
+            <button class="nav-button ${state.coordDestination === "chat" ? "active" : ""}" data-action="coord-dest" data-dest="chat">
+              <span class="nav-icon">CC</span>
+              <span class="nav-copy"><span class="nav-title">Coordinator Chat</span><span class="nav-sub">Selected parent and linked work</span></span>
+            </button>
+            <button class="nav-button ${state.coordDestination === "all" ? "active" : ""}" data-action="coord-dest" data-dest="all">
+              <span class="nav-icon">AB</span>
+              <span class="nav-copy"><span class="nav-title">All Agents Board</span><span class="nav-sub">Active work across Missions</span></span>
+            </button>
+          </div>
 
-  <script type="__bundler/template">
-"<!DOCTYPE html>\n<html><head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<script src=\"17060c37-db6b-4811-b633-f19bb0f70b3d\"><\/script>\n</head>\n<body>\n<x-dc>\n<helmet>\n<style>\n  html,body{margin:0;height:100%;background:#1E1E1E;}\n  *{box-sizing:border-box;}\n  ::-webkit-scrollbar{width:9px;height:9px;}\n  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.07);border-radius:6px;border:2px solid transparent;background-clip:padding-box;}\n  ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.13);background-clip:padding-box;}\n  ::-webkit-scrollbar-track{background:transparent;}\n  input{outline:none;}\n  input::placeholder{color:#3A3A3C;}\n</style>\n</helmet>\n\n\n\n<div style=\"height:100vh;width:100%;display:flex;flex-direction:column;background:#1E1E1E;color:#FFFFFF;font-family:-apple-system,'SF Pro Text','SF Pro Display',system-ui,sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden;font-weight:400;\">\n\n\n  <!-- ===== Main ===== -->\n  <div ref=\"{{ rootRef }}\" style=\"flex:1;min-height:0;display:flex;flex-direction:column;background:#1E1E1E;position:relative;overflow:hidden;\">\n    <div style=\"position:absolute;right:16px;top:12px;z-index:5;height:42px;display:flex;align-items:center;gap:10px;\">\n      <div title=\"Placeholder app-level surface switch: Coordinator is a peer surface to Agent Mode\" style=\"height:34px;display:flex;align-items:center;gap:3px;padding:4px;border:1px solid rgba(255,255,255,0.08);border-radius:19px;background:rgba(255,255,255,0.045);color:#98989F;font-size:12.5px;font-weight:600;line-height:1;-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);box-shadow:0 10px 26px rgba(0,0,0,0.22);\">\n        <span style=\"height:26px;display:flex;align-items:center;padding:0 12px;border-radius:15px;color:#98989F;\">Agent</span>\n        <span style=\"height:26px;display:flex;align-items:center;padding:0 12px;border-radius:15px;background:rgba(255,255,255,0.12);color:#FFFFFF;\">Coordinator</span>\n      </div>\n\n      <div title=\"MCP tools enabled for this window\" style=\"height:34px;display:flex;align-items:center;gap:8px;padding:0 13px;border:1px solid rgba(255,255,255,0.10);border-radius:18px;background:rgba(255,255,255,0.055);color:#FFFFFF;font-size:13px;font-weight:500;line-height:1;-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);box-shadow:0 10px 26px rgba(0,0,0,0.22);\">\n        <svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#30D158\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" style=\"flex:none;\"><rect x=\"4\" y=\"4\" width=\"16\" height=\"5\" rx=\"1.5\"></rect><rect x=\"4\" y=\"10\" width=\"16\" height=\"5\" rx=\"1.5\"></rect><rect x=\"4\" y=\"16\" width=\"16\" height=\"4\" rx=\"1.5\"></rect><circle cx=\"8\" cy=\"6.5\" r=\"0.8\" fill=\"#30D158\" stroke=\"none\"></circle><circle cx=\"8\" cy=\"12.5\" r=\"0.8\" fill=\"#30D158\" stroke=\"none\"></circle><circle cx=\"8\" cy=\"18\" r=\"0.8\" fill=\"#30D158\" stroke=\"none\"></circle></svg>\n        <span>MCP Server</span>\n      </div>\n    </div>\n\n    <div style=\"height:52px;position:absolute;left:0;right:0;top:0;z-index:5;pointer-events:none;\">\n      <div style=\"position:absolute;left:16px;top:0;bottom:0;display:flex;align-items:center;gap:8px;\">\n        <span style=\"width:12px;height:12px;border-radius:50%;background:#ff5f57;\"></span>\n        <span style=\"width:12px;height:12px;border-radius:50%;background:#febc2e;\"></span>\n        <span style=\"width:12px;height:12px;border-radius:50%;background:#28c840;\"></span>\n      </div>\n      <div style=\"position:absolute;left:calc({{ boardPadLeft }} + 22px);right:{{ boardPadRight }};top:0;bottom:0;display:flex;align-items:center;justify-content:flex-start;font-size:13px;color:#FFFFFF;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;\">platform-infra</div>\n    </div>\n\n    <div style=\"flex:1;min-height:0;display:flex;position:relative;overflow:hidden;\">\n\n    <!-- ===== LEFT: Coordinator ===== -->\n    <sc-if value=\"{{ chatRail }}\" hint-placeholder-val=\"{{ false }}\">\n    <div style=\"position:absolute;left:2px;top:0;bottom:12px;z-index:3;width:62px;display:flex;flex-direction:column;align-items:center;padding:64px 8px 14px;gap:16px;border:1px solid rgba(255,255,255,0.08);border-radius:5px 12px 12px 5px;overflow:hidden;background:rgba(30,30,30,0.72);-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);\">\n      <span onclick=\"{{ onOpenChat }}\" title=\"Open Coordinator\" style=\"width:32px;height:32px;border-radius:14px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);display:flex;align-items:center;justify-content:center;color:#98989F;cursor:pointer;-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);\" style-hover=\"background:rgba(255,255,255,0.10);\"><svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"><path d=\"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z\"></path></svg></span>\n    </div>\n    </sc-if>\n    <sc-if value=\"{{ chatFull }}\" hint-placeholder-val=\"{{ true }}\">\n    <div style=\"position:absolute;left:2px;top:0;bottom:12px;z-index:3;width:{{ chatWidthPx }};display:flex;flex-direction:column;padding:52px 4px 4px;border:1px solid rgba(255,255,255,0.08);border-radius:5px 12px 12px 5px;overflow:hidden;min-height:0;background:rgba(30,30,30,0.72);-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);\">\n      <button onclick=\"{{ onCollapseChat }}\" title=\"Collapse coordinator\" aria-label=\"Collapse coordinator\" style=\"position:absolute;top:10px;right:10px;z-index:4;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:0;border-radius:50%;background:transparent;color:#636366;cursor:pointer;padding:0;\" style-hover=\"background:rgba(255,255,255,0.08);color:#FFFFFF;\"><svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"15 18 9 12 15 6\"></polyline></svg></button>\n      <!-- header -->\n      <div style=\"padding:16px 16px 12px;display:flex;align-items:center;gap:11px;\">\n        <span style=\"width:30px;height:30px;border-radius:14px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);display:flex;align-items:center;justify-content:center;color:#98989F;flex:none;-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);\"><svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"6\" cy=\"6\" r=\"2\"></circle><circle cx=\"18\" cy=\"6\" r=\"2\"></circle><circle cx=\"12\" cy=\"18\" r=\"2\"></circle><path d=\"M8 6h8\"></path><path d=\"M6 8v2a8 8 0 0 0 6 7.7\"></path><path d=\"M18 8v2a8 8 0 0 1-6 7.7\"></path></svg></span>\n        <div style=\"flex:1;min-width:0;\">\n          <div style=\"font-size:14px;color:#FFFFFF;font-weight:500;line-height:1.2;\">Coordinator</div>\n        </div>\n      </div>\n      <div style=\"display:flex;margin:0 16px 12px;\">\n        <button onclick=\"{{ onClearChat }}\" title=\"Clear coordinator chat\" style=\"height:30px;width:100%;display:flex;align-items:center;justify-content:center;gap:8px;border:1px solid rgba(255,255,255,0.08);border-radius:10px;background:rgba(255,255,255,0.035);color:#98989F;font-family:inherit;font-size:12.5px;font-weight:500;padding:0 10px;cursor:pointer;-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);\" style-hover=\"background:rgba(255,255,255,0.07);color:#FFFFFF;\">\n          <svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" style=\"flex:none;\"><path d=\"M16 3l5 5-11 11H5l-2-2v-5L14 1z\"></path><path d=\"M12 5l7 7\"></path><path d=\"M5 19h14\"></path></svg>\n          <span>Clear Chat</span>\n        </button>\n      </div>\n\n      <!-- Coordinator context view -->\n      <div ref=\"{{ msgRef }}\" style=\"flex:1;min-height:0;overflow-y:auto;padding:4px 16px 8px;display:flex;flex-direction:column;gap:18px;\">\n        <sc-if value=\"{{ showEmptyChat }}\" hint-placeholder-val=\"{{ false }}\">\n          <div style=\"flex:1;min-height:120px;display:flex;align-items:center;justify-content:center;color:#636366;font-size:12.5px;font-weight:400;\">{{ emptyChatText }}</div>\n        </sc-if>\n        <sc-for list=\"{{ messages }}\" as=\"message\" hint-placeholder-count=\"5\">\n          <div>\n            <div style=\"display:flex;align-items:center;gap:8px;margin-bottom:7px;\">\n              <span style=\"font-size:12.5px;color:#98989F;font-weight:500;\">{{ message.from }}</span>\n              <span style=\"font-size:11.5px;color:#636366;margin-left:auto;\">{{ message.time }}</span>\n            </div>\n            <div>\n              <div style=\"font-size:13.5px;line-height:1.55;color:#FFFFFF;font-weight:400;\">{{ message.text }}</div>\n              <sc-for list=\"{{ message.bullets }}\" as=\"bullet\" hint-placeholder-count=\"0\">\n                <div style=\"display:flex;gap:8px;margin-top:8px;\">\n                  <span style=\"width:7px;height:7px;border-radius:50%;flex:none;margin-top:4px;background:{{ bullet.color }};\"></span>\n                  <div style=\"display:flex;flex-direction:column;gap:1px;\">\n                    <span style=\"font-size:12.5px;color:#FFFFFF;\">{{ bullet.main }}</span>\n                    <sc-if value=\"{{ bullet.hasSub }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"font-size:12px;color:{{ bullet.subColor }};\">{{ bullet.sub }}</span></sc-if>\n                  </div>\n                </div>\n              </sc-for>\n            </div>\n          </div>\n        </sc-for>\n      </div>\n      <!-- composer -->\n      <div style=\"flex:none;padding:12px 16px 16px;border-top:1px solid rgba(255,255,255,0.06);\">\n        <sc-if value=\"{{ showContextChip }}\" hint-placeholder-val=\"{{ false }}\">\n        <div style=\"display:flex;margin-bottom:8px;\">\n          <div style=\"display:inline-flex;align-items:center;gap:7px;max-width:100%;padding:4px 9px;border-radius:14px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);\">\n            <span style=\"font-size:11px;color:#98989F;flex:none;\">About</span>\n            <span style=\"font-size:12px;color:#FFFFFF;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;\">{{ contextTitle }}</span>\n            <span onclick=\"{{ onClearContext }}\" style=\"display:flex;color:#636366;cursor:pointer;flex:none;\" style-hover=\"color:#FFFFFF;\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\"><line x1=\"18\" y1=\"6\" x2=\"6\" y2=\"18\"></line><line x1=\"6\" y1=\"6\" x2=\"18\" y2=\"18\"></line></svg></span>\n          </div>\n        </div>\n        </sc-if>\n        <div style=\"border:1px solid rgba(255,255,255,0.10);border-radius:8px;background:rgba(255,255,255,0.06);padding:10px 12px;-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);\">\n          <input value=\"{{ chatInput }}\" onchange=\"{{ onChatChange }}\" onkeydown=\"{{ onChatKey }}\" placeholder=\"Message Coordinator...\" style=\"width:100%;background:transparent;border:none;color:#FFFFFF;font-size:13px;font-family:inherit;padding:0;\">\n          <div style=\"display:flex;align-items:center;margin-top:9px;\">\n            <span title=\"Coordinator model\" style=\"display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:14px;border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.06);color:#98989F;font-size:11px;font-weight:500;line-height:1;-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);\"><span style=\"color:#FFFFFF;\">Claude Code</span><span style=\"color:#636366;\">\u00b7</span><span>Sonnet 4.5</span></span>\n            <span onclick=\"{{ onSend }}\" style=\"margin-left:auto;display:flex;color:#98989F;cursor:pointer;\" style-hover=\"color:#FFFFFF;\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"><line x1=\"22\" y1=\"2\" x2=\"11\" y2=\"13\"></line><polygon points=\"22 2 15 22 11 13 2 9 22 2\"></polygon></svg></span>\n          </div>\n        </div>\n      </div>\n\n    </div>\n    </sc-if>\n\n    <!-- ===== CENTER ===== -->\n    <div style=\"flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;position:relative;z-index:1;background:#1E1E1E;padding-top:52px;padding-left:{{ boardPadLeft }};padding-right:{{ boardPadRight }};\">\n      <div style=\"flex:none;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 22px 2px;\">\n        <div style=\"height:28px;display:flex;align-items:center;background:rgba(255,255,255,0.045);border:1px solid rgba(255,255,255,0.06);border-radius:7px;padding:1px;\">\n          <button style=\"{{ boardTabStyle }}\" onclick=\"{{ onBoardView }}\">Board</button>\n          <button style=\"{{ listTabStyle }}\" onclick=\"{{ onListView }}\">List</button>\n        </div>\n        <div style=\"display:flex;align-items:center;gap:6px;min-width:0;\">\n        <div style=\"position:relative;flex:none;\">\n          <sc-if value=\"{{ sortOpen }}\" hint-placeholder-val=\"{{ false }}\">\n          <div onclick=\"{{ onToggleSort }}\" style=\"position:fixed;inset:0;z-index:40;\"></div>\n          </sc-if>\n          <button onclick=\"{{ onToggleSort }}\" style=\"height:26px;display:flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:0 8px;background:rgba(255,255,255,0.025);color:#636366;font-family:inherit;font-size:12px;cursor:pointer;white-space:nowrap;\" style-hover=\"background:rgba(255,255,255,0.055);\">\n            <svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"><line x1=\"4\" y1=\"7\" x2=\"16\" y2=\"7\"></line><line x1=\"4\" y1=\"12\" x2=\"13\" y2=\"12\"></line><line x1=\"4\" y1=\"17\" x2=\"10\" y2=\"17\"></line></svg>\n            <span style=\"color:#FFFFFF;\">{{ sortLabel }}</span>\n            <svg width=\"11\" height=\"11\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><polyline points=\"6 9 12 15 18 9\"></polyline></svg>\n          </button>\n          <sc-if value=\"{{ sortOpen }}\" hint-placeholder-val=\"{{ false }}\">\n          <div style=\"position:absolute;top:calc(100% + 6px);right:0;z-index:50;min-width:172px;background:rgba(35,35,35,0.82);border:1px solid rgba(255,255,255,0.10);border-radius:12px;padding:5px;box-shadow:0 10px 28px rgba(0,0,0,0.45);display:flex;flex-direction:column;gap:1px;-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);\">\n            <sc-for list=\"{{ sortOptions }}\" as=\"opt\" hint-placeholder-count=\"3\">\n              <div onclick=\"{{ opt.onSelect }}\" style=\"{{ opt.rowStyle }}\" style-hover=\"background:rgba(255,255,255,0.06);\">\n                <span style=\"flex:1;\">{{ opt.label }}</span>\n                <sc-if value=\"{{ opt.active }}\" hint-placeholder-val=\"{{ false }}\"><svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" style=\"color:#FFFFFF;\"><polyline points=\"20 6 9 17 4 12\"></polyline></svg></sc-if>\n              </div>\n            </sc-for>\n          </div>\n          </sc-if>\n        </div>\n        <div style=\"height:26px;display:flex;align-items:center;gap:6px;flex:0 1 200px;min-width:0;border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:0 8px;color:#636366;overflow:hidden;background:rgba(255,255,255,0.035);\">\n          <svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" style=\"flex:none;\"><circle cx=\"11\" cy=\"11\" r=\"7\"></circle><line x1=\"21\" y1=\"21\" x2=\"16.5\" y2=\"16.5\"></line></svg>\n          <input placeholder=\"Search tasks\" style=\"background:transparent;border:none;color:#98989F;font-size:12.5px;font-family:inherit;width:100%;min-width:0;\">\n        </div>\n      </div>\n      </div>\n\n      <!-- BOARD -->\n      <sc-if value=\"{{ showBoard }}\" hint-placeholder-val=\"{{ true }}\">\n      <div style=\"flex:1;min-height:0;display:flex;gap:16px;padding:6px 22px 22px;overflow-x:auto;\">\n        <sc-for list=\"{{ columns }}\" as=\"column\" hint-placeholder-count=\"5\">\n          <div style=\"flex:1 1 208px;min-width:208px;display:flex;flex-direction:column;min-height:0;\">\n            <div style=\"display:flex;align-items:center;gap:9px;padding:6px 4px 14px;\">\n              <span style=\"width:8px;height:8px;border-radius:50%;background:{{ column.color }};\"></span>\n              <span style=\"font-size:13.5px;color:#FFFFFF;font-weight:500;\">{{ column.name }}</span>\n              <span style=\"font-size:13px;color:#636366;margin-left:2px;\">{{ column.count }}</span>\n            </div>\n            <div style=\"flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:1px 2px 8px;\">\n              <sc-for list=\"{{ column.tasks }}\" as=\"task\" hint-placeholder-count=\"3\">\n                <div onclick=\"{{ task.onSelect }}\" style=\"{{ task.cardStyle }}\" style-hover=\"background:rgba(255,255,255,0.06);\">\n                  <div style=\"font-size:13.5px;color:#FFFFFF;line-height:1.35;font-weight:{{ task.titleWeight }};\">{{ task.title }}</div>\n                  <sc-if value=\"{{ showModel }}\" hint-placeholder-val=\"{{ true }}\"><div style=\"font-size:12px;color:#98989F;font-family:'SF Mono',ui-monospace,Menlo,monospace;\">{{ task.agent }}</div></sc-if>\n                  <div style=\"display:flex;align-items:center;gap:7px;\">\n                    <span style=\"{{ task.statusPillStyle }}\"><span style=\"font-size:10px;line-height:1;\">{{ task.labelIcon }}</span>{{ task.label }}</span>\n                  </div>\n                </div>\n              </sc-for>\n            </div>\n          </div>\n        </sc-for>\n      </div>\n      </sc-if>\n\n      <!-- LIST -->\n      <sc-if value=\"{{ showList }}\" hint-placeholder-val=\"{{ false }}\">\n      <div style=\"flex:1;min-height:0;overflow-y:auto;padding:6px 22px 22px;\">\n        <div style=\"max-width:760px;\">\n          <sc-for list=\"{{ listTasks }}\" as=\"row\" hint-placeholder-count=\"10\">\n            <div onclick=\"{{ row.onSelect }}\" style=\"{{ row.rowStyle }}\" style-hover=\"background:rgba(255,255,255,0.035);\">\n              <span style=\"{{ row.statusPillStyle }}\"><span style=\"font-size:10px;line-height:1;\">{{ row.labelIcon }}</span>{{ row.label }}</span>\n              <span style=\"flex:1;min-width:0;font-size:13.5px;color:#FFFFFF;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:{{ row.titleWeight }};\">{{ row.title }}</span>\n              <span style=\"width:120px;flex:none;font-size:12px;color:#98989F;font-family:'SF Mono',ui-monospace,Menlo,monospace;\">{{ row.agent }}</span>\n            </div>\n          </sc-for>\n        </div>\n      </div>\n      </sc-if>\n    </div>\n\n    <!-- ===== RIGHT: detail ===== -->\n    <sc-if value=\"{{ inspectorOpen }}\" hint-placeholder-val=\"{{ true }}\">\n    <div style=\"position:absolute;right:2px;top:0;bottom:12px;z-index:3;width:354px;padding:52px 4px 4px;border:1px solid rgba(255,255,255,0.08);border-radius:12px 5px 5px 12px;overflow:hidden;display:flex;flex-direction:column;min-height:0;background:rgba(30,30,30,0.72);-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);\">\n      <button onclick=\"{{ sel.onClose }}\" title=\"Collapse inspector\" aria-label=\"Collapse inspector\" style=\"position:absolute;top:10px;left:10px;z-index:4;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:0;border-radius:50%;background:transparent;color:#636366;cursor:pointer;padding:0;\" style-hover=\"background:rgba(255,255,255,0.08);color:#FFFFFF;\"><svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"9 18 15 12 9 6\"></polyline></svg></button>\n      <div style=\"flex:1;min-height:0;overflow-y:auto;padding:22px 22px 26px;\">\n        <div style=\"display:flex;align-items:flex-start;gap:12px;margin-bottom:24px;\">\n          <div style=\"flex:1;font-size:19px;line-height:1.3;color:#FFFFFF;font-weight:500;\">{{ sel.title }}</div>\n        </div>\n\n        <div style=\"display:flex;flex-direction:column;gap:15px;\">\n          <div style=\"display:flex;align-items:center;\"><span style=\"flex:1;font-size:13px;color:#98989F;font-weight:400;\">State</span><span style=\"{{ sel.statePillStyle }}\"><span style=\"font-size:10px;line-height:1;\">{{ sel.stateIcon }}</span>{{ sel.stateLabel }}</span></div>\n          <div style=\"display:flex;align-items:center;\"><span style=\"flex:1;font-size:13px;color:#98989F;font-weight:400;\">Agent / Model</span><span style=\"font-size:12.5px;color:#FFFFFF;font-family:'SF Mono',ui-monospace,Menlo,monospace;\">{{ sel.agent }}</span></div>\n          <div style=\"display:flex;align-items:center;\"><span style=\"flex:1;font-size:13px;color:#98989F;font-weight:400;\">Workspace</span><span style=\"font-size:13px;color:#FFFFFF;font-weight:400;\">{{ sel.workspace }}</span></div>\n          <div style=\"display:flex;align-items:center;\"><span style=\"flex:1;font-size:13px;color:#98989F;font-weight:400;\">Branch</span><span style=\"font-size:12.5px;color:#FFFFFF;font-family:'SF Mono',ui-monospace,Menlo,monospace;\">{{ sel.branch }}</span></div>\n        </div>\n\n        <div style=\"margin-top:28px;\">\n          <div style=\"font-size:13px;color:#98989F;margin-bottom:10px;\">Description</div>\n          <div style=\"font-size:13.5px;line-height:1.6;color:#FFFFFF;\">{{ sel.desc }}</div>\n        </div>\n\n        <div style=\"margin-top:28px;\">\n          <div style=\"font-size:13px;color:#98989F;margin-bottom:13px;\">Recent activity</div>\n          <div style=\"display:flex;flex-direction:column;gap:13px;\">\n            <sc-for list=\"{{ sel.activity }}\" as=\"act\" hint-placeholder-count=\"3\">\n              <div style=\"display:flex;align-items:center;gap:11px;\">\n                <span style=\"width:8px;height:8px;border-radius:50%;flex:none;background:{{ act.c }};\"></span>\n                <span style=\"font-size:12.5px;color:#636366;width:64px;flex:none;\">{{ act.t }}</span>\n                <span style=\"font-size:13px;color:#FFFFFF;\">{{ act.l }}</span>\n              </div>\n            </sc-for>\n          </div>\n        </div>\n\n        <div style=\"margin-top:32px;\">\n          <div style=\"font-size:13px;color:#98989F;margin-bottom:13px;\">Actions</div>\n          <div style=\"display:flex;flex-direction:column;gap:10px;\">\n            <sc-if value=\"{{ sel.showStart }}\" hint-placeholder-val=\"{{ true }}\">\n            <button onclick=\"{{ sel.onStartWork }}\" style=\"height:40px;width:100%;border:none;border-radius:14px;background:#0A84FF;color:#FFFFFF;font-size:13.5px;font-family:inherit;font-weight:500;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;\" style-hover=\"filter:brightness(1.12);\">\n              <svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"currentColor\"><polygon points=\"6 4 20 12 6 20 6 4\"></polygon></svg>Start work\n            </button>\n            </sc-if>\n            <button onclick=\"{{ sel.onOpenAgentMode }}\" title=\"Open this session in the regular Agent Mode chat\" style=\"height:40px;width:100%;border:1px solid rgba(255,255,255,0.10);border-radius:14px;background:rgba(255,255,255,0.055);color:#FFFFFF;font-size:13.5px;font-family:inherit;font-weight:500;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);\" style-hover=\"background:rgba(255,255,255,0.10);\">\n              <svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"4\" y=\"4\" width=\"13\" height=\"13\" rx=\"2\"></rect><path d=\"M13 5h6v6\"></path><path d=\"M10 14L19 5\"></path></svg>Open in Agent Mode\n            </button>\n          </div>\n        </div>\n      </div>\n    </div>\n    </sc-if>\n\n    </div>\n  </div>\n</div>\n</x-dc>\n<script type=\"text/x-dc\" data-dc-script=\"\" data-props=\"{&quot;$preview&quot;:{&quot;width&quot;:&quot;100%&quot;,&quot;height&quot;:&quot;100%&quot;},&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#0A84FF&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;options&quot;:[&quot;#0A84FF&quot;,&quot;#40CBE0&quot;,&quot;#30D158&quot;,&quot;#5E5CE6&quot;]},&quot;calmCards&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;}}\">\nclass Component extends DCLogic {\n  state = {\n    selectedId: 't1',\n    view: 'board',\n    chatInput: '',\n    winW: 1400,\n    userInspectorOpen: true,\n    userChatOpen: false,\n    composerContext: false,\n    chatCleared: false,\n    sortKey: 'updated',\n    sortOpen: false,\n    updatedAt: {},\n    tasks: [\n      { id:'t1', title:'Staging namespace migration', agent:'sonnet-4.5', col:'needs-you', label:'Ready to start', branch:'feat/ns-migration', desc:'Migrate all resources from the default namespace to the staging namespace. Update Helm releases and CI/CD references.', activity:[{t:'10:12 AM',l:'Created task',c:'#FF9F0A'},{t:'10:13 AM',l:'Coordinator assigned',c:'#30D158'},{t:'10:14 AM',l:'Awaiting your input',c:'#98989F'}] },\n      { id:'t2', title:'Express helm refactor', agent:'sonnet-4.5', col:'needs-you', label:'Needs clarification', branch:'feat/helm-refactor', desc:'Refactor Helm chart values into a shared library chart and remove duplicated templates.', activity:[{t:'09:58 AM',l:'Created task',c:'#FF9F0A'},{t:'10:05 AM',l:'Agent paused for input',c:'#98989F'}] },\n      { id:'t3', title:'Write rollout notes', agent:'opus-4', col:'needs-you', label:'Waiting for input', branch:'docs/rollout-notes', desc:'Draft rollout and rollback notes for the staging namespace migration.', activity:[{t:'10:01 AM',l:'Created task',c:'#FF9F0A'},{t:'10:09 AM',l:'Awaiting your input',c:'#98989F'}] },\n      { id:'t4', title:'Migrate billing schema', agent:'sonnet-4.5', col:'working', label:'In progress', branch:'feat/billing-schema', desc:'Apply the new billing schema migration and backfill existing rows.' },\n      { id:'t5', title:'CI pipeline cleanup', agent:'sonnet-4.5', col:'working', label:'In progress', branch:'chore/ci-cleanup', desc:'Remove deprecated CI steps and consolidate workflow files.' },\n      { id:'t6', title:'External DNS failover', agent:'haiku-3.5', col:'working', label:'In progress', branch:'feat/dns-failover', desc:'Configure a secondary DNS provider and automatic failover.' },\n      { id:'t7', title:'Observability dashboards', agent:'sonnet-4.5', col:'working', label:'In progress', branch:'feat/observability', desc:'Build Grafana dashboards for the new staging services.' },\n      { id:'t8', title:'Docs link fix', agent:'opus-4', col:'working', label:'In progress', branch:'docs/link-fix', desc:'Fix broken internal links across the docs site.' },\n      { id:'t9', title:'AKS cluster upgrade', agent:'opus-4', col:'blocked', label:'Blocked', branch:'ops/aks-upgrade', desc:'Upgrade the AKS cluster to the latest supported version.' },\n      { id:'t10', title:'Secrets rotation', agent:'sonnet-4.5', col:'blocked', label:'Blocked', branch:'ops/secrets-rotation', desc:'Rotate all service secrets and update references.' },\n      { id:'t11', title:'Send-guard fix', agent:'sonnet-3.5', col:'blocked', label:'Blocked', branch:'fix/send-guard', desc:'Resolve the send-guard race condition in streaming messages.' },\n      { id:'t12', title:'RBAC policy upgrade', agent:'sonnet-4.5', col:'review', label:'Ready for review', branch:'feat/rbac-policy', desc:'Tighten RBAC roles and review cluster-wide bindings.' },\n      { id:'t13', title:'Helm chart cleanup', agent:'opus-4', col:'review', label:'Ready for review', branch:'chore/helm-cleanup', desc:'Remove unused Helm values and align chart versions.' },\n      { id:'t14', title:'Log retention policy', agent:'haiku-3.5', col:'review', label:'Ready for review', branch:'ops/log-retention', desc:'Set log retention windows per environment.' },\n      { id:'t15', title:'Improve health checks', agent:'sonnet-4.5', col:'review', label:'Ready for review', branch:'feat/health-checks', desc:'Add readiness and liveness probes to core services.' },\n      { id:'t16', title:'Migrate ConfigMaps', agent:'sonnet-4.5', col:'done', label:'Completed', branch:'feat/ns-migration', desc:'ConfigMaps migrated to the staging namespace.' },\n      { id:'t17', title:'Migrate Secrets', agent:'sonnet-4.5', col:'done', label:'Completed', branch:'feat/ns-migration', desc:'Secrets migrated to the staging namespace.' },\n      { id:'t18', title:'Update references', agent:'opus-4', col:'done', label:'Completed', branch:'feat/ns-migration', desc:'CI/CD references updated to the staging namespace.' },\n      { id:'t19', title:'Verify & smoke test', agent:'sonnet-4.5', col:'done', label:'Completed', branch:'feat/ns-migration', desc:'Smoke tests passed against the staging namespace.' }\n    ],\n    messages: [\n      { from:'Coordinator', time:'10:12 AM', text:'Good morning. We have 2 items that need your input.', bullets:[{color:'#FF9F0A',main:'Express helm refactor'},{color:'#FF9F0A',main:'Staging namespace migration'}] },\n      { from:'You', time:'10:13 AM', text:\"Let's prioritize the namespace migration. What's the plan?\" },\n      { from:'Coordinator', time:'10:13 AM', text:'I recommend starting the staging namespace migration now. Dependencies are ready and the Helm refactor can proceed in parallel.', bullets:[{color:'#FF9F0A',main:'Staging namespace migration',sub:'Ready to start',subColor:'#FF9F0A'}] },\n      { from:'You', time:'10:14 AM', text:'Go ahead and start it. Keep me posted on any blockers.' },\n      { from:'Coordinator', time:'10:14 AM', text:'Starting the agent and moving it to Working.', bullets:[{color:this.accent(),main:'Dispatched to agent',sub:'sonnet-4.5',subColor:'#98989F'}] }\n    ]\n  };\n\n  accent(){ return this.props.accent || '#0A84FF'; }\n  meta(){ return {\n    'needs-you':{ name:'Needs you', color:'#FF9F0A', bg:'rgba(255,159,10,0.16)', stroke:'rgba(255,159,10,0.34)', icon:'!' },\n    'working':  { name:'Working',   color:'#0A84FF', bg:'rgba(10,132,255,0.16)', stroke:'rgba(10,132,255,0.34)', icon:'\u21bb' },\n    'blocked':  { name:'Blocked',   color:'#FF453A', bg:'rgba(255,69,58,0.16)', stroke:'rgba(255,69,58,0.34)', icon:'!' },\n    'review':   { name:'Review',    color:'#BF5AF2', bg:'rgba(191,90,242,0.16)', stroke:'rgba(191,90,242,0.34)', icon:'\u25d0' },\n    'done':     { name:'Done',      color:'#30D158', bg:'rgba(48,209,88,0.16)', stroke:'rgba(48,209,88,0.34)', icon:'\u2713' }\n  }; }\n  order(){ return ['needs-you','working','blocked','review','done']; }\n\n  now(){ const d=new Date(); let h=d.getHours(); const m=d.getMinutes(); const ap=h>=12?'PM':'AM'; h=h%12||12; return h+':'+String(m).padStart(2,'0')+' '+ap; }\n\n  genActivity(col){\n    const O='#FF9F0A', B='#0A84FF', G='#30D158', R='#FF453A', P='#BF5AF2';\n    if(col==='working') return [{t:'10:08 AM',l:'Created task',c:O},{t:'10:10 AM',l:'Coordinator assigned',c:G},{t:'10:15 AM',l:'Agent working',c:B}];\n    if(col==='blocked') return [{t:'09:40 AM',l:'Created task',c:O},{t:'09:52 AM',l:'Coordinator assigned',c:G},{t:'10:05 AM',l:'Blocked on dependency',c:R}];\n    if(col==='review')  return [{t:'09:30 AM',l:'Created task',c:O},{t:'10:20 AM',l:'Agent finished',c:G},{t:'10:22 AM',l:'Ready for review',c:P}];\n    return [{t:'09:00 AM',l:'Created task',c:O},{t:'09:45 AM',l:'Agent finished',c:G},{t:'09:50 AM',l:'Completed',c:G}];\n  }\n\n  select(id){ this.setState({ selectedId:id, userInspectorOpen:true }); }\n\n  setRoot(el){\n    if(el && el!==this.rootEl){\n      this.rootEl = el;\n      if(this._ro) this._ro.disconnect();\n      this._ro = new ResizeObserver(entries=>{\n        const w = Math.round(entries[0].contentRect.width);\n        if(w && w!==this.state.winW) this.setState({ winW:w });\n      });\n      this._ro.observe(el);\n      const w = Math.round(el.getBoundingClientRect().width);\n      if(w && w!==this.state.winW) this.setState({ winW:w });\n    }\n  }\n  _measure(){\n    let w = 0;\n    if(this.rootEl) w = Math.round(this.rootEl.getBoundingClientRect().width);\n    if(!w) w = Math.round(window.innerWidth);\n    if(w && w!==this.state.winW) this.setState({ winW:w });\n  }\n  componentDidMount(){\n    this._onResize = ()=>this._measure();\n    window.addEventListener('resize', this._onResize);\n    this._measure();\n    requestAnimationFrame(()=>this._measure());\n    setTimeout(()=>this._measure(), 60);\n    const recency = ['t1','t4','t12','t5','t6','t15','t7','t13','t8','t14','t2','t9','t3','t10','t11','t16','t17','t18','t19'];\n    const now = Date.now(); const map = {};\n    recency.forEach((id,i)=>{ map[id] = now - i*7*60000; });\n    this.setState({ updatedAt: map });\n  }\n  priorityMap(){ return { t1:1,t2:1,t3:3,t4:2,t5:3,t6:2,t7:3,t8:3,t9:1,t10:2,t11:1,t12:1,t13:3,t14:3,t15:2,t16:3,t17:3,t18:3,t19:3 }; }\n  componentWillUnmount(){ if(this._ro){ this._ro.disconnect(); } if(this._onResize){ window.removeEventListener('resize', this._onResize); } }\n\n  startWork(id){\n    const task = this.state.tasks.find(t=>t.id===id);\n    const tasks = this.state.tasks.map(t => t.id===id ? {...t, col:'working', label:'In progress', activity:this.genActivity('working')} : t);\n    const co = { from:'Coordinator', time:this.now(), text:'Starting '+task.title+' \u2014 moving it to Working.', bullets:[{color:this.accent(),main:'Dispatched to agent',sub:task.agent,subColor:'#98989F'}] };\n    const updatedAt = {...this.state.updatedAt, [id]: Date.now()};\n    this.setState({ tasks, updatedAt, messages:[...this.state.messages, co], chatCleared:false });\n  }\n\n  ask(id){\n    this.setState({ selectedId:id, composerContext:true });\n  }\n\n  send(){\n    const v = (this.state.chatInput||'').trim();\n    if(!v) return;\n    const t = this.now();\n    const you = { from:'You', time:t, text:v, bullets:[] };\n    const co  = { from:'Coordinator', time:t, text:\"On it \u2014 I'll keep this thread posted.\", bullets:[] };\n    this.setState({ messages:[...this.state.messages, you, co], chatInput:'', chatCleared:false });\n  }\n\n  componentDidUpdate(){ if(this.msgEl){ this.msgEl.scrollTop = this.msgEl.scrollHeight; } }\n\n  shapeBullet(b){ return { color:b.color||'#98989F', main:b.main, sub:b.sub||'', hasSub:!!b.sub, subColor:b.subColor||'#98989F' }; }\n\n  renderVals(){\n    const M = this.meta(), order = this.order(), selId = this.state.selectedId;\n    const acc = this.accent();\n    const material = '-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);';\n    const pillStyle = (m) => 'display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:16px;font-size:12px;font-weight:500;line-height:1;color:'+m.color+';background:rgba(255,255,255,0.06);border:1px solid '+m.stroke+';'+material;\n    const plateStyle = (m,col) => {\n      let s = 'width:16px;height:16px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;background:'+m.bg+';border:1.5px solid '+m.stroke+';'+material;\n      if(col==='working') s += 'border-top-color:#0A84FF;box-shadow:0 0 0 1px rgba(10,132,255,0.10);';\n      if(col==='needs-you') s += 'box-shadow:0 0 0 2px rgba(48,209,88,0.24);';\n      return s;\n    };\n    const base = 'padding:11px 12px;border-radius:14px;border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.04);cursor:pointer;display:flex;flex-direction:column;gap:7px;transition:background .12s,border-color .12s;'+material;\n    const selS = 'padding:11px 12px;border-radius:14px;border:1px solid rgba(10,132,255,0.40);background:rgba(10,132,255,0.15);cursor:pointer;display:flex;flex-direction:column;gap:7px;transition:background .12s,border-color .12s;'+material;\n\n    const shapeCard = (t) => ({\n      id:t.id, title:t.title, agent:t.agent, label:t.label,\n      labelColor:M[t.col].color, labelIcon:M[t.col].icon, statusPillStyle:pillStyle(M[t.col]),\n      titleWeight: t.id===selId ? 600 : 400,\n      cardStyle: t.id===selId ? selS : base,\n      onSelect: () => this.select(t.id)\n    });\n\n    const sk = this.state.sortKey, ua = this.state.updatedAt || {}, PRI = this.priorityMap();\n    const sortFn = (a,b)=>{\n      if(sk==='name') return a.title.localeCompare(b.title);\n      if(sk==='priority'){ const d=(PRI[a.id]||9)-(PRI[b.id]||9); if(d) return d; return (ua[b.id]||0)-(ua[a.id]||0); }\n      return (ua[b.id]||0)-(ua[a.id]||0);\n    };\n    const columns = order.map(key => {\n      const tasks = this.state.tasks.filter(t=>t.col===key);\n      return { key, name:M[key].name, color:M[key].color, count:tasks.length, tasks:tasks.slice().sort(sortFn).map(shapeCard) };\n    });\n\n    // list view \u2014 needs-you first\n    const rowBase='display:flex;align-items:center;gap:13px;padding:9px 10px;border-radius:14px;cursor:pointer;border:1px solid transparent;';\n    const listTasks = order.flatMap(key => this.state.tasks.filter(t=>t.col===key).slice().sort(sortFn).map(t => ({\n      title:t.title, agent:t.agent, label:t.label, labelColor:M[t.col].color, labelIcon:M[t.col].icon, statusPillStyle:pillStyle(M[t.col]),\n      titleWeight: t.id===selId ? 600 : 400,\n      rowStyle: t.id===selId ? rowBase+'background:rgba(10,132,255,0.15);border-color:rgba(10,132,255,0.40);' : rowBase,\n      onSelect: () => this.select(t.id)\n    })));\n\n    // selection detail\n    const st = this.state.tasks.find(t=>t.id===selId);\n    let sel = null;\n    if(st){ const m=M[st.col];\n      sel = {\n        title:st.title, stateLabel:m.name, stateColor:m.color, stateBg:m.bg, stateIcon:m.icon, statePillStyle:pillStyle(m),\n        agent:st.agent, workspace:'platform-infra', branch:st.branch, desc:st.desc,\n        activity: st.activity || this.genActivity(st.col),\n        showStart: st.col==='needs-you',\n        onStartWork: ()=>this.startWork(selId),\n        onOpenAgentMode: ()=>this.select(selId),\n        onClose: ()=>this.setState({userInspectorOpen:false})\n      };\n    }\n\n    const W = this.state.winW || 1400;\n    const inspectorOpen = !!sel && this.state.userInspectorOpen && W >= 1200;\n    const chatFull = (W >= 980) || this.state.userChatOpen;\n    const chatRail = !chatFull;\n    const chatWidthPx = W >= 1200 ? '312px' : (W >= 980 ? '280px' : '300px');\n    const boardPadLeft = chatFull ? 'calc('+chatWidthPx+' + 0px)' : '52px';\n    const boardPadRight = inspectorOpen ? '344px' : '0px';\n    const forceList = W < 540;\n    const effView = forceList ? 'list' : this.state.view;\n\n    const tabOn='flex:1;padding:6px 0;border-radius:8px;border:none;font-family:inherit;font-size:13px;cursor:pointer;background:rgba(255,255,255,0.10);color:#FFFFFF;font-weight:500;';\n    const tabOff='flex:1;padding:6px 0;border-radius:8px;border:none;font-family:inherit;font-size:13px;cursor:pointer;background:transparent;color:#98989F;font-weight:400;';\n    const segOn='height:24px;padding:0 11px;border:none;border-radius:5px;font-family:inherit;font-size:12.5px;cursor:pointer;background:rgba(255,255,255,0.08);color:#FFFFFF;font-weight:500;';\n    const segOff='height:24px;padding:0 11px;border:none;border-radius:5px;font-family:inherit;font-size:12.5px;cursor:pointer;background:transparent;color:#98989F;font-weight:400;';\n\n    return {\n      accent: acc,\n      columns, listTasks,\n      showModel: !this.props.calmCards,\n      showBoard: effView==='board',\n      showList: effView==='list',\n      hasSelection: !!sel, noSelection: !sel, sel: sel || {},\n      inspectorOpen, chatFull, chatRail, chatWidthPx, boardPadLeft, boardPadRight,\n      sortLabel: ({updated:'Updated',name:'Name',priority:'Priority'})[sk],\n      sortOpen: this.state.sortOpen,\n      onToggleSort: ()=>this.setState({sortOpen:!this.state.sortOpen}),\n      sortOptions: [['updated','Last updated'],['name','Name'],['priority','Priority']].map(([k,l])=>({\n        key:k, label:l, active: sk===k,\n        rowStyle:'display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:6px;font-size:13px;color:#FFFFFF;cursor:pointer;',\n        onSelect: ()=>this.setState({sortKey:k, sortOpen:false})\n      })),\n      rootRef: (el)=>this.setRoot(el),\n      onOpenChat: ()=>this.setState({userChatOpen:true}),\n      onCollapseChat: ()=>this.setState({userChatOpen:false}),\n      showContextChip: this.state.composerContext && !!sel,\n      contextTitle: sel ? sel.title : '',\n      onClearContext: ()=>this.setState({composerContext:false}),\n      onClearChat: ()=>this.setState({messages:[], chatCleared:true, composerContext:false}),\n      showEmptyChat: this.state.messages.length===0,\n      emptyChatText: this.state.chatCleared ? 'Conversation cleared' : 'No messages',\n      messages: this.state.messages.map(m => ({\n        from:m.from, time:m.time, text:m.text, isCo:m.from==='Coordinator',\n        boxBg: m.from==='Coordinator' ? 'rgba(255,255,255,0.022)' : 'rgba(255,255,255,0.06)',\n        bullets: (m.bullets||[]).map(b=>this.shapeBullet(b))\n      })),\n      chatInput: this.state.chatInput,\n      msgRef: (el)=>{ this.msgEl = el; },\n      onChatChange: (e)=>this.setState({chatInput:e.target.value}),\n      onChatKey: (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); this.send(); } },\n      onSend: ()=>this.send(),\n      onBoardView: ()=>this.setState({view:'board'}),\n      onListView: ()=>this.setState({view:'list'}),\n      boardTabStyle: effView==='board'?segOn:segOff,\n      listTabStyle: effView==='list'?segOn:segOff\n    };\n  }\n}\n<\/script>\n\n\n</body></html>"
+          <div class="section-title"><span>Missions</span><span>${missions.length}</span></div>
+          <button class="new-mission" data-action="select-mission" data-id="m-readme">
+            <span class="row-leading">+</span>
+            <span class="row-copy"><span class="row-title">New Mission</span><span class="row-sub">Start a blank Coordinator...</span></span>
+            <span class="row-trailing">${pill("Ready")}</span>
+          </button>
+
+          <div class="rows">
+            ${missions.map(item => `
+              <button class="row-button ${item.id === m.id ? "active" : ""}" data-action="select-mission" data-id="${item.id}">
+                <span class="row-leading">${item.id === m.id ? "v" : "C"}</span>
+                <span class="row-copy"><span class="row-title">${escapeHtml(item.title)}</span><span class="row-sub">${escapeHtml(item.subtitle)}</span></span>
+                <span class="row-trailing">${pill(item.status, statusClass[item.status] || "")}</span>
+              </button>
+            `).join("")}
+          </div>
+
+          <div class="sidebar-footer">
+            <button class="row-button">
+              <span class="row-leading">A</span>
+              <span class="row-copy"><span class="row-title">Archived Missions</span><span class="row-sub">53 archived parent threads</span></span>
+            </button>
+          </div>
+        </aside>
+      `;
+    }
+
+    function renderConversation() {
+      const m = mission(state.selectedMission);
+      const linked = coordinatorSessions(m.id);
+      return `
+        <section class="panel conversation">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Conversation</div>
+              <div class="panel-sub">${escapeHtml(m.title)}</div>
+            </div>
+            <span class="spacer"></span>
+            <button class="link-button">Stop</button>
+            <button class="link-button">Clear</button>
+          </div>
+
+          <div class="scroll">
+            ${renderMissionSummary(m)}
+            ${m.messages.map(renderMessage).join("")}
+            ${linked.map(renderDelegatedCard).join("")}
+          </div>
+
+          ${m.checkpoint === "step" && state.checkpointOpen ? renderCheckpoint(m) : m.checkpoint === "approval" ? renderCheckpoint(m) : ""}
+          ${renderCoordinatorComposer(m)}
+        </section>
+      `;
+    }
+
+    function renderMissionSummary(m) {
+      return `
+        <div class="mission-card">
+          <div class="mission-head">
+            <strong>Mission Plan</strong>
+            <span class="spacer"></span>
+            ${pill(m.revision, "blue")}
+            ${pill(m.status, statusClass[m.status] || "")}
+            ${pill(m.approval, statusClass[m.approval] || "")}
+          </div>
+          <div class="mission-objective"><strong>${escapeHtml(m.objective)}</strong></div>
+          <div class="chips">
+            ${chip(`Template: ${m.template}`)}
+            ${chip(`Pace: ${m.pace}`, m.pace === "Auto" ? "blue" : "amber")}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderMessage(msg) {
+      return `
+        <div class="message ${msg.role === "user" ? "user" : ""}">
+          <div class="message-label">${msg.role === "user" ? "You" : "Coordinator"}</div>
+          <div class="message-body">${escapeHtml(msg.text)}</div>
+        </div>
+      `;
+    }
+
+    function renderDelegatedCard(s) {
+      return `
+        <div class="delegated-card ${state.selectedSession === s.id ? "active" : ""}" data-action="select-session" data-id="${s.id}">
+          <span class="small-icon">D</span>
+          <span>
+            <span class="card-title">${escapeHtml(s.title)}</span>
+            <span class="card-sub">${escapeHtml(s.owner || "Normal Agent session")}</span>
+          </span>
+          ${pill(s.status, statusClass[s.status] || "")}
+        </div>
+      `;
+    }
+
+    function renderCheckpoint(m) {
+      if (m.checkpoint === "approval") {
+        return `
+          <div class="checkpoint">
+            <div class="checkpoint-title">Coordinator checkpoint <span class="spacer"></span>Question 1 of 1</div>
+            <div class="checkpoint-question"><strong>Approval required</strong><br>Choose how the Coordinator should continue from this checkpoint.</div>
+            <div class="option-grid">
+              ${["Proceed|Run the next safe step the Coordinator proposed.","Revise|Edit the plan or instruction before continuing.","Gather evidence|Run narrow read-only probes before approval.","Deepen plan|Run a visible planning pass for broad uncertainty.","Get independent critique|Ask a separate design session to review the plan.","Start smaller|Revise to a smaller first phase.","Stop|End this Mission here."].map(renderOption).join("")}
+            </div>
+            <div class="checkpoint-actions"><button class="secondary-button">Back</button><button class="primary-button" data-action="approve-readme">Continue</button></div>
+          </div>
+        `;
+      }
+      if (m.checkpoint === "step") {
+        return `
+          <div class="checkpoint">
+            <div class="checkpoint-title">Step checkpoint <span class="spacer"></span>${escapeHtml(m.pace)} pace</div>
+            <div class="checkpoint-question"><strong>Implementation boundary reached</strong><br>Review the current DAG step before moving to the next safe step.</div>
+            <div class="option-grid">
+              ${["Continue|Resume the Coordinator with this observed boundary.","Revise|Edit the plan or instruction before continuing.","Stop|End this Mission here."].map(renderOption).join("")}
+            </div>
+            <div class="checkpoint-actions"><button class="secondary-button">Back</button><button class="primary-button">Continue</button></div>
+          </div>
+        `;
+      }
+      return "";
+    }
+
+    function renderOption(raw) {
+      const [title, desc] = raw.split("|");
+      return `<button class="option"><span class="radio"></span><span><strong>${escapeHtml(title)}</strong><span>${escapeHtml(desc)}</span></span></button>`;
+    }
+
+    function renderCoordinatorComposer(m) {
+      return `
+        <div class="composer">
+          <div class="composer-box">
+            <textarea placeholder="Message Coordinator..."></textarea>
+            <div class="composer-strip">
+              ${pill("Coordinator", "blue")}
+              ${pill(m.status === "Running" ? "Live" : m.status, statusClass[m.status] || "")}
+              <span class="seg">
+                <button class="${m.pace === "Step" ? "active" : ""}" data-action="set-pace" data-pace="Step">Step</button>
+                <button class="${m.pace === "Auto" ? "active" : ""}" data-action="set-pace" data-pace="Auto">Auto</button>
+              </span>
+              ${m.checkpoint === "step" ? `<button class="checkpoint-trigger" data-action="toggle-checkpoint">${state.checkpointOpen ? "Hide checkpoint" : "Step checkpoint"}</button>` : ""}
+              ${pill("MCP / Tools")}
+              ${m.id === "m-readme" ? pill("Mission Template") : ""}
+              <button class="send">></button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderWorkPanel(all) {
+      return `
+        <section class="panel work-panel ${all ? "all-board" : ""} ${state.inspectorCollapsed ? "inspector-collapsed" : ""}">
+          <div class="panel-tabs">
+            <span class="tabseg">
+              <button class="${state.rightTab === "board" ? "active" : ""}" data-action="right-tab" data-tab="board">Board</button>
+              <button class="${state.rightTab === "plan" ? "active" : ""}" data-action="right-tab" data-tab="plan">Plan</button>
+            </span>
+            <span class="spacer"></span>
+            ${all ? pill("All active Coordinator work", "blue") : pill(mission(state.selectedMission).revision, "blue")}
+            ${pill("MCP active", "blue")}
+          </div>
+          ${state.rightTab === "board" ? renderBoard(all) : renderPlan()}
+          ${renderInspector()}
+        </section>
+      `;
+    }
+
+    function renderBoard(all) {
+      const visible = all ? coordinatorSessions() : coordinatorSessions(state.selectedMission);
+      return `
+        <div class="board">
+          ${lanes.map(lane => {
+            const rows = visible.filter(s => s.status === lane);
+            return `
+              <div class="lane">
+                <div class="lane-header"><span class="dot" style="color:${laneColor(lane)}"></span>${lane}<span class="lane-count">${rows.length}</span></div>
+                <div class="lane-body">
+                  ${rows.length ? rows.map(s => renderWorkCard(s, all)).join("") : `<div class="empty">No sessions</div>`}
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      `;
+    }
+
+    function laneColor(lane) {
+      return lane === "Done" ? "var(--green)" : lane === "Needs you" ? "var(--amber)" : "var(--blue)";
+    }
+
+    function renderWorkCard(s, all) {
+      return `
+        <div class="work-card ${state.selectedSession === s.id ? "active" : ""}" data-action="select-session" data-id="${s.id}">
+          <div class="card-title">${escapeHtml(s.title)}</div>
+          <div class="chips">
+            ${all ? chip(s.owner, "blue") : ""}
+            ${chip(boardWorkflowLabel(s.workflow), workflowClass(s.workflow))}
+            ${chip(boardPolicyLabel(s.policy))}
+          </div>
+        </div>
+      `;
+    }
+
+    function boardWorkflowLabel(workflow) {
+      if (workflow === "agent_explore") return "Explore";
+      return workflow || "Agent";
+    }
+
+    function boardPolicyLabel(policy) {
+      if (policy === "Read-only child") return "Read-only";
+      if (policy === "Sibling on same worktree") return "Same worktree";
+      return policy;
+    }
+
+    function renderPlan() {
+      const m = mission(state.selectedMission);
+      return `
+        <div class="plan">
+          ${renderMissionSummary(m)}
+          ${m.workstreams.map(ws => `
+            <div class="workstream">
+              <div class="workstream-head">
+                <div class="workstream-title">
+                  <span class="workstream-name">${escapeHtml(ws.title)}</span>
+                  <span class="workstream-chips">${chip(ws.role)}${chip(ws.policy, "blue")}${chip(ws.strategy)}</span>
+                </div>
+                <div class="workstream-purpose">${escapeHtml(ws.purpose)}</div>
+              </div>
+              <div class="nodes">
+                ${ws.nodes.map((nodeID, idx) => renderNodeCard(m.nodes[nodeID], nodeID, idx > 0 && m.nodes[nodeID].policy.includes("Steer"))).join("")}
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    function renderNodeCard(node, nodeID, continuation) {
+      return `
+        <div class="node-card ${continuation ? "continuation" : ""} ${state.selectedNode === nodeID ? "active" : ""}" data-action="select-node" data-id="${nodeID}">
+          <div class="node-head"><strong>${escapeHtml(node.title)}</strong><span class="spacer"></span>${pill(node.status, statusClass[node.status] || "")}</div>
+          <div class="chips">
+            ${chip(node.workflow, workflowClass(node.workflow))}
+            ${chip(node.policy, "blue")}
+            ${node.deps ? chip(`${node.deps} dependencies`) : ""}
+            ${node.session ? chip("Bound session", "green") : ""}
+          </div>
+          <div class="node-desc">${escapeHtml(node.desc)}</div>
+        </div>
+      `;
+    }
+
+    function activeNode() {
+      const m = mission(state.selectedMission);
+      return m.nodes[state.selectedNode] || Object.values(m.nodes)[0];
+    }
+
+    function renderInspector() {
+      if (state.rightTab === "plan") {
+        const node = activeNode();
+        const bound = node.session ? session(node.session) : null;
+        return `
+          <div class="inspector ${state.inspectorCollapsed ? "collapsed" : ""}">
+            ${renderInspectorHandle()}
+            <div class="inspector-body">
+              <div class="inspector-head"><span class="pill">Plan Inspector</span><div class="inspector-title">${escapeHtml(node.title)}</div><span class="spacer"></span>${bound ? `<button class="primary-button" data-action="open-agent" data-id="${bound.id}">Open Agent</button>` : ""}</div>
+              <div class="kv">
+                <span>Status</span><span>${escapeHtml(node.status)}</span>
+                <span>Workflow</span><span>${escapeHtml(node.workflow || "Coordinator only")}</span>
+                <span>Execution policy</span><span>${escapeHtml(node.policy)}</span>
+                <span>Dependencies</span><span>${node.deps}</span>
+                <span>Bound session</span><span>${bound ? escapeHtml(bound.title) : "None"}</span>
+                <span>Recent event</span><span>${node.status === "Running" ? "node_started" : node.status === "Completed" ? "node_completed" : "planned"}</span>
+                <span>Routing decision</span><span>${bound ? escapeHtml(`Use ${bound.policy}; context is preserved in ${bound.worktree}.`) : "Coordinator-owned state update."}</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+      const s = session(state.selectedSession);
+      return `
+        <div class="inspector ${state.inspectorCollapsed ? "collapsed" : ""}">
+          ${renderInspectorHandle()}
+          <div class="inspector-body">
+            <div class="inspector-head"><span class="pill">Inspector</span><div class="inspector-title">${escapeHtml(s.title)}</div><span class="spacer"></span><button class="primary-button" data-action="open-agent" data-id="${s.id}">Open Agent</button></div>
+            <div class="kv">
+              <span>Status</span><span>${escapeHtml(s.status)}</span>
+              <span>Owner Mission</span><span>${escapeHtml(s.owner || "None")}</span>
+              <span>Workflow</span><span>${escapeHtml(s.workflow || "None")}</span>
+              <span>Policy</span><span>${escapeHtml(s.policy)}</span>
+              <span>Worktree</span><code>${escapeHtml(s.worktree)}</code>
+              <span>Branch</span><code>${escapeHtml(s.branch)}</code>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderInspectorHandle() {
+      return `<button class="inspector-handle" data-action="toggle-inspector" data-drag="inspector" aria-label="${state.inspectorCollapsed ? "Expand inspector" : "Collapse inspector"}"></button>`;
+    }
+
+    function renderAgent() {
+      const s = session(state.agentSession);
+      const owned = subagentsFor(s.id);
+      const parent = s.parentSession ? session(s.parentSession) : null;
+      return `
+        <section class="surface agent-shell">
+          ${renderAgentSidebar()}
+          <section class="panel agent-chat">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">${escapeHtml(s.title)}</div>
+                <div class="panel-sub">${escapeHtml(s.workflow || "Agent")} - ${escapeHtml(s.worktree)} - ${escapeHtml(s.branch)}</div>
+              </div>
+              <span class="spacer"></span>
+              ${parent ? `<button class="secondary-button" data-action="select-agent-session" data-id="${parent.id}">Back to parent</button>` : s.mission ? `<button class="secondary-button" data-action="surface" data-surface="coordinator">Back to Coordinator</button>` : ""}
+            </div>
+            <div class="agent-transcript">
+              <div class="message user"><div class="message-label">You</div><div class="message-body">${escapeHtml(agentPromptFor(s))}</div></div>
+              ${s.transcript.map(text => `<div class="message"><div class="message-label">Agent</div><div class="message-body">${escapeHtml(text)}</div></div>`).join("")}
+              ${owned.length ? renderSubagentPanel(owned) : ""}
+              ${s.tools.map(tool => `<div class="tool-card"><span class="dot" style="color:var(--green)"></span>${escapeHtml(tool)}</div>`).join("")}
+            </div>
+            <div class="agent-composer">
+              <div class="agent-composer-box">
+                <textarea placeholder="Send a message..."></textarea>
+                <div class="agent-strip">
+                  ${pill("MCP", "amber")}
+                  ${pill(`Codex CLI - ${s.model}`)}
+                  ${pill(s.workflow || "Workflow")}
+                  ${pill(s.worktree.includes("rp-agent") ? "Work locally" : "Parent checkout")}
+                  ${pill("Tools")}
+                  ${pill("Permissions")}
+                  <button class="send">></button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+      `;
+    }
+
+    function renderSubagentPanel(items) {
+      return `
+        <div class="subagent-panel">
+          <div class="subagent-panel-title">Agent-owned sub-agents</div>
+          ${items.map(child => `
+            <div class="subagent-card ${state.agentSession === child.id ? "active" : ""}" data-action="select-agent-session" data-id="${child.id}">
+              <span>
+                <span class="card-title">${escapeHtml(child.title)}</span>
+                <span class="card-sub">${escapeHtml(child.workflow || "Agent")} - ${escapeHtml(child.policy)}</span>
+              </span>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    function agentPromptFor(s) {
+      if (s.workflow === "Investigate") return "Read-only investigation for issue #298. Find evidence and report file references. Do not edit files.";
+      if (s.workflow === "Review") return "Review the implementation worktree from a fresh session and report correctness, safety, and test coverage.";
+      if (s.workflow === "Orchestrate") return "Implement issue #298 provider cleanup in the isolated worktree. Keep changes focused.";
+      if (s.workflow === "agent_explore") return "Read-only probe. Return concise findings and do not edit files.";
+      if (s.parentSession) return "Continue this sub-agent session. Report concise findings back to the parent agent.";
+      return "Continue this Agent Mode session.";
+    }
+
+    function renderAgentSidebar() {
+      const visible = sessions.filter(s => !s.parentSession);
+      return `
+        <aside class="panel agent-sidebar">
+          <input class="search" placeholder="Search">
+          <div class="rows">
+            <div class="section-title"><span>Today</span></div>
+            ${visible.map(renderAgentSidebarSession).join("")}
+            <button class="row-button"><span class="row-leading">Z</span><span class="row-copy"><span class="row-title">Archived Sessions</span><span class="row-sub">38 archived sessions</span></span></button>
+          </div>
+          <div class="sidebar-footer">
+            <div class="workspace-card">
+              <div class="workspace-heading">
+                <span>Workspace</span>
+                <button class="workspace-switch">runtime-demo</button>
+              </div>
+              <div class="repo-list">
+                <div class="repo-row">
+                  <span class="row-leading">R</span>
+                  <span>
+                    <span class="repo-name">repoprompt-ce-coordinator-runtime-demo</span>
+                    <span class="repo-branch">coordinator/runtime-demo</span>
+                  </span>
+                </div>
+                <div class="repo-row add-folder">
+                  <span class="row-leading">+</span>
+                  <span>Add Folder</span>
+                </div>
+              </div>
+            </div>
+            <div class="footer-actions"><button class="ghost-button">Models</button><button class="ghost-button">Permissions</button></div>
+          </div>
+        </aside>
+      `;
+    }
+
+    function renderAgentSidebarSession(s) {
+      const children = subagentsFor(s.id);
+      return `
+        <button class="row-button ${state.agentSession === s.id ? "active" : ""}" data-action="select-agent-session" data-id="${s.id}">
+          <span class="row-leading">${s.coordinatorChild ? "C" : "A"}</span>
+          <span class="row-copy"><span class="row-title">${escapeHtml(s.title)}</span><span class="row-sub">${escapeHtml(s.coordinatorChild ? `Delegated from ${s.owner}` : "Normal Agent session")}</span></span>
+        </button>
+        ${children.map(child => `
+          <button class="row-button child-row ${state.agentSession === child.id ? "active" : ""}" data-action="select-agent-session" data-id="${child.id}">
+            <span class="row-leading">S</span>
+            <span class="row-copy"><span class="row-title">${escapeHtml(child.title)}</span><span class="row-sub">${escapeHtml(`Sub-agent of ${s.title}`)}</span></span>
+          </button>
+        `).join("")}
+      `;
+    }
+
+    function bindEvents() {
+      document.querySelectorAll("[data-action]").forEach(el => {
+        el.addEventListener("click", event => {
+          const target = event.currentTarget;
+          const action = target.dataset.action;
+          if (action === "surface") state.surface = target.dataset.surface;
+          if (action === "coord-dest") state.coordDestination = target.dataset.dest;
+          if (action === "select-mission") {
+            state.selectedMission = target.dataset.id;
+            const m = mission(state.selectedMission);
+            state.pace = m.pace;
+            state.selectedNode = Object.keys(m.nodes)[0];
+            const first = sessions.find(s => s.mission === m.id);
+            if (first) state.selectedSession = first.id;
+            state.coordDestination = "chat";
+            state.checkpointOpen = false;
+          }
+          if (action === "right-tab") state.rightTab = target.dataset.tab;
+          if (action === "select-session") {
+            state.selectedSession = target.dataset.id;
+            state.rightTab = "board";
+          }
+          if (action === "select-node") {
+            state.selectedNode = target.dataset.id;
+            const node = activeNode();
+            if (node.session) state.selectedSession = node.session;
+          }
+          if (action === "open-agent") {
+            state.agentSession = target.dataset.id;
+            state.surface = "agent";
+          }
+          if (action === "select-agent-session") state.agentSession = target.dataset.id;
+          if (action === "set-pace") {
+            mission(state.selectedMission).pace = target.dataset.pace;
+          }
+          if (action === "toggle-checkpoint") {
+            state.checkpointOpen = !state.checkpointOpen;
+          }
+          if (action === "toggle-inspector") {
+            if (state.inspectorSuppressClick) {
+              state.inspectorSuppressClick = false;
+              render();
+              return;
+            }
+            state.inspectorCollapsed = !state.inspectorCollapsed;
+          }
+          if (action === "approve-readme") {
+            const m = mission("m-readme");
+            m.approval = "Approved";
+            m.status = "Running";
+            m.checkpoint = "step";
+            m.messages.push({ role: "coordinator", text: "Approved. I will launch the read-only README purpose probe and bind the child session to the Mission Plan node." });
+            session("s-readme").status = "Working";
+            state.checkpointOpen = false;
+          }
+          render();
+        });
+      });
+      document.querySelectorAll("[data-drag='inspector']").forEach(el => {
+        el.addEventListener("pointerdown", event => {
+          state.inspectorDragY = event.clientY;
+          el.setPointerCapture(event.pointerId);
+        });
+        el.addEventListener("pointerup", event => {
+          if (state.inspectorDragY === null) return;
+          const delta = event.clientY - state.inspectorDragY;
+          state.inspectorDragY = null;
+          if (delta > 28) {
+            state.inspectorCollapsed = true;
+            state.inspectorSuppressClick = true;
+            render();
+          } else if (delta < -28) {
+            state.inspectorCollapsed = false;
+            state.inspectorSuppressClick = true;
+            render();
+          }
+        });
+        el.addEventListener("pointercancel", () => {
+          state.inspectorDragY = null;
+        });
+      });
+    }
+
+    document.getElementById("surfaceCoordinator").addEventListener("click", () => { state.surface = "coordinator"; render(); });
+    document.getElementById("surfaceAgent").addEventListener("click", () => { state.surface = "agent"; render(); });
+    render();
   </script>
 </body>
 </html>
