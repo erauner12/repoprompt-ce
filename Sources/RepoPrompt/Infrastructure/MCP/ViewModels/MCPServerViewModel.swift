@@ -434,6 +434,7 @@ final class MCPServerViewModel: ObservableObject {
             askOracleToolName: MCPWindowToolName.askOracle,
             oracleSendToolName: MCPWindowToolName.oracleSend,
             oracleChatLogToolName: MCPWindowToolName.oracleChatLog,
+            windowID: windowID,
             promptVM: promptVM,
             oracleVM: oracleVM,
             captureRequestMetadata: { [self] in await captureRequestMetadata() },
@@ -821,6 +822,7 @@ final class MCPServerViewModel: ObservableObject {
 
     @Published private(set) var isRunning = false // overall status
     @Published private(set) var pendingClientID: String? // approval state
+    @Published private(set) var pendingApprovalPresentation: MCPApprovalPresentation?
     @Published private(set) var diagnostics: MCPDiagnostics = .init(
         issue: .none,
         lastEventAt: nil,
@@ -2430,6 +2432,7 @@ final class MCPServerViewModel: ObservableObject {
 
         isRunning = snap.isRunning
         pendingClientID = snap.pendingClientID
+        pendingApprovalPresentation = snap.pendingApprovalPresentation
         diagnostics = snap.diagnostics
         lastErrorMessage = humanReadableError(from: snap.diagnostics.issue)
 
