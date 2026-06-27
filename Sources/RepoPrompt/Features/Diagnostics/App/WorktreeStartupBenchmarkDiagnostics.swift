@@ -813,7 +813,7 @@
 
                 var payload: [String: Any] = [
                     "ok": true,
-                    "schema_version": 5,
+                    "schema_version": 6,
                     "action": export ? "export" : "snapshot",
                     "scope": [
                         "window_id": scope.windowID,
@@ -1088,6 +1088,9 @@
                 "correlation_id": record.correlationID.uuidString,
                 "source": evaluation.source.rawValue,
                 "decision": evaluation.decision.rawValue,
+                "policy_canonicalization_comparison": record.policyCanonicalizationComparison.map(
+                    policyCanonicalizationComparisonPayload
+                ) ?? NSNull(),
                 "field_evaluations": evaluation.fieldEvaluations.map {
                     [
                         "field": $0.field.rawValue,
@@ -1111,6 +1114,113 @@
                 "duplicate": record.duplicate,
                 "contradictory": record.contradictory
             ]
+        }
+
+        private static func policyCanonicalizationComparisonPayload(
+            _ comparison: GitWorkspacePolicyCanonicalizationDiagnostics.Comparison
+        ) -> [String: Any] {
+            [
+                "classification": comparison.classification.rawValue,
+                "constituent_comparisons": comparison.constituentComparisons.map {
+                    [
+                        "constituent": $0.constituent.rawValue,
+                        "matched": $0.matched
+                    ]
+                },
+                "base": comparison.base.map(policyCanonicalizationDiagnosticsPayload) ?? NSNull(),
+                "target": comparison.target.map(policyCanonicalizationDiagnosticsPayload) ?? NSNull()
+            ]
+        }
+
+        private static func policyCanonicalizationDiagnosticsPayload(
+            _ diagnostics: GitWorkspacePolicyCanonicalizationDiagnostics
+        ) -> [String: Any] {
+            [
+                "constituents": GitWorkspacePolicyCanonicalizationDiagnostics.Constituent.allCases.map {
+                    policyCanonicalizationConstituentPayload($0, diagnostics: diagnostics)
+                }
+            ]
+        }
+
+        private static func policyCanonicalizationConstituentPayload(
+            _ constituent: GitWorkspacePolicyCanonicalizationDiagnostics.Constituent,
+            diagnostics: GitWorkspacePolicyCanonicalizationDiagnostics
+        ) -> [String: Any] {
+            switch constituent {
+            case .rootNeutralPolicyConfig:
+                [
+                    "constituent": constituent.rawValue,
+                    "byte_count": diagnostics.rootNeutralPolicyConfigByteCount,
+                    "sha256": diagnostics.rootNeutralPolicyConfigSHA256
+                ]
+            case .commonInfoExclude:
+                [
+                    "constituent": constituent.rawValue,
+                    "state": diagnostics.commonInfoExclude.state.rawValue,
+                    "digest": diagnostics.commonInfoExclude.digest
+                ]
+            case .canonicalIgnoreFooter:
+                [
+                    "constituent": constituent.rawValue,
+                    "digest": diagnostics.canonicalIgnoreFooter.digest,
+                    "record_count": diagnostics.canonicalIgnoreFooter.recordCount
+                ]
+            case .externalExcludes:
+                [
+                    "constituent": constituent.rawValue,
+                    "state": diagnostics.externalExcludes.state.rawValue,
+                    "identity_digest": diagnostics.externalExcludes.identityDigest,
+                    "byte_count": diagnostics.externalExcludes.byteCount
+                ]
+            case .configuredIgnorePolicy:
+                [
+                    "constituent": constituent.rawValue,
+                    "digest": diagnostics.configuredIgnorePolicyDigest
+                ]
+            case .commonInfoAttributes:
+                [
+                    "constituent": constituent.rawValue,
+                    "state": diagnostics.commonInfoAttributes.state.rawValue,
+                    "digest": diagnostics.commonInfoAttributes.digest
+                ]
+            case .canonicalAttributeFooter:
+                [
+                    "constituent": constituent.rawValue,
+                    "digest": diagnostics.canonicalAttributeFooter.digest,
+                    "record_count": diagnostics.canonicalAttributeFooter.recordCount
+                ]
+            case .externalAttributes:
+                [
+                    "constituent": constituent.rawValue,
+                    "state": diagnostics.externalAttributes.state.rawValue,
+                    "identity_digest": diagnostics.externalAttributes.identityDigest,
+                    "byte_count": diagnostics.externalAttributes.byteCount
+                ]
+            case .attributePolicy:
+                [
+                    "constituent": constituent.rawValue,
+                    "digest": diagnostics.attributePolicyDigest
+                ]
+            case .sparsePolicy:
+                [
+                    "constituent": constituent.rawValue,
+                    "digest": diagnostics.sparsePolicyDigest
+                ]
+            case .canonicalization:
+                [
+                    "constituent": constituent.rawValue,
+                    "policy_version": diagnostics.canonicalizationPolicyVersion,
+                    "pruned_root_count": diagnostics.prunedRootCount,
+                    "pruned_root_summary_sha256": diagnostics.prunedRootSummarySHA256,
+                    "completeness": diagnostics.completeness.rawValue
+                ]
+            case .committedControls:
+                [
+                    "constituent": constituent.rawValue,
+                    "record_count": diagnostics.committedControlCount,
+                    "summary_sha256": diagnostics.committedControlSummarySHA256
+                ]
+            }
         }
 
         private static func receiptCreationPayload(

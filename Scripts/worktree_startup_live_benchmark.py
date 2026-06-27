@@ -31,7 +31,7 @@ from typing import Any, Iterable
 
 
 SCHEMA_VERSION = 1
-DIAGNOSTIC_SCHEMA_VERSION = 5
+DIAGNOSTIC_SCHEMA_VERSION = 6
 PRIMARY_REVALIDATION_VERSION = 1
 DEBUG_TOOL = "__repoprompt_debug_diagnostics"
 WORKSPACE_PREFIXES = ("RPCE 8E Bench ", "RPCE Search Bench ")
@@ -49,6 +49,26 @@ EXPECTED_ACTUAL_ROUTE_COUNTS = {
     "forced-full": {"fullCrawl": 1},
     "projected": {"diffSeedServing": 1},
 }
+
+
+@dataclass(frozen=True)
+class RouteObservationExpectation:
+    phase: str
+    route: str
+
+
+POLICY_DIGEST_PROBE_ROUTE_EVENTS = (
+    RouteObservationExpectation("seedWatcherAttached", "diffSeedServing"),
+    RouteObservationExpectation("seedReplayFenced", "diffSeedServing"),
+    RouteObservationExpectation("seedReadyForCommit", "diffSeedServing"),
+    RouteObservationExpectation("seedPublished", "diffSeedServing"),
+)
+
+
+def policy_digest_probe_route_observation_count(route: str) -> int:
+    return sum(event.route == route for event in POLICY_DIGEST_PROBE_ROUTE_EVENTS)
+
+
 DELTA_COMPATIBILITY_FIELDS = [
     "repositoryNamespace",
     "objectFormat",
@@ -66,6 +86,26 @@ DELTA_COMPATIBILITY_FIELDS = [
     "resolvedExcludesFileIdentity",
     "resolvedAttributesFileIdentity",
 ]
+POLICY_CANONICALIZATION_CONSTITUENTS = [
+    "rootNeutralPolicyConfig",
+    "commonInfoExclude",
+    "canonicalIgnoreFooter",
+    "externalExcludes",
+    "configuredIgnorePolicy",
+    "commonInfoAttributes",
+    "canonicalAttributeFooter",
+    "externalAttributes",
+    "attributePolicy",
+    "sparsePolicy",
+    "canonicalization",
+    "committedControls",
+]
+POLICY_CANONICALIZATION_CLASSIFICATIONS = {
+    "canonicalEquivalentAfterReachabilityFiltering",
+    "semanticInputDifference",
+    "incomplete",
+    "incoherent",
+}
 REQUIRED_GIT_FIELDS = {
     "available", "command_count", "families", "priorities", "queue_wait_us",
     "duration_us", "output_bytes", "cancelled_count",
@@ -2291,6 +2331,71 @@ def self_test_command(_args: argparse.Namespace) -> int:
             decision.update({
                 "creation_attempt_count": 1,
                 "creation": {
+                    "source_layout_state": "mainCheckout",
+                    "destination_eligibility": "eligible",
+                    "source_authority_key_digest": "1" * 64,
+                    "source_common_directory_digest": "2" * 64,
+                    "repository_id_digest": "3" * 64,
+                    "repository_namespace_digest": "4" * 64,
+                    "requested_prefix_digest": "5" * 64,
+                    "current_lease_present": True,
+                    "current_lease_current_at_snapshot_lookup": True,
+                    "current_snapshot_present": True,
+                    "current_snapshot_content_address_valid": True,
+                    "current_snapshot_sha256": "6" * 64,
+                    "parent_lookup_route": "currentAlias",
+                    "parent_lookup_failure": "none",
+                    "parent_authority_key_match": "match",
+                    "parent_prefix_match": "match",
+                    "target_tree_resolution": "succeeded",
+                    "witness_requested": True,
+                    "witness_started": True,
+                    "witness_finished": True,
+                    "witness_start_event_id": 100,
+                    "witness_end_event_id": 110,
+                    "witness_start_event_id_valid": True,
+                    "witness_end_event_id_valid": True,
+                    "witness_stable_root_available_before_mutation": True,
+                    "witness_destination_absent_before_mutation": True,
+                    "witness_destination_strict_descendant": True,
+                    "witness_stable_root_unchanged_after_initialization": True,
+                    "witness_stream_creation_succeeded": True,
+                    "witness_activation_flush_completed": True,
+                    "witness_activation_callback_barrier_completed": True,
+                    "witness_ending_flush_completed": True,
+                    "witness_ending_callback_barrier_completed": True,
+                    "witness_start_accepted_callback_watermark": 10,
+                    "witness_end_accepted_callback_watermark": 12,
+                    "witness_accepted_callback_count": 12,
+                    # The producer counts every callback event, including events
+                    # beyond the closed semantic cut. Only the two classified
+                    # events below contribute to the interval evidence.
+                    "witness_accepted_event_count": 3,
+                    "witness_accepted_destination_event_count": 1,
+                    "witness_accepted_non_destination_event_count": 1,
+                    "witness_must_scan_sub_dirs": False,
+                    "witness_root_changed": False,
+                    "witness_user_dropped": False,
+                    "witness_kernel_dropped": False,
+                    "witness_event_ids_wrapped": False,
+                    "witness_event_id_regressed": False,
+                    "witness_lifetime_exceeded": False,
+                    "witness_gap": False,
+                    "witness_drop": False,
+                    "witness_overflow": False,
+                    "witness_proves_interval": True,
+                    "include_copy_requested": True,
+                    "include_copy_result_present": False,
+                    "include_copy_complete": True,
+                    "include_copy_had_failures": False,
+                    "target_layout_present": True,
+                    "target_layout_linked": True,
+                    "target_authority_capture": "succeeded",
+                    "common_directory_match": "match",
+                    "repository_id_match": "match",
+                    "repository_namespace_match": "match",
+                    "target_prefix_match": "match",
+                    "target_tree_authority_match": "match",
                     "receipt_emitted": True,
                     "outcome": "receiptEmitted",
                     "receipt_fallback_reason": None,
@@ -2322,6 +2427,51 @@ def self_test_command(_args: argparse.Namespace) -> int:
                 "final_observation": {"state": "eligible"},
             })
         return decision
+
+    def policy_canonicalization_fixture() -> dict[str, Any]:
+        base_constituents: list[dict[str, Any]] = [
+            {"constituent": "rootNeutralPolicyConfig", "byte_count": 0, "sha256": "a" * 64},
+            {"constituent": "commonInfoExclude", "state": "missing", "digest": "b" * 64},
+            {"constituent": "canonicalIgnoreFooter", "digest": "c" * 64, "record_count": 4},
+            {
+                "constituent": "externalExcludes", "state": "unset",
+                "identity_digest": "d" * 64, "byte_count": 0,
+            },
+            {"constituent": "configuredIgnorePolicy", "digest": "e" * 64},
+            {"constituent": "commonInfoAttributes", "state": "regular", "digest": "f" * 64},
+            {"constituent": "canonicalAttributeFooter", "digest": "1" * 64, "record_count": 1},
+            {
+                "constituent": "externalAttributes", "state": "unset",
+                "identity_digest": "2" * 64, "byte_count": 0,
+            },
+            {"constituent": "attributePolicy", "digest": "3" * 64},
+            {"constituent": "sparsePolicy", "digest": "4" * 64},
+            {
+                "constituent": "canonicalization",
+                "policy_version": "mandatory-gitignore-floor-reachable-controls-v3",
+                "pruned_root_count": 1,
+                "pruned_root_summary_sha256": "5" * 64,
+                "completeness": "complete",
+            },
+            {
+                "constituent": "committedControls", "record_count": 5,
+                "summary_sha256": "6" * 64,
+            },
+        ]
+        target_constituents = json.loads(json.dumps(base_constituents))
+        target_constituents[-2].update({
+            "pruned_root_count": 0,
+            "pruned_root_summary_sha256": "7" * 64,
+        })
+        return {
+            "classification": "canonicalEquivalentAfterReachabilityFiltering",
+            "constituent_comparisons": [
+                {"constituent": name, "matched": True}
+                for name in POLICY_CANONICALIZATION_CONSTITUENTS
+            ],
+            "base": {"constituents": base_constituents},
+            "target": {"constituents": target_constituents},
+        }
 
     def export_fixture(route: str) -> dict[str, Any]:
         boundaries = {
@@ -2370,6 +2520,7 @@ def self_test_command(_args: argparse.Namespace) -> int:
                     "terminal_fallback": None,
                     "duplicate": False,
                     "contradictory": False,
+                    "policy_canonicalization_comparison": policy_canonicalization_fixture(),
                 })
         return {
             "schema_version": DIAGNOSTIC_SCHEMA_VERSION,
@@ -2478,7 +2629,8 @@ def self_test_command(_args: argparse.Namespace) -> int:
         }
 
     def finalize_primary_fixture(
-        primary: dict[str, Any], *, route: str = "baseline", cleanup_complete: bool = True
+        primary: dict[str, Any], *, route: str = "baseline", cleanup_complete: bool = True,
+        expected_route_observation_count: int = 1,
     ) -> None:
         finalize_primary_performance(
             primary, route=route,
@@ -2488,6 +2640,7 @@ def self_test_command(_args: argparse.Namespace) -> int:
             expected_build=primary_build, expected_fixture=primary_fixture_identity,
             resource_failures=[], cleanup_complete=cleanup_complete,
             build_unchanged=True,
+            expected_route_observation_count=expected_route_observation_count,
         )
 
     codemap_timeout_primary = primary_fixture()
@@ -2639,6 +2792,87 @@ def self_test_command(_args: argparse.Namespace) -> int:
         "receipt_projected_decision_contract_mismatch"
         in receipt_failures(projected_mixed_attempt, "projected")
     )
+    additive_receipt = export_fixture("projected")
+    additive_receipt["receipt_decisions"][0]["creation"]["future_physical_evidence"] = {
+        "producer_version": 7,
+    }
+    checks["receipt_projected_unknown_additive_field_accepted"] = not receipt_failures(
+        additive_receipt, "projected"
+    )
+    for field in ("current_snapshot_content_address_valid", "witness_proves_interval"):
+        contradictory_receipt = export_fixture("projected")
+        contradictory_receipt["receipt_decisions"][0]["creation"][field] = False
+        checks[f"receipt_projected_contradictory_{field}_rejected"] = (
+            "receipt_projected_decision_contract_mismatch"
+            in receipt_failures(contradictory_receipt, "projected")
+        )
+    wrong_physical_type = export_fixture("projected")
+    wrong_physical_type["receipt_decisions"][0]["creation"]["witness_proves_interval"] = 1
+    checks["receipt_projected_known_physical_type_rejected"] = (
+        "receipt_projected_decision_contract_mismatch"
+        in receipt_failures(wrong_physical_type, "projected")
+    )
+    event_id_overflow = export_fixture("projected")
+    event_id_overflow["receipt_decisions"][0]["creation"]["witness_end_event_id"] = 1 << 64
+    checks["receipt_projected_uint64_event_id_overflow_rejected"] = (
+        "receipt_projected_decision_contract_mismatch"
+        in receipt_failures(event_id_overflow, "projected")
+    )
+    event_id_sentinel = export_fixture("projected")
+    event_id_sentinel["receipt_decisions"][0]["creation"]["witness_end_event_id"] = (1 << 64) - 1
+    checks["receipt_projected_uint64_event_id_sentinel_rejected"] = (
+        "receipt_projected_decision_contract_mismatch"
+        in receipt_failures(event_id_sentinel, "projected")
+    )
+    callback_watermark_overflow = export_fixture("projected")
+    callback_watermark_overflow["receipt_decisions"][0]["creation"].update({
+        "witness_end_accepted_callback_watermark": 1 << 64,
+        "witness_accepted_callback_count": (1 << 63) - 1,
+    })
+    checks["receipt_projected_uint64_callback_watermark_overflow_rejected"] = (
+        "receipt_projected_decision_contract_mismatch"
+        in receipt_failures(callback_watermark_overflow, "projected")
+    )
+    callback_count_overflow = export_fixture("projected")
+    callback_count_overflow["receipt_decisions"][0]["creation"].update({
+        "witness_end_accepted_callback_watermark": 1 << 63,
+        "witness_accepted_callback_count": 1 << 63,
+    })
+    checks["receipt_projected_swift_int_callback_count_overflow_rejected"] = (
+        "receipt_projected_decision_contract_mismatch"
+        in receipt_failures(callback_count_overflow, "projected")
+    )
+    callback_count_mismatch = export_fixture("projected")
+    callback_count_mismatch["receipt_decisions"][0]["creation"][
+        "witness_accepted_callback_count"
+    ] = 11
+    checks["receipt_projected_callback_watermark_count_mismatch_rejected"] = (
+        "receipt_projected_decision_contract_mismatch"
+        in receipt_failures(callback_count_mismatch, "projected")
+    )
+    events_outside_semantic_cut = export_fixture("projected")
+    outside_cut_creation = events_outside_semantic_cut["receipt_decisions"][0]["creation"]
+    checks["receipt_projected_total_events_outside_semantic_cut_accepted"] = (
+        outside_cut_creation["witness_accepted_event_count"]
+        > outside_cut_creation["witness_accepted_destination_event_count"]
+        + outside_cut_creation["witness_accepted_non_destination_event_count"]
+        and not receipt_failures(events_outside_semantic_cut, "projected")
+    )
+    callback_watermark_regression = export_fixture("projected")
+    callback_watermark_regression["receipt_decisions"][0]["creation"].update({
+        "witness_start_accepted_callback_watermark": 13,
+        "witness_end_accepted_callback_watermark": 12,
+    })
+    checks["receipt_projected_callback_watermark_regression_rejected"] = (
+        "receipt_projected_decision_contract_mismatch"
+        in receipt_failures(callback_watermark_regression, "projected")
+    )
+    wrong_mandatory_type = export_fixture("projected")
+    wrong_mandatory_type["receipt_decisions"][0]["creation_attempt_count"] = True
+    checks["receipt_projected_mandatory_type_rejected"] = (
+        "receipt_projected_decision_contract_mismatch"
+        in receipt_failures(wrong_mandatory_type, "projected")
+    )
     duplicated_terminal = export_fixture("projected")
     duplicated_terminal["receipt_decision_count"] = 2
     duplicated_terminal["terminal_receipt_decision_count"] = 2
@@ -2646,6 +2880,45 @@ def self_test_command(_args: argparse.Namespace) -> int:
     checks["receipt_duplicate_terminal_decision_rejected"] = (
         "terminal_receipt_evidence_invalid"
         in receipt_failures(duplicated_terminal, "projected")
+    )
+
+    probe_route_export = export_fixture("projected")
+    derived_probe_observations = policy_digest_probe_route_observation_count("diffSeedServing")
+    probe_route_export["sample"]["route_counts"] = {
+        "diffSeedServing": derived_probe_observations
+    }
+    checks["policy_digest_probe_observation_count_derived_from_typed_events"] = (
+        derived_probe_observations
+        == len([
+            event for event in POLICY_DIGEST_PROBE_ROUTE_EVENTS
+            if event.route == "diffSeedServing"
+        ])
+        and all(event.phase for event in POLICY_DIGEST_PROBE_ROUTE_EVENTS)
+    )
+    checks["policy_digest_probe_exact_projected_observation_count_accepted"] = not validate_export(
+        probe_route_export, "projected", {"search": True, "read": True},
+        expected_correlation=correlation, expected_session=session,
+        expected_invocation=1, expected_ordinal=1,
+        expected_route_observation_count=derived_probe_observations,
+    )
+    checks["aggregate_projected_route_still_requires_one_observation"] = (
+        "actual_route_counts_mismatch" in validate_export(
+            probe_route_export, "projected", {"search": True, "read": True},
+            expected_correlation=correlation, expected_session=session,
+            expected_invocation=1, expected_ordinal=1,
+        )
+    )
+    probe_route_primary = primary_fixture("projected")
+    probe_route_primary["diagnostic_checkpoint"]["sample"]["route_counts"] = {
+        "diffSeedServing": derived_probe_observations
+    }
+    finalize_primary_fixture(
+        probe_route_primary,
+        route="projected",
+        expected_route_observation_count=derived_probe_observations,
+    )
+    checks["policy_digest_probe_primary_accepts_exact_projected_observations"] = (
+        probe_route_primary["valid"] is True
     )
 
     forced_delta = export_fixture("forced-full")
@@ -2684,6 +2957,96 @@ def self_test_command(_args: argparse.Namespace) -> int:
         "delta_compatibility_evidence_invalid"
         in validate_delta_compatibility_oracle(
             contradictory_delta, "projected", expected_correlation=correlation,
+        )
+    )
+    canonical_equivalent = policy_canonicalization_fixture()
+    checks["policy_canonicalization_equivalence_accepted"] = not validate_policy_canonicalization_comparison(
+        canonical_equivalent, require_canonical_equivalence=True,
+    )
+    semantic_policy = policy_canonicalization_fixture()
+    semantic_policy["classification"] = "semanticInputDifference"
+    semantic_policy["target"]["constituents"][2]["digest"] = "6" * 64
+    semantic_policy["constituent_comparisons"][2]["matched"] = False
+    checks["policy_canonicalization_semantic_classified_but_not_authorized"] = (
+        not validate_policy_canonicalization_comparison(
+            semantic_policy, require_canonical_equivalence=False,
+        )
+        and "policy_canonicalization_not_equivalent"
+        in validate_policy_canonicalization_comparison(
+            semantic_policy, require_canonical_equivalence=True,
+        )
+    )
+    incomplete_policy = policy_canonicalization_fixture()
+    incomplete_policy["classification"] = "incomplete"
+    incomplete_policy["base"]["constituents"][-2]["completeness"] = "incomplete"
+    incomplete_policy["constituent_comparisons"][-2]["matched"] = False
+    checks["policy_canonicalization_incomplete_fails_closed"] = (
+        "policy_canonicalization_not_equivalent"
+        in validate_policy_canonicalization_comparison(
+            incomplete_policy, require_canonical_equivalence=True,
+        )
+    )
+    duplicate_policy = policy_canonicalization_fixture()
+    duplicate_policy["base"]["constituents"].append(
+        json.loads(json.dumps(duplicate_policy["base"]["constituents"][-1]))
+    )
+    checks["policy_canonicalization_duplicate_rejected"] = (
+        "policy_canonicalization_base_constituent_order_invalid"
+        in validate_policy_canonicalization_comparison(
+            duplicate_policy, require_canonical_equivalence=True,
+        )
+    )
+    contradictory_policy = policy_canonicalization_fixture()
+    contradictory_policy["constituent_comparisons"][0]["matched"] = False
+    checks["policy_canonicalization_contradiction_rejected"] = (
+        "policy_canonicalization_comparison_contradictory"
+        in validate_policy_canonicalization_comparison(
+            contradictory_policy, require_canonical_equivalence=True,
+        )
+    )
+    large_policy = policy_canonicalization_fixture()
+    for label in ("base", "target"):
+        large_policy[label]["constituents"][-2]["pruned_root_count"] = 1_000_000
+        large_policy[label]["constituents"][-1]["record_count"] = 1_000_000
+    checks["policy_canonicalization_large_summary_counts_accepted"] = (
+        not validate_policy_canonicalization_comparison(
+            large_policy, require_canonical_equivalence=True,
+        )
+    )
+    additive_policy = policy_canonicalization_fixture()
+    additive_policy["producer_revision"] = 7
+    additive_policy["constituent_comparisons"][0]["future_comparison_evidence"] = "base-target"
+    for label, marker_value in (("base", "left"), ("target", "right")):
+        additive_policy[label]["future_side_evidence"] = marker_value
+        additive_policy[label]["constituents"][0]["future_policy_evidence"] = marker_value
+        additive_policy[label]["constituents"][-1]["future_control_evidence"] = marker_value
+    checks["policy_canonicalization_unknown_additive_fields_accepted"] = (
+        not validate_policy_canonicalization_comparison(
+            additive_policy, require_canonical_equivalence=True,
+        )
+    )
+    count_policy = policy_canonicalization_fixture()
+    count_policy["target"]["constituents"][-1]["record_count"] = 6
+    checks["policy_canonicalization_exact_counts_required"] = (
+        "policy_canonicalization_comparison_contradictory"
+        in validate_policy_canonicalization_comparison(
+            count_policy, require_canonical_equivalence=True,
+        )
+    )
+    summary_policy = policy_canonicalization_fixture()
+    summary_policy["target"]["constituents"][-1]["summary_sha256"] = "A" * 64
+    checks["policy_canonicalization_summary_digest_required"] = (
+        "policy_canonicalization_target_committedControls_value_invalid"
+        in validate_policy_canonicalization_comparison(
+            summary_policy, require_canonical_equivalence=True,
+        )
+    )
+    digest_policy = policy_canonicalization_fixture()
+    digest_policy["target"]["constituents"][0]["sha256"] = "A" * 64
+    checks["policy_canonicalization_lowercase_digests_required"] = (
+        "policy_canonicalization_target_rootNeutralPolicyConfig_value_invalid"
+        in validate_policy_canonicalization_comparison(
+            digest_policy, require_canonical_equivalence=True,
         )
     )
     semantic_mismatch = export_fixture("projected")
@@ -2863,7 +3226,7 @@ def self_test_command(_args: argparse.Namespace) -> int:
     nested_schema_export = export_fixture("baseline")
     nested_schema_export.pop("schema_version")
     nested_schema_export["nested"] = {"schema_version": DIAGNOSTIC_SCHEMA_VERSION}
-    checks["nested_schema_v5_does_not_satisfy_top_level_contract"] = (
+    checks["nested_schema_v6_does_not_satisfy_top_level_contract"] = (
         "diagnostic_schema_mismatch" in validate_export(
             nested_schema_export, "baseline", {"search": True, "read": True},
             expected_correlation=correlation, expected_session=session,
@@ -3561,6 +3924,54 @@ def self_test_command(_args: argparse.Namespace) -> int:
             and query_runner.calls[0][1].get("preparation_id")
             == query_runner.calls[1][1].get("preparation_id")
         )
+    bypass_counter_fixture = {
+        "preparation": {
+            "counters": {"prefix_cache_bypasses": 0},
+            "counter_saturated": {"prefix_cache_bypasses": False},
+        }
+    }
+    checks["policy_digest_probe_cache_bypass_not_inferred_from_field_presence"] = (
+        prefix_control_cache_bypass_evidence(bypass_counter_fixture)["observed"] is False
+    )
+    bypass_counter_fixture["preparation"]["counters"]["prefix_cache_bypasses"] = 1
+    checks["policy_digest_probe_cache_bypass_requires_positive_counter"] = (
+        prefix_control_cache_bypass_evidence(bypass_counter_fixture)
+        == {"counter": 1, "counter_saturated": False, "observed": True}
+    )
+    bypass_counter_fixture["preparation"]["counter_saturated"]["prefix_cache_bypasses"] = True
+    checks["policy_digest_probe_cache_bypass_rejects_saturated_counter"] = (
+        prefix_control_cache_bypass_evidence(bypass_counter_fixture)["observed"] is False
+    )
+    probe_args = configure_policy_digest_probe(argparse.Namespace())
+    checks["policy_digest_probe_configuration_exact"] = {
+        "process_state": probe_args.process_state,
+        "checkout_kind": probe_args.checkout_kind,
+        "route": probe_args.route,
+        "width": probe_args.width,
+        "invocation": probe_args.invocation,
+        "warmups": probe_args.warmups,
+        "samples": probe_args.samples,
+        "bypass_prefix_control_cache": probe_args.bypass_prefix_control_cache,
+        "expected_route_observation_count": probe_args.expected_route_observation_count,
+        "policy_digest_probe": probe_args.policy_digest_probe,
+    } == {
+        "process_state": "warm",
+        "checkout_kind": "linked-worktree",
+        "route": "projected",
+        "width": 1,
+        "invocation": 1,
+        "warmups": 0,
+        "samples": 1,
+        "bypass_prefix_control_cache": True,
+        "expected_route_observation_count": (
+            policy_digest_probe_route_observation_count("diffSeedServing")
+        ),
+        "policy_digest_probe": True,
+    }
+    checks["policy_digest_probe_non_aggregatable"] = is_policy_digest_probe_summary({
+        "kind": "policy-digest-probe",
+        "non_aggregatable": True,
+    }) and not is_policy_digest_probe_summary({"kind": "cohort"})
     if not all(checks.values()):
         raise BenchmarkError(f"self-test failed: {[name for name, ok in checks.items() if not ok]}")
     print(json.dumps({"status": "completed", "checks": checks}, indent=2, sort_keys=True))
@@ -3779,6 +4190,28 @@ def validate_preparation_snapshot(value: Any, preparation_id: str, terminal: str
     if not isinstance(saturation, dict) or set(saturation) != required_counters:
         raise BenchmarkError("preparation snapshot saturation schema mismatch")
     return preparation
+
+
+def prefix_control_cache_bypass_evidence(value: Any) -> dict[str, Any]:
+    """Derive bypass truth only from a valid, unsaturated preparation counter."""
+    try:
+        preparation = find_value(value, "preparation")
+    except BenchmarkError:
+        preparation = None
+    counters = preparation.get("counters") if isinstance(preparation, dict) else None
+    saturation = preparation.get("counter_saturated") if isinstance(preparation, dict) else None
+    counter = counters.get("prefix_cache_bypasses") if isinstance(counters, dict) else None
+    saturated = saturation.get("prefix_cache_bypasses") if isinstance(saturation, dict) else None
+    observed = (
+        nonnegative_integer(counter)
+        and counter > 0
+        and saturated is False
+    )
+    return {
+        "counter": counter if nonnegative_integer(counter) else None,
+        "counter_saturated": saturated if isinstance(saturated, bool) else None,
+        "observed": observed,
+    }
 
 
 def set_route(
@@ -4341,6 +4774,17 @@ def positive_integer(value: Any) -> bool:
     return nonnegative_integer(value) and value > 0
 
 
+def expected_actual_route_counts(
+    route: str, observation_count: int = 1
+) -> dict[str, int]:
+    if route not in EXPECTED_ACTUAL_ROUTE_COUNTS or not positive_integer(observation_count):
+        raise BenchmarkError("expected route observation count must be a positive integer")
+    return {
+        name: count * observation_count
+        for name, count in EXPECTED_ACTUAL_ROUTE_COUNTS[route].items()
+    }
+
+
 def finite_number(value: Any, *, positive: bool = False) -> bool:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return False
@@ -4547,6 +4991,129 @@ def expected_receipt_decision(route: str, correlation: str) -> dict[str, Any]:
     }
 
 
+def matches_mandatory_typed_subset(actual: Any, expected: Any) -> bool:
+    """Require every expected receipt field while permitting additive evidence."""
+    if isinstance(expected, dict):
+        return (
+            isinstance(actual, dict)
+            and all(
+                key in actual and matches_mandatory_typed_subset(actual[key], value)
+                for key, value in expected.items()
+            )
+        )
+    if expected is None:
+        return actual is None
+    return type(actual) is type(expected) and actual == expected
+
+
+PROJECTED_RECEIPT_CREATION_EXACT_VALUES: dict[str, Any] = {
+    "destination_eligibility": "eligible",
+    "current_lease_present": True,
+    "current_lease_current_at_snapshot_lookup": True,
+    "current_snapshot_present": True,
+    "current_snapshot_content_address_valid": True,
+    "parent_lookup_route": "currentAlias",
+    "parent_lookup_failure": "none",
+    "parent_authority_key_match": "match",
+    "parent_prefix_match": "match",
+    "target_tree_resolution": "succeeded",
+    "witness_requested": True,
+    "witness_started": True,
+    "witness_finished": True,
+    "witness_start_event_id_valid": True,
+    "witness_end_event_id_valid": True,
+    "witness_stable_root_available_before_mutation": True,
+    "witness_destination_absent_before_mutation": True,
+    "witness_destination_strict_descendant": True,
+    "witness_stable_root_unchanged_after_initialization": True,
+    "witness_stream_creation_succeeded": True,
+    "witness_activation_flush_completed": True,
+    "witness_activation_callback_barrier_completed": True,
+    "witness_ending_flush_completed": True,
+    "witness_ending_callback_barrier_completed": True,
+    "witness_must_scan_sub_dirs": False,
+    "witness_root_changed": False,
+    "witness_user_dropped": False,
+    "witness_kernel_dropped": False,
+    "witness_event_ids_wrapped": False,
+    "witness_event_id_regressed": False,
+    "witness_lifetime_exceeded": False,
+    "witness_gap": False,
+    "witness_drop": False,
+    "witness_overflow": False,
+    "witness_proves_interval": True,
+    "include_copy_requested": True,
+    "include_copy_complete": True,
+    "include_copy_had_failures": False,
+    "target_layout_present": True,
+    "target_layout_linked": True,
+    "target_authority_capture": "succeeded",
+    "common_directory_match": "match",
+    "repository_id_match": "match",
+    "repository_namespace_match": "match",
+    "target_prefix_match": "match",
+    "target_tree_authority_match": "match",
+}
+PROJECTED_RECEIPT_CREATION_DIGEST_FIELDS = {
+    "source_authority_key_digest", "source_common_directory_digest",
+    "repository_id_digest", "repository_namespace_digest", "requested_prefix_digest",
+    "current_snapshot_sha256",
+}
+PROJECTED_RECEIPT_CREATION_NONNEGATIVE_INTEGER_FIELDS = {
+    "witness_start_accepted_callback_watermark",
+    "witness_end_accepted_callback_watermark",
+    "witness_accepted_callback_count",
+    "witness_accepted_event_count",
+    "witness_accepted_destination_event_count",
+    "witness_accepted_non_destination_event_count",
+}
+UINT64_MAX = (1 << 64) - 1
+SWIFT_INT64_MAX = (1 << 63) - 1
+
+
+def valid_projected_receipt_creation(value: Any) -> bool:
+    """Validate every known physical correctness field; unknown fields remain additive."""
+    if not isinstance(value, dict):
+        return False
+    if value.get("source_layout_state") not in {"mainCheckout", "linkedWorktree"}:
+        return False
+    if any(
+        key not in value
+        or type(value[key]) is not type(expected)
+        or value[key] != expected
+        for key, expected in PROJECTED_RECEIPT_CREATION_EXACT_VALUES.items()
+    ):
+        return False
+    if type(value.get("include_copy_result_present")) is not bool:
+        return False
+    if any(not lowercase_sha256(value.get(key)) for key in PROJECTED_RECEIPT_CREATION_DIGEST_FIELDS):
+        return False
+    if any(
+        not nonnegative_integer(value.get(key))
+        for key in PROJECTED_RECEIPT_CREATION_NONNEGATIVE_INTEGER_FIELDS
+    ):
+        return False
+    start_event_id = value.get("witness_start_event_id")
+    end_event_id = value.get("witness_end_event_id")
+    start_watermark = value.get("witness_start_accepted_callback_watermark")
+    end_watermark = value.get("witness_end_accepted_callback_watermark")
+    accepted_callback_count = value.get("witness_accepted_callback_count")
+    if (
+        not positive_integer(start_event_id)
+        or not positive_integer(end_event_id)
+        or start_event_id >= UINT64_MAX
+        or end_event_id >= UINT64_MAX
+        or end_event_id < start_event_id
+        or start_watermark > UINT64_MAX
+        or end_watermark > UINT64_MAX
+        or end_watermark < start_watermark
+        or accepted_callback_count > SWIFT_INT64_MAX
+        or accepted_callback_count != min(end_watermark, SWIFT_INT64_MAX)
+    ):
+        return False
+    return True
+
+
 def validate_receipt_oracle(
     checkpoint: dict[str, Any],
     sample: dict[str, Any],
@@ -4583,10 +5150,192 @@ def validate_receipt_oracle(
         or decision.get("terminal_stage") != RECEIPT_TERMINAL_STAGE
     ):
         failures.append("receipt_decision_identity_or_terminal_mismatch")
-    if decision != expected_receipt_decision(route, expected_correlation):
+    if not matches_mandatory_typed_subset(
+        decision, expected_receipt_decision(route, expected_correlation)
+    ) or (
+        route == "projected"
+        and not valid_projected_receipt_creation(decision.get("creation"))
+    ):
         failures.append(
             f"receipt_{route.replace('-', '_')}_decision_contract_mismatch"
         )
+    return failures
+
+
+def lowercase_sha256(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def validate_policy_canonicalization_side(value: Any, label: str) -> tuple[list[str], list[dict[str, Any]] | None]:
+    failures: list[str] = []
+    if not isinstance(value, dict) or "constituents" not in value:
+        return [f"policy_canonicalization_{label}_inventory_invalid"], None
+    constituents = value.get("constituents")
+    if not isinstance(constituents, list) or not all(isinstance(item, dict) for item in constituents):
+        return [f"policy_canonicalization_{label}_constituents_invalid"], None
+    if [item.get("constituent") for item in constituents] != POLICY_CANONICALIZATION_CONSTITUENTS:
+        return [f"policy_canonicalization_{label}_constituent_order_invalid"], None
+
+    for item in constituents:
+        name = item["constituent"]
+        if name == "rootNeutralPolicyConfig":
+            if not {"constituent", "byte_count", "sha256"}.issubset(item):
+                failures.append(f"policy_canonicalization_{label}_{name}_inventory_invalid")
+            elif not nonnegative_integer(item.get("byte_count")) or not lowercase_sha256(item.get("sha256")):
+                failures.append(f"policy_canonicalization_{label}_{name}_value_invalid")
+        elif name in {"commonInfoExclude", "commonInfoAttributes"}:
+            if not {"constituent", "state", "digest"}.issubset(item):
+                failures.append(f"policy_canonicalization_{label}_{name}_inventory_invalid")
+            elif item.get("state") not in {"missing", "directory", "regular"} or not lowercase_sha256(item.get("digest")):
+                failures.append(f"policy_canonicalization_{label}_{name}_value_invalid")
+        elif name in {"canonicalIgnoreFooter", "canonicalAttributeFooter"}:
+            if not {"constituent", "digest", "record_count"}.issubset(item):
+                failures.append(f"policy_canonicalization_{label}_{name}_inventory_invalid")
+            elif not lowercase_sha256(item.get("digest")) or not nonnegative_integer(item.get("record_count")):
+                failures.append(f"policy_canonicalization_{label}_{name}_value_invalid")
+        elif name in {"externalExcludes", "externalAttributes"}:
+            if not {"constituent", "state", "identity_digest", "byte_count"}.issubset(item):
+                failures.append(f"policy_canonicalization_{label}_{name}_inventory_invalid")
+            elif (
+                item.get("state") not in {"unset", "missing", "present"}
+                or not lowercase_sha256(item.get("identity_digest"))
+                or not nonnegative_integer(item.get("byte_count"))
+            ):
+                failures.append(f"policy_canonicalization_{label}_{name}_value_invalid")
+        elif name in {"configuredIgnorePolicy", "attributePolicy", "sparsePolicy"}:
+            if not {"constituent", "digest"}.issubset(item):
+                failures.append(f"policy_canonicalization_{label}_{name}_inventory_invalid")
+            elif not lowercase_sha256(item.get("digest")):
+                failures.append(f"policy_canonicalization_{label}_{name}_value_invalid")
+        elif name == "canonicalization":
+            expected = {
+                "constituent", "policy_version", "pruned_root_count",
+                "pruned_root_summary_sha256", "completeness",
+            }
+            if not expected.issubset(item):
+                failures.append(f"policy_canonicalization_{label}_{name}_inventory_invalid")
+            elif (
+                not isinstance(item.get("policy_version"), str)
+                or not item["policy_version"]
+                or "/" in item["policy_version"]
+                or "\\" in item["policy_version"]
+                or item.get("completeness") not in {"complete", "incomplete"}
+                or not nonnegative_integer(item.get("pruned_root_count"))
+                or not lowercase_sha256(item.get("pruned_root_summary_sha256"))
+            ):
+                failures.append(f"policy_canonicalization_{label}_{name}_value_invalid")
+        elif name == "committedControls":
+            expected = {"constituent", "record_count", "summary_sha256"}
+            if not expected.issubset(item):
+                failures.append(f"policy_canonicalization_{label}_{name}_inventory_invalid")
+            elif (
+                not nonnegative_integer(item.get("record_count"))
+                or not lowercase_sha256(item.get("summary_sha256"))
+            ):
+                failures.append(f"policy_canonicalization_{label}_{name}_value_invalid")
+    return failures, constituents
+
+
+def policy_constituents_match(
+    name: str,
+    base: dict[str, Any],
+    target: dict[str, Any],
+) -> bool:
+    if name == "canonicalization":
+        return (
+            base.get("policy_version") == target.get("policy_version")
+            and base.get("completeness") == target.get("completeness")
+        )
+    if name == "committedControls":
+        return (
+            base.get("record_count") == target.get("record_count")
+            and base.get("summary_sha256") == target.get("summary_sha256")
+        )
+    known_keys = {
+        "rootNeutralPolicyConfig": {"constituent", "byte_count", "sha256"},
+        "commonInfoExclude": {"constituent", "state", "digest"},
+        "canonicalIgnoreFooter": {"constituent", "digest", "record_count"},
+        "externalExcludes": {"constituent", "state", "identity_digest", "byte_count"},
+        "configuredIgnorePolicy": {"constituent", "digest"},
+        "commonInfoAttributes": {"constituent", "state", "digest"},
+        "canonicalAttributeFooter": {"constituent", "digest", "record_count"},
+        "externalAttributes": {"constituent", "state", "identity_digest", "byte_count"},
+        "attributePolicy": {"constituent", "digest"},
+        "sparsePolicy": {"constituent", "digest"},
+    }[name]
+    return all(base.get(key) == target.get(key) for key in known_keys)
+
+
+def validate_policy_canonicalization_comparison(
+    value: Any,
+    *,
+    require_canonical_equivalence: bool,
+) -> list[str]:
+    if not isinstance(value, dict) or not {
+        "classification", "constituent_comparisons", "base", "target",
+    }.issubset(value):
+        return ["policy_canonicalization_comparison_inventory_invalid"]
+    failures: list[str] = []
+    classification = value.get("classification")
+    if classification not in POLICY_CANONICALIZATION_CLASSIFICATIONS:
+        failures.append("policy_canonicalization_classification_invalid")
+    comparisons = value.get("constituent_comparisons")
+    if not isinstance(comparisons, list) or not all(isinstance(item, dict) for item in comparisons):
+        return failures + ["policy_canonicalization_constituent_comparisons_invalid"]
+    if [item.get("constituent") for item in comparisons] != POLICY_CANONICALIZATION_CONSTITUENTS:
+        failures.append("policy_canonicalization_comparison_order_invalid")
+    comparison_shape_valid = not any(
+        not {"constituent", "matched"}.issubset(item) or not isinstance(item.get("matched"), bool)
+        for item in comparisons
+    )
+    if not comparison_shape_valid:
+        failures.append("policy_canonicalization_comparison_value_invalid")
+
+    base_value = value.get("base")
+    target_value = value.get("target")
+    base_constituents: list[dict[str, Any]] | None = None
+    target_constituents: list[dict[str, Any]] | None = None
+    if base_value is not None:
+        side_failures, base_constituents = validate_policy_canonicalization_side(base_value, "base")
+        failures.extend(side_failures)
+    if target_value is not None:
+        side_failures, target_constituents = validate_policy_canonicalization_side(target_value, "target")
+        failures.extend(side_failures)
+
+    incomplete = base_constituents is None or target_constituents is None
+    if (
+        comparison_shape_valid
+        and len(comparisons) == len(POLICY_CANONICALIZATION_CONSTITUENTS)
+        and base_constituents is not None
+        and target_constituents is not None
+    ):
+        for comparison, base, target in zip(comparisons, base_constituents, target_constituents):
+            if comparison.get("constituent") != base.get("constituent") or base.get("constituent") != target.get("constituent"):
+                failures.append("policy_canonicalization_comparison_alignment_invalid")
+                break
+            computed_match = policy_constituents_match(comparison["constituent"], base, target)
+            if comparison.get("matched") is not computed_match:
+                failures.append("policy_canonicalization_comparison_contradictory")
+                break
+        for constituents in (base_constituents, target_constituents):
+            canonicalization = constituents[-2]
+            if canonicalization.get("completeness") != "complete":
+                incomplete = True
+
+    declared_matches = [item.get("matched") for item in comparisons]
+    if classification == "canonicalEquivalentAfterReachabilityFiltering":
+        if incomplete or declared_matches != [True] * len(POLICY_CANONICALIZATION_CONSTITUENTS):
+            failures.append("policy_canonicalization_equivalence_incoherent")
+    elif classification == "semanticInputDifference":
+        if incomplete or all(declared_matches):
+            failures.append("policy_canonicalization_semantic_difference_incoherent")
+    elif classification == "incomplete":
+        if not incomplete:
+            failures.append("policy_canonicalization_incomplete_classification_incoherent")
+    elif classification == "incoherent":
+        failures.append("policy_canonicalization_reported_incoherent")
+    if require_canonical_equivalence and classification != "canonicalEquivalentAfterReachabilityFiltering":
+        failures.append("policy_canonicalization_not_equivalent")
     return failures
 
 
@@ -4624,6 +5373,13 @@ def validate_delta_compatibility_oracle(
         fields = evaluation.get("field_evaluations")
         mismatched = evaluation.get("mismatched_fields")
         correction = evaluation.get("correction_rule_applied")
+        comparison_failures = validate_policy_canonicalization_comparison(
+            evaluation.get("policy_canonicalization_comparison"),
+            require_canonical_equivalence=True,
+        )
+        failures.extend(
+            f"delta_compatibility_{source}_{failure}" for failure in comparison_failures
+        )
         if (
             evaluation.get("correlation_id") != expected_correlation
             or evaluation.get("decision") != "compatible"
@@ -4705,6 +5461,7 @@ def validate_primary_checkpoint(
     expected_scope_context: str,
     expected_invocation: int,
     expected_ordinal: int,
+    expected_route_observation_count: int = 1,
 ) -> list[str]:
     """Validate only the correlation-bound root/search/read critical path."""
     failures: list[str] = []
@@ -4741,7 +5498,9 @@ def validate_primary_checkpoint(
     fallback_counts = sample.get("fallback_counts")
     if not validate_named_counts(route_counts):
         failures.append("invalid_route_counts")
-    elif route_counts != EXPECTED_ACTUAL_ROUTE_COUNTS[route]:
+    elif route_counts != expected_actual_route_counts(
+        route, expected_route_observation_count
+    ):
         failures.append("actual_route_counts_mismatch")
     if not validate_named_counts(fallback_counts):
         failures.append("invalid_fallback_counts")
@@ -4830,6 +5589,7 @@ def validate_primary_performance(
     expected_ordinal: int,
     expected_build: dict[str, str],
     expected_fixture: dict[str, str],
+    expected_route_observation_count: int = 1,
 ) -> list[str]:
     failures: list[str] = []
     identity = primary.get("identity")
@@ -4868,6 +5628,7 @@ def validate_primary_performance(
             expected_scope_context=expected_scope_context,
             expected_invocation=expected_invocation,
             expected_ordinal=expected_ordinal,
+            expected_route_observation_count=expected_route_observation_count,
         ))
     resource_cleanup = primary.get("resource_cleanup")
     if not isinstance(resource_cleanup, dict):
@@ -4898,6 +5659,7 @@ def finalize_primary_performance(
     resource_failures: list[str],
     cleanup_complete: bool,
     build_unchanged: bool,
+    expected_route_observation_count: int = 1,
 ) -> None:
     primary["resource_cleanup"] = {
         "resource_failures": resource_failures,
@@ -4914,6 +5676,7 @@ def finalize_primary_performance(
         expected_ordinal=expected_ordinal,
         expected_build=expected_build,
         expected_fixture=expected_fixture,
+        expected_route_observation_count=expected_route_observation_count,
     )
     primary["invalid_reasons"] = failures
     primary["valid"] = not failures
@@ -4985,6 +5748,7 @@ def validate_export(
     expected_session: str,
     expected_invocation: int,
     expected_ordinal: int,
+    expected_route_observation_count: int = 1,
 ) -> list[str]:
     failures: list[str] = []
     if export.get("schema_version") != DIAGNOSTIC_SCHEMA_VERSION:
@@ -5010,7 +5774,9 @@ def validate_export(
     fallbacks = sample.get("fallback_counts")
     if not validate_named_counts(route_counts):
         failures.append("invalid_route_counts")
-    elif route_counts != EXPECTED_ACTUAL_ROUTE_COUNTS[route]:
+    elif route_counts != expected_actual_route_counts(
+        route, expected_route_observation_count
+    ):
         failures.append("actual_route_counts_mismatch")
     if not validate_named_counts(fallbacks):
         failures.append("invalid_fallback_counts")
@@ -5241,6 +6007,10 @@ def clean_owned_worktree(
 
 
 def run_command(args: argparse.Namespace) -> int:
+    policy_digest_probe = getattr(args, "policy_digest_probe", False) is True
+    expected_route_observation_count = getattr(
+        args, "expected_route_observation_count", 1
+    )
     if not args.confirm_live_debug_app or not args.confirm_process_state:
         raise BenchmarkError("run requires --confirm-live-debug-app and --confirm-process-state")
     plan_path = Path(args.plan).expanduser().resolve(strict=True)
@@ -5256,7 +6026,23 @@ def run_command(args: argparse.Namespace) -> int:
         raise BenchmarkError("run width was not declared by the frozen plan")
     if plan["scope"].get("target_kind") == "real-repository-dedicated" and not args.confirm_dedicated_workspace:
         raise BenchmarkError("real-repository runs require --confirm-dedicated-workspace")
-    if args.warmups != FIXED_WARMUPS or args.samples != FIXED_RETAINED_SAMPLES:
+    if policy_digest_probe:
+        exact_probe_configuration = {
+            "process_state": "warm",
+            "checkout_kind": "linked-worktree",
+            "route": "projected",
+            "width": 1,
+            "invocation": 1,
+            "warmups": 0,
+            "samples": 1,
+            "bypass_prefix_control_cache": True,
+            "expected_route_observation_count": (
+                policy_digest_probe_route_observation_count("diffSeedServing")
+            ),
+        }
+        if any(getattr(args, key, None) != value for key, value in exact_probe_configuration.items()):
+            raise BenchmarkError("policy-digest-probe configuration must remain exact")
+    elif args.warmups != FIXED_WARMUPS or args.samples != FIXED_RETAINED_SAMPLES:
         raise BenchmarkError("run requires one excluded warmup and exactly five retained samples")
     cli = resolve_cli(args.cli)
     root = Path(plan["scope"]["root_path"])
@@ -5273,7 +6059,12 @@ def run_command(args: argparse.Namespace) -> int:
         "search_marker": str(plan["dataset"]["search_marker"]),
         "read_marker": str(plan["dataset"]["read_marker"]),
     }
-    artifact = make_artifact(Path(args.output_root), f"{args.process_state}-{args.route}-w{args.width}")
+    artifact_label = (
+        "policy-digest-probe"
+        if policy_digest_probe
+        else f"{args.process_state}-{args.route}-w{args.width}"
+    )
+    artifact = make_artifact(Path(args.output_root), artifact_label)
     runner = CLIRunner(
         cli, plan["scope"]["window_id"], plan["scope"]["context_id"], root, artifact
     )
@@ -5300,6 +6091,7 @@ def run_command(args: argparse.Namespace) -> int:
     sample_records: list[dict[str, Any]] = []
     operational_error: str | None = None
     cleanup: list[dict[str, Any]] = []
+    control_response: Any = None
     try:
         control_id, control_response = set_route(
             runner,
@@ -5417,6 +6209,7 @@ def run_command(args: argparse.Namespace) -> int:
                     expected_session=session_id,
                     expected_invocation=invocation,
                     expected_ordinal=ordinal,
+                    expected_route_observation_count=expected_route_observation_count,
                 )
                 follow_on_failures.extend(
                     f"follow_on_collection:{failure}" for failure in collection_failures
@@ -5580,6 +6373,7 @@ def run_command(args: argparse.Namespace) -> int:
             resource_failures=resource_failures,
             cleanup_complete=cleanup_ok,
             build_unchanged=build_unchanged,
+            expected_route_observation_count=expected_route_observation_count,
         )
         follow_on_acceptance = record["follow_on_acceptance"]
         record["valid"] = (
@@ -5620,9 +6414,51 @@ def run_command(args: argparse.Namespace) -> int:
         "invalid_count": len([sample for sample in sample_records if not sample["valid"]]),
         "cleanup_complete": cleanup_ok,
     }
+    if policy_digest_probe:
+        cache_bypass_evidence = prefix_control_cache_bypass_evidence(control_response)
+        diagnostic_gate_passed = (
+            summary["status"] == "completed"
+            and summary["sample_count"] == 1
+            and summary["valid_retained_count"] == 1
+            and summary["invalid_count"] == 0
+            and cache_bypass_evidence["observed"] is True
+        )
+        summary.update({
+            "kind": "policy-digest-probe",
+            "non_aggregatable": True,
+            "performance_acceptance_applied": False,
+            "prefix_control_cache_bypassed": cache_bypass_evidence["observed"],
+            "prefix_control_cache_bypass_evidence": cache_bypass_evidence,
+            "diagnostic_gate_passed": diagnostic_gate_passed,
+        })
+        if not diagnostic_gate_passed:
+            summary["status"] = "failed"
     save_json(artifact / "summary.json", summary, exclusive=True)
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0 if summary["status"] == "completed" else 1
+
+
+def configure_policy_digest_probe(args: argparse.Namespace) -> argparse.Namespace:
+    """Force the single diagnostic-only canonicalization probe configuration."""
+    args.process_state = "warm"
+    args.checkout_kind = "linked-worktree"
+    args.route = "projected"
+    args.width = 1
+    args.invocation = 1
+    args.warmups = 0
+    args.samples = 1
+    args.minimum_aged_sessions = 0
+    args.confirm_process_state = True
+    args.bypass_prefix_control_cache = True
+    args.expected_route_observation_count = (
+        policy_digest_probe_route_observation_count("diffSeedServing")
+    )
+    args.policy_digest_probe = True
+    return args
+
+
+def policy_digest_probe_command(args: argparse.Namespace) -> int:
+    return run_command(configure_policy_digest_probe(args))
 
 
 def bounded_poll_search(
@@ -9605,6 +10441,13 @@ def revalidate_primary_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def is_policy_digest_probe_summary(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and (value.get("kind") == "policy-digest-probe" or value.get("non_aggregatable") is True)
+    )
+
+
 def aggregate_command(args: argparse.Namespace) -> int:
     plan = load_plan(Path(args.plan).expanduser().resolve(strict=True))
     expected_fixture = {
@@ -9634,6 +10477,8 @@ def aggregate_command(args: argparse.Namespace) -> int:
         if not summary_file.exists():
             raise BenchmarkError(f"artifact omitted summary.json: {artifact}")
         item = json.loads(summary_file.read_text(encoding="utf-8"))
+        if is_policy_digest_probe_summary(item):
+            raise BenchmarkError(f"policy-digest-probe artifacts are non-aggregatable: {artifact}")
         if item.get("plan_sha256") != plan["plan_sha256"]:
             raise BenchmarkError(f"artifact summary does not match plan: {artifact}")
         artifact_id = item.get("artifact_id")
@@ -10583,6 +11428,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="DEBUG attribution only: bypass reusable prefix-control evidence reads and admission",
     )
     run.set_defaults(func=run_command)
+
+    policy_probe = sub.add_parser(
+        "policy-digest-probe",
+        help="run one non-aggregatable projected canonicalization diagnostic probe",
+    )
+    add_live_common(policy_probe)
+    policy_probe.add_argument("--confirm-dedicated-workspace", action="store_true")
+    policy_probe.set_defaults(func=policy_digest_probe_command)
 
     smoke = sub.add_parser("smoke", help="run correctness, watcher, inheritance, and root-churn checks")
     add_live_common(smoke)

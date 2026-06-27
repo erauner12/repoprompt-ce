@@ -602,7 +602,116 @@ import XCTest
             XCTAssertEqual(WorktreeStartupInstrumentation.currentDeltaCompatibilityEvaluationEvictionCount(), 0)
         }
 
-        func testReceiptDecisionSchemaV5ExportIsTerminalBoundedPathFreeAndOperationCorrelated() throws {
+        func testCanonicalizationComparisonParticipatesInDuplicateAndContradictionDetection() throws {
+            WorktreeStartupInstrumentation.resetForTesting()
+            let correlationID = UUID()
+            let base = WorkspaceRootSeedTestSupport.compatibilityKey(
+                canonicalizationDiagnostics: WorkspaceRootSeedTestSupport.canonicalizationDiagnostics(
+                    prunedRootCount: 1
+                )
+            )
+            let target = WorkspaceRootSeedTestSupport.compatibilityKey(
+                canonicalizationDiagnostics: WorkspaceRootSeedTestSupport.canonicalizationDiagnostics()
+            )
+            let evaluation = target.deltaCompatibilityEvaluation(with: base, source: .hintEvaluator)
+            let comparison = try XCTUnwrap(GitWorkspacePolicyCanonicalizationDiagnostics.comparison(
+                base: base.policyIdentity,
+                target: target.policyIdentity
+            ))
+
+            func record(_ comparison: GitWorkspacePolicyCanonicalizationDiagnostics.Comparison) {
+                WorktreeStartupInstrumentation.recordDeltaCompatibilityEvaluation(
+                    correlationID: correlationID,
+                    evaluation: evaluation,
+                    policyCanonicalizationComparison: comparison,
+                    exactSnapshotLookupReached: true,
+                    exactSnapshotLookupPassed: true,
+                    targetAuthorityComparisonReached: true,
+                    targetAuthorityComparisonPassed: true,
+                    currentSearchABIReached: true,
+                    currentSearchABIMatched: true,
+                    catalogPolicyComparisonReached: false,
+                    catalogPolicyMatched: nil,
+                    terminalFallback: nil
+                )
+            }
+
+            record(comparison)
+            record(comparison)
+            var stored = try XCTUnwrap(
+                WorktreeStartupInstrumentation.deltaCompatibilityEvaluations(correlationID: correlationID).first
+            )
+            XCTAssertTrue(stored.duplicate)
+            XCTAssertFalse(stored.contradictory)
+
+            let contradictoryTarget = WorkspaceRootSeedTestSupport.compatibilityKey(
+                canonicalizationDiagnostics: WorkspaceRootSeedTestSupport.canonicalizationDiagnostics(
+                    committedControlSummarySHA256: String(repeating: "e", count: 64)
+                )
+            )
+            let contradictoryComparison = try XCTUnwrap(
+                GitWorkspacePolicyCanonicalizationDiagnostics.comparison(
+                    base: base.policyIdentity,
+                    target: contradictoryTarget.policyIdentity
+                )
+            )
+            XCTAssertEqual(contradictoryComparison.classification, .semanticInputDifference)
+            record(contradictoryComparison)
+            stored = try XCTUnwrap(
+                WorktreeStartupInstrumentation.deltaCompatibilityEvaluations(correlationID: correlationID).first
+            )
+            XCTAssertTrue(stored.duplicate)
+            XCTAssertTrue(stored.contradictory)
+        }
+
+        func testCanonicalizationDiagnosticSummariesRemainCompleteBeyondFormerCountCaps() {
+            let large = WorkspaceRootSeedTestSupport.canonicalizationDiagnostics(
+                prunedRootCount: 65,
+                committedControlCount: 4097
+            )
+            XCTAssertEqual(large.prunedRootCount, 65)
+            XCTAssertEqual(large.committedControlCount, 4097)
+            XCTAssertEqual(large.prunedRootSummarySHA256.utf8.count, 64)
+            XCTAssertEqual(large.committedControlSummarySHA256.utf8.count, 64)
+
+            let matchingLarge = WorkspaceRootSeedTestSupport.canonicalizationDiagnostics(
+                prunedRootCount: 65,
+                committedControlCount: 4097
+            )
+            let largeKey = WorkspaceRootSeedTestSupport.compatibilityKey(canonicalizationDiagnostics: large)
+            let matchingKey = WorkspaceRootSeedTestSupport.compatibilityKey(
+                canonicalizationDiagnostics: matchingLarge
+            )
+            XCTAssertEqual(
+                GitWorkspacePolicyCanonicalizationDiagnostics.comparison(
+                    base: largeKey.policyIdentity,
+                    target: matchingKey.policyIdentity
+                )?.classification,
+                .canonicalEquivalentAfterReachabilityFiltering
+            )
+
+            let defaultKey = WorkspaceRootSeedTestSupport.compatibilityKey(
+                canonicalizationDiagnostics: WorkspaceRootSeedTestSupport.canonicalizationDiagnostics()
+            )
+            XCTAssertEqual(defaultKey.policyIdentity, largeKey.policyIdentity)
+            XCTAssertEqual(Set([defaultKey.policyIdentity, largeKey.policyIdentity]).count, 1)
+
+            let incoherent = WorkspaceRootSeedTestSupport.canonicalizationDiagnostics(
+                prunedRootSummarySHA256: "not-a-digest"
+            )
+            let incoherentKey = WorkspaceRootSeedTestSupport.compatibilityKey(
+                canonicalizationDiagnostics: incoherent
+            )
+            XCTAssertEqual(
+                GitWorkspacePolicyCanonicalizationDiagnostics.comparison(
+                    base: defaultKey.policyIdentity,
+                    target: incoherentKey.policyIdentity
+                )?.classification,
+                .incoherent
+            )
+        }
+
+        func testReceiptDecisionSchemaV6ExportIsTerminalBoundedPathFreeAndOperationCorrelated() throws {
             WorktreeStartupInstrumentation.resetForTesting()
             WorktreeStartupBenchmarkDiagnostics.setGateEnabled(true)
             defer { WorktreeStartupBenchmarkDiagnostics.setGateEnabled(false) }
@@ -677,7 +786,17 @@ import XCTest
                 correlationID: arm.correlationID,
                 decision: consumption
             )
-            let compatibility = WorkspaceRootSeedTestSupport.compatibilityKey()
+            let canonicalizationPathSentinel = "/private/ignored-derived-controls"
+            let baseCompatibility = WorkspaceRootSeedTestSupport.compatibilityKey(
+                canonicalizationDiagnostics: WorkspaceRootSeedTestSupport.canonicalizationDiagnostics(
+                    prunedRootCount: 1,
+                    prunedRootSummarySHA256: GitWorkspacePolicyCanonicalizationDiagnostics
+                        .repositoryRelativePathFingerprint(canonicalizationPathSentinel)
+                )
+            )
+            let compatibility = WorkspaceRootSeedTestSupport.compatibilityKey(
+                canonicalizationDiagnostics: WorkspaceRootSeedTestSupport.canonicalizationDiagnostics()
+            )
             func recordCompatibility(
                 _ source: WorkspaceRootSeedDeltaCompatibilitySource,
                 correlationID: UUID = arm.correlationID,
@@ -686,8 +805,12 @@ import XCTest
                 WorktreeStartupInstrumentation.recordDeltaCompatibilityEvaluation(
                     correlationID: correlationID,
                     evaluation: compatibility.deltaCompatibilityEvaluation(
-                        with: compatibility,
+                        with: baseCompatibility,
                         source: source
+                    ),
+                    policyCanonicalizationComparison: GitWorkspacePolicyCanonicalizationDiagnostics.comparison(
+                        base: baseCompatibility.policyIdentity,
+                        target: compatibility.policyIdentity
                     ),
                     exactSnapshotLookupReached: true,
                     exactSnapshotLookupPassed: true,
@@ -777,7 +900,7 @@ import XCTest
                 correlationID: arm.correlationID,
                 export: true
             )
-            XCTAssertEqual(payload["schema_version"] as? Int, 5)
+            XCTAssertEqual(payload["schema_version"] as? Int, 6)
             XCTAssertEqual(payload["bounded"] as? Bool, true)
             XCTAssertEqual(payload["contains_paths"] as? Bool, false)
             XCTAssertEqual(payload["receipt_decision_count"] as? Int, 1)
@@ -797,6 +920,31 @@ import XCTest
                     && ($0["mismatched_fields"] as? [String]) == []
                     && ($0["correction_rule_applied"] as? String) == "none"
             })
+            let canonicalizationComparison = try XCTUnwrap(
+                compatibilityPayloads.first?["policy_canonicalization_comparison"] as? [String: Any]
+            )
+            XCTAssertEqual(
+                canonicalizationComparison["classification"] as? String,
+                "canonicalEquivalentAfterReachabilityFiltering"
+            )
+            let constituentComparisons = try XCTUnwrap(
+                canonicalizationComparison["constituent_comparisons"] as? [[String: Any]]
+            )
+            XCTAssertEqual(
+                constituentComparisons.compactMap { $0["constituent"] as? String },
+                GitWorkspacePolicyCanonicalizationDiagnostics.Constituent.allCases.map(\.rawValue)
+            )
+            XCTAssertEqual(
+                constituentComparisons.first { $0["constituent"] as? String == "canonicalization" }?["matched"]
+                    as? Bool,
+                true
+            )
+            let baseCanonicalization = try XCTUnwrap(canonicalizationComparison["base"] as? [String: Any])
+            let baseConstituents = try XCTUnwrap(baseCanonicalization["constituents"] as? [[String: Any]])
+            XCTAssertEqual(
+                baseConstituents.compactMap { $0["constituent"] as? String },
+                GitWorkspacePolicyCanonicalizationDiagnostics.Constituent.allCases.map(\.rawValue)
+            )
             let sample = try XCTUnwrap(payload["sample"] as? [String: Any])
             XCTAssertEqual(sample["valid"] as? Bool, true)
             XCTAssertEqual(sample["boundary_evidence_available"] as? Bool, true)
@@ -823,6 +971,7 @@ import XCTest
             let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
             let exported = try XCTUnwrap(String(data: data, encoding: .utf8))
             XCTAssertFalse(exported.contains(pathSentinel))
+            XCTAssertFalse(exported.contains(canonicalizationPathSentinel))
             XCTAssertTrue(exported.contains("source_common_directory_digest"))
             XCTAssertTrue(exported.contains("\"witness_start_event_id\":100"))
             XCTAssertTrue(exported.contains("\"witness_end_event_id\":200"))

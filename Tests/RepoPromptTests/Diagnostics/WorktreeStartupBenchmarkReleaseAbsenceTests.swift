@@ -7,6 +7,8 @@ final class WorktreeStartupBenchmarkReleaseAbsenceTests: XCTestCase {
         let files = [
             "Sources/RepoPrompt/Features/Diagnostics/App/WorktreeStartupInstrumentation.swift",
             "Sources/RepoPrompt/Features/Diagnostics/App/WorktreeStartupBenchmarkDiagnostics.swift",
+            "Sources/RepoPrompt/Infrastructure/VCS/GitWorkspacePolicyCanonicalizationDiagnostics.swift",
+            "Sources/RepoPrompt/Infrastructure/VCS/GitWorktreeInitializationModels.swift",
             "Sources/RepoPrompt/Features/Diagnostics/MCP/MCPConnectionManager+DebugDiagnostics.swift",
             "Sources/RepoPrompt/Features/Diagnostics/MCP/MCPConnectionManager+DebugDiagnosticsWorktreeStartup.swift",
             "Sources/RepoPrompt/Infrastructure/MCP/WindowTools/MCPAgentControlToolProvider.swift",
@@ -23,6 +25,7 @@ final class WorktreeStartupBenchmarkReleaseAbsenceTests: XCTestCase {
             "_worktree_startup_benchmark_token",
             "BenchmarkMetricTag",
             "ReceiptDecision",
+            "GitWorkspacePolicyCanonicalizationDiagnostics",
             "BenchmarkPlannerPhase",
             "marker_publications",
             "receipt_decisions",

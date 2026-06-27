@@ -414,6 +414,10 @@ actor WorkspaceRootSeedPlanner {
                 WorktreeStartupInstrumentation.recordDeltaCompatibilityEvaluation(
                     correlationID: hint.correlationID,
                     evaluation: compatibilityEvaluation,
+                    policyCanonicalizationComparison: GitWorkspacePolicyCanonicalizationDiagnostics.comparison(
+                        base: snapshot.compatibilityKey.policyIdentity,
+                        target: hint.creationReceipt.targetAuthorityAfter.policyIdentity
+                    ),
                     exactSnapshotLookupReached: true,
                     exactSnapshotLookupPassed: true,
                     targetAuthorityComparisonReached: true,

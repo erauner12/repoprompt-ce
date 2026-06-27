@@ -194,7 +194,10 @@ final class GitWorktreeInitializationAPITests: XCTestCase {
 
         let baseline = try await git.authorityMetadata(in: layout, prefix: prefix)
         let policy = baseline.policyIdentity
-        XCTAssertEqual(policy.mandatoryIgnorePolicyIdentity, "git-ignore-policy-v1")
+        XCTAssertEqual(
+            policy.mandatoryIgnorePolicyIdentity,
+            WorkspaceGitignorePolicyIdentity.current.rawValue
+        )
         XCTAssertEqual(policy.resolvedExcludesFileIdentity?.exists, true)
         XCTAssertEqual(policy.resolvedExcludesFileIdentity?.byteCount, "*.temporary\n".utf8.count)
         XCTAssertEqual(policy.resolvedAttributesFileIdentity?.exists, true)
@@ -228,6 +231,95 @@ final class GitWorktreeInitializationAPITests: XCTestCase {
             hierarchicalMutation.policyIdentity.committedIgnoreControlDigest,
             externalMutation.policyIdentity.committedIgnoreControlDigest
         )
+    }
+
+    func testMainDerivedIgnoredControlsAndCleanLinkedWorktreeProduceIdenticalPolicyIdentity() async throws {
+        let fixture = try GitInitializationFixture()
+        defer { fixture.cleanup() }
+        try fixture.write(".gitignore", "GeneratedEvidence/\n")
+        try fixture.write(".repo_ignore", "*.repo-generated\n")
+        try fixture.write("Root/.cursorignore", "*.cursor-generated\n")
+        try fixture.write("Root/Nested/.gitignore", "*.nested-generated\n")
+        try fixture.write(".gitattributes", "*.swift text\n")
+        try fixture.commitAll("reachable policy controls")
+
+        for index in 0 ..< 256 {
+            try fixture.write(
+                "GeneratedEvidence/ignore-\(index)/.gitignore",
+                "ignored-\(index)\n"
+            )
+        }
+        for index in 0 ..< 76 {
+            try fixture.write(
+                "GeneratedEvidence/attributes-\(index)/.gitattributes",
+                "*.derived-\(index) binary\n"
+            )
+        }
+
+        let linkedRoot = fixture.sandbox.appendingPathComponent("linked", isDirectory: true)
+        try fixture.git(["worktree", "add", "--detach", linkedRoot.path, "HEAD"])
+        let mainLayout = try XCTUnwrap(GitRepositoryLayoutResolver.resolve(atWorkTreeRoot: fixture.root))
+        let linkedLayout = try XCTUnwrap(GitRepositoryLayoutResolver.resolve(atWorkTreeRoot: linkedRoot))
+        XCTAssertNotEqual(mainLayout.gitDir, linkedLayout.gitDir)
+        let prefix = try GitRepositoryRelativeRootPrefix("")
+
+        let mainControls = try await GitService.streamedPrefixControlEvidence(
+            layout: mainLayout,
+            prefix: prefix,
+            indexedGitlinkPaths: []
+        )
+        let linkedControls = try await GitService.streamedPrefixControlEvidence(
+            layout: linkedLayout,
+            prefix: prefix,
+            indexedGitlinkPaths: []
+        )
+        XCTAssertEqual(mainControls.recordCount, 5)
+        XCTAssertEqual(linkedControls.recordCount, 5)
+        XCTAssertEqual(mainControls.ignoreControlDigest, linkedControls.ignoreControlDigest)
+        XCTAssertEqual(mainControls.attributeControlDigest, linkedControls.attributeControlDigest)
+
+        let git = GitService()
+        let main = try await git.authorityMetadata(
+            in: mainLayout,
+            prefix: prefix,
+            cacheMode: .bypassReadAndAdmission
+        )
+        let linked = try await git.authorityMetadata(
+            in: linkedLayout,
+            prefix: prefix,
+            cacheMode: .bypassReadAndAdmission
+        )
+        XCTAssertEqual(
+            main.policyIdentity.mandatoryIgnorePolicyIdentity,
+            WorkspaceGitignorePolicyIdentity.current.rawValue
+        )
+        XCTAssertEqual(
+            main.policyIdentity.committedIgnoreControlDigest,
+            linked.policyIdentity.committedIgnoreControlDigest
+        )
+        XCTAssertEqual(main.policyIdentity.attributePolicyDigest, linked.policyIdentity.attributePolicyDigest)
+        XCTAssertEqual(main.policyIdentity, linked.policyIdentity)
+        #if DEBUG
+            let mainDiagnostics = try XCTUnwrap(main.policyIdentity.canonicalizationDiagnostics)
+            let linkedDiagnostics = try XCTUnwrap(linked.policyIdentity.canonicalizationDiagnostics)
+            XCTAssertEqual(mainDiagnostics.completeness, .complete)
+            XCTAssertEqual(linkedDiagnostics.completeness, .complete)
+            XCTAssertEqual(mainDiagnostics.canonicalIgnoreFooter.recordCount, 4)
+            XCTAssertEqual(linkedDiagnostics.canonicalIgnoreFooter.recordCount, 4)
+            XCTAssertEqual(mainDiagnostics.canonicalAttributeFooter.recordCount, 1)
+            XCTAssertEqual(linkedDiagnostics.canonicalAttributeFooter.recordCount, 1)
+            XCTAssertEqual(mainDiagnostics.prunedRootCount, 1)
+            XCTAssertEqual(linkedDiagnostics.prunedRootCount, 0)
+            XCTAssertEqual(mainDiagnostics.committedControlCount, 5)
+            XCTAssertEqual(linkedDiagnostics.committedControlCount, 5)
+            XCTAssertEqual(
+                GitWorkspacePolicyCanonicalizationDiagnostics.comparison(
+                    base: main.policyIdentity,
+                    target: linked.policyIdentity
+                )?.classification,
+                .canonicalEquivalentAfterReachabilityFiltering
+            )
+        #endif
     }
 
     func testStreamingTargetEvidenceAPIsPreserveGitSemanticsAndAuthenticatedHeaders() async throws {

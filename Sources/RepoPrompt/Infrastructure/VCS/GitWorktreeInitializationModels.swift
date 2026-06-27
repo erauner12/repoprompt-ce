@@ -45,6 +45,78 @@ struct GitWorkspacePolicyIdentity: Hashable {
     let searchABI: GitWorkspaceSearchABIIdentity
     let resolvedExcludesFileIdentity: GitWorkspaceAuthorityContentIdentity?
     let resolvedAttributesFileIdentity: GitWorkspaceAuthorityContentIdentity?
+    #if DEBUG
+        /// Non-identity, path-free evidence used only by DEBUG diagnostics.
+        let canonicalizationDiagnostics: GitWorkspacePolicyCanonicalizationDiagnostics?
+    #endif
+
+    #if DEBUG
+        init(
+            mandatoryIgnorePolicyIdentity: String,
+            committedIgnoreControlDigest: String,
+            configuredIgnoreAuthorityDigest: String,
+            attributePolicyDigest: String,
+            sparsePolicyDigest: String,
+            searchABI: GitWorkspaceSearchABIIdentity,
+            resolvedExcludesFileIdentity: GitWorkspaceAuthorityContentIdentity?,
+            resolvedAttributesFileIdentity: GitWorkspaceAuthorityContentIdentity?,
+            canonicalizationDiagnostics: GitWorkspacePolicyCanonicalizationDiagnostics? = nil
+        ) {
+            self.mandatoryIgnorePolicyIdentity = mandatoryIgnorePolicyIdentity
+            self.committedIgnoreControlDigest = committedIgnoreControlDigest
+            self.configuredIgnoreAuthorityDigest = configuredIgnoreAuthorityDigest
+            self.attributePolicyDigest = attributePolicyDigest
+            self.sparsePolicyDigest = sparsePolicyDigest
+            self.searchABI = searchABI
+            self.resolvedExcludesFileIdentity = resolvedExcludesFileIdentity
+            self.resolvedAttributesFileIdentity = resolvedAttributesFileIdentity
+            self.canonicalizationDiagnostics = canonicalizationDiagnostics
+        }
+    #else
+        init(
+            mandatoryIgnorePolicyIdentity: String,
+            committedIgnoreControlDigest: String,
+            configuredIgnoreAuthorityDigest: String,
+            attributePolicyDigest: String,
+            sparsePolicyDigest: String,
+            searchABI: GitWorkspaceSearchABIIdentity,
+            resolvedExcludesFileIdentity: GitWorkspaceAuthorityContentIdentity?,
+            resolvedAttributesFileIdentity: GitWorkspaceAuthorityContentIdentity?
+        ) {
+            self.mandatoryIgnorePolicyIdentity = mandatoryIgnorePolicyIdentity
+            self.committedIgnoreControlDigest = committedIgnoreControlDigest
+            self.configuredIgnoreAuthorityDigest = configuredIgnoreAuthorityDigest
+            self.attributePolicyDigest = attributePolicyDigest
+            self.sparsePolicyDigest = sparsePolicyDigest
+            self.searchABI = searchABI
+            self.resolvedExcludesFileIdentity = resolvedExcludesFileIdentity
+            self.resolvedAttributesFileIdentity = resolvedAttributesFileIdentity
+        }
+    #endif
+
+    // Diagnostics are deliberately excluded from semantic identity.
+    // swiftformat:disable:next redundantEquatable
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.mandatoryIgnorePolicyIdentity == rhs.mandatoryIgnorePolicyIdentity
+            && lhs.committedIgnoreControlDigest == rhs.committedIgnoreControlDigest
+            && lhs.configuredIgnoreAuthorityDigest == rhs.configuredIgnoreAuthorityDigest
+            && lhs.attributePolicyDigest == rhs.attributePolicyDigest
+            && lhs.sparsePolicyDigest == rhs.sparsePolicyDigest
+            && lhs.searchABI == rhs.searchABI
+            && lhs.resolvedExcludesFileIdentity == rhs.resolvedExcludesFileIdentity
+            && lhs.resolvedAttributesFileIdentity == rhs.resolvedAttributesFileIdentity
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(mandatoryIgnorePolicyIdentity)
+        hasher.combine(committedIgnoreControlDigest)
+        hasher.combine(configuredIgnoreAuthorityDigest)
+        hasher.combine(attributePolicyDigest)
+        hasher.combine(sparsePolicyDigest)
+        hasher.combine(searchABI)
+        hasher.combine(resolvedExcludesFileIdentity)
+        hasher.combine(resolvedAttributesFileIdentity)
+    }
 }
 
 struct GitWorkspaceAuthorityContentIdentity: Hashable {

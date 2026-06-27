@@ -11,6 +11,7 @@ struct GitPrefixControlEvidenceResourcePolicy: Equatable {
     let maximumOpenRuns: Int
     let minimumFreeDiskBytes: UInt64
     let maximumAggregateArtifactBytes: UInt64?
+    let maximumAggregateControlBytes: UInt64
 
     init(
         maximumBufferedRecordBytes: Int = 16 * 1024 * 1024,
@@ -18,7 +19,8 @@ struct GitPrefixControlEvidenceResourcePolicy: Equatable {
         maximumRecordByteCount: Int = 1024 * 1024,
         maximumOpenRuns: Int = 32,
         minimumFreeDiskBytes: UInt64 = 256 * 1024 * 1024,
-        maximumAggregateArtifactBytes: UInt64? = 4 * 1024 * 1024 * 1024
+        maximumAggregateArtifactBytes: UInt64? = 4 * 1024 * 1024 * 1024,
+        maximumAggregateControlBytes: UInt64 = 64 * 1024 * 1024
     ) {
         self.maximumBufferedRecordBytes = maximumBufferedRecordBytes
         self.maximumRecordsPerBatch = maximumRecordsPerBatch
@@ -26,6 +28,7 @@ struct GitPrefixControlEvidenceResourcePolicy: Equatable {
         self.maximumOpenRuns = maximumOpenRuns
         self.minimumFreeDiskBytes = minimumFreeDiskBytes
         self.maximumAggregateArtifactBytes = maximumAggregateArtifactBytes
+        self.maximumAggregateControlBytes = maximumAggregateControlBytes
     }
 
     var spillPolicy: SpillBackedSortedArtifactResourcePolicy {

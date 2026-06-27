@@ -235,6 +235,7 @@ actor FileSystemService {
     let path: String
     let rootURL: URL
     let canonicalRootURL: URL
+    let ignoreRulePolicy: IgnoreRulePolicy
     var canonicalRootPath: String {
         canonicalRootURL.path
     }
@@ -340,6 +341,7 @@ actor FileSystemService {
         self.path = path
         rootURL = URL(fileURLWithPath: path).standardizedFileURL
         canonicalRootURL = rootURL.resolvingSymlinksInPath()
+        ignoreRulePolicy = try IgnoreRulePolicy.resolvingLoadedRoot(rootURL)
         self.respectRepoIgnore = respectRepoIgnore
         self.respectCursorignore = respectCursorignore
         self.skipSymlinks = skipSymlinks
@@ -363,7 +365,8 @@ actor FileSystemService {
         let resolvedIgnoreRules = try await IgnoreRulesManager.shared.resolvedIgnoreRules(
             for: path,
             respectRepoIgnore: respectRepoIgnore,
-            respectCursorignore: respectCursorignore
+            respectCursorignore: respectCursorignore,
+            policy: ignoreRulePolicy
         )
         ignoreRules = resolvedIgnoreRules.rules
         catalogPolicyIdentity = WorkspaceRootCatalogPolicyIdentity(
@@ -434,6 +437,7 @@ actor FileSystemService {
             self.path = path
             rootURL = URL(fileURLWithPath: path).standardizedFileURL
             canonicalRootURL = rootURL.resolvingSymlinksInPath()
+            ignoreRulePolicy = try IgnoreRulePolicy.resolvingLoadedRoot(rootURL)
             self.respectRepoIgnore = respectRepoIgnore
             self.respectCursorignore = respectCursorignore
             self.skipSymlinks = skipSymlinks
@@ -487,7 +491,8 @@ actor FileSystemService {
                 let resolvedIgnoreRules = try await IgnoreRulesManager.shared.resolvedIgnoreRules(
                     for: path,
                     respectRepoIgnore: respectRepoIgnore,
-                    respectCursorignore: respectCursorignore
+                    respectCursorignore: respectCursorignore,
+                    policy: ignoreRulePolicy
                 )
                 ignoreRules = resolvedIgnoreRules.rules
                 catalogPolicyIdentity = WorkspaceRootCatalogPolicyIdentity(

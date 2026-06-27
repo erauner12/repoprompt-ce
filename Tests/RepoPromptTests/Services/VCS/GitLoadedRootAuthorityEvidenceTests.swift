@@ -4,6 +4,127 @@ import Foundation
 import XCTest
 
 final class GitLoadedRootAuthorityEvidenceTests: XCTestCase {
+    func testPrunedRootDiagnosticsRemainCompleteBeyondFormerCountCap() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        try "ignored-*/\n".write(
+            to: fixture.root.appendingPathComponent(".gitignore"),
+            atomically: true,
+            encoding: .utf8
+        )
+        for index in 0 ..< 65 {
+            try FileManager.default.createDirectory(
+                at: fixture.root.appendingPathComponent("ignored-\(index)", isDirectory: true),
+                withIntermediateDirectories: false
+            )
+        }
+        _ = try fixture.runGit(["add", ".gitignore"])
+        _ = try fixture.runGit(["commit", "-q", "-m", "ignored roots"])
+
+        let git = GitService(workspaceStateAuthority: GitWorkspaceStateAuthority())
+        let captured = try await git.workspaceAuthoritySnapshot(
+            in: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            cacheMode: .bypassReadAndAdmission
+        )
+        let diagnostics = try XCTUnwrap(captured.snapshot.policyIdentity.canonicalizationDiagnostics)
+        XCTAssertEqual(diagnostics.completeness, .complete)
+        XCTAssertEqual(diagnostics.prunedRootCount, 65)
+        XCTAssertEqual(diagnostics.prunedRootSummarySHA256.utf8.count, 64)
+    }
+
+    func testCommittedControlDiagnosticsRemainCompleteBeyondFormerRecordCap() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        try fixture.importCommittedControls(count: 4097)
+
+        let git = GitService(workspaceStateAuthority: GitWorkspaceStateAuthority())
+        let captured = try await git.workspaceAuthoritySnapshot(
+            in: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            cacheMode: .bypassReadAndAdmission
+        )
+        let diagnostics = try XCTUnwrap(captured.snapshot.policyIdentity.canonicalizationDiagnostics)
+        XCTAssertEqual(diagnostics.completeness, .complete)
+        XCTAssertEqual(diagnostics.committedControlCount, 4097)
+        XCTAssertEqual(diagnostics.committedControlSummarySHA256.utf8.count, 64)
+    }
+
+    func testWarmPrefixControlCacheHitReplaysCanonicalizationDetail() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        let authority = GitWorkspaceStateAuthority()
+        let prefix = try GitRepositoryRelativeRootPrefix("")
+        let detail = GitPrefixControlCollectionDetail(
+            collectionCompleted: true,
+            ignoreControlCount: 1,
+            attributeControlCount: 0,
+            prunedRootCount: 1,
+            prunedRootSummarySHA256: String(repeating: "a", count: 64)
+        )
+        let counter = PrefixControlCollectedEvidenceCounter(evidence: .init(
+            footer: prefixFooter(),
+            collectionDetail: detail
+        ))
+
+        let first = try await authority.prefixControlEvidenceWithDetail(
+            in: fixture.layout,
+            prefix: prefix,
+            cacheMode: .automatic
+        ) { await counter.collect() }
+        let warm = try await authority.prefixControlEvidenceWithDetail(
+            in: fixture.layout,
+            prefix: prefix,
+            cacheMode: .automatic
+        ) { await counter.collect() }
+
+        XCTAssertEqual(first.collectionDetail, detail)
+        XCTAssertEqual(warm.collectionDetail, detail)
+        let collectionCount = await counter.collectionCount()
+        XCTAssertEqual(collectionCount, 1)
+        let counters = await authority.snapshotForTesting()
+        XCTAssertEqual(counters.prefixControlPhysicalScanCount, 1)
+        XCTAssertEqual(counters.prefixControlCacheHitCount, 1)
+    }
+
+    func testDetailRequestRescansCacheEntryWithoutCanonicalizationDetail() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        let authority = GitWorkspaceStateAuthority()
+        let prefix = try GitRepositoryRelativeRootPrefix("")
+        let footerCounter = PrefixControlCollectorCounter(footer: prefixFooter())
+        _ = try await authority.prefixControlEvidence(
+            in: fixture.layout,
+            prefix: prefix,
+            cacheMode: .automatic
+        ) { await footerCounter.collect() }
+        let detail = GitPrefixControlCollectionDetail(
+            collectionCompleted: true,
+            ignoreControlCount: 1,
+            attributeControlCount: 0,
+            prunedRootCount: 0,
+            prunedRootSummarySHA256: String(repeating: "b", count: 64)
+        )
+        let detailCounter = PrefixControlCollectedEvidenceCounter(evidence: .init(
+            footer: prefixFooter(),
+            collectionDetail: detail
+        ))
+
+        let rescanned = try await authority.prefixControlEvidenceWithDetail(
+            in: fixture.layout,
+            prefix: prefix,
+            cacheMode: .automatic
+        ) { await detailCounter.collect() }
+
+        XCTAssertEqual(rescanned.collectionDetail, detail)
+        let footerCollectionCount = await footerCounter.collectionCount()
+        let detailCollectionCount = await detailCounter.collectionCount()
+        XCTAssertEqual(footerCollectionCount, 1)
+        XCTAssertEqual(detailCollectionCount, 1)
+        let counters = await authority.snapshotForTesting()
+        XCTAssertEqual(counters.prefixControlPhysicalScanCount, 2)
+    }
+
     func testAutomaticAuthorityCapturesShareOnePhysicalPrefixScanAndWarmCaptureHits() async throws {
         let fixture = try AuthorityEvidenceFixture(makeCommit: true)
         defer { fixture.cleanup() }
@@ -25,12 +146,24 @@ final class GitLoadedRootAuthorityEvidenceTests: XCTestCase {
         XCTAssertEqual(counters.prefixControlCacheHitCount, 1)
         XCTAssertEqual(counters.prefixControlCacheAdmissionCount, 1)
         XCTAssertEqual(discovery.snapshot, captured.snapshot)
+        XCTAssertEqual(
+            discovery.snapshot.policyIdentity.canonicalizationDiagnostics?.completeness,
+            .complete
+        )
+        XCTAssertEqual(
+            captured.snapshot.policyIdentity.canonicalizationDiagnostics?.completeness,
+            .complete
+        )
 
         let warm = try await git.workspaceAuthoritySnapshot(in: fixture.layout, prefix: prefix)
         counters = await authority.snapshotForTesting()
         XCTAssertEqual(counters.prefixControlPhysicalScanCount, 1)
         XCTAssertEqual(counters.prefixControlCacheHitCount, 2)
         XCTAssertEqual(warm.snapshot, captured.snapshot)
+        XCTAssertEqual(
+            warm.snapshot.policyIdentity.canonicalizationDiagnostics?.completeness,
+            .complete
+        )
 
         let bypassAuthority = GitWorkspaceStateAuthority()
         let bypassGit = GitService(workspaceStateAuthority: bypassAuthority)
@@ -522,11 +655,73 @@ final class GitLoadedRootAuthorityEvidenceTests: XCTestCase {
             eventPath: fixture.root.appendingPathComponent(".git/objects/.gitignore").path,
             flags: fileFlag
         ))
+        XCTAssertTrue(try GitWorkspaceMetadataMonitor.prefixControlScopeMatchesForTesting(
+            repositoryRoot: fixture.root,
+            prefix: prefix,
+            eventPath: fixture.root.appendingPathComponent("Sources/Nested/Child/.git").path,
+            flags: directoryCreateFlags
+        ))
+        XCTAssertTrue(try GitWorkspaceMetadataMonitor.prefixControlScopeMatchesForTesting(
+            repositoryRoot: fixture.root,
+            prefix: prefix,
+            eventPath: fixture.root.appendingPathComponent("Sources/.git").path,
+            flags: fileFlag
+        ))
+        XCTAssertFalse(try GitWorkspaceMetadataMonitor.prefixControlScopeMatchesForTesting(
+            repositoryRoot: fixture.root,
+            prefix: prefix,
+            eventPath: fixture.root.appendingPathComponent("Sources/Nested/Child/.git/HEAD").path,
+            flags: fileFlag
+        ))
         XCTAssertFalse(try GitWorkspaceMetadataMonitor.prefixControlScopeMatchesForTesting(
             repositoryRoot: fixture.root,
             prefix: prefix,
             eventPath: fixture.root.appendingPathComponent("Sources/ordinary.swift").path,
             flags: fileFlag
+        ))
+        let external = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "rpce-metadata-symlink-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: external) }
+        try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
+        let externalControl = external.appendingPathComponent("external-ignore")
+        try "Generated/\n".write(to: externalControl, atomically: true, encoding: .utf8)
+        let linkedControl = fixture.root.appendingPathComponent(".gitignore")
+        try FileManager.default.createSymbolicLink(at: linkedControl, withDestinationURL: externalControl)
+        let symlinkFlags = FSEventStreamEventFlags(
+            kFSEventStreamEventFlagItemIsSymlink | kFSEventStreamEventFlagItemCreated
+        )
+        XCTAssertTrue(try GitWorkspaceMetadataMonitor.prefixControlScopeMatchesForTesting(
+            repositoryRoot: fixture.root,
+            prefix: prefix,
+            eventPath: linkedControl.path,
+            flags: symlinkFlags
+        ))
+
+        let sources = fixture.root.appendingPathComponent("Sources", isDirectory: true)
+        let nestedScope = sources.appendingPathComponent("Nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nestedScope, withIntermediateDirectories: true)
+        let linkedDirectory = nestedScope.appendingPathComponent("LinkedDirectory", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: linkedDirectory, withDestinationURL: external)
+        XCTAssertTrue(try GitWorkspaceMetadataMonitor.prefixControlScopeMatchesForTesting(
+            repositoryRoot: fixture.root,
+            prefix: prefix,
+            eventPath: linkedDirectory.path,
+            flags: symlinkFlags
+        ))
+
+        let nestedParent = nestedScope.appendingPathComponent("Child", isDirectory: true)
+        try FileManager.default.createDirectory(at: nestedParent, withIntermediateDirectories: true)
+        let externalGit = external.appendingPathComponent("external-git", isDirectory: true)
+        try FileManager.default.createDirectory(at: externalGit, withIntermediateDirectories: true)
+        let linkedGit = nestedParent.appendingPathComponent(".git")
+        try FileManager.default.createSymbolicLink(at: linkedGit, withDestinationURL: externalGit)
+        XCTAssertTrue(try GitWorkspaceMetadataMonitor.prefixControlScopeMatchesForTesting(
+            repositoryRoot: fixture.root,
+            prefix: prefix,
+            eventPath: linkedGit.path,
+            flags: symlinkFlags
         ))
         await monitor.release(retained)
     }
@@ -543,11 +738,13 @@ final class GitLoadedRootAuthorityEvidenceTests: XCTestCase {
         let streamed = try await GitService.streamedPrefixControlEvidence(
             layout: fixture.layout,
             prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: [],
             candidateSource: beyondLimit
         )
         let expected = try await GitService.streamedPrefixControlEvidence(
             layout: fixture.layout,
             prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: [],
             candidateSource: baseline
         )
 
@@ -569,7 +766,8 @@ final class GitLoadedRootAuthorityEvidenceTests: XCTestCase {
 
         let evidence = try await GitService.streamedPrefixControlEvidence(
             layout: fixture.layout,
-            prefix: GitRepositoryRelativeRootPrefix("")
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: []
         )
 
         XCTAssertEqual(evidence.recordCount, 1)
@@ -831,6 +1029,7 @@ final class GitLoadedRootAuthorityEvidenceTests: XCTestCase {
         let controls = try await GitService.streamedPrefixControlEvidence(
             layout: fixture.layout,
             prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: [],
             candidateSource: source
         )
         XCTAssertEqual(source.emittedNoiseCount, recordCount)
@@ -919,6 +1118,799 @@ final class GitLoadedRootAuthorityEvidenceTests: XCTestCase {
         return false
     }
 
+    func testReachabilityCanonicalizationRejectsInvalidUTF8MandatoryGitIgnore() async throws {
+        for placement in ["root", "nested"] {
+            let fixture = try AuthorityEvidenceFixture()
+            defer { fixture.cleanup() }
+            let control: URL
+            if placement == "root" {
+                control = fixture.root.appendingPathComponent(".gitignore")
+            } else {
+                let reachable = fixture.root.appendingPathComponent("Reachable", isDirectory: true)
+                try FileManager.default.createDirectory(at: reachable, withIntermediateDirectories: true)
+                control = reachable.appendingPathComponent(".gitignore")
+            }
+            try Data([0xFF, 0xFE, 0xFD]).write(to: control)
+
+            do {
+                _ = try await GitService.streamedPrefixControlEvidence(
+                    layout: fixture.layout,
+                    prefix: GitRepositoryRelativeRootPrefix(""),
+                    indexedGitlinkPaths: []
+                )
+                XCTFail("Expected invalid mandatory .gitignore UTF-8 to fail for \(placement)")
+            } catch MandatoryGitIgnoreControlError.invalidEncoding {
+                // Strict mandatory decoding must reject both root and nested controls.
+            } catch {
+                XCTFail("Unexpected canonical reachability error for \(placement): \(error)")
+            }
+        }
+    }
+
+    func testReachabilityCanonicalizationPrunesControlsBelowUntraversableIgnoredDirectory() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        let rootIgnore = fixture.root.appendingPathComponent(".gitignore")
+        try "Generated/\n".write(to: rootIgnore, atomically: true, encoding: .utf8)
+
+        let baseline = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: []
+        )
+        let ignoredDirectory = fixture.root.appendingPathComponent("Generated/nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: ignoredDirectory, withIntermediateDirectories: true)
+        try "*.tmp\n".write(
+            to: ignoredDirectory.appendingPathComponent(".gitignore"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "*.swift text\n".write(
+            to: ignoredDirectory.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let filtered = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: []
+        )
+        XCTAssertEqual(filtered.recordCount, 1)
+        XCTAssertEqual(filtered.ignoreControlDigest, baseline.ignoreControlDigest)
+        XCTAssertEqual(filtered.attributeControlDigest, baseline.attributeControlDigest)
+    }
+
+    func testReachabilityCanonicalizationRetainsReincludedAndOptionalVariantControls() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        try "Generated/*\n!Generated/keep/\n".write(
+            to: fixture.root.appendingPathComponent(".gitignore"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "Generated/\n".write(
+            to: fixture.root.appendingPathComponent(".repo_ignore"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let retainedDirectory = fixture.root.appendingPathComponent("Generated/keep", isDirectory: true)
+        try FileManager.default.createDirectory(at: retainedDirectory, withIntermediateDirectories: true)
+        try "*.swift text\n".write(
+            to: retainedDirectory.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let evidence = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: []
+        )
+        XCTAssertEqual(evidence.recordCount, 3)
+    }
+
+    func testGitIgnoreFloorRejectsSecondaryNegationInCanonicalAndOrdinaryTraversal() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        try "Generated/\n".write(
+            to: fixture.root.appendingPathComponent(".gitignore"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let global = "!Generated/\n!Generated/keep/\n"
+        let retained = fixture.root.appendingPathComponent("Generated/keep", isDirectory: true)
+        try FileManager.default.createDirectory(at: retained, withIntermediateDirectories: true)
+        try "*.swift text\n".write(
+            to: retained.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let authority = IgnoreRulesManager.compileRootAuthority(
+            gitignoreContent: "Generated/\n",
+            globalIgnoreContent: global,
+            repoIgnoreContent: nil,
+            cursorignoreContent: nil
+        )
+        let ordinaryRules = try IgnoreRulesManager.makeRootRules(
+            authority: authority,
+            respectRepoIgnore: true,
+            respectCursorignore: true,
+            policy: .gitRoot(repositoryRelativeRootPrefix: GitRepositoryRelativeRootPrefix(""))
+        )
+        XCTAssertFalse(WorkspaceCatalogDirectoryReachability.shouldTraverse(
+            repositoryRelativeDirectory: "Generated",
+            rules: ordinaryRules.snapshot()
+        ))
+        let nonGitRules = IgnoreRulesManager.makeRootRules(
+            authority: authority,
+            respectRepoIgnore: true,
+            respectCursorignore: true,
+            policy: .nonGitRoot
+        )
+        XCTAssertTrue(WorkspaceCatalogDirectoryReachability.shouldTraverse(
+            repositoryRelativeDirectory: "Generated",
+            rules: nonGitRules.snapshot()
+        ))
+
+        let evidence = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: [],
+            globalIgnoreDefaultsOverride: global
+        )
+        XCTAssertEqual(evidence.recordCount, 1)
+    }
+
+    func testSecondaryOnlyExclusionPrunesCanonicalAndOrdinaryTraversal() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        let generated = fixture.root.appendingPathComponent("Generated", isDirectory: true)
+        try FileManager.default.createDirectory(at: generated, withIntermediateDirectories: true)
+        try "*.swift text\n".write(
+            to: generated.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let authority = IgnoreRulesManager.compileRootAuthority(
+            gitignoreContent: nil,
+            globalIgnoreContent: "Generated/\n",
+            repoIgnoreContent: nil,
+            cursorignoreContent: nil
+        )
+        let ordinaryRules = try IgnoreRulesManager.makeRootRules(
+            authority: authority,
+            respectRepoIgnore: true,
+            respectCursorignore: true,
+            policy: .gitRoot(repositoryRelativeRootPrefix: GitRepositoryRelativeRootPrefix(""))
+        )
+        XCTAssertFalse(WorkspaceCatalogDirectoryReachability.shouldTraverse(
+            repositoryRelativeDirectory: "Generated",
+            rules: ordinaryRules.snapshot()
+        ))
+
+        let evidence = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: [],
+            globalIgnoreDefaultsOverride: "Generated/\n"
+        )
+        XCTAssertEqual(evidence.recordCount, 0)
+    }
+
+    func testGitNegationWithinMandatoryChainKeepsCanonicalAndOrdinaryTraversalReachable() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        let gitignore = "Generated/*\n!Generated/keep/\n"
+        try gitignore.write(
+            to: fixture.root.appendingPathComponent(".gitignore"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let retained = fixture.root.appendingPathComponent("Generated/keep", isDirectory: true)
+        try FileManager.default.createDirectory(at: retained, withIntermediateDirectories: true)
+        try "*.swift text\n".write(
+            to: retained.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let authority = IgnoreRulesManager.compileRootAuthority(
+            gitignoreContent: gitignore,
+            globalIgnoreContent: "",
+            repoIgnoreContent: nil,
+            cursorignoreContent: nil
+        )
+        let ordinaryRules = try IgnoreRulesManager.makeRootRules(
+            authority: authority,
+            respectRepoIgnore: true,
+            respectCursorignore: true,
+            policy: .gitRoot(repositoryRelativeRootPrefix: GitRepositoryRelativeRootPrefix(""))
+        )
+        XCTAssertTrue(WorkspaceCatalogDirectoryReachability.shouldTraverse(
+            repositoryRelativeDirectory: "Generated",
+            rules: ordinaryRules.snapshot()
+        ))
+
+        let evidence = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: [],
+            globalIgnoreDefaultsOverride: ""
+        )
+        XCTAssertEqual(evidence.recordCount, 2)
+    }
+
+    func testBuiltInSecondaryDefaultsDoNotMasqueradeAsMandatoryGitAuthority() throws {
+        let global = "!.svn/\n!.DS_Store\n!Thumbs.db\n!.git/\n"
+        let authority = IgnoreRulesManager.compileRootAuthority(
+            gitignoreContent: nil,
+            globalIgnoreContent: global,
+            repoIgnoreContent: nil,
+            cursorignoreContent: nil
+        )
+        let gitRules = try IgnoreRulesManager.makeRootRules(
+            authority: authority,
+            respectRepoIgnore: true,
+            respectCursorignore: true,
+            policy: .gitRoot(repositoryRelativeRootPrefix: GitRepositoryRelativeRootPrefix(""))
+        )
+
+        XCTAssertFalse(gitRules.isIgnored(relativePath: ".svn", isDirectory: true))
+        XCTAssertFalse(gitRules.isIgnored(relativePath: ".DS_Store", isDirectory: false))
+        XCTAssertFalse(gitRules.isIgnored(relativePath: "Thumbs.db", isDirectory: false))
+        XCTAssertTrue(gitRules.isIgnored(relativePath: ".git", isDirectory: true))
+
+        let nonGitRules = IgnoreRulesManager.makeRootRules(
+            authority: authority,
+            respectRepoIgnore: true,
+            respectCursorignore: true,
+            policy: .nonGitRoot
+        )
+        XCTAssertFalse(nonGitRules.isIgnored(relativePath: ".git", isDirectory: true))
+    }
+
+    func testLoadedRepositorySubdirectoryKeepsGitIgnoreAsMandatoryFloor() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        try "Sources/Generated/\n".write(
+            to: fixture.root.appendingPathComponent(".gitignore"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let loadedRoot = fixture.root.appendingPathComponent("Sources", isDirectory: true)
+        try FileManager.default.createDirectory(at: loadedRoot, withIntermediateDirectories: true)
+        try "!Generated/\n".write(
+            to: loadedRoot.appendingPathComponent(".repo_ignore"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let service = try await FileSystemService(path: loadedRoot.path)
+        let generatedIsIncluded = await service.directoryIsIncludedInOrdinaryCrawl(relativePath: "Generated")
+        XCTAssertFalse(generatedIsIncluded)
+        let policy = await service.ignoreRulePolicy
+        if case let .gitRoot(prefix) = policy {
+            XCTAssertEqual(prefix.value, "Sources")
+        } else {
+            XCTFail("Loaded repository subdirectory must retain Git-root policy")
+        }
+    }
+
+    func testLoadedRepositorySubdirectoryHonorsScopedGitNegation() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        try "Sources/Generated/\n".write(
+            to: fixture.root.appendingPathComponent(".gitignore"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let loadedRoot = fixture.root.appendingPathComponent("Sources", isDirectory: true)
+        try FileManager.default.createDirectory(at: loadedRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: loadedRoot.appendingPathComponent("Generated/keep", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try "!Generated/\n!Generated/keep/\n".write(
+            to: loadedRoot.appendingPathComponent(".gitignore"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let service = try await FileSystemService(path: loadedRoot.path)
+        let generatedIsIncluded = await service.directoryIsIncludedInOrdinaryCrawl(relativePath: "Generated")
+        let keepIsIncluded = await service.directoryIsIncludedInOrdinaryCrawl(relativePath: "Generated/keep")
+        XCTAssertTrue(generatedIsIncluded)
+        XCTAssertTrue(keepIsIncluded)
+    }
+
+    func testExplicitNonGitAndBarePoliciesRemainNonGitAndAmbiguousGitFailsClosed() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "rpce-ignore-policy-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("objects", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try "ref: refs/heads/main\n".write(
+            to: root.appendingPathComponent("HEAD"),
+            atomically: true,
+            encoding: .utf8
+        )
+        if case .nonGitRoot = try IgnoreRulePolicy.resolvingLoadedRoot(root) {
+            // A bare repository has no worktree ignore authority.
+        } else {
+            XCTFail("Bare/non-Git roots must keep explicit non-Git semantics")
+        }
+
+        try "not a gitfile\n".write(
+            to: root.appendingPathComponent(".git"),
+            atomically: true,
+            encoding: .utf8
+        )
+        XCTAssertThrowsError(try IgnoreRulePolicy.resolvingLoadedRoot(root))
+    }
+
+    func testBogusNestedGitMarkerFailsClosedInsteadOfDroppingContainingAuthority() throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        let nestedRoot = fixture.root.appendingPathComponent("Sources", isDirectory: true)
+        let loadedRoot = nestedRoot.appendingPathComponent("Child", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: nestedRoot.appendingPathComponent(".git", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(at: loadedRoot, withIntermediateDirectories: true)
+
+        XCTAssertThrowsError(try IgnoreRulePolicy.resolvingLoadedRoot(loadedRoot))
+    }
+
+    func testValidLinkedWorktreeSubdirectoryCarriesContainingRepositoryPrefix() throws {
+        let fixture = try AuthorityEvidenceFixture(makeCommit: true)
+        defer { fixture.cleanup() }
+        let linkedRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "rpce-linked-policy-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer {
+            try? fixture.runGit(["worktree", "remove", "--force", linkedRoot.path])
+            try? FileManager.default.removeItem(at: linkedRoot)
+        }
+        try fixture.runGit([
+            "worktree", "add", "-q", "-b", "rpce-policy-\(UUID().uuidString)", linkedRoot.path, "HEAD"
+        ])
+        let loadedRoot = linkedRoot.appendingPathComponent("Sources/Nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: loadedRoot, withIntermediateDirectories: true)
+
+        let policy = try IgnoreRulePolicy.resolvingLoadedRoot(loadedRoot)
+        guard case let .gitRoot(prefix) = policy else {
+            return XCTFail("Valid linked-worktree subdirectory must retain Git authority")
+        }
+        XCTAssertEqual(prefix.value, "Sources/Nested")
+    }
+
+    func testMandatoryGitIgnoreSymlinkReadAndEncodingFailuresFailInitialLoad() async throws {
+        for failure in ["symlink", "directory", "encoding"] {
+            let fixture = try AuthorityEvidenceFixture()
+            defer { fixture.cleanup() }
+            let control = fixture.root.appendingPathComponent(".gitignore")
+            if failure == "symlink" {
+                let external = FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "rpce-external-ignore-\(UUID().uuidString)"
+                )
+                defer { try? FileManager.default.removeItem(at: external) }
+                try "Generated/\n".write(to: external, atomically: true, encoding: .utf8)
+                try FileManager.default.createSymbolicLink(at: control, withDestinationURL: external)
+            } else if failure == "directory" {
+                try FileManager.default.createDirectory(at: control, withIntermediateDirectories: false)
+            } else {
+                try Data([0xFF, 0xFE, 0xFD]).write(to: control)
+            }
+
+            do {
+                _ = try await FileSystemService(path: fixture.root.path)
+                XCTFail("Expected mandatory .gitignore \(failure) failure")
+            } catch {
+                // Mandatory Git authority must fail closed.
+            }
+        }
+    }
+
+    func testMandatoryGitIgnoreRefreshFailureRetainsInstalledPolicy() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        let control = fixture.root.appendingPathComponent(".gitignore")
+        try "Generated/\n".write(to: control, atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(
+            at: fixture.root.appendingPathComponent("Generated", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        let service = try await FileSystemService(path: fixture.root.path)
+        let initiallyIncluded = await service.directoryIsIncludedInOrdinaryCrawl(relativePath: "Generated")
+        XCTAssertFalse(initiallyIncluded)
+
+        try Data([0xFF, 0xFE]).write(to: control)
+        do {
+            try await service.refreshIgnoreRules()
+            XCTFail("Expected refresh to reject invalid mandatory authority")
+        } catch {}
+        let includedAfterFailedRefresh = await service.directoryIsIncludedInOrdinaryCrawl(
+            relativePath: "Generated"
+        )
+        XCTAssertFalse(includedAfterFailedRefresh)
+    }
+
+    func testNestedMandatoryGitIgnoreFailureDoesNotCacheParentOnlyRules() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        let child = fixture.root.appendingPathComponent("Child", isDirectory: true)
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        let external = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "rpce-nested-external-ignore-\(UUID().uuidString)"
+        )
+        defer { try? FileManager.default.removeItem(at: external) }
+        try "Generated/\n".write(to: external, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            at: child.appendingPathComponent(".gitignore"),
+            withDestinationURL: external
+        )
+        let service = try await FileSystemService(path: fixture.root.path)
+
+        let included = await service.directoryIsIncludedInOrdinaryCrawl(relativePath: "Child/Generated")
+        XCTAssertFalse(included)
+        let cached = await service.cachedIgnoreRules(for: "Child")
+        XCTAssertNil(cached)
+    }
+
+    func testReachabilityCanonicalizationBoundsAggregateRetainedControlMemory() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        try String(repeating: "generated-file\n", count: 128).write(
+            to: fixture.root.appendingPathComponent(".gitignore"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        do {
+            _ = try await GitService.streamedPrefixControlEvidence(
+                layout: fixture.layout,
+                prefix: GitRepositoryRelativeRootPrefix(""),
+                indexedGitlinkPaths: [],
+                resourcePolicy: GitPrefixControlEvidenceResourcePolicy(
+                    maximumAggregateControlBytes: 512
+                ),
+                globalIgnoreDefaultsOverride: ""
+            )
+            XCTFail("Expected aggregate retained-control budget failure")
+        } catch let error as GitWorktreeInitializationError {
+            XCTAssertEqual(error.reason, .cappedOutput)
+        }
+    }
+
+    func testDirectoryObservationMemoryUsesAggregateByteBudget() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        for index in 0 ..< 16 {
+            try FileManager.default.createDirectory(
+                at: fixture.root.appendingPathComponent("Directory-\(index)", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+        }
+
+        do {
+            _ = try await GitService.streamedPrefixControlEvidence(
+                layout: fixture.layout,
+                prefix: GitRepositoryRelativeRootPrefix(""),
+                indexedGitlinkPaths: [],
+                resourcePolicy: GitPrefixControlEvidenceResourcePolicy(
+                    maximumAggregateControlBytes: 8 * 1024
+                ),
+                globalIgnoreDefaultsOverride: ""
+            )
+            XCTFail("Expected directory-observation aggregate budget failure")
+        } catch let error as GitWorktreeInitializationError {
+            XCTAssertEqual(error.reason, .cappedOutput)
+        }
+    }
+
+    func testReachabilityCanonicalizationFinalizationFencesOmittedControlDeletionAndChange() async throws {
+        for mutation in ["delete", "change"] {
+            let fixture = try AuthorityEvidenceFixture()
+            defer { fixture.cleanup() }
+            let control = fixture.root.appendingPathComponent(".gitignore")
+            try "Generated/\n".write(to: control, atomically: true, encoding: .utf8)
+            let source = MutatingEmptyPrefixCandidateSource {
+                if mutation == "delete" {
+                    try FileManager.default.removeItem(at: control)
+                } else {
+                    try "Changed/\n".write(to: control, atomically: true, encoding: .utf8)
+                }
+            }
+
+            do {
+                _ = try await GitWorkspaceStateAuthority().prefixControlEvidence(
+                    in: fixture.layout,
+                    prefix: GitRepositoryRelativeRootPrefix(""),
+                    cacheMode: .bypassReadAndAdmission
+                ) {
+                    try await GitService.streamedPrefixControlEvidence(
+                        layout: fixture.layout,
+                        prefix: GitRepositoryRelativeRootPrefix(""),
+                        indexedGitlinkPaths: [],
+                        candidateSource: source,
+                        globalIgnoreDefaultsOverride: ""
+                    )
+                }
+                XCTFail("Expected omitted eager control \(mutation) to fail closed")
+            } catch {
+                // Any stable-read/currentness failure is the required fail-closed result.
+            }
+        }
+    }
+
+    func testBypassFinalizationFencesLateControlAndTopologyAdditions() async throws {
+        for addition in ["control", "topology", "gitlink"] {
+            let fixture = try AuthorityEvidenceFixture(makeCommit: true)
+            defer { fixture.cleanup() }
+            let head = try fixture.runGit(["rev-parse", "HEAD"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let source = MutatingEmptyPrefixCandidateSource {
+                if addition == "control" {
+                    try "*.swift text\n".write(
+                        to: fixture.root.appendingPathComponent(".gitattributes"),
+                        atomically: true,
+                        encoding: .utf8
+                    )
+                } else if addition == "topology" {
+                    try FileManager.default.createDirectory(
+                        at: fixture.root.appendingPathComponent("Late/.git", isDirectory: true),
+                        withIntermediateDirectories: true
+                    )
+                } else {
+                    try fixture.runGit([
+                        "update-index", "--add", "--cacheinfo", "160000", head, "LateGitlink"
+                    ])
+                }
+            }
+
+            do {
+                _ = try await GitWorkspaceStateAuthority().prefixControlEvidence(
+                    in: fixture.layout,
+                    prefix: GitRepositoryRelativeRootPrefix(""),
+                    cacheMode: .bypassReadAndAdmission
+                ) {
+                    try await GitService.streamedPrefixControlEvidence(
+                        layout: fixture.layout,
+                        prefix: GitRepositoryRelativeRootPrefix(""),
+                        indexedGitlinkPaths: [],
+                        candidateSource: source,
+                        globalIgnoreDefaultsOverride: ""
+                    )
+                }
+                XCTFail("Expected late \(addition) addition to fail closed")
+            } catch {
+                // Any final currentness/topology error is the required fail-closed result.
+            }
+        }
+    }
+
+    func testPostArtifactFinalizationFenceRejectsControlMutation() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        let control = fixture.root.appendingPathComponent(".gitignore")
+        try "Generated/\n".write(to: control, atomically: true, encoding: .utf8)
+
+        do {
+            _ = try await GitService.streamedPrefixControlEvidence(
+                layout: fixture.layout,
+                prefix: GitRepositoryRelativeRootPrefix(""),
+                indexedGitlinkPaths: [],
+                globalIgnoreDefaultsOverride: "",
+                postArtifactFinalizationHook: {
+                    try "Changed/\n".write(to: control, atomically: true, encoding: .utf8)
+                }
+            )
+            XCTFail("Expected post-finalization currentness failure")
+        } catch {
+            // The bounded post-artifact fence must reject the mutation.
+        }
+    }
+
+    func testReachabilityCanonicalizationFailsBeforeNestedGitDirectoryOrGitfileControls() async throws {
+        for boundaryKind in ["directory", "gitfile"] {
+            let fixture = try AuthorityEvidenceFixture()
+            defer { fixture.cleanup() }
+            let nested = fixture.root.appendingPathComponent("Nested", isDirectory: true)
+            try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+            let boundary = nested.appendingPathComponent(".git")
+            if boundaryKind == "directory" {
+                try FileManager.default.createDirectory(at: boundary, withIntermediateDirectories: false)
+            } else {
+                try "gitdir: ../metadata\n".write(to: boundary, atomically: true, encoding: .utf8)
+            }
+            try "*.swift text\n".write(
+                to: nested.appendingPathComponent(".gitattributes"),
+                atomically: true,
+                encoding: .utf8
+            )
+
+            do {
+                _ = try await GitService.streamedPrefixControlEvidence(
+                    layout: fixture.layout,
+                    prefix: GitRepositoryRelativeRootPrefix(""),
+                    indexedGitlinkPaths: [],
+                    globalIgnoreDefaultsOverride: ""
+                )
+                XCTFail("Expected nested Git \(boundaryKind) to fail closed")
+            } catch let error as GitWorktreeInitializationError {
+                XCTAssertEqual(error.reason, .malformedOutput)
+            }
+        }
+    }
+
+    func testReachabilityCanonicalizationFailsBeforeIndexedGitlinkControlsWithoutGitfile() async throws {
+        let fixture = try AuthorityEvidenceFixture(makeCommit: true)
+        defer { fixture.cleanup() }
+        let head = try fixture.runGit(["rev-parse", "HEAD"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try fixture.runGit(["update-index", "--add", "--cacheinfo", "160000", head, "Nested"])
+        let nested = fixture.root.appendingPathComponent("Nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try "*.swift text\n".write(
+            to: nested.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        do {
+            _ = try await GitService(workspaceStateAuthority: GitWorkspaceStateAuthority())
+                .workspaceAuthoritySnapshot(
+                    in: fixture.layout,
+                    prefix: GitRepositoryRelativeRootPrefix(""),
+                    cacheMode: .bypassReadAndAdmission
+                )
+            XCTFail("Expected indexed gitlink topology to fail closed before controls")
+        } catch let error as GitWorktreeInitializationError {
+            XCTAssertEqual(error.reason, .malformedOutput)
+        }
+    }
+
+    func testSameLogicalCacheKeyDoesNotReuseFooterAcrossIndexedGitlinkMutation() async throws {
+        let fixture = try AuthorityEvidenceFixture(makeCommit: true)
+        defer { fixture.cleanup() }
+        let authority = GitWorkspaceStateAuthority()
+        let git = GitService(workspaceStateAuthority: authority)
+        let prefix = try GitRepositoryRelativeRootPrefix("")
+        _ = try await git.workspaceAuthoritySnapshot(in: fixture.layout, prefix: prefix)
+        let head = try fixture.runGit(["rev-parse", "HEAD"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try fixture.runGit(["update-index", "--add", "--cacheinfo", "160000", head, "Nested"])
+        let nested = fixture.root.appendingPathComponent("Nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try "*.swift text\n".write(
+            to: nested.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        do {
+            _ = try await git.workspaceAuthoritySnapshot(in: fixture.layout, prefix: prefix)
+            XCTFail("Expected indexed gitlink mutation to invalidate prefix-control evidence")
+        } catch let error as GitWorktreeInitializationError {
+            XCTAssertEqual(error.reason, .malformedOutput)
+        }
+        let counters = await authority.snapshotForTesting()
+        XCTAssertEqual(counters.prefixControlCacheHitCount, 0)
+        XCTAssertEqual(counters.prefixControlPhysicalScanCount, 2)
+    }
+
+    func testReachableControlAddChangeDeleteAndOrderChangeExactDigest() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        let rootIgnore = fixture.root.appendingPathComponent(".gitignore")
+        try "one\ntwo\n".write(to: rootIgnore, atomically: true, encoding: .utf8)
+        let baseline = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: []
+        )
+
+        try "two\none\n".write(to: rootIgnore, atomically: true, encoding: .utf8)
+        let reordered = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: []
+        )
+        XCTAssertNotEqual(reordered.ignoreControlDigest, baseline.ignoreControlDigest)
+
+        try "one\ntwo\n".write(to: rootIgnore, atomically: true, encoding: .utf8)
+        let nestedControl = fixture.root.appendingPathComponent("Sources/.repo_ignore")
+        try FileManager.default.createDirectory(
+            at: nestedControl.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "*.generated\n".write(to: nestedControl, atomically: true, encoding: .utf8)
+        let added = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: []
+        )
+        XCTAssertNotEqual(added.ignoreControlDigest, baseline.ignoreControlDigest)
+
+        try "*.changed\n".write(to: nestedControl, atomically: true, encoding: .utf8)
+        let changed = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: []
+        )
+        XCTAssertNotEqual(changed.ignoreControlDigest, added.ignoreControlDigest)
+
+        try FileManager.default.removeItem(at: nestedControl)
+        let deleted = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: []
+        )
+        XCTAssertEqual(deleted.ignoreControlDigest, baseline.ignoreControlDigest)
+
+        let attributes = fixture.root.appendingPathComponent("Sources/.gitattributes")
+        try "*.swift text\n*.json -text\n".write(to: attributes, atomically: true, encoding: .utf8)
+        let attributeAdded = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: []
+        )
+        XCTAssertNotEqual(attributeAdded.attributeControlDigest, baseline.attributeControlDigest)
+
+        try "*.json -text\n*.swift text\n".write(to: attributes, atomically: true, encoding: .utf8)
+        let attributeReordered = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: []
+        )
+        XCTAssertNotEqual(attributeReordered.attributeControlDigest, attributeAdded.attributeControlDigest)
+
+        try "*.swift binary\n".write(to: attributes, atomically: true, encoding: .utf8)
+        let attributeChanged = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: []
+        )
+        XCTAssertNotEqual(attributeChanged.attributeControlDigest, attributeReordered.attributeControlDigest)
+
+        try FileManager.default.removeItem(at: attributes)
+        let attributeDeleted = try await GitService.streamedPrefixControlEvidence(
+            layout: fixture.layout,
+            prefix: GitRepositoryRelativeRootPrefix(""),
+            indexedGitlinkPaths: []
+        )
+        XCTAssertEqual(attributeDeleted.attributeControlDigest, baseline.attributeControlDigest)
+    }
+
+    func testReachabilityCanonicalizationFailsClosedForSymbolicLinkTopology() async throws {
+        let fixture = try AuthorityEvidenceFixture()
+        defer { fixture.cleanup() }
+        let target = fixture.root.appendingPathComponent("ordinary-target", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: fixture.root.appendingPathComponent("ambiguous-prefix"),
+            withDestinationURL: target
+        )
+
+        do {
+            _ = try await GitService.streamedPrefixControlEvidence(
+                layout: fixture.layout,
+                prefix: GitRepositoryRelativeRootPrefix("ambiguous-prefix"),
+                indexedGitlinkPaths: []
+            )
+            XCTFail("Expected symbolic-link topology to fail closed")
+        } catch let error as GitWorktreeInitializationError {
+            XCTAssertEqual(error.reason, .malformedOutput)
+        }
+    }
+
     private func inventoryHeader() throws -> WorkspaceRootReusableInventoryManifestHeader {
         let oid = try GitObjectID(objectFormat: .sha1, lowercaseHex: String(repeating: "2", count: 40))
         return try WorkspaceRootReusableInventoryManifestHeader(
@@ -1001,12 +1993,31 @@ private actor PrefixControlCollectorCounter {
     }
 }
 
+private actor PrefixControlCollectedEvidenceCounter {
+    private let evidence: GitPrefixControlCollectedEvidence
+    private var count = 0
+
+    init(evidence: GitPrefixControlCollectedEvidence) {
+        self.evidence = evidence
+    }
+
+    func collect() -> GitPrefixControlCollectedEvidence {
+        count += 1
+        return evidence
+    }
+
+    func collectionCount() -> Int {
+        count
+    }
+}
+
 private final class LazyPrefixCandidateSource: GitPrefixControlCandidateSource {
     private let root: URL
     private let logicalNoiseCount: Int
     private let lateControl: URL
     private var index = 0
     private(set) var emittedNoiseCount = 0
+    private(set) var currentCandidateKind: GitPrefixControlCandidateKind = .regularFile
 
     init(root: URL, logicalNoiseCount: Int, lateControl: URL) {
         self.root = root
@@ -1019,11 +2030,38 @@ private final class LazyPrefixCandidateSource: GitPrefixControlCandidateSource {
             defer { index += 1
                 emittedNoiseCount += 1
             }
+            currentCandidateKind = .regularFile
             return root.appendingPathComponent("logical-noise-\(index)")
         }
         if index == logicalNoiseCount {
             index += 1
+            currentCandidateKind = .directory
+            return lateControl.deletingLastPathComponent()
+        }
+        if index == logicalNoiseCount + 1 {
+            index += 1
+            currentCandidateKind = .regularFile
             return lateControl
+        }
+        return nil
+    }
+
+    func skipDescendants() {}
+}
+
+private final class MutatingEmptyPrefixCandidateSource: GitPrefixControlCandidateSource {
+    private let mutation: () throws -> Void
+    private var mutated = false
+    let currentCandidateKind: GitPrefixControlCandidateKind = .regularFile
+
+    init(mutation: @escaping () throws -> Void) {
+        self.mutation = mutation
+    }
+
+    func nextCandidate() throws -> URL? {
+        if !mutated {
+            mutated = true
+            try mutation()
         }
         return nil
     }
@@ -1061,17 +2099,57 @@ private final class AuthorityEvidenceFixture {
         try? FileManager.default.removeItem(at: cleanupRoot)
     }
 
-    private static func git(_ arguments: [String], at root: URL) throws {
+    @discardableResult
+    func runGit(_ arguments: [String]) throws -> String {
+        try Self.git(arguments, at: root)
+    }
+
+    func importCommittedControls(count: Int) throws {
+        let branch = try runGit(["symbolic-ref", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        var stream = Data()
+        stream.append(Data("commit \(branch)\n".utf8))
+        stream.append(Data("committer RepoPrompt Tests <tests@example.invalid> 0 +0000\n".utf8))
+        stream.append(Data("data 7\nfixture\n".utf8))
+        for index in 0 ..< count {
+            stream.append(Data(String(format: "M 100644 inline control-%06d/.gitignore\n", index).utf8))
+            stream.append(Data("data 0\n\n".utf8))
+        }
+        stream.append(Data("done\n".utf8))
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["fast-import", "--quiet"]
+        process.currentDirectoryURL = root
+        let stdin = Pipe()
+        process.standardInput = stdin
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        stdin.fileHandleForWriting.write(stream)
+        try stdin.fileHandleForWriting.close()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw NSError(domain: "GitLoadedRootAuthorityEvidenceTests", code: Int(process.terminationStatus))
+        }
+    }
+
+    @discardableResult
+    private static func git(_ arguments: [String], at root: URL) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = arguments
         process.currentDirectoryURL = root
-        process.standardOutput = Pipe()
+        let stdout = Pipe()
+        process.standardOutput = stdout
         process.standardError = Pipe()
         try process.run()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             throw NSError(domain: "GitLoadedRootAuthorityEvidenceTests", code: Int(process.terminationStatus))
         }
+        return String(
+            data: stdout.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
     }
 }

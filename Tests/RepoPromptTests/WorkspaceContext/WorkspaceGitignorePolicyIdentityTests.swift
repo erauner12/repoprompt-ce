@@ -2,9 +2,12 @@
 import XCTest
 
 final class WorkspaceGitignorePolicyIdentityTests: XCTestCase {
-    func testCurrentIdentityIsStableMandatoryV1() {
-        XCTAssertEqual(WorkspaceGitignorePolicyIdentity.current, .mandatoryV1)
-        XCTAssertEqual(WorkspaceGitignorePolicyIdentity.current.rawValue, "mandatory-gitignore-v1")
+    func testCurrentIdentityUsesGitIgnoreFloorV3() {
+        XCTAssertEqual(WorkspaceGitignorePolicyIdentity.current, .gitIgnoreFloorV3)
+        XCTAssertEqual(
+            WorkspaceGitignorePolicyIdentity.current.rawValue,
+            "mandatory-gitignore-floor-reachable-controls-v3"
+        )
     }
 
     func testLoadedRootUsesMandatoryIdentityAndExcludesIgnoredFiles() async throws {
@@ -21,7 +24,7 @@ final class WorkspaceGitignorePolicyIdentityTests: XCTestCase {
 
         let identity = await store.gitignorePolicyIdentityForTesting(rootID: root.id)
         let paths = await store.files(inRoot: root.id).map(\.standardizedRelativePath)
-        XCTAssertEqual(identity, .mandatoryV1)
+        XCTAssertEqual(identity, .gitIgnoreFloorV3)
         XCTAssertTrue(paths.contains("kept.txt"))
         XCTAssertFalse(paths.contains("ignored.txt"))
         await store.unloadRoot(id: root.id)

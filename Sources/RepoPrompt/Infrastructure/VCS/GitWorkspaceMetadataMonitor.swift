@@ -87,9 +87,9 @@ actor GitWorkspaceMetadataMonitor {
             flags: FSEventStreamEventFlags
         ) -> Set<GitWorkspaceMetadataEventKind> {
             let targetPath = targetURL.standardizedFileURL.path
-            let canonicalEventPath = URL(fileURLWithPath: eventPath)
-                .resolvingSymlinksInPath()
-                .standardizedFileURL.path
+            guard let canonicalEventPath = Self.canonicalEventPathPreservingFinalComponent(eventPath) else {
+                return []
+            }
             let matches = switch scope {
             case .exactFile:
                 // Some replacement/deletion batches are reported at the
@@ -111,6 +111,19 @@ actor GitWorkspaceMetadataMonitor {
             return matches ? eventKinds : []
         }
 
+        private static func canonicalEventPathPreservingFinalComponent(_ eventPath: String) -> String? {
+            let rawURL = URL(fileURLWithPath: eventPath).standardizedFileURL
+            guard rawURL.isFileURL,
+                  rawURL.path.hasPrefix("/"),
+                  !rawURL.path.contains("\0")
+            else { return nil }
+            guard rawURL.path != "/" else { return "/" }
+            let canonicalParent = rawURL.deletingLastPathComponent()
+                .resolvingSymlinksInPath()
+                .standardizedFileURL
+            return canonicalParent.appendingPathComponent(rawURL.lastPathComponent).standardizedFileURL.path
+        }
+
         private static func prefixControlScopeMatches(
             canonicalEventPath: String,
             repositoryRootPath: String,
@@ -124,10 +137,6 @@ actor GitWorkspaceMetadataMonitor {
                 ? ""
                 : String(canonicalEventPath.dropFirst(repositoryRootPath.count + 1))
             let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
-            // Repository metadata is covered by the ordinary typed metadata
-            // targets. A checkout-owned `.git` subtree can be enormous and is
-            // never part of prefix-control discovery.
-            guard !components.contains(".git") else { return false }
 
             let isAtOrBelowPrefix = relativePrefix.isEmpty
                 || relativePath == relativePrefix
@@ -141,6 +150,21 @@ actor GitWorkspaceMetadataMonitor {
             let parentIsPrefixAncestor = parent.isEmpty
                 || parent == relativePrefix
                 || relativePrefix.hasPrefix(parent + "/")
+            if let gitComponentIndex = components.firstIndex(of: ".git") {
+                // The checkout's own `.git` metadata is covered by typed Git
+                // metadata targets and can be extremely noisy. A nested exact
+                // `.git` path, however, is traversal topology: directory,
+                // gitfile, create, remove, and replacement events must
+                // invalidate prefix-control evidence. Ignore descendants of
+                // either metadata directory after matching the boundary.
+                guard gitComponentIndex > components.startIndex else { return false }
+                guard gitComponentIndex == components.index(before: components.endIndex) else { return false }
+                let boundaryDirectory = components[..<gitComponentIndex].joined(separator: "/")
+                return relativePrefix.isEmpty
+                    || boundaryDirectory == relativePrefix
+                    || boundaryDirectory.hasPrefix(relativePrefix + "/")
+                    || relativePrefix.hasPrefix(boundaryDirectory + "/")
+            }
             let isControl = [".gitignore", ".repo_ignore", ".cursorignore", ".gitattributes"]
                 .contains(components.last.map(String.init) ?? "")
                 && (isAtOrBelowPrefix || parentIsPrefixAncestor)

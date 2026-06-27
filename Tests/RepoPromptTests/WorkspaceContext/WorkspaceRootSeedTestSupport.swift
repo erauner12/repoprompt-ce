@@ -9,7 +9,8 @@ enum WorkspaceRootSeedTestSupport {
     static func compatibilityKey(
         treeOID: GitObjectID = oid(),
         prefix: GitRepositoryRelativeRootPrefix = try! GitRepositoryRelativeRootPrefix(""),
-        committedIgnoreDigest: String = "ignore"
+        committedIgnoreDigest: String = "ignore",
+        canonicalizationDiagnostics: GitWorkspacePolicyCanonicalizationDiagnostics? = nil
     ) -> WorkspaceRootSeedCompatibilityKey {
         let root = URL(fileURLWithPath: "/tmp/workspace-root-seed-tests")
         let git = root.appendingPathComponent(".git", isDirectory: true)
@@ -21,14 +22,18 @@ enum WorkspaceRootSeedTestSupport {
             isWorktree: false
         )
         let policy = GitWorkspacePolicyIdentity(
-            mandatoryIgnorePolicyIdentity: "git-ignore-policy-v1",
-            committedIgnoreControlDigest: committedIgnoreDigest,
-            configuredIgnoreAuthorityDigest: "configured-ignore",
-            attributePolicyDigest: "attributes",
-            sparsePolicyDigest: "sparse-disabled",
+            mandatoryIgnorePolicyIdentity: canonicalizationDiagnostics?.canonicalizationPolicyVersion
+                ?? WorkspaceGitignorePolicyIdentity.current.rawValue,
+            committedIgnoreControlDigest: canonicalizationDiagnostics?.canonicalIgnoreFooter.digest
+                ?? committedIgnoreDigest,
+            configuredIgnoreAuthorityDigest: canonicalizationDiagnostics?.configuredIgnorePolicyDigest
+                ?? "configured-ignore",
+            attributePolicyDigest: canonicalizationDiagnostics?.attributePolicyDigest ?? "attributes",
+            sparsePolicyDigest: canonicalizationDiagnostics?.sparsePolicyDigest ?? "sparse-disabled",
             searchABI: .current,
             resolvedExcludesFileIdentity: nil,
-            resolvedAttributesFileIdentity: nil
+            resolvedAttributesFileIdentity: nil,
+            canonicalizationDiagnostics: canonicalizationDiagnostics
         )
         let authority = GitWorkspaceAuthoritySnapshot(
             repositoryKey: GitWorkspaceAuthorityRepositoryKey(layout: layout),
@@ -46,6 +51,37 @@ enum WorkspaceRootSeedTestSupport {
             policyIdentity: policy
         )
         return WorkspaceRootSeedCompatibilityKey(authority: authority)
+    }
+
+    static func canonicalizationDiagnostics(
+        prunedRootCount: Int = 0,
+        prunedRootSummarySHA256: String = String(repeating: "a", count: 64),
+        completeness: GitWorkspacePolicyCanonicalizationDiagnostics.Completeness = .complete,
+        committedControlCount: Int = 1,
+        committedControlSummarySHA256: String = String(repeating: "b", count: 64)
+    ) -> GitWorkspacePolicyCanonicalizationDiagnostics {
+        func digest(_ scalar: Character) -> String {
+            String(repeating: scalar, count: 64)
+        }
+        return GitWorkspacePolicyCanonicalizationDiagnostics(
+            rootNeutralPolicyConfigByteCount: 0,
+            rootNeutralPolicyConfigSHA256: digest("0"),
+            commonInfoExclude: .init(state: .missing, digest: digest("1")),
+            canonicalIgnoreFooter: .init(digest: digest("2"), recordCount: 4),
+            externalExcludes: .init(state: .unset, identityDigest: digest("3"), byteCount: 0),
+            configuredIgnorePolicyDigest: digest("4"),
+            commonInfoAttributes: .init(state: .missing, digest: digest("5")),
+            canonicalAttributeFooter: .init(digest: digest("6"), recordCount: 1),
+            externalAttributes: .init(state: .unset, identityDigest: digest("7"), byteCount: 0),
+            attributePolicyDigest: digest("8"),
+            sparsePolicyDigest: digest("9"),
+            canonicalizationPolicyVersion: WorkspaceGitignorePolicyIdentity.current.rawValue,
+            prunedRootCount: prunedRootCount,
+            prunedRootSummarySHA256: prunedRootSummarySHA256,
+            completeness: completeness,
+            committedControlCount: committedControlCount,
+            committedControlSummarySHA256: committedControlSummarySHA256
+        )
     }
 
     static func snapshot(

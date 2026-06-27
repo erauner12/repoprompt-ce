@@ -1,7 +1,7 @@
 import Foundation
 
 enum WorkspaceGitignorePolicyIdentity: String, Hashable {
-    case mandatoryV1 = "mandatory-gitignore-v1"
+    case gitIgnoreFloorV3 = "mandatory-gitignore-floor-reachable-controls-v3"
 
-    static let current = WorkspaceGitignorePolicyIdentity.mandatoryV1
+    static let current = WorkspaceGitignorePolicyIdentity.gitIgnoreFloorV3
 }

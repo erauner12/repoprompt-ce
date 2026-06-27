@@ -28,6 +28,23 @@ enum GitPrefixControlEvidenceCacheError: Error, Equatable {
     case resourceAdmission
 }
 
+struct GitPrefixControlCollectionDetail: Equatable {
+    let collectionCompleted: Bool
+    let ignoreControlCount: Int
+    let attributeControlCount: Int
+    let prunedRootCount: Int
+    /// Domain-separated digest of every pruned repository-relative root in
+    /// canonical traversal order. This keeps cache carriage constant-size;
+    /// count overflow or an unavailable digest makes the detail invalid rather
+    /// than silently truncating diagnostic evidence.
+    let prunedRootSummarySHA256: String
+}
+
+struct GitPrefixControlCollectedEvidence: Equatable {
+    let footer: GitPrefixControlEvidenceManifestFooter
+    let collectionDetail: GitPrefixControlCollectionDetail?
+}
+
 private final class GitWorkspaceAuthoritySynchronousState: @unchecked Sendable {
     private struct RepositoryState {
         let invalidationGeneration: UInt64
@@ -167,6 +184,7 @@ actor GitWorkspaceStateAuthority {
         let repositoryKey: GitWorkspaceAuthorityRepositoryKey
         let rootIdentity: PrefixControlRootIdentity
         let prefix: GitRepositoryRelativeRootPrefix
+        let policyAuthorityIdentity: String
         let collectorFormatVersion: UInt32
     }
 
@@ -180,7 +198,7 @@ actor GitWorkspaceStateAuthority {
 
     private struct PrefixControlCacheEntry {
         let id: UUID
-        let footer: GitPrefixControlEvidenceManifestFooter
+        let evidence: GitPrefixControlCollectedEvidence
         let observationToken: GitWorkspaceMetadataMonitor.RetainToken
         var currentness: PrefixControlCurrentnessKey
         var lastAccessOrdinal: UInt64
@@ -190,11 +208,11 @@ actor GitWorkspaceStateAuthority {
 
     private struct PendingPrefixControlAdmission {
         let id: UUID
-        let task: Task<GitPrefixControlEvidenceManifestFooter, Error>
+        let task: Task<GitPrefixControlCollectedEvidence, Error>
         let observationToken: GitWorkspaceMetadataMonitor.RetainToken
         let currentness: PrefixControlCurrentnessKey
         let repositoryRoot: URL
-        var waiters: [UUID: CheckedContinuation<GitPrefixControlEvidenceManifestFooter, Error>]
+        var waiters: [UUID: CheckedContinuation<GitPrefixControlCollectedEvidence, Error>]
         var isCancelled: Bool
         let reservedResidentBytes: Int
         let reservedArtifactBytes: UInt64
@@ -202,8 +220,8 @@ actor GitWorkspaceStateAuthority {
 
     private struct PendingUncachedPrefixControlFlight {
         let id: UUID
-        let task: Task<GitPrefixControlEvidenceManifestFooter, Error>
-        var waiters: [UUID: CheckedContinuation<GitPrefixControlEvidenceManifestFooter, Error>]
+        let task: Task<GitPrefixControlCollectedEvidence, Error>
+        var waiters: [UUID: CheckedContinuation<GitPrefixControlCollectedEvidence, Error>]
         var isCancelled: Bool
         let reservedResidentBytes: Int
         let reservedArtifactBytes: UInt64
@@ -275,11 +293,60 @@ actor GitWorkspaceStateAuthority {
         in layout: GitRepositoryLayout,
         prefix: GitRepositoryRelativeRootPrefix,
         cacheMode: GitPrefixControlEvidenceCacheMode,
+        policyAuthorityIdentity: String = "",
         collector: @escaping @Sendable () async throws -> GitPrefixControlEvidenceManifestFooter
     ) async throws -> GitPrefixControlEvidenceManifestFooter {
+        try await prefixControlCollectedEvidence(
+            in: layout,
+            prefix: prefix,
+            cacheMode: cacheMode,
+            policyAuthorityIdentity: policyAuthorityIdentity,
+            requiresCollectionDetail: false
+        ) {
+            try await GitPrefixControlCollectedEvidence(
+                footer: collector(),
+                collectionDetail: nil
+            )
+        }.footer
+    }
+
+    func prefixControlEvidenceWithDetail(
+        in layout: GitRepositoryLayout,
+        prefix: GitRepositoryRelativeRootPrefix,
+        cacheMode: GitPrefixControlEvidenceCacheMode,
+        policyAuthorityIdentity: String = "",
+        collector: @escaping @Sendable () async throws -> GitPrefixControlCollectedEvidence
+    ) async throws -> GitPrefixControlCollectedEvidence {
+        try await prefixControlCollectedEvidence(
+            in: layout,
+            prefix: prefix,
+            cacheMode: cacheMode,
+            policyAuthorityIdentity: policyAuthorityIdentity,
+            requiresCollectionDetail: true,
+            collector: collector
+        )
+    }
+
+    private func prefixControlCollectedEvidence(
+        in layout: GitRepositoryLayout,
+        prefix: GitRepositoryRelativeRootPrefix,
+        cacheMode: GitPrefixControlEvidenceCacheMode,
+        policyAuthorityIdentity: String,
+        requiresCollectionDetail: Bool,
+        collector: @escaping @Sendable () async throws -> GitPrefixControlCollectedEvidence
+    ) async throws -> GitPrefixControlCollectedEvidence {
         #if DEBUG
             let recorder = WorktreeStartupPreparationInstrumentation.currentRecorder
         #endif
+        let validatedCollector: @Sendable () async throws -> GitPrefixControlCollectedEvidence = {
+            let evidence = try await collector()
+            guard !requiresCollectionDetail
+                || (evidence.collectionDetail != nil && Self.prefixControlEvidenceIsValid(evidence))
+            else {
+                throw GitPrefixControlEvidenceCacheError.corruptFooter
+            }
+            return evidence
+        }
         if cacheMode == .bypassReadAndAdmission {
             prefixControlCacheBypassCount &+= 1
             prefixControlPhysicalScanCount &+= 1
@@ -287,7 +354,7 @@ actor GitWorkspaceStateAuthority {
                 recorder?.increment(.prefixCacheBypasses)
                 recorder?.recordReason(.bypassed)
             #endif
-            return try await collector()
+            return try await validatedCollector()
         }
 
         #if DEBUG
@@ -295,11 +362,15 @@ actor GitWorkspaceStateAuthority {
         #endif
 
         let repositoryKey = GitWorkspaceAuthorityRepositoryKey(layout: layout)
+        guard policyAuthorityIdentity.utf8.count <= 128,
+              !policyAuthorityIdentity.contains("\0")
+        else { throw GitPrefixControlEvidenceCacheError.resourceAdmission }
         let rootIdentity = try Self.prefixControlRootIdentity(for: layout.workTreeRoot)
         let key = PrefixControlCacheKey(
             repositoryKey: repositoryKey,
             rootIdentity: rootIdentity,
             prefix: prefix,
+            policyAuthorityIdentity: policyAuthorityIdentity,
             collectorFormatVersion: GitPrefixControlEvidenceManifestHeader.currentSchemaVersion
         )
         let scopeKey = GitWorkspaceAuthorityScopeKey(
@@ -348,7 +419,8 @@ actor GitWorkspaceStateAuthority {
                currentRootIdentity == rootIdentity,
                prefixControlCacheEntries[key]?.id == expectedEntryID,
                prefixControlCurrentness(for: scopeKey) == expectedCurrentness,
-               Self.prefixControlFooterIsValid(entry.footer)
+               Self.prefixControlEvidenceIsValid(entry.evidence),
+               !requiresCollectionDetail || entry.evidence.collectionDetail != nil
             {
                 prefixControlCacheAccessOrdinal &+= 1
                 entry.lastAccessOrdinal = prefixControlCacheAccessOrdinal
@@ -358,7 +430,7 @@ actor GitWorkspaceStateAuthority {
                     recorder?.increment(.prefixCacheHits)
                     lookupSpan?.end()
                 #endif
-                return entry.footer
+                return entry.evidence
             }
             #if DEBUG
                 recorder?.increment(.prefixCacheInvalidations)
@@ -393,7 +465,19 @@ actor GitWorkspaceStateAuthority {
                     recorder?.increment(.prefixCacheCoalesces)
                     lookupSpan?.end()
                 #endif
-                return try await waitForPendingPrefixControlAdmission(key: key, flightID: pending.id)
+                let evidence = try await waitForPendingPrefixControlAdmission(key: key, flightID: pending.id)
+                if requiresCollectionDetail, evidence.collectionDetail == nil {
+                    await removePrefixControlCacheEntry(key, invalidated: false)
+                    return try await prefixControlCollectedEvidence(
+                        in: layout,
+                        prefix: prefix,
+                        cacheMode: cacheMode,
+                        policyAuthorityIdentity: policyAuthorityIdentity,
+                        requiresCollectionDetail: true,
+                        collector: collector
+                    )
+                }
+                return evidence
             }
             #if DEBUG
                 recorder?.recordReason(.staleCurrentness)
@@ -416,7 +500,18 @@ actor GitWorkspaceStateAuthority {
                 recorder?.increment(.prefixCacheCoalesces)
                 lookupSpan?.end()
             #endif
-            return try await waitForPendingUncachedPrefixControlFlight(key: key, flightID: pending.id)
+            let evidence = try await waitForPendingUncachedPrefixControlFlight(key: key, flightID: pending.id)
+            if requiresCollectionDetail, evidence.collectionDetail == nil {
+                return try await prefixControlCollectedEvidence(
+                    in: layout,
+                    prefix: prefix,
+                    cacheMode: cacheMode,
+                    policyAuthorityIdentity: policyAuthorityIdentity,
+                    requiresCollectionDetail: true,
+                    collector: collector
+                )
+            }
+            return evidence
         }
 
         prefixControlCacheMissCount &+= 1
@@ -442,7 +537,7 @@ actor GitWorkspaceStateAuthority {
             #if DEBUG
                 recorder?.recordReason(.monitorUnavailable)
             #endif
-            return try await collector()
+            return try await validatedCollector()
         }
 
         let currentness = prefixControlCurrentness(for: scopeKey)
@@ -456,7 +551,9 @@ actor GitWorkspaceStateAuthority {
             throw GitPrefixControlEvidenceCacheError.invalidatedDuringCollection
         }
 
-        let reservedResidentBytes = Self.maximumPrefixControlFooterResidentBytes
+        let reservedResidentBytes = requiresCollectionDetail
+            ? Self.maximumPrefixControlEvidenceResidentBytes
+            : Self.maximumPrefixControlFooterResidentBytes
         let reservedArtifactBytes: UInt64 = 0
         let (nextPendingResidentBytes, residentOverflow) = pendingPrefixControlResidentBytes
             .addingReportingOverflow(reservedResidentBytes)
@@ -474,13 +571,14 @@ actor GitWorkspaceStateAuthority {
             #endif
             return try await startOrJoinBoundedUncachedPrefixControlFlight(
                 key: key,
-                collector: collector
+                reservedResidentBytes: reservedResidentBytes,
+                collector: validatedCollector
             )
         }
 
         let flightID = UUID()
         prefixControlPhysicalScanCount &+= 1
-        let task = Task { try await collector() }
+        let task = Task { try await validatedCollector() }
         pendingPrefixControlResidentBytes = nextPendingResidentBytes
         pendingPrefixControlArtifactBytes = nextPendingArtifactBytes
         pendingPrefixControlAdmissions[key] = PendingPrefixControlAdmission(
@@ -495,7 +593,7 @@ actor GitWorkspaceStateAuthority {
             reservedArtifactBytes: reservedArtifactBytes
         )
         Task { [weak self] in
-            let result: Result<GitPrefixControlEvidenceManifestFooter, Error>
+            let result: Result<GitPrefixControlCollectedEvidence, Error>
             do {
                 result = try await .success(task.value)
             } catch {
@@ -513,7 +611,7 @@ actor GitWorkspaceStateAuthority {
     private func waitForPendingPrefixControlAdmission(
         key: PrefixControlCacheKey,
         flightID: UUID
-    ) async throws -> GitPrefixControlEvidenceManifestFooter {
+    ) async throws -> GitPrefixControlCollectedEvidence {
         let waiterID = UUID()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -563,7 +661,7 @@ actor GitWorkspaceStateAuthority {
     private func completePendingPrefixControlAdmission(
         key: PrefixControlCacheKey,
         flightID: UUID,
-        result: Result<GitPrefixControlEvidenceManifestFooter, Error>
+        result: Result<GitPrefixControlCollectedEvidence, Error>
     ) async {
         guard let initial = pendingPrefixControlAdmissions[key],
               initial.id == flightID
@@ -580,13 +678,13 @@ actor GitWorkspaceStateAuthority {
             let pending = takePendingPrefixControlAdmission(key, flightID: flightID)
             pending?.waiters.values.forEach { $0.resume(throwing: error) }
             if let pending { await metadataMonitor.release(pending.observationToken) }
-        case let .success(footer):
+        case let .success(evidence):
             #if DEBUG
                 let admissionSpan = WorktreeStartupPreparationInstrumentation.currentRecorder?
                     .begin(.prefixControlCacheAdmit)
                 defer { admissionSpan?.end() }
             #endif
-            guard Self.prefixControlFooterIsValid(footer) else {
+            guard Self.prefixControlEvidenceIsValid(evidence) else {
                 let pending = takePendingPrefixControlAdmission(key, flightID: flightID)
                 pending?.waiters.values.forEach {
                     $0.resume(throwing: GitPrefixControlEvidenceCacheError.corruptFooter)
@@ -629,12 +727,12 @@ actor GitWorkspaceStateAuthority {
             }
 
             guard let completed = takePendingPrefixControlAdmission(key, flightID: flightID) else { return }
-            let residentBytes = Self.prefixControlFooterResidentBytes(footer)
+            let residentBytes = Self.prefixControlEvidenceResidentBytes(evidence)
             let artifactBytes: UInt64 = 0
             prefixControlCacheAccessOrdinal &+= 1
             let entry = PrefixControlCacheEntry(
                 id: UUID(),
-                footer: footer,
+                evidence: evidence,
                 observationToken: completed.observationToken,
                 currentness: completed.currentness,
                 lastAccessOrdinal: prefixControlCacheAccessOrdinal,
@@ -656,14 +754,15 @@ actor GitWorkspaceStateAuthority {
                     .increment(.prefixCacheAdmissions)
             #endif
             await evictPrefixControlCacheIfNeeded()
-            completed.waiters.values.forEach { $0.resume(returning: footer) }
+            completed.waiters.values.forEach { $0.resume(returning: evidence) }
         }
     }
 
     private func startOrJoinBoundedUncachedPrefixControlFlight(
         key: PrefixControlCacheKey,
-        collector: @escaping @Sendable () async throws -> GitPrefixControlEvidenceManifestFooter
-    ) async throws -> GitPrefixControlEvidenceManifestFooter {
+        reservedResidentBytes: Int,
+        collector: @escaping @Sendable () async throws -> GitPrefixControlCollectedEvidence
+    ) async throws -> GitPrefixControlCollectedEvidence {
         if let pending = pendingUncachedPrefixControlFlights[key], !pending.isCancelled {
             prefixControlCacheCoalescedWaiterCount &+= 1
             #if DEBUG
@@ -673,7 +772,6 @@ actor GitWorkspaceStateAuthority {
             return try await waitForPendingUncachedPrefixControlFlight(key: key, flightID: pending.id)
         }
 
-        let reservedResidentBytes = Self.maximumPrefixControlFooterResidentBytes
         let reservedArtifactBytes: UInt64 = 0
         let (nextResidentBytes, residentOverflow) = pendingUncachedPrefixControlResidentBytes
             .addingReportingOverflow(reservedResidentBytes)
@@ -700,7 +798,7 @@ actor GitWorkspaceStateAuthority {
             reservedArtifactBytes: reservedArtifactBytes
         )
         Task { [weak self] in
-            let result: Result<GitPrefixControlEvidenceManifestFooter, Error>
+            let result: Result<GitPrefixControlCollectedEvidence, Error>
             do {
                 result = try await .success(task.value)
             } catch {
@@ -718,7 +816,7 @@ actor GitWorkspaceStateAuthority {
     private func waitForPendingUncachedPrefixControlFlight(
         key: PrefixControlCacheKey,
         flightID: UUID
-    ) async throws -> GitPrefixControlEvidenceManifestFooter {
+    ) async throws -> GitPrefixControlCollectedEvidence {
         let waiterID = UUID()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -768,13 +866,13 @@ actor GitWorkspaceStateAuthority {
     private func completePendingUncachedPrefixControlFlight(
         key: PrefixControlCacheKey,
         flightID: UUID,
-        result: Result<GitPrefixControlEvidenceManifestFooter, Error>
+        result: Result<GitPrefixControlCollectedEvidence, Error>
     ) {
         guard let completed = takePendingUncachedPrefixControlFlight(key, flightID: flightID) else { return }
         guard !completed.isCancelled else { return }
         switch result {
-        case let .success(footer):
-            completed.waiters.values.forEach { $0.resume(returning: footer) }
+        case let .success(evidence):
+            completed.waiters.values.forEach { $0.resume(returning: evidence) }
         case let .failure(error):
             completed.waiters.values.forEach { $0.resume(throwing: error) }
         }
@@ -1622,8 +1720,10 @@ actor GitWorkspaceStateAuthority {
     }
 
     private nonisolated static let maximumPrefixControlFooterResidentBytes = 512
+    private nonisolated static let maximumPrefixControlEvidenceResidentBytes = 8 * 1024
     private nonisolated static let maximumPendingUncachedPrefixControlFlightCount = 1
-    private nonisolated static let maximumPendingUncachedPrefixControlResidentBytes = maximumPrefixControlFooterResidentBytes
+    private nonisolated static let maximumPendingUncachedPrefixControlResidentBytes =
+        maximumPrefixControlEvidenceResidentBytes
     private nonisolated static let maximumPendingUncachedPrefixControlArtifactBytes: UInt64 = 0
 
     private nonisolated static func prefixControlFooterResidentBytes(
@@ -1646,6 +1746,39 @@ actor GitWorkspaceStateAuthority {
         let (_, recordOverflow) = footer.recordPayloadByteCount.addingReportingOverflow(footer.recordCount)
         let (_, pathOverflow) = footer.pathPayloadByteCount.addingReportingOverflow(footer.recordCount)
         return !recordOverflow && !pathOverflow
+    }
+
+    private nonisolated static func prefixControlEvidenceResidentBytes(
+        _ evidence: GitPrefixControlCollectedEvidence
+    ) -> Int {
+        let footerBytes = prefixControlFooterResidentBytes(evidence.footer)
+        guard let detail = evidence.collectionDetail else { return footerBytes }
+        return footerBytes + MemoryLayout<GitPrefixControlCollectionDetail>.stride
+            + detail.prunedRootSummarySHA256.utf8.count
+    }
+
+    private nonisolated static func prefixControlEvidenceIsValid(
+        _ evidence: GitPrefixControlCollectedEvidence
+    ) -> Bool {
+        guard prefixControlFooterIsValid(evidence.footer),
+              prefixControlEvidenceResidentBytes(evidence) <= maximumPrefixControlEvidenceResidentBytes
+        else { return false }
+        guard let detail = evidence.collectionDetail else { return true }
+        guard detail.collectionCompleted,
+              detail.ignoreControlCount >= 0,
+              detail.attributeControlCount >= 0,
+              detail.prunedRootCount >= 0,
+              detail.prunedRootSummarySHA256.utf8.count == 64,
+              detail.prunedRootSummarySHA256.utf8.allSatisfy({ byte in
+                  (UInt8(ascii: "0") ... UInt8(ascii: "9")).contains(byte)
+                      || (UInt8(ascii: "a") ... UInt8(ascii: "f")).contains(byte)
+              })
+        else { return false }
+        let expectedRecordCount = detail.ignoreControlCount.addingReportingOverflow(
+            detail.attributeControlCount
+        )
+        return !expectedRecordCount.overflow
+            && UInt64(exactly: expectedRecordCount.partialValue) == evidence.footer.recordCount
     }
 
     private nonisolated static func prefixControlRootIdentity(

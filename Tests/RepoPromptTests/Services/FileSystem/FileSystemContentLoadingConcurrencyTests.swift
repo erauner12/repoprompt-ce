@@ -1110,7 +1110,7 @@ final class FileSystemContentLoadingConcurrencyTests: XCTestCase {
             respectRepoIgnore: false,
             respectCursorignore: false,
             skipSymlinks: true,
-            testIgnoreRules: IgnoreRules(),
+            testIgnoreRules: IgnoreRules(policy: .nonGitRoot),
             isTestMode: true
         )
         let workerHookInvoked = AsyncSignal()

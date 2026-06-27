@@ -674,6 +674,7 @@ enum WorktreeStartupInstrumentation {
         struct DeltaCompatibilityEvaluationRecord: Equatable {
             let correlationID: UUID
             let evaluation: WorkspaceRootSeedDeltaCompatibilityEvaluation
+            let policyCanonicalizationComparison: GitWorkspacePolicyCanonicalizationDiagnostics.Comparison?
             let exactSnapshotLookupReached: Bool
             let exactSnapshotLookupPassed: Bool
             let targetAuthorityComparisonReached: Bool
@@ -1055,6 +1056,7 @@ enum WorktreeStartupInstrumentation {
         static func recordDeltaCompatibilityEvaluation(
             correlationID: UUID,
             evaluation: WorkspaceRootSeedDeltaCompatibilityEvaluation,
+            policyCanonicalizationComparison: GitWorkspacePolicyCanonicalizationDiagnostics.Comparison? = nil,
             exactSnapshotLookupReached: Bool,
             exactSnapshotLookupPassed: Bool,
             targetAuthorityComparisonReached: Bool,
@@ -1068,6 +1070,7 @@ enum WorktreeStartupInstrumentation {
             let candidate = DeltaCompatibilityEvaluationRecord(
                 correlationID: correlationID,
                 evaluation: evaluation,
+                policyCanonicalizationComparison: policyCanonicalizationComparison,
                 exactSnapshotLookupReached: exactSnapshotLookupReached,
                 exactSnapshotLookupPassed: exactSnapshotLookupPassed,
                 targetAuthorityComparisonReached: targetAuthorityComparisonReached,
