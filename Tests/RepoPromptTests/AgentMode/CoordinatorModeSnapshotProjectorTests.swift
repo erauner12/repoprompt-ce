@@ -70,6 +70,88 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertNil(plainSnapshot.coordinatorRail.coordinatorSessionID)
     }
 
+    func testManualSelectionCanPromotePlainLiveSessionAsCoordinator() {
+        let sessionID = uuid(1)
+        let tabID = uuid(101)
+
+        let unselected = projector.project(input(live: [
+            live(id: sessionID, tab: tabID, title: "Plain Live Session", updatedAt: date(10), state: .idle)
+        ]))
+
+        XCTAssertEqual(unselected.coordinatorRail.state, .chooseCoordinator)
+        XCTAssertFalse(unselected.coordinatorRail.isComposerEnabled)
+
+        let selected = projector.project(input(
+            live: [live(id: sessionID, tab: tabID, title: "Plain Live Session", updatedAt: date(10), state: .idle)],
+            selectedCoordinatorID: sessionID
+        ))
+
+        XCTAssertEqual(selected.coordinatorRail.state, .selected)
+        XCTAssertEqual(selected.coordinatorRail.coordinatorSessionID, sessionID)
+        XCTAssertEqual(selected.coordinatorRail.selectionSource, .userSelected)
+        XCTAssertTrue(selected.coordinatorRail.isLiveInCurrentWindow)
+        XCTAssertTrue(selected.coordinatorRail.isComposerEnabled)
+        XCTAssertTrue(selected.coordinatorRail.isComposerSendEnabled)
+    }
+
+    func testComposerAvailabilityRequiresLiveCurrentWindowCoordinator() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let coordinatorTab = uuid(101)
+        let childTab = uuid(102)
+
+        let liveSnapshot = projector.project(input(
+            persisted: [
+                persisted(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(10), isMCP: true),
+                persisted(id: childID, tab: childTab, title: "Child", updatedAt: date(9), parent: coordinatorID)
+            ],
+            live: [
+                live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(11), state: .idle, isMCP: true)
+            ]
+        ))
+
+        XCTAssertEqual(liveSnapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
+        XCTAssertTrue(liveSnapshot.coordinatorRail.isLiveInCurrentWindow)
+        XCTAssertTrue(liveSnapshot.coordinatorRail.isComposerEnabled)
+        XCTAssertTrue(liveSnapshot.coordinatorRail.isComposerSendEnabled)
+
+        let runningSnapshot = projector.project(input(
+            persisted: [
+                persisted(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(10), isMCP: true),
+                persisted(id: childID, tab: childTab, title: "Child", updatedAt: date(9), parent: coordinatorID)
+            ],
+            live: [
+                live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(12), state: .running, isMCP: true)
+            ]
+        ))
+        XCTAssertTrue(runningSnapshot.coordinatorRail.isComposerEnabled)
+        XCTAssertFalse(runningSnapshot.coordinatorRail.isComposerSendEnabled)
+
+        let persistedOnlySnapshot = projector.project(input(persisted: [
+            persisted(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(10), isMCP: true),
+            persisted(id: childID, tab: childTab, title: "Child", updatedAt: date(9), parent: coordinatorID)
+        ]))
+
+        XCTAssertEqual(persistedOnlySnapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
+        XCTAssertFalse(persistedOnlySnapshot.coordinatorRail.isLiveInCurrentWindow)
+        XCTAssertFalse(persistedOnlySnapshot.coordinatorRail.isComposerEnabled)
+        XCTAssertFalse(persistedOnlySnapshot.coordinatorRail.isComposerSendEnabled)
+        XCTAssertNotNil(persistedOnlySnapshot.coordinatorRail.openAgentChatRoute)
+    }
+
+    func testComposerFallbackWhenCoordinatorIsUnreachable() {
+        let snapshot = projector.project(input(persisted: [
+            persisted(id: uuid(1), tab: uuid(101), title: "Plain Parent", updatedAt: date(10)),
+            persisted(id: uuid(2), tab: uuid(102), title: "Plain Child", updatedAt: date(9), parent: uuid(1))
+        ]))
+
+        XCTAssertEqual(snapshot.coordinatorRail.state, .chooseCoordinator)
+        XCTAssertNil(snapshot.coordinatorRail.coordinatorSessionID)
+        XCTAssertFalse(snapshot.coordinatorRail.isComposerEnabled)
+        XCTAssertFalse(snapshot.coordinatorRail.isComposerSendEnabled)
+        XCTAssertNil(snapshot.coordinatorRail.openAgentChatRoute)
+    }
+
     func testGroupingCountsAndStaleActiveStatesDoNotCountAsLiveAttention() {
         let liveNeeds = live(id: uuid(1), tab: uuid(101), title: "Live Needs", updatedAt: date(50), state: .waitingForApproval)
         let liveWorking = live(id: uuid(2), tab: uuid(102), title: "Live Working", updatedAt: date(40), state: .running)

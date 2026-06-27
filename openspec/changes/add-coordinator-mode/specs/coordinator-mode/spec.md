@@ -127,7 +127,7 @@ The system SHALL present v1 as a read-only status board by default, with a list 
 - **THEN** it SHALL NOT provide drag-to-reorder, drag-to-dispatch, drag-to-change-status, inline approval, inline retry, or direct child-session mutation.
 
 ### Requirement: Coordinator composer
-The system SHALL provide a scoped Coordinator composer as the only v1 Coordinator-mode write path.
+The system SHALL provide a scoped Coordinator composer as a Layer 1 demo/manual write path only. It SHALL NOT be specified or named as the future real Coordinator runtime instruction delivery path.
 
 #### Scenario: Coordinator is live in the current window
 - **WHEN** a Coordinator is selected or detected
@@ -140,13 +140,14 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **THEN** the Coordinator view SHALL disable the Coordinator composer or replace it with an `Open agent chat` affordance when route data is available
 - **AND** it SHALL NOT restore, steal, or create a session solely to enable the composer.
 
-#### Scenario: User sends a Coordinator directive
+#### Scenario: User sends a demo/manual Coordinator directive
 - **WHEN** the user submits text through the enabled Coordinator composer
-- **THEN** the Coordinator view SHALL deliver that text as an ordinary user message to the Coordinator session through the existing Agent Mode message path
+- **THEN** the Coordinator view SHALL deliver that text as an ordinary user turn to the selected current-window live Coordinator session through the existing Agent Mode message path
+- **AND** this behavior SHALL be treated as Layer 1 demo/manual fallback behavior only
 - **AND** it SHALL NOT wrap the directive in a new structured command envelope in v1.
 
-#### Scenario: Directive is displayed after send
-- **WHEN** a Coordinator directive is accepted by the Coordinator view
+#### Scenario: Demo/manual directive is displayed after send
+- **WHEN** a demo/manual Coordinator directive is accepted by the Coordinator view
 - **THEN** the Coordinator view MAY echo the user's sent directive into the Coordinator rail transcript
 - **AND** Coordinator responses and child-session effects SHALL surface through the normal coarse Coordinator view snapshot refresh rather than a live token stream in the rail.
 
@@ -162,8 +163,14 @@ The system SHALL provide a scoped Coordinator composer as the only v1 Coordinato
 - **AND** it SHALL NOT implement Coordinator-view-side interrupt or steering semantics in v1.
 
 #### Scenario: Board state remains protected
-- **WHEN** the Coordinator composer sends a directive
+- **WHEN** the Coordinator composer sends a demo/manual directive
 - **THEN** the composer SHALL NOT directly mutate child session state, dispatch cards, approve pending interactions, retry sessions, or change board/list status groups.
+
+#### Scenario: Real Coordinator runtime instruction delivery stays distinct
+- **WHEN** future work adds real Coordinator runtime instruction delivery
+- **THEN** it SHALL use a separately named path such as `submitCoordinatorRuntimeInstruction` / `deliverCoordinatorRuntimeInstruction`
+- **AND** it SHALL NOT reuse the demo/manual selected-session ordinary-user-turn path or an ambiguous `submitCoordinatorDirectiveToAgentMode`-style API
+- **AND** the demo/manual composer path SHALL remain easy to delete once migration is decided.
 
 ### Requirement: Session row projection
 The system SHALL project Coordinator mode session rows/cards from structured session and live-state data.

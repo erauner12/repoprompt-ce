@@ -472,13 +472,16 @@ struct CoordinatorModeSnapshotProjector {
         guard let selection, let row = rowsByID[selection.sessionID] else {
             return .empty
         }
+        let isLiveInCurrentWindow = !row.isPersistedOnly
         return CoordinatorModeCoordinatorRail(
             state: .selected,
             coordinatorSessionID: row.sessionID,
             selectionSource: selection.source,
             title: row.title,
-            isLiveInCurrentWindow: !row.isPersistedOnly,
-            openAgentChatRoute: row.openAgentChatRoute
+            isLiveInCurrentWindow: isLiveInCurrentWindow,
+            openAgentChatRoute: row.openAgentChatRoute,
+            isComposerEnabled: isLiveInCurrentWindow,
+            isComposerSendEnabled: isLiveInCurrentWindow && !row.runState.isActive
         )
     }
 

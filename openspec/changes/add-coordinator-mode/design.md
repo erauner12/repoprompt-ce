@@ -10,7 +10,7 @@ Naming convention for this change: **Coordinator mode** is the peer `.main` surf
 - `MCPServerViewModel.dashboard` exposes MCP connection/tool-call state through an existing MCP subscription lifecycle; the `add-mcp-coordinator-mode-consumer` prerequisite adds the named Coordinator view consumer for this lifecycle.
 - `AgentSessionDeepLinkRoute` and `WindowState.routeToAgentSession` already provide the basis for opening existing Agent Mode sessions.
 
-The Coordinator view should therefore be a sourced projection over existing state plus one deliberately scoped v1 write path: sending an ordinary user message to a current-window live Coordinator session. It is not a new runtime, protocol, or Agent UI replacement.
+The Coordinator view should therefore be a sourced projection over existing state plus one deliberately scoped Layer 1 demo/manual write path: sending an ordinary user turn to a selected current-window live Coordinator session. It is not the future real Coordinator runtime instruction delivery path, not a new runtime, protocol, or Agent UI replacement.
 
 ## Goals / Non-Goals
 
@@ -21,7 +21,7 @@ The Coordinator view should therefore be a sourced projection over existing stat
 - Compose that projection from two independent upstream categories: Agent Mode state, including current-window live state plus active-workspace session metadata; and `MCPServerViewModel.dashboard`.
 - Scope v1 to active-workspace rows with current-window live-state enrichment.
 - Show Coordinator context when selected or detected, keep the board/list workspace useful without a Coordinator, group session cards/rows by total run-state-aware rules, render read-only pending interaction prompts, compact MCP awareness, and deep links to Agent Mode.
-- Provide a Coordinator composer only when the selected/detected Coordinator is live in the current window; deliver each directive as an ordinary user message to that Coordinator session.
+- Provide a Coordinator composer only when the selected/detected Coordinator is live in the current window; deliver each demo/manual directive as an ordinary user turn to that Coordinator session.
 - Use coarse observation and diff-before-publish behavior so streaming transcript/token deltas do not churn the Coordinator view.
 
 **Non-Goals:**
@@ -123,11 +123,11 @@ Blocked's conflicted-merge signal should come from cheap metadata such as active
 
 The v1 Coordinator view is board-first, with List as an alternate and narrow-width fallback. If no Coordinator is selected or detected, the Coordinator view still renders the grouped active-workspace board or list and shows an empty/choose-Coordinator state in the rail area. If multiple auto-detected Coordinator candidates exist, v1 picks the most recent candidate within the highest-ranked matching precedence tier until the user selects a different per-window, workspace-keyed Coordinator. The Coordinator/session rail is in-surface Coordinator view navigation for Coordinator identity/selection, optional context, and the scoped Coordinator composer, not the app-level Agent Mode ↔ Coordinator mode surface switcher; it should not contain Agent Mode as a rail item, and it should not host a separate by-agent roster of workspace sessions in v1.
 
-### 13. Coordinator composer is the only v1 Coordinator view write path
+### 13. Coordinator composer is a Layer 1 demo/manual write path only
 
-The v1 Coordinator composer is enabled only when the selected/detected Coordinator is live in the current window, using the same current-window liveness predicate as Coordinator view live enrichment. If no Coordinator is selected/detected, or if the Coordinator is persisted-only or owned by another window, the composer is disabled and the rail should provide an `Open agent chat` affordance when route data is available.
+The v1 Coordinator composer is a temporary Layer 1 demo/manual path enabled only when the selected/detected Coordinator is live in the current window, using the same current-window liveness predicate as Coordinator view live enrichment. If no Coordinator is selected/detected, or if the Coordinator is persisted-only or owned by another window, the composer is disabled and the rail should provide an `Open agent chat` affordance when route data is available.
 
-A v1 directive is an ordinary user message delivered to the Coordinator session through the existing Agent Mode message path. V1 does not define a structured directive envelope, cross-window directive routing, Coordinator-view-side interrupt/steer semantics, or direct mutation of child sessions. The composer may echo the user's sent directive into the rail transcript; Coordinator responses and child-session effects surface through normal coarse Coordinator view snapshot refresh rather than a live token stream in the rail. Clear Chat is a rail display reset only: it must not delete, truncate, or rewrite the underlying Coordinator session transcript, which persists and archives through the existing Agent Mode session lifecycle. If the Coordinator is mid-run, v1 may queue the directive as the next turn or disable send; it must not implement Coordinator-view-side interrupt or steering.
+A v1 composer submission is an ordinary user turn delivered to the selected current-window live Coordinator session through the existing Agent Mode message path. This is acceptable only as demo/manual behavior; it is not the future real Coordinator runtime instruction delivery path. V1 does not define a structured directive envelope, cross-window directive routing, Coordinator-view-side interrupt/steer semantics, or direct mutation of child sessions. The composer may echo the user's sent directive into the rail transcript; Coordinator responses and child-session effects surface through normal coarse Coordinator view snapshot refresh rather than a live token stream in the rail. Clear Chat is a rail display reset only: it must not delete, truncate, or rewrite the underlying Coordinator session transcript, which persists and archives through the existing Agent Mode session lifecycle. If the Coordinator is mid-run, v1 may queue the directive as the next turn or disable send; it must not implement Coordinator-view-side interrupt or steering.
 
 ### 14. Inspector stays sourced; full logs stay in Agent Mode
 
@@ -152,7 +152,7 @@ The v1 surface defaults to a read-only status board. List remains a first-class 
 2. Build snapshot projection and tests before wiring the Coordinator composer.
 3. Add UI shell and deep links after snapshot behavior is stable.
 4. Consume the MCP Coordinator mode consumer added by `add-mcp-coordinator-mode-consumer` after compact MCP projection tests are in place.
-5. Defer Coordinator-view-side approval/retry actions, drag/dispatch/status mutations, structured directive transport, cross-window directives, objective labels, and cross-window/cross-workspace aggregation.
+5. Defer Coordinator-view-side approval/retry actions, drag/dispatch/status mutations, a separately named real Coordinator runtime instruction delivery path, cross-window directives, objective labels, and cross-window/cross-workspace aggregation.
 
 Rollback is simple for v1: remove or hide the Coordinator mode entry point; Agent Mode remains the default and canonical surface.
 

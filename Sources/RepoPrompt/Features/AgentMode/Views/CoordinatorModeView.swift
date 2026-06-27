@@ -41,6 +41,8 @@ struct CoordinatorModeView: View {
     @State private var selectedRowID: UUID?
     @State private var hoveredRowID: UUID?
     @State private var filterText = ""
+    @State private var coordinatorDirectiveDraft = ""
+    @State private var isSubmittingCoordinatorDirective = false
     @State private var isCoordinatorRailVisible = true
     @State private var isInspectorVisible = true
     @ObservedObject private var fontScale = FontScaleManager.shared
@@ -287,6 +289,11 @@ struct CoordinatorModeView: View {
                             metrics: metrics
                         )
                         openAgentChatButton(route: rail.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
+                        Button("Clear Coordinator") {
+                            viewModel.selectCoordinator(sessionID: nil)
+                        }
+                        .buttonStyle(.link)
+                        .font(metrics.bodyMedium)
                     }
                 case .chooseCoordinator:
                     VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
@@ -307,13 +314,12 @@ struct CoordinatorModeView: View {
                 strokeOpacity: 0
             )
 
-            VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
-                Label("Read-only PR3 shell", systemImage: "lock")
-                    .font(metrics.cardTitle)
-                Text("Composer, approvals, retries, drag dispatch, and status mutation intentionally stay out of this surface.")
-                    .font(metrics.body)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            Group {
+                if rail.isComposerEnabled {
+                    coordinatorComposer(rail, metrics: metrics)
+                } else {
+                    coordinatorComposerFallback(rail, metrics: metrics)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(metrics.cardPadding)
@@ -456,7 +462,10 @@ struct CoordinatorModeView: View {
                 statusChip("Persisted only", color: .secondary, metrics: metrics)
             }
 
-            openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
+            HStack(spacing: metrics.controlSpacing) {
+                openAgentChatButton(route: row.openAgentChatRoute, title: "Open in Agent Mode", metrics: metrics)
+                coordinatorSelectionButton(row, metrics: metrics)
+            }
         }
         .padding(metrics.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -519,6 +528,7 @@ struct CoordinatorModeView: View {
             }
             Spacer()
             openAgentChatButton(route: row.openAgentChatRoute, title: "Open", metrics: metrics)
+            coordinatorSelectionButton(row, metrics: metrics)
         }
         .padding(.vertical, metrics.listRowVerticalPadding)
         .padding(.horizontal, metrics.listRowHorizontalPadding)
@@ -536,6 +546,20 @@ struct CoordinatorModeView: View {
         }
         .onHover { hovering in
             hoveredRowID = hovering ? row.id : (hoveredRowID == row.id ? nil : hoveredRowID)
+        }
+    }
+
+    @ViewBuilder
+    private func coordinatorSelectionButton(_ row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
+        if !row.isPersistedOnly, !row.isCoordinator {
+            Button("Use as Coordinator") {
+                viewModel.selectCoordinator(sessionID: row.sessionID)
+                selectedRowID = row.id
+                isCoordinatorRailVisible = true
+            }
+            .buttonStyle(.link)
+            .font(metrics.bodyMedium)
+            .accessibilityLabel("Use \(row.title) as Coordinator")
         }
     }
 
@@ -629,6 +653,118 @@ struct CoordinatorModeView: View {
             }
         }
         .coordinatorSidebarPanel(edge: .leading)
+    }
+
+    private func coordinatorComposer(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+            HStack {
+                Label("Directive", systemImage: "paperplane")
+                    .font(metrics.cardTitle)
+                Spacer()
+                Button("Clear Chat") {
+                    viewModel.clearCoordinatorRailTranscript()
+                }
+                .buttonStyle(.link)
+                .font(metrics.micro)
+                .disabled(viewModel.railTranscriptEntries.isEmpty)
+            }
+
+            if viewModel.railTranscriptEntries.isEmpty {
+                Text("Accepted directives appear here. Coordinator responses and child-session effects refresh through the board.")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                        ForEach(viewModel.railTranscriptEntries) { entry in
+                            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                                Text(entry.role.displayName)
+                                    .font(metrics.microMedium)
+                                    .foregroundStyle(.secondary)
+                                Text(entry.text)
+                                    .font(metrics.micro)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(metrics.pendingPadding)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                                    .fill(Color(nsColor: .windowBackgroundColor))
+                            )
+                        }
+                    }
+                }
+                .frame(maxHeight: 160)
+            }
+
+            if !rail.isComposerSendEnabled {
+                Text("Coordinator is mid-run. Send directives when it reaches an ordinary turn boundary.")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            TextField("Message the Coordinator", text: $coordinatorDirectiveDraft, axis: .vertical)
+                .lineLimit(2 ... 5)
+                .textFieldStyle(.roundedBorder)
+                .font(metrics.body)
+                .disabled(isSubmittingCoordinatorDirective || !rail.isComposerSendEnabled)
+                .onSubmit {
+                    submitCoordinatorDirective()
+                }
+
+            HStack {
+                if let notice = viewModel.composerNotice, !notice.isEmpty {
+                    Text(notice)
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button(isSubmittingCoordinatorDirective ? "Sending…" : "Send") {
+                    submitCoordinatorDirective()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!canSubmitCoordinatorDirective)
+            }
+        }
+    }
+
+    private func coordinatorComposerFallback(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+            Label("Coordinator composer unavailable", systemImage: "lock")
+                .font(metrics.cardTitle)
+            Text("The scoped composer is enabled only for a Coordinator with live state in this window.")
+                .font(metrics.micro)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if rail.openAgentChatRoute != nil {
+                openAgentChatButton(route: rail.openAgentChatRoute, title: "Open agent chat", metrics: metrics)
+            }
+        }
+    }
+
+    private var canSubmitCoordinatorDirective: Bool {
+        viewModel.snapshot.coordinatorRail.isComposerSendEnabled
+            && !isSubmittingCoordinatorDirective
+            && !coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func submitCoordinatorDirective() {
+        let draft = coordinatorDirectiveDraft
+        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !isSubmittingCoordinatorDirective
+        else { return }
+        isSubmittingCoordinatorDirective = true
+        Task { @MainActor in
+            let result = await viewModel.submitCoordinatorDirective(draft)
+            if result == .accepted {
+                coordinatorDirectiveDraft = ""
+            }
+            isSubmittingCoordinatorDirective = false
+        }
     }
 
     private func inspectorObjectSubtitle(for row: CoordinatorModeRow) -> String {
@@ -1180,6 +1316,14 @@ private extension CoordinatorModeCoordinatorRail.SelectionSource {
     }
 }
 
+private extension CoordinatorModeRailTranscriptEntry.Role {
+    var displayName: String {
+        switch self {
+        case .user: "You"
+        }
+    }
+}
+
 private extension CoordinatorModeStatusGroup {
     var accentColor: Color {
         switch self {
@@ -1353,7 +1497,9 @@ private extension AgentSessionRunState {
                     selectionSource: .mcpLineageRoot,
                     title: "Coordinate PR stack",
                     isLiveInCurrentWindow: true,
-                    openAgentChatRoute: nil
+                    openAgentChatRoute: nil,
+                    isComposerEnabled: true,
+                    isComposerSendEnabled: false
                 ),
                 pendingInteractions: [],
                 mcpAwareness: CoordinatorModeMCPAwareness(
