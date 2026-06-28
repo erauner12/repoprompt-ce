@@ -43,41 +43,45 @@
     button { color: inherit; }
     .app {
       height: 100vh;
-      display: grid;
-      grid-template-rows: 54px 1fr;
+      position: relative;
       background:
         radial-gradient(circle at 15% 0%, rgba(54,119,210,.10), transparent 28%),
         linear-gradient(180deg, #1e2225 0, #151719 58%, #111315 100%);
     }
 
-    .toolbar {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      align-items: center;
-      gap: 16px;
-      padding: 0 18px;
-      border-bottom: 1px solid var(--line);
-      background: rgba(31,35,38,.82);
-      backdrop-filter: blur(18px);
-      min-width: 0;
-    }
-    .titlebar-left {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      min-width: 0;
-    }
     .traffic { display: flex; gap: 8px; flex: none; }
     .traffic span { width: 12px; height: 12px; border-radius: 50%; display: block; }
     .traffic span:nth-child(1) { background: #ff6159; }
     .traffic span:nth-child(2) { background: #ffbd2e; }
     .traffic span:nth-child(3) { background: #28c840; }
-    .workspace-title {
-      font-size: 14px;
-      font-weight: 700;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+    .sidebar-chrome {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 10px;
+      min-height: 26px;
+      padding: 0 2px 2px;
+    }
+    .sidebar-chrome .chrome-button { margin-left: 14px; }
+    .chrome-button {
+      width: 25px;
+      height: 25px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+    }
+    .chrome-button:hover {
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+    }
+    .chrome-button svg {
+      width: 16px;
+      height: 16px;
+      display: block;
     }
     .surface-switch {
       display: inline-flex;
@@ -103,13 +107,6 @@
     .surface-switch button.active {
       background: rgba(63,134,255,.25);
       color: #6fa4ff;
-    }
-    .toolbar-right {
-      display: flex;
-      justify-content: flex-end;
-      align-items: center;
-      gap: 10px;
-      min-width: 0;
     }
     .pill {
       display: inline-flex;
@@ -150,7 +147,7 @@
       flex: none;
     }
 
-    .main { min-height: 0; overflow: hidden; }
+    .main { height: 100%; min-height: 0; overflow: hidden; }
     .surface { height: 100%; min-height: 0; }
 
     .coordinator-shell {
@@ -172,6 +169,9 @@
       min-height: 0;
       height: 100%;
     }
+    .coordinator-shell > .conversation,
+    .coordinator-shell > .work-panel,
+    .agent-shell > .agent-chat { height: 100%; }
     .panel {
       background: rgba(32,35,38,.82);
       border: 1px solid var(--line);
@@ -260,6 +260,7 @@
       gap: 6px;
       min-height: 0;
       overflow: auto;
+      flex: 1;
     }
     .row-button {
       padding: 9px 10px;
@@ -314,6 +315,38 @@
       grid-template-columns: auto minmax(0, 1fr) auto;
       align-items: center;
       gap: 10px;
+    }
+    .sidebar-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .mini-action {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: rgba(255,255,255,.035);
+      color: var(--muted);
+      padding: 8px 9px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 800;
+      min-width: 0;
+    }
+    .mini-action span:last-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .row-button.mission-row {
+      border-color: rgba(63,134,255,.12);
+      background: rgba(63,134,255,.055);
+    }
+    .row-button.mission-row.active {
+      border-color: rgba(63,134,255,.45);
+      background: rgba(63,134,255,.18);
     }
     .sidebar-footer {
       margin-top: auto;
@@ -412,6 +445,12 @@
       gap: 10px;
       padding: 14px 16px 10px;
       border-bottom: 1px solid rgba(255,255,255,.055);
+      min-width: 0;
+    }
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
       min-width: 0;
     }
     .panel-title {
@@ -536,9 +575,13 @@
     }
     .checkpoint {
       margin: 0 16px 12px;
-      padding: 12px;
+      padding: 10px 12px;
       background: rgba(63,134,255,.10);
       border-color: rgba(63,134,255,.28);
+      max-height: min(316px, 40vh);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
     }
     .checkpoint-title {
       display: flex;
@@ -549,20 +592,24 @@
       color: #8fb6ff;
     }
     .checkpoint-question {
-      margin-top: 8px;
+      margin-top: 6px;
       color: var(--muted);
       font-size: 12px;
     }
     .option-grid {
-      margin-top: 10px;
+      margin-top: 8px;
       display: grid;
-      gap: 7px;
+      gap: 6px;
+      min-height: 0;
+      overflow: auto;
+      overscroll-behavior: contain;
+      padding-right: 2px;
     }
     .option {
       border: 1px solid var(--line);
       background: rgba(255,255,255,.035);
       border-radius: 8px;
-      padding: 9px 10px;
+      padding: 7px 9px;
       display: flex;
       gap: 10px;
       cursor: pointer;
@@ -585,7 +632,7 @@
     .option span {
       color: var(--muted);
       font-size: 12px;
-      line-height: 1.35;
+      line-height: 1.28;
     }
     .checkpoint-actions {
       margin-top: 10px;
@@ -683,12 +730,36 @@
       cursor: pointer;
       white-space: nowrap;
     }
+    .strip-action {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.045);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .strip-action.blue {
+      color: #8fb6ff;
+      border-color: rgba(63,134,255,.24);
+      background: rgba(63,134,255,.12);
+    }
+    .strip-action.red {
+      color: #e07a7a;
+      border-color: rgba(217,95,95,.22);
+      background: rgba(217,95,95,.10);
+    }
 
     .work-panel {
       display: grid;
       grid-template-rows: auto minmax(220px, 1fr) minmax(160px, auto);
       min-height: 0;
       overflow: hidden;
+    }
+    .work-panel.all-board {
+      grid-template-rows: auto minmax(220px, 1fr) minmax(160px, auto);
     }
     .work-panel.inspector-collapsed {
       grid-template-rows: auto minmax(0, 1fr) 38px;
@@ -735,6 +806,79 @@
     }
     .all-board .board {
       grid-auto-columns: minmax(220px, 1fr);
+    }
+    .board-with-plan {
+      min-height: 0;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: minmax(420px, 54%) minmax(0, 1fr);
+      border-bottom: 1px solid var(--line);
+    }
+    .board-with-plan .board {
+      border-bottom: 0;
+      grid-auto-columns: minmax(260px, 1fr);
+    }
+    .board-with-plan .lane {
+      min-width: 260px;
+    }
+    .board-plan-panel {
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      border-right: 1px solid var(--line);
+      background: rgba(255,255,255,.018);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .board-plan-head {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 900;
+    }
+    .board-plan-panel .plan {
+      padding: 14px 16px;
+      gap: 12px;
+    }
+    .board-plan-panel .workstream {
+      overflow: visible;
+    }
+    .board-plan-panel .workstream-head {
+      padding: 12px 14px;
+    }
+    .board-plan-panel .workstream-name,
+    .board-plan-panel .workstream-purpose,
+    .board-plan-panel .node-desc {
+      display: block;
+      overflow: visible;
+      -webkit-line-clamp: initial;
+    }
+    .board-plan-panel .nodes {
+      padding: 10px 12px 12px;
+      gap: 10px;
+    }
+    .board-plan-panel .node-card {
+      padding: 12px 14px;
+    }
+    .board-plan-panel .node-head {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .board-plan-panel .node-head strong {
+      white-space: normal;
+      overflow: visible;
+      line-height: 1.25;
+    }
+    .board-plan-panel .node-card .chips {
+      margin-top: 10px;
+    }
+    .board-plan-panel .node-desc {
+      margin-top: 8px;
+      line-height: 1.35;
     }
     .lane {
       min-width: 0;
@@ -836,6 +980,101 @@
       display: flex;
       flex-direction: column;
       gap: 10px;
+    }
+    .mission-status-strip {
+      border: 1px solid rgba(63,134,255,.16);
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(31,37,48,.72), rgba(25,29,36,.58));
+      box-shadow: 0 10px 24px rgba(0,0,0,.14);
+      backdrop-filter: blur(20px) saturate(1.18);
+      padding: 9px 12px;
+      margin: 12px 16px 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      overflow: hidden;
+    }
+    .mission-status-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+    }
+    .mission-status-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: max-content;
+    }
+    .mission-status-title {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .mission-status-title span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .mission-checklist {
+      display: grid;
+      gap: 6px;
+      max-height: 136px;
+      overflow: auto;
+      padding-top: 2px;
+      padding-right: 2px;
+      overscroll-behavior: contain;
+    }
+    .mission-check-row {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      min-width: 0;
+      text-align: left;
+    }
+    .mission-check-row.current {
+      color: var(--text);
+      font-weight: 800;
+    }
+    .mission-check-row span:nth-child(2) {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .mission-check-icon {
+      width: 20px;
+      height: 16px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255,255,255,.20);
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 900;
+    }
+    .mission-check-row.done .mission-check-icon {
+      color: #8be68f;
+      border-color: rgba(100,214,109,.35);
+      background: rgba(100,214,109,.12);
+    }
+    .mission-check-row.current .mission-check-icon {
+      color: #8fb6ff;
+      border-color: rgba(63,134,255,.40);
+      background: rgba(63,134,255,.14);
+    }
+    .mission-status-copy {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .workstream {
       border: 1px solid var(--line);
@@ -968,8 +1207,8 @@
     .kv code { font-family: var(--mono); font-size: 11px; color: var(--text); }
 
     .agent-sidebar {
-      display: grid;
-      grid-template-rows: auto 1fr auto;
+      display: flex;
+      flex-direction: column;
       gap: 12px;
       padding: 14px;
     }
@@ -986,6 +1225,13 @@
       display: grid;
       grid-template-rows: auto 1fr auto;
       min-height: 0;
+    }
+    .mission-chat-main {
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
     }
     .agent-transcript {
       padding: 18px 24px;
@@ -1055,7 +1301,9 @@
       .work-panel { grid-column: 1 / -1; }
       .coordinator-shell.all-board { grid-template-columns: 246px 1fr; grid-template-rows: 1fr; }
       .coordinator-shell.all-board .work-panel { grid-column: auto; }
-      .toolbar-right .pill.version { display: none; }
+      .board-with-plan {
+        grid-template-columns: minmax(0, 1fr) minmax(320px, 40%);
+      }
     }
 
     @media (max-width: 780px) {
@@ -1065,34 +1313,17 @@
       }
       .sidebar { max-height: 230px; }
       .surface-switch button { min-width: 80px; padding-left: 12px; padding-right: 12px; }
-      .workspace-title { max-width: 180px; }
+      .board-with-plan {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .board-plan-panel {
+        display: none;
+      }
     }
   </style>
 </head>
 <body>
   <div class="app">
-    <header class="toolbar">
-      <div class="titlebar-left">
-        <div class="traffic"><span></span><span></span><span></span></div>
-        <div class="workspace-title">repoprompt-ce-coordinator-runtime-demo</div>
-      </div>
-      <div class="toolbar-right">
-        <div class="surface-switch" aria-label="Main surface">
-          <button id="surfaceCoordinator" type="button">Coordinator</button>
-          <button id="surfaceAgent" type="button">Agent</button>
-        </div>
-        <span class="pill amber icon-pill" title="Lightbulb" aria-label="Lightbulb">
-          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M9 18h6"></path>
-            <path d="M10 22h4"></path>
-            <path d="M8.5 14.5c-1.5-1.1-2.5-2.9-2.5-5A6 6 0 0 1 18 9.5c0 2.1-1 3.9-2.5 5-.8.6-1.2 1.3-1.3 2.1H9.8c-.1-.8-.5-1.5-1.3-2.1Z"></path>
-          </svg>
-        </span>
-        <span class="pill green">MCP Server</span>
-        <span class="pill blue version">Update v1.0.21</span>
-      </div>
-    </header>
-
     <main id="appRoot" class="main"></main>
   </div>
 
@@ -1112,7 +1343,7 @@
         messages: [
           { role: "user", text: "Coordinator mission: implement GitHub issue #298, provider-side cleanup for RepoPrompt Agent Mode and Oracle sessions." },
           { role: "coordinator", text: "I created a visible Mission Plan before delegation, gathered read-only evidence, and approved the isolated implementation lane. Current mutable work is running in a fresh worktree." },
-          { role: "coordinator", text: "The implementation child owns the active worktree. Review will run as a fresh sibling on the same worktree after the primary lane reaches a stable handoff." }
+          { role: "coordinator", text: "The implementation child owns the active worktree. Validation will run as a fresh sibling on the same worktree after the primary lane reaches a stable handoff." }
         ],
         workstreams: [
           {
@@ -1135,11 +1366,11 @@
           },
           {
             id: "ws-review",
-            title: "Fresh review and validation",
+            title: "Validation and handoff",
             role: "pair",
             policy: "Sibling on same worktree",
             strategy: "Same workstream worktree",
-            purpose: "Review the implementation diff from an independent session and run focused validation.",
+            purpose: "Validate the implementation diff from an independent session and run focused checks before handoff.",
             nodes: ["n5", "n6"]
           }
         ],
@@ -1148,15 +1379,15 @@
           n2: { title: "Map provider archive-delete capability seams", status: "Completed", workflow: "Investigate", policy: "Read-only child", deps: 0, session: "s-investigate", desc: "Formal investigation of provider protocols/adapters and unsupported-provider reporting." },
           n3: { title: "Implement provider cleanup contract, Agent setting, and Oracle deletion", status: "Running", workflow: "Orchestrate", policy: "Fresh worktree", deps: 2, session: "s-impl", desc: "Primary mutable lane. Base ref: main. Worktree: rp-agent-2c4a8595-agent." },
           n4: { title: "Add and run focused provider cleanup tests", status: "Pending", workflow: "Orchestrate", policy: "Steer primary", deps: 1, session: "s-impl", desc: "Continue the primary implementation session after core behavior lands." },
-          n5: { title: "Review provider cleanup implementation from a fresh session", status: "Pending", workflow: "Review", policy: "Sibling on same worktree", deps: 1, session: "s-review", desc: "Fresh review on the implementation worktree after the primary child completes." },
-          n6: { title: "Run coordinated validation and prepare handoff summary", status: "Pending", workflow: "Review", policy: "Steer primary", deps: 1, session: "s-review", desc: "Final status, changed files, tests, and residual risk." }
+          n5: { title: "Validate provider cleanup implementation from a fresh session", status: "Pending", workflow: "Validation", policy: "Sibling on same worktree", deps: 1, session: "s-review", desc: "Fresh validation on the implementation worktree after the primary child completes." },
+          n6: { title: "Run coordinated validation and prepare handoff summary", status: "Pending", workflow: "Validation", policy: "Steer primary", deps: 1, session: "s-review", desc: "Final status, changed files, tests, and residual risk." }
         }
       },
       {
         id: "m-readme",
         title: "README purpose evidence",
         subtitle: "No-edit smoke",
-        status: "Awaiting approval",
+        status: "Draft",
         approval: "Awaiting approval",
         revision: "r1",
         objective: "No-edit smoke mission: inspect README.md and report the repository purpose.",
@@ -1194,7 +1425,7 @@
         pace: "Auto",
         checkpoint: null,
         messages: [
-          { role: "coordinator", text: "The state-only mission completed. Plan, Orchestrate, and Review nodes reached terminal state without launching child agents." }
+          { role: "coordinator", text: "The state-only mission completed. Plan, Orchestrate, and Verify nodes reached terminal state without launching child agents." }
         ],
         workstreams: [
           {
@@ -1204,13 +1435,106 @@
             policy: "Coordinator only",
             strategy: "No worktree",
             purpose: "Validate app-side plan status projection.",
-            nodes: ["n-plan", "n-orch", "n-review"]
+            nodes: ["n-plan", "n-orch", "n-verify"]
           }
         ],
         nodes: {
           "n-plan": { title: "Plan", status: "Completed", workflow: null, policy: "Coordinator only", deps: 0, session: null, desc: "Record initial Mission Plan state." },
           "n-orch": { title: "Orchestrate", status: "Completed", workflow: null, policy: "Coordinator only", deps: 1, session: null, desc: "State-only Orchestrate node completed." },
-          "n-review": { title: "Review", status: "Completed", workflow: null, policy: "Coordinator only", deps: 1, session: null, desc: "Review completed after dependency satisfaction." }
+          "n-verify": { title: "Verify", status: "Completed", workflow: null, policy: "Coordinator only", deps: 1, session: null, desc: "Verification completed after dependency satisfaction." }
+        }
+      },
+      {
+        id: "m-failed",
+        title: "Provider cleanup blocked smoke",
+        subtitle: "Blocked example",
+        status: "Blocked",
+        approval: "Approved",
+        revision: "r5",
+        objective: "Show a Mission that became blocked after a delegated implementation lane reported an unrecoverable issue.",
+        template: "Scoped Change",
+        pace: "Step",
+        checkpoint: null,
+        messages: [
+          { role: "user", text: "Run a failure-state smoke for a Coordinator Mission without changing files." },
+          { role: "coordinator", text: "The implementation lane reported an unrecoverable provider capability mismatch, so the Mission was marked blocked and no further child work was started." }
+        ],
+        workstreams: [
+          {
+            id: "ws-failed-impl",
+            title: "Provider cleanup implementation attempt",
+            role: "engineer",
+            policy: "Fresh worktree",
+            strategy: "New isolated worktree",
+            purpose: "Attempt the requested provider cleanup change, then fail closed when the required provider operation is unavailable.",
+            nodes: ["n-failed-map", "n-failed-impl"]
+          }
+        ],
+        nodes: {
+          "n-failed-map": { title: "Confirm provider cleanup contract", status: "Completed", workflow: "agent_explore", policy: "Read-only child", deps: 0, session: null, desc: "Mapped provider capabilities before mutable work." },
+          "n-failed-impl": { title: "Apply unsupported provider cleanup behavior", status: "Blocked", workflow: "Orchestrate", policy: "Fresh worktree", deps: 1, session: null, desc: "Blocked because the required provider-side cleanup operation was unavailable and should not be guessed." }
+        }
+      },
+      {
+        id: "m-stopped",
+        title: "Stopped release notes polish",
+        subtitle: "Stopped by user",
+        status: "Stopped",
+        approval: "Approved",
+        revision: "r2",
+        objective: "Show a Mission that was intentionally stopped after discovery.",
+        template: "Issue drafting",
+        pace: "Step",
+        checkpoint: null,
+        messages: [
+          { role: "user", text: "Explore release note gaps, but stop before drafting changes." },
+          { role: "coordinator", text: "Discovery completed and the Mission was stopped by user request before opening an implementation lane." }
+        ],
+        workstreams: [
+          {
+            id: "ws-stopped-discovery",
+            title: "Release notes evidence gathering",
+            role: "explore",
+            policy: "Read-only child",
+            strategy: "Read-only",
+            purpose: "Collect release note evidence and stop before edits.",
+            nodes: ["n-stopped-discovery", "n-stopped-draft"]
+          }
+        ],
+        nodes: {
+          "n-stopped-discovery": { title: "Gather release note evidence", status: "Completed", workflow: "agent_explore", policy: "Read-only child", deps: 0, session: null, desc: "Collected candidate changelog references." },
+          "n-stopped-draft": { title: "Draft release note update", status: "Cancelled", workflow: "Orchestrate", policy: "Fresh worktree", deps: 1, session: null, desc: "User stopped the Mission before any mutable work began." }
+        }
+      },
+      {
+        id: "m-draft",
+        title: "Draft onboarding investigation",
+        subtitle: "Draft mission",
+        status: "Draft",
+        approval: "Not required",
+        revision: "r0",
+        objective: "Show a Mission that has been drafted but not yet approved or delegated.",
+        template: "Problem investigation",
+        pace: "Step",
+        checkpoint: null,
+        messages: [
+          { role: "user", text: "Investigate onboarding friction and prepare a possible issue draft." },
+          { role: "coordinator", text: "Draft Mission created. No approval requested and no child sessions launched yet." }
+        ],
+        workstreams: [
+          {
+            id: "ws-draft-discovery",
+            title: "Onboarding friction discovery",
+            role: "explore",
+            policy: "Read-only child",
+            strategy: "Read-only",
+            purpose: "Prepare an investigation-only plan before deciding whether this should become an issue or implementation Mission.",
+            nodes: ["n-draft-map", "n-draft-issue"]
+          }
+        ],
+        nodes: {
+          "n-draft-map": { title: "Map onboarding surfaces", status: "Pending", workflow: "agent_explore", policy: "Read-only child", deps: 0, session: null, desc: "Find the relevant onboarding entry points and existing diagnostics." },
+          "n-draft-issue": { title: "Prepare issue draft from findings", status: "Pending", workflow: null, policy: "Coordinator only", deps: 1, session: null, desc: "Summarize evidence and decide whether to file an issue." }
         }
       }
     ];
@@ -1223,6 +1547,7 @@
         coordinatorChild: true,
         owner: "Issue #298 provider cleanup",
         status: "Done",
+        runState: "completed",
         workflow: "agent_explore",
         policy: "Read-only child",
         worktree: "parent checkout",
@@ -1241,6 +1566,7 @@
         coordinatorChild: true,
         owner: "Issue #298 provider cleanup",
         status: "Done",
+        runState: "completed",
         workflow: "Investigate",
         policy: "Read-only child",
         worktree: "rp-agent-01-investigate",
@@ -1259,6 +1585,7 @@
         coordinatorChild: true,
         owner: "Issue #298 provider cleanup",
         status: "Working",
+        runState: "running",
         workflow: "Orchestrate",
         policy: "Fresh worktree",
         worktree: "rp-agent-2c4a8595-agent",
@@ -1273,21 +1600,22 @@
       },
       {
         id: "s-review",
-        title: "Review Worktree rp-agent-2c4a8595-agent",
+        title: "Validate Worktree rp-agent-2c4a8595-agent",
         mission: "m298",
         coordinatorChild: true,
         owner: "Issue #298 provider cleanup",
         status: "Working",
-        workflow: "Review",
+        runState: "running",
+        workflow: "Validation",
         policy: "Sibling on same worktree",
         worktree: "rp-agent-2c4a8595-agent",
         branch: "rp/agent/issue-298-provider-cleanup",
         model: "design",
         transcript: [
-          "Fresh review will inspect the uncommitted diff from the implementation worktree.",
+          "Fresh validation will inspect the uncommitted diff from the implementation worktree.",
           "Waiting for primary implementation lane to reach handoff."
         ],
-        tools: ["Workflow: Review", "Same worktree", "Pending"]
+        tools: ["Workflow: Validation", "Same worktree", "Pending"]
       },
       {
         id: "s-readme",
@@ -1296,6 +1624,7 @@
         coordinatorChild: true,
         owner: "README purpose evidence",
         status: "Needs you",
+        runState: "waitingForApproval",
         workflow: "agent_explore",
         policy: "Read-only child",
         worktree: "parent checkout",
@@ -1307,11 +1636,48 @@
         tools: ["Planned only"]
       },
       {
+        id: "s-readme-question",
+        title: "README scope question",
+        mission: "m-readme",
+        coordinatorChild: true,
+        owner: "README purpose evidence",
+        status: "Needs you",
+        runState: "waitingForQuestion",
+        workflow: "agent_explore",
+        policy: "Read-only child",
+        worktree: "parent checkout",
+        branch: "coordinator/runtime-demo",
+        model: "explore",
+        transcript: [
+          "The probe needs a decision about whether to include build-system details in the purpose summary."
+        ],
+        tools: ["Question pending"]
+      },
+      {
+        id: "s-onboarding-input",
+        title: "Onboarding scope input",
+        mission: "m-draft",
+        coordinatorChild: true,
+        owner: "Draft onboarding investigation",
+        status: "Needs you",
+        runState: "waitingForUser",
+        workflow: null,
+        policy: "Coordinator only",
+        worktree: "parent checkout",
+        branch: "coordinator/runtime-demo",
+        model: "gpt-5.5",
+        transcript: [
+          "Waiting for the user to choose whether this remains an investigation or becomes an implementation Mission."
+        ],
+        tools: ["User input pending"]
+      },
+      {
         id: "s-impl-tests",
         title: "Focused cleanup test scout",
         parentSession: "s-impl",
         owner: "Issue 298 Provider Cleanup",
         status: "Working",
+        runState: "running",
         workflow: "agent_explore",
         policy: "Agent-owned sub-agent",
         worktree: "rp-agent-2c4a8595-agent",
@@ -1325,20 +1691,21 @@
       },
       {
         id: "s-impl-review",
-        title: "Provider API safety review",
+        title: "Provider API safety check",
         parentSession: "s-impl",
         owner: "Issue 298 Provider Cleanup",
         status: "Done",
-        workflow: "Review",
+        runState: "completed",
+        workflow: "Validation",
         policy: "Agent-owned sub-agent",
         worktree: "rp-agent-2c4a8595-agent",
         branch: "rp/agent/issue-298-provider-cleanup",
         model: "design",
         transcript: [
-          "Sub-agent reviewed the proposed provider cleanup contract.",
+          "Sub-agent checked the proposed provider cleanup contract.",
           "Recommended best-effort cleanup with local fallback preserved."
         ],
-        tools: ["Review", "Diff read", "Safety notes"]
+        tools: ["Validation", "Diff read", "Safety notes"]
       },
       {
         id: "s-docs",
@@ -1346,6 +1713,7 @@
         mission: null,
         owner: null,
         status: "Working",
+        runState: "running",
         workflow: null,
         policy: "Normal Agent session",
         worktree: "current checkout",
@@ -1356,11 +1724,68 @@
           "This appears in Agent Mode but not in the Coordinator selected-Mission board."
         ],
         tools: ["Read File", "Edit", "Preview"]
+      },
+      {
+        id: "s-blocked-provider",
+        title: "Provider cleanup capability blocker",
+        mission: "m-failed",
+        coordinatorChild: true,
+        owner: "Provider cleanup blocked smoke",
+        status: "Blocked",
+        runState: "failed",
+        workflow: "Orchestrate",
+        policy: "Fresh worktree",
+        worktree: "rp-agent-blocked-provider",
+        branch: "rp/agent/provider-cleanup-blocked",
+        model: "gpt-5.5",
+        transcript: [
+          "Implementation stopped after confirming the provider operation is unsupported.",
+          "Reported blocker and left the worktree unchanged."
+        ],
+        tools: ["Run failed", "Blocker report", "No edits"]
+      },
+      {
+        id: "s-cancelled-release",
+        title: "Release notes draft lane",
+        mission: "m-stopped",
+        coordinatorChild: true,
+        owner: "Stopped release notes polish",
+        status: "Done",
+        runState: "cancelled",
+        workflow: "Orchestrate",
+        policy: "Fresh worktree",
+        worktree: "rp-agent-release-notes",
+        branch: "rp/agent/release-notes-polish",
+        model: "gpt-5.5",
+        transcript: [
+          "User stopped the Mission before mutable drafting began.",
+          "Cancellation was recorded and no follow-up lane was started."
+        ],
+        tools: ["Cancelled", "No edits"]
+      },
+      {
+        id: "s-idle-onboarding",
+        title: "Queued onboarding issue draft",
+        mission: "m-draft",
+        coordinatorChild: true,
+        owner: "Draft onboarding investigation",
+        status: "Done",
+        runState: "idle",
+        workflow: null,
+        policy: "Coordinator only",
+        worktree: "parent checkout",
+        branch: "coordinator/runtime-demo",
+        model: "gpt-5.5",
+        transcript: [
+          "Idle draft lane. No run is active yet."
+        ],
+        tools: ["Idle"]
       }
     ];
 
     const state = {
-      surface: "coordinator",
+      surface: "agent",
+      boardScope: "all",
       coordDestination: "chat",
       selectedMission: "m298",
       rightTab: "plan",
@@ -1368,24 +1793,38 @@
       selectedNode: "n3",
       pace: "Auto",
       agentSession: "s-impl",
+      agentSelection: "mission",
+      startKind: "mission",
       checkpointOpen: false,
       inspectorCollapsed: false,
       inspectorDragY: null,
       inspectorSuppressClick: false
     };
 
-    const lanes = ["Needs you", "Working", "Done"];
     const statusClass = {
       "Needs you": "amber",
       "Working": "blue",
-      "Review": "purple",
       "Done": "green",
       "Pending": "amber",
       "Running": "blue",
       "Completed": "green",
       "Awaiting approval": "amber",
       "Approved": "green",
-      "Stopped": "red"
+      "Not required": "muted",
+      "Blocked": "red",
+      "Stopped": "red",
+      "Cancelled": "red",
+      "Draft": "blue"
+    };
+    const runStateClass = {
+      idle: "muted",
+      running: "blue",
+      waitingForUser: "amber",
+      waitingForQuestion: "amber",
+      waitingForApproval: "amber",
+      completed: "green",
+      cancelled: "red",
+      failed: "red"
     };
 
     function mission(id) { return missions.find(m => m.id === id) || missions[0]; }
@@ -1411,7 +1850,7 @@
       return `<span class="pill ${cls}">${escapeHtml(text)}</span>`;
     }
     function workflowClass(workflow) {
-      if (workflow === "Review") return "purple";
+      if (workflow === "Validation") return "purple";
       if (workflow === "Investigate") return "cyan";
       if (workflow === "Deep Plan") return "amber";
       if (workflow === "Orchestrate") return "green";
@@ -1420,20 +1859,50 @@
     }
 
     function render() {
-      document.getElementById("surfaceCoordinator").classList.toggle("active", state.surface === "coordinator");
-      document.getElementById("surfaceAgent").classList.toggle("active", state.surface === "agent");
       document.getElementById("appRoot").innerHTML = state.surface === "coordinator" ? renderCoordinator() : renderAgent();
       bindEvents();
     }
 
     function renderCoordinator() {
-      const all = state.coordDestination === "all";
       return `
-        <section class="surface coordinator-shell ${all ? "all-board" : ""}">
+        <section class="surface coordinator-shell all-board">
           ${renderCoordinatorSidebar()}
-          ${all ? "" : renderConversation()}
-          ${renderWorkPanel(all)}
+          ${renderWorkPanel(true)}
         </section>
+      `;
+    }
+
+    function renderSidebarChrome(action = "new-session") {
+      return `
+        <div class="sidebar-chrome">
+          <div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div>
+          <button class="chrome-button" data-action="${action}" title="New">
+            <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 5v14"></path>
+              <path d="M5 12h14"></path>
+              <path d="M16 3h5v5"></path>
+            </svg>
+          </button>
+        </div>
+      `;
+    }
+
+    function renderHeaderControls() {
+      return `
+        <div class="header-controls">
+          <div class="surface-switch" aria-label="Main surface">
+            <button class="${state.surface === "coordinator" ? "active" : ""}" data-action="surface-board" type="button">Board</button>
+            <button class="${state.surface === "agent" ? "active" : ""}" data-action="surface-agent" type="button">Agent</button>
+          </div>
+          <span class="pill amber icon-pill" title="Lightbulb" aria-label="Lightbulb">
+            <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 18h6"></path>
+              <path d="M10 22h4"></path>
+              <path d="M8.5 14.5c-1.5-1.1-2.5-2.9-2.5-5A6 6 0 0 1 18 9.5c0 2.1-1 3.9-2.5 5-.8.6-1.2 1.3-1.3 2.1H9.8c-.1-.8-.5-1.5-1.3-2.1Z"></path>
+            </svg>
+          </span>
+          <span class="pill green">MCP Server</span>
+        </div>
       `;
     }
 
@@ -1441,27 +1910,17 @@
       const m = mission(state.selectedMission);
       return `
         <aside class="panel sidebar">
-          <div class="side-top">
-            <button class="nav-button ${state.coordDestination === "chat" ? "active" : ""}" data-action="coord-dest" data-dest="chat">
-              <span class="nav-icon">CC</span>
-              <span class="nav-copy"><span class="nav-title">Coordinator Chat</span><span class="nav-sub">Selected parent and linked work</span></span>
-            </button>
-            <button class="nav-button ${state.coordDestination === "all" ? "active" : ""}" data-action="coord-dest" data-dest="all">
-              <span class="nav-icon">AB</span>
-              <span class="nav-copy"><span class="nav-title">All Agents Board</span><span class="nav-sub">Active work across Missions</span></span>
-            </button>
-          </div>
-
-          <div class="section-title"><span>Missions</span><span>${missions.length}</span></div>
-          <button class="new-mission" data-action="select-mission" data-id="m-readme">
-            <span class="row-leading">+</span>
-            <span class="row-copy"><span class="row-title">New Mission</span><span class="row-sub">Start a blank Coordinator...</span></span>
-            <span class="row-trailing">${pill("Ready")}</span>
+          ${renderSidebarChrome("new-mission")}
+          <div class="section-title"><span>Board</span><span>Global</span></div>
+          <button class="nav-button ${state.boardScope === "all" ? "active" : ""}" data-action="board-scope-all">
+            <span class="nav-icon">AB</span>
+            <span class="nav-copy"><span class="nav-title">All Agents Board</span><span class="nav-sub">Active work across Missions</span></span>
           </button>
 
+          <div class="section-title"><span>Missions</span><span>${missions.length}</span></div>
           <div class="rows">
             ${missions.map(item => `
-              <button class="row-button ${item.id === m.id ? "active" : ""}" data-action="select-mission" data-id="${item.id}">
+              <button class="row-button ${state.boardScope === "mission" && item.id === m.id ? "active" : ""}" data-action="board-scope-mission" data-id="${item.id}">
                 <span class="row-leading">${item.id === m.id ? "v" : "C"}</span>
                 <span class="row-copy"><span class="row-title">${escapeHtml(item.title)}</span><span class="row-sub">${escapeHtml(item.subtitle)}</span></span>
                 <span class="row-trailing">${pill(item.status, statusClass[item.status] || "")}</span>
@@ -1490,8 +1949,7 @@
               <div class="panel-sub">${escapeHtml(m.title)}</div>
             </div>
             <span class="spacer"></span>
-            <button class="link-button">Stop</button>
-            <button class="link-button">Clear</button>
+            ${renderHeaderControls()}
           </div>
 
           <div class="scroll">
@@ -1564,7 +2022,7 @@
         return `
           <div class="checkpoint">
             <div class="checkpoint-title">Step checkpoint <span class="spacer"></span>${escapeHtml(m.pace)} pace</div>
-            <div class="checkpoint-question"><strong>Implementation boundary reached</strong><br>Review the current DAG step before moving to the next safe step.</div>
+            <div class="checkpoint-question"><strong>Implementation boundary reached</strong><br>Inspect the current DAG step before moving to the next safe step.</div>
             <div class="option-grid">
               ${["Continue|Resume the Coordinator with this observed boundary.","Revise|Edit the plan or instruction before continuing.","Stop|End this Mission here."].map(renderOption).join("")}
             </div>
@@ -1593,6 +2051,9 @@
                 <button class="${m.pace === "Auto" ? "active" : ""}" data-action="set-pace" data-pace="Auto">Auto</button>
               </span>
               ${m.checkpoint === "step" ? `<button class="checkpoint-trigger" data-action="toggle-checkpoint">${state.checkpointOpen ? "Hide checkpoint" : "Step checkpoint"}</button>` : ""}
+              ${state.agentSelection === "mission" ? `<button class="strip-action blue" data-action="open-mission-board" data-id="${m.id}">Open Board</button>` : ""}
+              <button class="strip-action red">Stop</button>
+              <button class="strip-action">Clear</button>
               ${pill("MCP / Tools")}
               ${m.id === "m-readme" ? pill("Mission Template") : ""}
               <button class="send">></button>
@@ -1603,8 +2064,25 @@
     }
 
     function renderWorkPanel(all) {
+      if (all) {
+        const scopedMission = state.boardScope === "mission" ? mission(state.selectedMission) : null;
+        return `
+          <section class="panel work-panel all-board ${state.inspectorCollapsed ? "inspector-collapsed" : ""}">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">${scopedMission ? escapeHtml(scopedMission.title) : "Board"}</div>
+                <div class="panel-sub">${scopedMission ? "Mission linked sessions" : "All active Coordinator work"}</div>
+              </div>
+              <span class="spacer"></span>
+              ${renderHeaderControls()}
+            </div>
+            ${scopedMission ? renderBoardWithPlan() : renderBoard(true)}
+            ${renderInspector()}
+          </section>
+        `;
+      }
       return `
-        <section class="panel work-panel ${all ? "all-board" : ""} ${state.inspectorCollapsed ? "inspector-collapsed" : ""}">
+        <section class="panel work-panel ${state.inspectorCollapsed ? "inspector-collapsed" : ""}">
           <div class="panel-tabs">
             <span class="tabseg">
               <button class="${state.rightTab === "board" ? "active" : ""}" data-action="right-tab" data-tab="board">Board</button>
@@ -1622,9 +2100,15 @@
 
     function renderBoard(all) {
       const visible = all ? coordinatorSessions() : coordinatorSessions(state.selectedMission);
+      const boardLanes = [
+        ...(visible.some(s => s.status === "Needs you") ? ["Needs you"] : []),
+        "Working",
+        ...(visible.some(s => s.status === "Blocked") ? ["Blocked"] : []),
+        "Done"
+      ];
       return `
         <div class="board">
-          ${lanes.map(lane => {
+          ${boardLanes.map(lane => {
             const rows = visible.filter(s => s.status === lane);
             return `
               <div class="lane">
@@ -1639,8 +2123,29 @@
       `;
     }
 
+    function renderBoardWithPlan() {
+      const m = mission(state.selectedMission);
+      return `
+        <div class="board-with-plan">
+          <aside class="board-plan-panel">
+            <div class="board-plan-head">
+              ${pill(m.revision, "blue")}
+              ${pill(m.status, statusClass[m.status] || "")}
+              <span class="spacer"></span>
+              <button class="secondary-button" data-action="select-agent-mission" data-id="${m.id}">Open Mission Agent</button>
+            </div>
+            ${renderPlan(false)}
+          </aside>
+          ${renderBoard(false)}
+        </div>
+      `;
+    }
+
     function laneColor(lane) {
-      return lane === "Done" ? "var(--green)" : lane === "Needs you" ? "var(--amber)" : "var(--blue)";
+      if (lane === "Done") return "var(--green)";
+      if (lane === "Needs you") return "var(--amber)";
+      if (lane === "Blocked") return "var(--red)";
+      return "var(--blue)";
     }
 
     function renderWorkCard(s, all) {
@@ -1651,9 +2156,24 @@
             ${all ? chip(s.owner, "blue") : ""}
             ${chip(boardWorkflowLabel(s.workflow), workflowClass(s.workflow))}
             ${chip(boardPolicyLabel(s.policy))}
+            ${s.runState ? chip(runStateLabel(s.runState), runStateClass[s.runState] || "") : ""}
           </div>
         </div>
       `;
+    }
+
+    function runStateLabel(state) {
+      const labels = {
+        idle: "Idle",
+        running: "Running",
+        waitingForUser: "Waiting for user",
+        waitingForQuestion: "Question",
+        waitingForApproval: "Approval",
+        completed: "Completed",
+        cancelled: "Cancelled",
+        failed: "Failed"
+      };
+      return labels[state] || state;
     }
 
     function boardWorkflowLabel(workflow) {
@@ -1667,11 +2187,11 @@
       return policy;
     }
 
-    function renderPlan() {
+    function renderPlan(includeSummary = true) {
       const m = mission(state.selectedMission);
       return `
         <div class="plan">
-          ${renderMissionSummary(m)}
+          ${includeSummary ? renderMissionSummary(m) : ""}
           ${m.workstreams.map(ws => `
             <div class="workstream">
               <div class="workstream-head">
@@ -1739,7 +2259,8 @@
           <div class="inspector-body">
             <div class="inspector-head"><span class="pill">Inspector</span><div class="inspector-title">${escapeHtml(s.title)}</div><span class="spacer"></span><button class="primary-button" data-action="open-agent" data-id="${s.id}">Open Agent</button></div>
             <div class="kv">
-              <span>Status</span><span>${escapeHtml(s.status)}</span>
+              <span>Board group</span><span>${escapeHtml(s.status)}</span>
+              <span>Run state</span><span>${escapeHtml(runStateLabel(s.runState))}</span>
               <span>Owner Mission</span><span>${escapeHtml(s.owner || "None")}</span>
               <span>Workflow</span><span>${escapeHtml(s.workflow || "None")}</span>
               <span>Policy</span><span>${escapeHtml(s.policy)}</span>
@@ -1756,6 +2277,8 @@
     }
 
     function renderAgent() {
+      if (state.agentSelection === "start") return renderAgentStart();
+      if (state.agentSelection === "mission") return renderAgentMission();
       const s = session(state.agentSession);
       const owned = subagentsFor(s.id);
       const parent = s.parentSession ? session(s.parentSession) : null;
@@ -1769,7 +2292,7 @@
                 <div class="panel-sub">${escapeHtml(s.workflow || "Agent")} - ${escapeHtml(s.worktree)} - ${escapeHtml(s.branch)}</div>
               </div>
               <span class="spacer"></span>
-              ${parent ? `<button class="secondary-button" data-action="select-agent-session" data-id="${parent.id}">Back to parent</button>` : s.mission ? `<button class="secondary-button" data-action="surface" data-surface="coordinator">Back to Coordinator</button>` : ""}
+              ${renderHeaderControls()}
             </div>
             <div class="agent-transcript">
               <div class="message user"><div class="message-label">You</div><div class="message-body">${escapeHtml(agentPromptFor(s))}</div></div>
@@ -1785,6 +2308,7 @@
                   ${pill(`Codex CLI - ${s.model}`)}
                   ${pill(s.workflow || "Workflow")}
                   ${pill(s.worktree.includes("rp-agent") ? "Work locally" : "Parent checkout")}
+                  ${parent ? `<button class="strip-action blue" data-action="select-agent-session" data-id="${parent.id}">Back to parent</button>` : s.mission ? `<button class="strip-action blue" data-action="select-agent-mission" data-id="${s.mission}">Back to Mission</button>` : ""}
                   ${pill("Tools")}
                   ${pill("Permissions")}
                   <button class="send">></button>
@@ -1793,6 +2317,124 @@
             </div>
           </section>
         </section>
+      `;
+    }
+
+    function renderAgentStart() {
+      const isMission = state.startKind === "mission";
+      return `
+        <section class="surface agent-shell">
+          ${renderAgentSidebar()}
+          <section class="panel agent-chat">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">${isMission ? "New Mission" : "New Agent Session"}</div>
+                <div class="panel-sub">What are we building?</div>
+              </div>
+              <span class="spacer"></span>
+              ${renderHeaderControls()}
+            </div>
+            <div class="agent-transcript" style="justify-content:center;align-items:center;">
+              <div class="mission-card" style="width:min(720px,100%);">
+                <div class="mission-head"><strong>${isMission ? "Start a Mission" : "Start an Agent Session"}</strong>${isMission ? pill("Plan first", "blue") : pill("Direct chat")}</div>
+                <div class="mission-objective"><strong>What are we building?</strong></div>
+                <div class="message-body">${isMission ? "The Coordinator will draft a visible Mission Plan, ask for approval, and then delegate child Agent sessions." : "Start a normal Agent Mode chat with the selected workspace context."}</div>
+              </div>
+            </div>
+            <div class="agent-composer">
+              <div class="agent-composer-box">
+                <textarea placeholder="${isMission ? "Describe the mission..." : "Send a message..."}"></textarea>
+                <div class="agent-strip">
+                  ${pill(isMission ? "Mission" : "Agent", isMission ? "blue" : "")}
+                  ${isMission ? pill("Plan + approve", "green") : pill("Codex CLI - gpt-5.5")}
+                  ${pill("MCP / Tools")}
+                  ${pill("Workspace context")}
+                  <button class="send">></button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+      `;
+    }
+
+    function renderAgentMission() {
+      const m = mission(state.selectedMission);
+      const linked = coordinatorSessions(m.id);
+      return `
+        <section class="surface agent-shell">
+          ${renderAgentSidebar()}
+          <section class="panel agent-chat">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">${escapeHtml(m.title)}</div>
+                <div class="panel-sub">Coordinator Mission - ${escapeHtml(m.revision)} - ${escapeHtml(m.status)} - ${escapeHtml(m.approval)}</div>
+              </div>
+              <span class="spacer"></span>
+              ${renderHeaderControls()}
+            </div>
+
+            <div class="mission-chat-main">
+              ${renderMissionStatusStrip(m)}
+              <div class="scroll">
+                ${m.messages.map(renderMessage).join("")}
+                ${linked.map(renderDelegatedCard).join("")}
+              </div>
+              ${m.checkpoint === "step" && state.checkpointOpen ? renderCheckpoint(m) : m.checkpoint === "approval" ? renderCheckpoint(m) : ""}
+            </div>
+
+            ${renderCoordinatorComposer(m)}
+          </section>
+        </section>
+      `;
+    }
+
+    function renderMissionStatusStrip(m) {
+      const node = currentMissionNode(m);
+      const nodes = missionNodeList(m);
+      const doneCount = nodes.filter(item => item.node.status === "Completed").length;
+      return `
+        <div class="mission-status-strip">
+          <div class="mission-status-head">
+            <div>
+              <div class="mission-status-title">
+                <span>Mission Plan</span>
+                ${pill(m.revision, "blue")}
+                ${pill(`${doneCount}/${nodes.length} done`, doneCount === nodes.length ? "green" : "blue")}
+                ${pill(m.status, statusClass[m.status] || "")}
+              </div>
+              <div class="mission-status-copy">Current: ${escapeHtml(node.title)}. Full plan and linked-session details live on the Board.</div>
+            </div>
+            <div class="mission-status-actions">
+              <button class="secondary-button" data-action="open-mission-board" data-id="${m.id}">Open Board</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function missionNodeList(m) {
+      return m.workstreams.flatMap(ws => ws.nodes.map(nodeID => ({ id: nodeID, node: m.nodes[nodeID] })).filter(item => item.node));
+    }
+
+    function currentMissionNode(m) {
+      const nodes = missionNodeList(m).map(item => item.node);
+      return nodes.find(node => node.status === "Running")
+        || nodes.find(node => node.status === "Pending")
+        || nodes[nodes.length - 1]
+        || activeNode();
+    }
+
+    function renderMissionCheckRow(item, current) {
+      const status = item.node.status;
+      const cls = status === "Completed" ? "done" : current ? "current" : "";
+      const icon = status === "Completed" ? "OK" : current ? ">" : "";
+      return `
+        <div class="mission-check-row ${cls}">
+          <span class="mission-check-icon">${icon}</span>
+          <span>${escapeHtml(item.node.title)}</span>
+          ${chip(status, statusClass[status] || "")}
+        </div>
       `;
     }
 
@@ -1814,7 +2456,7 @@
 
     function agentPromptFor(s) {
       if (s.workflow === "Investigate") return "Read-only investigation for issue #298. Find evidence and report file references. Do not edit files.";
-      if (s.workflow === "Review") return "Review the implementation worktree from a fresh session and report correctness, safety, and test coverage.";
+      if (s.workflow === "Validation") return "Validate the implementation worktree from a fresh session and report correctness, safety, and test coverage.";
       if (s.workflow === "Orchestrate") return "Implement issue #298 provider cleanup in the isolated worktree. Keep changes focused.";
       if (s.workflow === "agent_explore") return "Read-only probe. Return concise findings and do not edit files.";
       if (s.parentSession) return "Continue this sub-agent session. Report concise findings back to the parent agent.";
@@ -1825,9 +2467,15 @@
       const visible = sessions.filter(s => !s.parentSession);
       return `
         <aside class="panel agent-sidebar">
+          ${renderSidebarChrome("new-session")}
           <input class="search" placeholder="Search">
+          <div class="sidebar-actions">
+            <button class="mini-action" data-action="new-mission"><span class="row-leading">+</span><span>New Mission</span></button>
+          </div>
           <div class="rows">
-            <div class="section-title"><span>Today</span></div>
+            <div class="section-title"><span>Missions</span><span>${missions.length}</span></div>
+            ${missions.map(renderAgentMissionRow).join("")}
+            <div class="section-title"><span>Sessions</span><span>Today</span></div>
             ${visible.map(renderAgentSidebarSession).join("")}
             <button class="row-button"><span class="row-leading">Z</span><span class="row-copy"><span class="row-title">Archived Sessions</span><span class="row-sub">38 archived sessions</span></span></button>
           </div>
@@ -1857,15 +2505,25 @@
       `;
     }
 
+    function renderAgentMissionRow(m) {
+      return `
+        <button class="row-button mission-row ${state.agentSelection === "mission" && state.selectedMission === m.id ? "active" : ""}" data-action="select-agent-mission" data-id="${m.id}">
+          <span class="row-leading">M</span>
+          <span class="row-copy"><span class="row-title">${escapeHtml(m.title)}</span><span class="row-sub">${escapeHtml(`${m.subtitle} - ${m.revision} - ${m.approval}`)}</span></span>
+          <span class="row-trailing">${pill(m.status, statusClass[m.status] || "")}</span>
+        </button>
+      `;
+    }
+
     function renderAgentSidebarSession(s) {
       const children = subagentsFor(s.id);
       return `
-        <button class="row-button ${state.agentSession === s.id ? "active" : ""}" data-action="select-agent-session" data-id="${s.id}">
+        <button class="row-button ${state.agentSelection === "session" && state.agentSession === s.id ? "active" : ""}" data-action="select-agent-session" data-id="${s.id}">
           <span class="row-leading">${s.coordinatorChild ? "C" : "A"}</span>
           <span class="row-copy"><span class="row-title">${escapeHtml(s.title)}</span><span class="row-sub">${escapeHtml(s.coordinatorChild ? `Delegated from ${s.owner}` : "Normal Agent session")}</span></span>
         </button>
         ${children.map(child => `
-          <button class="row-button child-row ${state.agentSession === child.id ? "active" : ""}" data-action="select-agent-session" data-id="${child.id}">
+          <button class="row-button child-row ${state.agentSelection === "session" && state.agentSession === child.id ? "active" : ""}" data-action="select-agent-session" data-id="${child.id}">
             <span class="row-leading">S</span>
             <span class="row-copy"><span class="row-title">${escapeHtml(child.title)}</span><span class="row-sub">${escapeHtml(`Sub-agent of ${s.title}`)}</span></span>
           </button>
@@ -1879,8 +2537,45 @@
           const target = event.currentTarget;
           const action = target.dataset.action;
           if (action === "surface") state.surface = target.dataset.surface;
+          if (action === "surface-board") {
+            state.surface = "coordinator";
+            state.coordDestination = "all";
+            state.boardScope = state.boardScope || "all";
+            state.rightTab = "board";
+          }
+          if (action === "surface-agent") {
+            state.surface = "agent";
+            if (state.agentSelection === "mission") state.rightTab = "plan";
+          }
           if (action === "coord-dest") state.coordDestination = target.dataset.dest;
-          if (action === "select-mission") {
+          if (action === "board-scope-all") {
+            state.boardScope = "all";
+            state.surface = "coordinator";
+            state.rightTab = "board";
+          }
+          if (action === "board-scope-mission") {
+            state.boardScope = "mission";
+            state.selectedMission = target.dataset.id;
+            const m = mission(state.selectedMission);
+            state.pace = m.pace;
+            state.selectedNode = Object.keys(m.nodes)[0];
+            const first = sessions.find(s => s.mission === m.id);
+            if (first) state.selectedSession = first.id;
+            state.surface = "coordinator";
+            state.rightTab = "board";
+          }
+          if (action === "open-mission-board") {
+            state.boardScope = "mission";
+            state.selectedMission = target.dataset.id;
+            const m = mission(state.selectedMission);
+            state.pace = m.pace;
+            state.selectedNode = Object.keys(m.nodes)[0];
+            const first = sessions.find(s => s.mission === m.id);
+            if (first) state.selectedSession = first.id;
+            state.surface = "coordinator";
+            state.rightTab = "board";
+          }
+          if (action === "select-mission" || action === "select-agent-mission") {
             state.selectedMission = target.dataset.id;
             const m = mission(state.selectedMission);
             state.pace = m.pace;
@@ -1889,6 +2584,21 @@
             if (first) state.selectedSession = first.id;
             state.coordDestination = "chat";
             state.checkpointOpen = false;
+            state.agentSelection = "mission";
+            state.rightTab = "plan";
+            state.surface = "agent";
+          }
+          if (action === "new-mission") {
+            state.agentSelection = "start";
+            state.startKind = "mission";
+            state.surface = "agent";
+            state.rightTab = "plan";
+            state.checkpointOpen = false;
+          }
+          if (action === "new-session") {
+            state.agentSelection = "start";
+            state.startKind = "session";
+            state.surface = "agent";
           }
           if (action === "right-tab") state.rightTab = target.dataset.tab;
           if (action === "select-session") {
@@ -1899,12 +2609,17 @@
             state.selectedNode = target.dataset.id;
             const node = activeNode();
             if (node.session) state.selectedSession = node.session;
+            state.rightTab = "plan";
           }
           if (action === "open-agent") {
             state.agentSession = target.dataset.id;
+            state.agentSelection = "session";
             state.surface = "agent";
           }
-          if (action === "select-agent-session") state.agentSession = target.dataset.id;
+          if (action === "select-agent-session") {
+            state.agentSession = target.dataset.id;
+            state.agentSelection = "session";
+          }
           if (action === "set-pace") {
             mission(state.selectedMission).pace = target.dataset.pace;
           }
@@ -1956,8 +2671,6 @@
       });
     }
 
-    document.getElementById("surfaceCoordinator").addEventListener("click", () => { state.surface = "coordinator"; render(); });
-    document.getElementById("surfaceAgent").addEventListener("click", () => { state.surface = "agent"; render(); });
     render();
   </script>
 </body>
