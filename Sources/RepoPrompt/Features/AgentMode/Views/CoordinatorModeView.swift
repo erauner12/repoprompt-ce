@@ -1350,11 +1350,12 @@ struct CoordinatorModeView: View {
         workstream: CoordinatorMissionWorkstreamSummary?
     ) -> MissionPlanExecutionLane {
         if let boundSessionID = node.boundSessionID {
+            let isPrimarySession = boundSessionID == workstream?.primarySessionID
             return MissionPlanExecutionLane(
                 id: "session-\(boundSessionID.uuidString)",
-                title: "Bound session",
-                subtitle: "Session \(boundSessionID.uuidString.prefix(8))",
-                systemImage: "person.text.rectangle",
+                title: isPrimarySession ? "Primary session" : "Bound session",
+                subtitle: "\(isPrimarySession ? "Reusing primary" : "Session") \(boundSessionID.uuidString.prefix(8))",
+                systemImage: isPrimarySession ? "arrowshape.turn.up.right.fill" : "person.text.rectangle",
                 policy: node.executionPolicy,
                 nodes: []
             )
@@ -1479,6 +1480,9 @@ struct CoordinatorModeView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: metrics.controlSpacing)
+            if let primarySessionID = workstream.primarySessionID {
+                statusChip("Primary \(primarySessionID.uuidString.prefix(8))", color: .green, metrics: metrics)
+            }
             statusChip(workstream.defaultPolicy.displayName, color: Color.accentColor, metrics: metrics)
             statusChip(workstream.worktreeStrategy.mode.displayName, color: .secondary, metrics: metrics)
             if let baseRef = workstream.worktreeStrategy.baseRef {
@@ -1500,7 +1504,7 @@ struct CoordinatorModeView: View {
 
     private func missionPlanNodeRow(
         _ node: CoordinatorMissionPlanNode,
-        workstream _: CoordinatorMissionWorkstreamSummary?,
+        workstream: CoordinatorMissionWorkstreamSummary?,
         plan _: CoordinatorMissionPlan,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
@@ -1523,6 +1527,7 @@ struct CoordinatorModeView: View {
                 if let workflowHint = node.workflowHint {
                     workflowBadge(workflowHint, metrics: metrics)
                 }
+                statusChip(missionPlanNodeRouteLabel(node, workstream: workstream), color: missionPlanNodeRouteTint(node, workstream: workstream), metrics: metrics)
                 statusChip(node.executionPolicy.displayName, color: Color.accentColor, metrics: metrics)
                 if let role = node.role {
                     statusChip(role, color: .secondary, metrics: metrics)
@@ -1566,6 +1571,52 @@ struct CoordinatorModeView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Plan node \(node.title)")
+    }
+
+    private func missionPlanNodeRouteLabel(
+        _ node: CoordinatorMissionPlanNode,
+        workstream: CoordinatorMissionWorkstreamSummary?
+    ) -> String {
+        if let boundSessionID = node.boundSessionID, boundSessionID == workstream?.primarySessionID {
+            return "Reuse primary"
+        }
+        switch node.executionPolicy {
+        case .steerPrimary:
+            return "Reuse primary"
+        case .freshWorktree:
+            return "Fresh worktree"
+        case .freshReadOnlyChild:
+            return "Read-only child"
+        case .freshSiblingOnSameWorktree:
+            return "Fresh sibling"
+        case .coordinatorOnly:
+            return "Coordinator"
+        case .planCritique:
+            return "Critique"
+        case .askUser:
+            return "Needs you"
+        }
+    }
+
+    private func missionPlanNodeRouteTint(
+        _ node: CoordinatorMissionPlanNode,
+        workstream: CoordinatorMissionWorkstreamSummary?
+    ) -> Color {
+        if let boundSessionID = node.boundSessionID, boundSessionID == workstream?.primarySessionID {
+            return .green
+        }
+        switch node.executionPolicy {
+        case .steerPrimary:
+            return .green
+        case .freshWorktree, .freshReadOnlyChild:
+            return .blue
+        case .freshSiblingOnSameWorktree, .planCritique:
+            return .purple
+        case .coordinatorOnly:
+            return .secondary
+        case .askUser:
+            return .orange
+        }
     }
 
     private func missionPlanEmptyState(title: String, subtitle: String, metrics: CoordinatorVisualMetrics) -> some View {
