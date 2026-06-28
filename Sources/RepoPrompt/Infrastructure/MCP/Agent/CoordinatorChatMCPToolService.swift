@@ -167,9 +167,14 @@ struct CoordinatorChatMCPToolService {
             let snapshot = environment.snapshot()
             let coordinatorSessionID = try resolveCoordinatorSessionID(args["coordinator_session_id"], in: snapshot)
             try validateCoordinatorExists(coordinatorSessionID, in: snapshot)
-            return stateResponse(snapshot, extra: [
-                "mission_status": missionStatusValue(coordinatorSessionID: coordinatorSessionID, snapshot: snapshot)
-            ])
+            let compact = AgentMCPToolHelpers.parseBool(args["compact"] ?? args["summary"]) ?? false
+            let statusValue = compact
+                ? compactMissionStatusValue(coordinatorSessionID: coordinatorSessionID, snapshot: snapshot)
+                : missionStatusValue(coordinatorSessionID: coordinatorSessionID, snapshot: snapshot)
+            let extra = ["mission_status": statusValue]
+            return compact
+                ? compactStateResponse(snapshot, extra: extra)
+                : stateResponse(snapshot, extra: extra)
 
         default:
             throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, start_mission, submit, mission_plan, mission_status.")
@@ -876,6 +881,23 @@ struct CoordinatorChatMCPToolService {
         return .object(payload)
     }
 
+    private func compactStateResponse(
+        _ snapshot: CoordinatorModeSnapshot,
+        extra: [String: Value] = [:]
+    ) -> Value {
+        var payload: [String: Value] = [
+            "selected_coordinator_session_id": AgentMCPToolHelpers.stringOrNull(snapshot.coordinatorRail.coordinatorSessionID?.uuidString),
+            "selected_title": AgentMCPToolHelpers.stringOrNull(snapshot.coordinatorRail.title),
+            "selection_source": AgentMCPToolHelpers.stringOrNull(snapshot.coordinatorRail.selectionSource?.rawValue),
+            "composer_enabled": .bool(snapshot.coordinatorRail.isComposerEnabled),
+            "composer_send_enabled": .bool(snapshot.coordinatorRail.isComposerSendEnabled),
+            "coordinator_count": .int(snapshot.coordinatorRail.availableCoordinators.count),
+            "counts": countsValue(snapshot.counts)
+        ]
+        payload.merge(extra) { _, new in new }
+        return .object(payload)
+    }
+
     private func missionStatusValue(coordinatorSessionID: UUID, snapshot: CoordinatorModeSnapshot) -> Value {
         guard let option = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == coordinatorSessionID }) else {
             return .null
@@ -936,6 +958,130 @@ struct CoordinatorChatMCPToolService {
                     .prefix(20)
                     .map(missionRoutingDecisionValue)
             )
+        ])
+    }
+
+    private func compactMissionStatusValue(coordinatorSessionID: UUID, snapshot: CoordinatorModeSnapshot) -> Value {
+        guard let option = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == coordinatorSessionID }) else {
+            return .null
+        }
+        let rows = snapshot.groups.flatMap(\.rows)
+        guard let plan = option.missionPlan else {
+            return .object([
+                "compact": .bool(true),
+                "coordinator_session_id": .string(option.sessionID.uuidString),
+                "title": .string(option.title),
+                "selected": .bool(option.isSelected),
+                "run_state": AgentMCPToolHelpers.stringOrNull(option.runState?.rawValue),
+                "has_plan": .bool(false),
+                "debug_summary": .string("No Mission Plan is recorded for \(option.title)."),
+                "liveness_warnings": .array([])
+            ])
+        }
+
+        let rowsBySessionID = Dictionary(
+            rows.map { ($0.sessionID, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let nodeCounts = Dictionary(grouping: plan.nodes, by: \.status).mapValues(\.count)
+        let terminalCount = (nodeCounts[.completed] ?? 0) + (nodeCounts[.skipped] ?? 0) + (nodeCounts[.cancelled] ?? 0)
+        let activeNodes = plan.nodes.filter { $0.status == .running || $0.status == .blocked }
+        let runningDelegatedNodesWithoutBoundSessions = plan.nodes.filter { node in
+            node.status == .running && node.executionPolicy != .coordinatorOnly && node.boundSessionID == nil
+        }
+        let missingBoundRows = plan.nodes.filter { node in
+            guard let boundSessionID = node.boundSessionID else { return false }
+            return rowsBySessionID[boundSessionID] == nil && !node.status.isTerminal
+        }
+        let warnings = compactMissionStatusWarnings(
+            option: option,
+            plan: plan,
+            activeNodes: activeNodes,
+            runningDelegatedNodesWithoutBoundSessions: runningDelegatedNodesWithoutBoundSessions,
+            missingBoundRows: missingBoundRows
+        )
+        let runStateSummary = option.runState?.rawValue ?? "unknown"
+        let debugSummary = "\(option.title): \(plan.status.rawValue), \(runStateSummary), r\(plan.revision), \(terminalCount)/\(plan.nodes.count) terminal nodes, \(activeNodes.count) active/blocking."
+
+        return .object([
+            "compact": .bool(true),
+            "coordinator_session_id": .string(option.sessionID.uuidString),
+            "title": .string(option.title),
+            "selected": .bool(option.isSelected),
+            "run_state": AgentMCPToolHelpers.stringOrNull(option.runState?.rawValue),
+            "has_plan": .bool(true),
+            "debug_summary": .string(debugSummary),
+            "plan": .object([
+                "revision": .int(plan.revision),
+                "objective": AgentMCPToolHelpers.stringOrNull(plan.objective),
+                "status": .string(plan.status.rawValue),
+                "approval_state": .string(plan.approvalState.rawValue)
+            ]),
+            "node_counts": missionPlanNodeCountsValue(nodeCounts),
+            "active_nodes": .array(activeNodes.map { compactMissionStatusNodeValue($0, rowsBySessionID: rowsBySessionID) }),
+            "running_delegated_nodes_without_bound_sessions": .array(
+                runningDelegatedNodesWithoutBoundSessions.map { compactMissionStatusNodeValue($0, rowsBySessionID: rowsBySessionID) }
+            ),
+            "missing_bound_rows": .array(missingBoundRows.map { compactMissionStatusNodeValue($0, rowsBySessionID: rowsBySessionID) }),
+            "liveness_warnings": .array(warnings.map(Value.string)),
+            "recent_events": .array(
+                plan.events
+                    .sorted { lhs, rhs in
+                        if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
+                        return lhs.timestamp > rhs.timestamp
+                    }
+                    .prefix(5)
+                    .map(missionPlanEventValue)
+            ),
+            "routing_decisions_recent": .array(
+                plan.routingDecisions
+                    .sorted { lhs, rhs in
+                        if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
+                        return lhs.timestamp > rhs.timestamp
+                    }
+                    .prefix(5)
+                    .map(missionRoutingDecisionValue)
+            )
+        ])
+    }
+
+    private func compactMissionStatusWarnings(
+        option: CoordinatorModeCoordinatorOption,
+        plan: CoordinatorMissionPlan,
+        activeNodes: [CoordinatorMissionPlanNode],
+        runningDelegatedNodesWithoutBoundSessions: [CoordinatorMissionPlanNode],
+        missingBoundRows: [CoordinatorMissionPlanNode]
+    ) -> [String] {
+        var warnings: [String] = []
+        if option.runState?.isActive != true, !activeNodes.isEmpty {
+            warnings.append("coordinator_run_state_is_not_active_but_plan_has_active_nodes")
+        }
+        if plan.status == .running, option.runState?.isActive != true {
+            warnings.append("plan_is_running_but_coordinator_run_state_is_not_active")
+        }
+        if !runningDelegatedNodesWithoutBoundSessions.isEmpty {
+            warnings.append("running_delegated_nodes_without_bound_sessions")
+        }
+        if !missingBoundRows.isEmpty {
+            warnings.append("bound_sessions_missing_from_board_rows")
+        }
+        return warnings
+    }
+
+    private func compactMissionStatusNodeValue(
+        _ node: CoordinatorMissionPlanNode,
+        rowsBySessionID: [UUID: CoordinatorModeRow]
+    ) -> Value {
+        let boundRow = node.boundSessionID.flatMap { rowsBySessionID[$0] }
+        return .object([
+            "id": .string(node.id.uuidString),
+            "title": .string(node.title),
+            "status": .string(node.status.rawValue),
+            "execution_policy": .string(node.executionPolicy.rawValue),
+            "workflow_name": AgentMCPToolHelpers.stringOrNull(node.workflowHint?.name),
+            "bound_session_id": AgentMCPToolHelpers.stringOrNull(node.boundSessionID?.uuidString),
+            "bound_row_status_group": AgentMCPToolHelpers.stringOrNull(boundRow?.statusGroup.rawValue),
+            "bound_row_run_state": AgentMCPToolHelpers.stringOrNull(boundRow?.runState.rawValue)
         ])
     }
 

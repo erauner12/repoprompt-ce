@@ -626,6 +626,61 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertNil(status["routing_decisions_recent"]?.arrayValue?.first?.objectValue?["context_summary"]?.stringValue)
     }
 
+    func testMissionStatusCompactReturnsPollingSummaryAndLivenessWarnings() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let plan = CoordinatorMissionPlan(
+            revision: 2,
+            objective: "Ship provider cleanup",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Implementation",
+                    purpose: "Apply provider cleanup.",
+                    defaultPolicy: .freshWorktree,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Implement provider cleanup",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .running
+                )
+            ]
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            coordinatorRunState: .completed,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+        let status = try XCTUnwrap(object["mission_status"]?.objectValue)
+
+        XCTAssertNil(object["mission_plan"])
+        XCTAssertNil(object["coordinators"])
+        XCTAssertEqual(status["compact"]?.boolValue, true)
+        XCTAssertEqual(status["run_state"]?.stringValue, "completed")
+        XCTAssertEqual(status["plan"]?.objectValue?["status"]?.stringValue, "running")
+        XCTAssertEqual(status["active_nodes"]?.arrayValue?.count, 1)
+        XCTAssertEqual(status["running_delegated_nodes_without_bound_sessions"]?.arrayValue?.count, 1)
+        let warnings = try XCTUnwrap(status["liveness_warnings"]?.arrayValue?.compactMap(\.stringValue))
+        XCTAssertTrue(warnings.contains("coordinator_run_state_is_not_active_but_plan_has_active_nodes"))
+        XCTAssertTrue(warnings.contains("plan_is_running_but_coordinator_run_state_is_not_active"))
+        XCTAssertTrue(warnings.contains("running_delegated_nodes_without_bound_sessions"))
+    }
+
     func testMissionStatusFlagsBoundWorkflowMismatch() async throws {
         let coordinatorID = UUID()
         let workstreamID = UUID()
@@ -912,6 +967,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
     private func makeService(
         coordinatorIDs: [UUID],
         selectedID: UUID,
+        coordinatorRunState: AgentSessionRunState = .idle,
         startNew: @escaping () -> Void = {},
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
@@ -923,6 +979,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         makeService(
             coordinatorIDs: coordinatorIDs,
             selectedID: { selectedID },
+            coordinatorRunState: coordinatorRunState,
             startNew: startNew,
             submit: submit,
             pendingChild: pendingChild,
@@ -936,6 +993,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
     private func makeService(
         coordinatorIDs: [UUID],
         selectedID: @escaping () -> UUID,
+        coordinatorRunState: AgentSessionRunState = .idle,
         select: @escaping (UUID?) -> Void = { _ in },
         startNew: @escaping () -> Void = {},
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
@@ -951,6 +1009,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     Self.snapshot(
                         coordinatorIDs: coordinatorIDs,
                         selectedID: selectedID(),
+                        coordinatorRunState: coordinatorRunState,
                         rows: rows,
                         missionPlans: missionPlans()
                     )
@@ -969,6 +1028,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
     private static func snapshot(
         coordinatorIDs: [UUID],
         selectedID: UUID,
+        coordinatorRunState: AgentSessionRunState = .idle,
         rows: [CoordinatorModeRow] = [],
         missionPlans: [UUID: CoordinatorMissionPlan] = [:]
     ) -> CoordinatorModeSnapshot {
@@ -986,7 +1046,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 childCounts: .empty,
                 missionTemplate: nil,
                 missionPlan: missionPlans[id],
-                runState: .idle,
+                runState: coordinatorRunState,
                 updatedAt: Date(timeIntervalSince1970: TimeInterval(index + 1)),
                 lastActivityAt: Date(timeIntervalSince1970: TimeInterval(index + 1))
             )

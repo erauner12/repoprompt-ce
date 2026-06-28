@@ -243,7 +243,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             - `start_mission`: Start a fresh Coordinator Mission and submit the initial directive in one operation. Prefer this for external automation starting a new mission.
             - `submit`: Send a directive to the selected parent, to `coordinator_session_id`, or to a fresh parent when `new_parent=true`.
             - `mission_plan`: Create or update the selected Coordinator Mission's DAG-lite plan. Use this before delegated child starts. Workstream and node arrays are upserts: include only changed entries for existing IDs/titles; omitted entries are preserved. Routing decisions append/upsert by id.
-            - `mission_status`: Read back the selected Coordinator Mission's current plan, node status, and newest 20 routing decisions.
+            - `mission_status`: Read back the selected Coordinator Mission's current plan, node status, and newest 20 routing decisions. Use `compact=true` for polling from external automation.
 
             Coordinator-role agents should use `mission_plan` to record concrete user-specific deliverables before delegating child Agent Mode sessions. Workflows such as Investigate, Deep Plan, Orchestrate, and Review belong in node workflow metadata only when the node is intended to run that real workflow. Workflow-less read-only probe nodes may be launched with `agent_explore.start`; workflow-bearing nodes should be launched or steered through `agent_run` with the same workflow, and `mission_status` reports planned/actual workflow matches for bound nodes.
             """,
@@ -258,13 +258,14 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 **start_mission**: message (required)
                 **submit**: message (required), coordinator_session_id? or new_parent?
                 **mission_plan**: coordinator_session_id? plus one or more of objective, status, approval_state, workstreams, nodes, routing_decisions, events
-                **mission_status**: coordinator_session_id?; returns current plan state and routing_decisions_recent newest-first, max 20
+                **mission_status**: coordinator_session_id?, compact?; returns current plan state and routing_decisions_recent newest-first, max 20. compact=true returns a smaller polling summary with liveness warnings and short recent history.
                 """,
                 properties: [
                     "op": .string(description: "Operation.", enum: ["list", "select", "new", "start_mission", "submit", "mission_plan", "mission_status"]),
                     "coordinator_session_id": .string(description: "[select, submit, mission_plan, mission_status] Existing Coordinator parent session UUID. Defaults to the selected Coordinator for mission_plan/mission_status."),
                     "message": .string(description: "[start_mission, submit] Directive text to send to the fresh, selected, or requested Coordinator parent."),
                     "new_parent": .boolean(description: "[submit] Start from a blank Coordinator parent before sending this directive. Default false."),
+                    "compact": .boolean(description: "[mission_status] Return a small polling summary instead of the full Coordinator snapshot. Default false."),
                     "objective": .string(description: "[mission_plan] User-specific Mission objective."),
                     "status": .string(description: "[mission_plan] Mission status.", enum: ["draft", "approved", "running", "blocked", "completed", "stopped"]),
                     "approval_state": .string(description: "[mission_plan] Human approval state for the plan.", enum: ["not_required", "awaiting_approval", "approved", "revision_requested"]),
