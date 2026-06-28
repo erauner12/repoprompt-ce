@@ -72,6 +72,34 @@ struct CoordinatorChatMCPToolService {
                 "new_parent_pending": .bool(true)
             ])
 
+        case "start_mission":
+            guard let message = normalizedString(args["message"] ?? args["response"]),
+                  !message.isEmpty
+            else {
+                throw MCPError.invalidParams("message is required.")
+            }
+
+            environment.refresh()
+            environment.startNewCoordinatorRun()
+            let result = await environment.submitDirective(message)
+            environment.refresh()
+
+            switch result {
+            case .accepted:
+                return stateResponse(environment.snapshot(), extra: [
+                    "accepted": .bool(true),
+                    "routed_to": .string("coordinator"),
+                    "started_new_mission": .bool(true)
+                ])
+            case let .rejected(message):
+                return stateResponse(environment.snapshot(), extra: [
+                    "accepted": .bool(false),
+                    "routed_to": .string("coordinator"),
+                    "started_new_mission": .bool(true),
+                    "error": .string(message)
+                ])
+            }
+
         case "submit":
             let message = normalizedString(args["message"] ?? args["response"])
             let newParent = AgentMCPToolHelpers.parseBool(args["new_parent"]) ?? false
@@ -144,7 +172,7 @@ struct CoordinatorChatMCPToolService {
             ])
 
         default:
-            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, submit, mission_plan, mission_status.")
+            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, start_mission, submit, mission_plan, mission_status.")
         }
     }
 

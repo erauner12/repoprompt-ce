@@ -48,6 +48,40 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(object["selected_coordinator_session_id"]?.stringValue, secondID.uuidString)
     }
 
+    func testStartMissionStartsFreshCoordinatorAndSubmitsInitialDirective() async throws {
+        let coordinatorID = UUID()
+        var events: [String] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            startNew: {
+                events.append("start_new")
+            },
+            submit: { message in
+                events.append("submit:\(message)")
+                return .accepted
+            },
+            pendingChild: {
+                XCTFail("start_mission should not route to an existing pending child interaction")
+                return Self.pendingChildRow(parentCoordinatorID: coordinatorID)
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("start_mission"),
+            "message": .string("Plan the next safe repo change.")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(events, [
+            "start_new",
+            "submit:Plan the next safe repo change."
+        ])
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["started_new_mission"]?.boolValue, true)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "coordinator")
+    }
+
     func testMissionPlanUpdatesStateWithoutSubmittingChatTurn() async throws {
         let coordinatorID = UUID()
         let childID = UUID()
