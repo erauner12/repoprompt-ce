@@ -1414,9 +1414,9 @@ final class AgentModeRunServiceLifecycleTests: XCTestCase {
             self?.registerACPController(controller)
             return controller
         }
-        let policyInstaller: AgentModeViewModel.ConnectionPolicyInstaller = { clientName, _, _, _, _, _, _, runID, _, _, _, _, _ in
-            recorder.record("policy:\(clientName):\(runID?.uuidString ?? "nil")")
-            if autoSignalACPRouting, let runID {
+        let policyInstaller: AgentModeViewModel.ConnectionPolicyInstaller = { context in
+            recorder.record("policy:\(context.clientName):\(context.runID?.uuidString ?? "nil")")
+            if autoSignalACPRouting, let runID = context.runID {
                 await MCPRoutingWaiter.notifyRouted(runID: runID)
             }
         }

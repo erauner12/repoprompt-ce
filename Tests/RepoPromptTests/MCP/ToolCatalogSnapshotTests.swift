@@ -303,6 +303,12 @@ final class ToolCatalogSnapshotTests: XCTestCase {
             XCTAssertNotNil(agentRunProperties[field], "agent_run schema should advertise property \(field)")
             XCTAssertNotNil(agentExploreProperties[field], "agent_explore schema should advertise property \(field)")
         }
+        XCTAssertNotNil(agentRunProperties["mission_node_id"], "agent_run schema should advertise mission_node_id")
+        XCTAssertNotNil(agentExploreProperties["mission_node_id"], "agent_explore schema should advertise mission_node_id")
+        let agentRunMissionNodeDescription = try XCTUnwrap(agentRunProperties["mission_node_id"]?.objectValue?["description"]?.stringValue)
+        XCTAssertTrue(agentRunMissionNodeDescription.contains("pre-approval Investigate"))
+        XCTAssertTrue(agentRunMissionNodeDescription.contains("Deep Plan"))
+        XCTAssertTrue(agentRunMissionNodeDescription.contains("plan_critique"))
 
         let exploreOpEnum = agentExploreProperties["op"]?.objectValue?["enum"]?.arrayValue?.compactMap(\.stringValue) ?? []
         XCTAssertEqual(exploreOpEnum, ["start", "poll", "wait", "cancel"])
@@ -322,6 +328,21 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         ] {
             XCTAssertNil(agentExploreProperties[field], "agent_explore schema must not advertise run-only property \(field)")
         }
+    }
+
+    func testCoordinatorChatSchemaAdvertisesFollowUpMissionFields() async throws {
+        let window = Self.makeWindowWithoutAutoStart()
+        let tools = await window.mcpServer.windowMCPTools
+        let coordinatorChat = try XCTUnwrap(tools.first { $0.name == MCPWindowToolName.coordinatorChat })
+        let properties = try Self.schemaProperties(for: coordinatorChat)
+
+        XCTAssertNotNil(properties["predecessor_mission_id"])
+        XCTAssertNotNil(properties["predecessor_title"])
+        XCTAssertNotNil(properties["predecessor_summary"])
+        XCTAssertNotNil(properties["mission_key"])
+        let predecessorIDDescription = try XCTUnwrap(properties["predecessor_mission_id"]?.objectValue?["description"]?.stringValue)
+        XCTAssertTrue(predecessorIDDescription.contains("start_mission"))
+        XCTAssertTrue(predecessorIDDescription.contains("mission_plan"))
     }
 
     private static func makeWindowWithoutAutoStart() -> WindowState {
@@ -481,12 +502,13 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         "14|manage_worktree|enabled=true|ann=title=nil,readOnly=false,destructive=true,idempotent=nil,openWorld=false|desc=857ab8975667e3d2e5b35a09c7415e07ca0ab2f0ff16de6895170d4d1b47a820|schema=9263f9f047982b3709d92040f749804d69928d222ce46038a4171ded34d12bc6",
         "15|context_builder|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=d83348b6b803b303965401075041ddc5d7dcea3512020afa3f352c04413750fb|schema=2da87e6e171809a1e0eb0614fa8f7db2f91311f655f8427745060be80755da1f",
         "16|ask_user|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=6b3870ae4848eb01c73de9fbbdf2ed1782487db150260469853757f799257ee0|schema=080446bb7697cf5f4cd31f07b42ecff8ab29edc8501ee0e84e61426748569156",
-        "17|agent_explore|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=698ab006db47713a51f394bfe3f832ada8637440d8acb4715be5430ec380cef8|schema=7b3c869b0c959c1c162dfadfd4ea578b05ed0834b2e930d177a8c38f96c31a4b",
-        "18|agent_run|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=52ef9e56d0aa35f1523bb6700ce9ced3512749401b4ea409d0de8cf3d007855b|schema=e2b5bce34fa512aca293fffec7eaa46a9639feb4e840546c12d3554b8a2d514b",
+        "17|agent_explore|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=0e8a797c836d23c3c085bc400d8e3dbab02144690baeab37689c4d1caa454f72|schema=2c8c2927050343e25b3868290db071e57a1754f2390d0c9f584c38a6f448fd33",
+        "18|agent_run|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=b6ff4d5a7b55131656557000d6196c5bac46dcdeb56fffcfb4420ce8fd36dcea|schema=b046889882a5994e137378ada5ae3dd71438be9067e3a0019f181a9c721c6364",
         "19|agent_manage|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=03e16bee789cb9343f6b1b16cb4d472aedd3d811a43f6f95ad8ea5e8f69dc28d|schema=f5bc6b05cf0683ef3acb7a82ee4a14b75fadf26f32c56b0314be1424688a2ba5",
-        "20|share_thoughts|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=b1ac755b39a4ac2d8a621e78801a258c5d95ec2ff4e063f600081fa27891a852|schema=a5dea0c92fd4da06a15f991e1e8a287235ca681ae381cef1b594bc7c07e538d7",
-        "21|set_status|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=19bbfd6fc47639e02295de4e9289ea77f25c6a91ad150998726768b84c266783|schema=0854d727c81f1eb8fa0a14edb9d6ab8bb58974d919cc53150bd72473f1ae0196",
-        "22|wait_for_next_user_instruction|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=3a59a13a0026414ae04dd21d730a7144b91c67146dce77340fe730c865bea3d7|schema=15335c3bbadf042948d0a1ba52f0fcb01125428dda4952dbda418051904d82ef"
+        "20|coordinator_chat|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=ba3ec3ecfde832a85390c0d74cc730a4059437ec7be2c11e55698be46241bb29|schema=b8820a8105f2d3687812f9aa5d5b0e716c9fbe82dfc5805736cf53ae9be193c9",
+        "21|share_thoughts|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=b1ac755b39a4ac2d8a621e78801a258c5d95ec2ff4e063f600081fa27891a852|schema=a5dea0c92fd4da06a15f991e1e8a287235ca681ae381cef1b594bc7c07e538d7",
+        "22|set_status|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=19bbfd6fc47639e02295de4e9289ea77f25c6a91ad150998726768b84c266783|schema=0854d727c81f1eb8fa0a14edb9d6ab8bb58974d919cc53150bd72473f1ae0196",
+        "23|wait_for_next_user_instruction|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=3a59a13a0026414ae04dd21d730a7144b91c67146dce77340fe730c865bea3d7|schema=15335c3bbadf042948d0a1ba52f0fcb01125428dda4952dbda418051904d82ef"
     ]
 
     private static func signatures(for tools: [RepoPrompt.Tool]) throws -> [String] {

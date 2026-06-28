@@ -13,16 +13,18 @@ struct ContentViewToolbarContent: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItem(placement: .automatic) {
             if isMainSurfaceSwitchingAvailable {
-                Picker("Main Surface", selection: $mainSurfaceSelection) {
-                    ForEach(MainSurface.allCases) { surface in
-                        Label(surface.displayName, systemImage: surface.systemImage)
-                            .tag(surface)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 86)
-                .accessibilityLabel("Main surface")
+                MainSurfaceSegmentedSwitcher(
+                    selection: $mainSurfaceSelection,
+                    isAvailable: isMainSurfaceSwitchingAvailable,
+                    surfaces: [.coordinatorMode, .agentMode]
+                )
+                .frame(width: 232)
             }
+        }
+
+        ToolbarItem(placement: .automatic) {
+            Spacer()
+                .frame(minWidth: 28, idealWidth: 56, maxWidth: 96)
         }
 
         // Recommendation wizard button

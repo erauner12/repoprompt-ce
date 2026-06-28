@@ -191,6 +191,8 @@ struct AgentSession: Codable, Identifiable {
     /// Whether this session was originally created by an MCP client (vs the user in the UI).
     /// Used to scope cleanup operations to MCP-originated sessions only.
     var isMCPOriginated: Bool
+    /// Whether this persisted session is the layer-above Coordinator runtime.
+    var isCoordinatorRuntime: Bool
 
     /// Persisted per-session logical-root to worktree bindings.
     /// Runtime cwd/path projection is resolved by downstream worktree-system layers.
@@ -199,6 +201,9 @@ struct AgentSession: Codable, Identifiable {
     /// Persisted resumable worktree-merge operations for this Agent session.
     /// Patch contents live in merge preview artifacts, not in the session JSON.
     var worktreeMergeOperations: [AgentSessionWorktreeMergeOperation]
+
+    /// Persisted follow-through bookkeeping for layer-above Coordinator runtimes.
+    var coordinatorFollowThroughState: CoordinatorFollowThroughState?
 
     /// Pending handoff payload (injected into the provider-facing text on the destination tab's
     /// first user send, then cleared). Persisted so it survives close/reopen.
@@ -241,8 +246,10 @@ struct AgentSession: Codable, Identifiable {
         pendingHandoffSourceItemID: UUID? = nil,
         pendingHandoffDefersProviderLockUntilSend: Bool = false,
         isMCPOriginated: Bool = false,
+        isCoordinatorRuntime: Bool = false,
         worktreeBindings: [AgentSessionWorktreeBinding] = [],
-        worktreeMergeOperations: [AgentSessionWorktreeMergeOperation] = []
+        worktreeMergeOperations: [AgentSessionWorktreeMergeOperation] = [],
+        coordinatorFollowThroughState: CoordinatorFollowThroughState? = nil
     ) {
         self.id = id
         self.serializationVersion = serializationVersion
@@ -277,8 +284,10 @@ struct AgentSession: Codable, Identifiable {
         self.pendingHandoffSourceItemID = pendingHandoffSourceItemID
         self.pendingHandoffDefersProviderLockUntilSend = pendingHandoffDefersProviderLockUntilSend
         self.isMCPOriginated = isMCPOriginated
+        self.isCoordinatorRuntime = isCoordinatorRuntime
         self.worktreeBindings = worktreeBindings
         self.worktreeMergeOperations = worktreeMergeOperations
+        self.coordinatorFollowThroughState = coordinatorFollowThroughState
     }
 
     enum CodingKeys: String, CodingKey {
@@ -315,8 +324,10 @@ struct AgentSession: Codable, Identifiable {
         case pendingHandoffSourceItemID
         case pendingHandoffDefersProviderLockUntilSend
         case isMCPOriginated
+        case isCoordinatorRuntime
         case worktreeBindings
         case worktreeMergeOperations
+        case coordinatorFollowThroughState
     }
 
     init(from decoder: Decoder) throws {
@@ -356,8 +367,10 @@ struct AgentSession: Codable, Identifiable {
         pendingHandoffSourceItemID = try container.decodeIfPresent(UUID.self, forKey: .pendingHandoffSourceItemID)
         pendingHandoffDefersProviderLockUntilSend = try container.decodeIfPresent(Bool.self, forKey: .pendingHandoffDefersProviderLockUntilSend) ?? false
         isMCPOriginated = try container.decodeIfPresent(Bool.self, forKey: .isMCPOriginated) ?? false
+        isCoordinatorRuntime = try container.decodeIfPresent(Bool.self, forKey: .isCoordinatorRuntime) ?? false
         worktreeBindings = try container.decodeIfPresent([AgentSessionWorktreeBinding].self, forKey: .worktreeBindings) ?? []
         worktreeMergeOperations = try container.decodeIfPresent([AgentSessionWorktreeMergeOperation].self, forKey: .worktreeMergeOperations) ?? []
+        coordinatorFollowThroughState = try container.decodeIfPresent(CoordinatorFollowThroughState.self, forKey: .coordinatorFollowThroughState)
     }
 
     /// Coalesces whitespace and falls back to "Agent Session" when empty.

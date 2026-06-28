@@ -485,7 +485,7 @@ final class MCPServerViewModel: ObservableObject {
             endAgentRunWait: { [self] token, completion in
                 endAgentRunWaitScope(token, completion: completion)
             },
-            startRun: { target, message, metadata, bindCurrentRequestToTab, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, workflow in
+            startRun: { target, message, metadata, bindCurrentRequestToTab, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, allowsAgentExternalControlTools, workflow in
                 try await AgentExternalMCPRunStarter.start(
                     target: target,
                     message: message,
@@ -496,6 +496,7 @@ final class MCPServerViewModel: ObservableObject {
                     modelRaw: modelRaw,
                     reasoningEffortRaw: reasoningEffortRaw,
                     taskLabelKind: taskLabelKind,
+                    allowsAgentExternalControlTools: allowsAgentExternalControlTools,
                     workflow: workflow
                 )
             }
@@ -531,7 +532,7 @@ final class MCPServerViewModel: ObservableObject {
             endAgentRunWait: { [self] token, completion in
                 endAgentRunWaitScope(token, completion: completion)
             },
-            startRun: { target, message, metadata, bindCurrentRequestToTab, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, workflow in
+            startRun: { target, message, metadata, bindCurrentRequestToTab, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, allowsAgentExternalControlTools, workflow in
                 try await AgentExternalMCPRunStarter.start(
                     target: target,
                     message: message,
@@ -542,6 +543,7 @@ final class MCPServerViewModel: ObservableObject {
                     modelRaw: modelRaw,
                     reasoningEffortRaw: reasoningEffortRaw,
                     taskLabelKind: taskLabelKind,
+                    allowsAgentExternalControlTools: allowsAgentExternalControlTools,
                     workflow: workflow
                 )
             }
@@ -562,6 +564,14 @@ final class MCPServerViewModel: ObservableObject {
             bindCurrentRequestToTab: { [self] tabID, metadata in
                 try await bindCurrentRequestToTabIfPossible(tabID: tabID, metadata: metadata)
             }
+        )
+    }
+
+    private var coordinatorChatToolService: CoordinatorChatMCPToolService {
+        CoordinatorChatMCPToolService(
+            toolName: MCPWindowToolName.coordinatorChat,
+            requireTargetWindow: { [self] in try requireTargetWindow() },
+            captureRequestMetadata: { [self] in await captureRequestMetadata() }
         )
     }
 
@@ -786,6 +796,10 @@ final class MCPServerViewModel: ObservableObject {
         executeAgentManage: { [weak self] args in
             guard let self else { throw MCPError.internalError("Window deallocated while executing agent_manage") }
             return try await agentManageToolService.execute(args: args)
+        },
+        executeCoordinatorChat: { [weak self] args in
+            guard let self else { throw MCPError.internalError("Window deallocated while executing coordinator_chat") }
+            return try await coordinatorChatToolService.execute(args: args)
         },
         requireTargetWindow: { [weak self] in
             guard let self else { throw MCPError.internalError("Window deallocated while resolving target window") }

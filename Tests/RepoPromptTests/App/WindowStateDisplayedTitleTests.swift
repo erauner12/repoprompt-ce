@@ -84,6 +84,54 @@ final class WindowStateDisplayedTitleTests: XCTestCase {
         await cleanup(window: window, rootURL: rootURL)
     }
 
+    func testCoordinatorModeWindowTitleUsesSurfaceInsteadOfActiveAgentSession() async throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WindowStateDisplayedTitleTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+
+        let previousAutoStart = GlobalSettingsStore.shared.mcpAutoStart()
+        GlobalSettingsStore.shared.setMCPAutoStart(false, commit: false)
+        let window = WindowState()
+        let nsWindow = makeTestWindow()
+        window.attachWindow(nsWindow)
+        WindowStatesManager.shared.registerWindowState(window)
+        GlobalSettingsStore.shared.setMCPAutoStart(previousAutoStart, commit: false)
+        await window.workspaceManager.awaitInitialized()
+
+        do {
+            let workspaceName = "Coordinator Title \(UUID().uuidString.prefix(8))"
+            let workspace = window.workspaceManager.createWorkspace(
+                name: workspaceName,
+                repoPaths: [rootURL.path],
+                ephemeral: true
+            )
+            await window.workspaceManager.switchWorkspace(
+                to: workspace,
+                saveState: false,
+                reason: "windowStateCoordinatorTitleTests"
+            )
+            let activeTabID = try XCTUnwrap(window.promptManager.activeComposeTabID)
+
+            window.agentModeViewModel.renameSession(tabID: activeTabID, to: "Active Parent Session")
+            try await waitForDisplayedTitle(
+                window,
+                and: nsWindow,
+                equalTo: "Active Parent Session — \(workspaceName)"
+            )
+
+            window.setMainSurfaceForWindowTitle(.coordinatorMode)
+            try await waitForDisplayedTitle(
+                window,
+                and: nsWindow,
+                equalTo: workspaceName
+            )
+        } catch {
+            await cleanup(window: window, rootURL: rootURL)
+            throw error
+        }
+        await cleanup(window: window, rootURL: rootURL)
+    }
+
     private func makeTestWindow() -> NSWindow {
         NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 640, height: 420),

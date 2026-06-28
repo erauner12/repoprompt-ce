@@ -505,7 +505,22 @@ extension AgentSessionDataService {
             let orderedSortStartMS = WorkspaceRestorePerfLog.timestampMSIfEnabled()
         #endif
 
-        let orderedPreferredEntries = preferredEntryByTabID.values.sorted { lhs, rhs in
+        let enrichedEntriesBySessionID = entriesBySessionID.mapValues { entry in
+            var enriched = entry
+            if enriched.workflowSummary == nil {
+                enriched.workflowSummary = recordBySessionID[entry.id]?.workflowSummary
+            }
+            return enriched
+        }
+        let enrichedPreferredEntryByTabID = preferredEntryByTabID.mapValues { entry in
+            var enriched = entry
+            if enriched.workflowSummary == nil {
+                enriched.workflowSummary = recordBySessionID[entry.id]?.workflowSummary
+            }
+            return enriched
+        }
+
+        let orderedPreferredEntries = enrichedPreferredEntryByTabID.values.sorted { lhs, rhs in
             let lhsActivity = AgentSessionRestoreSupport.sidebarActivityDate(
                 lastUserMessageAt: lhs.lastUserMessageAt,
                 savedAt: lhs.savedAt
@@ -553,8 +568,8 @@ extension AgentSessionDataService {
         #endif
 
         return SidebarIndexProjection(
-            entriesBySessionID: entriesBySessionID,
-            preferredEntryByTabID: preferredEntryByTabID,
+            entriesBySessionID: enrichedEntriesBySessionID,
+            preferredEntryByTabID: enrichedPreferredEntryByTabID,
             orderedPreferredEntries: orderedPreferredEntries
         )
     }

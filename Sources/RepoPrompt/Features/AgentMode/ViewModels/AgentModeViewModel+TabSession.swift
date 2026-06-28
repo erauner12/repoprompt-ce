@@ -145,12 +145,25 @@ extension AgentModeViewModel {
         }
 
         var isMCPInstructionDispatchInProgress: Bool = false
+        /// Durable marker for the layer-above Coordinator runtime.
+        var isCoordinatorRuntime: Bool = false
+        /// Compatibility name used by the production-demo Coordinator surface.
+        var isCoordinatorRuntimeDemo: Bool {
+            get { isCoordinatorRuntime }
+            set { isCoordinatorRuntime = newValue }
+        }
+
+        /// Demo-only marker for Coordinator housekeeping children that should not be
+        /// presented as supervised delegated work.
+        var isCoordinatorInternalSession: Bool = false
         /// Whether this session was originally created by an MCP client.
         var isMCPOriginated: Bool = false
         /// Persisted logical-root to worktree bindings for this Agent session.
         var worktreeBindings: [AgentSessionWorktreeBinding] = []
         /// Persisted resumable worktree-merge operations for this Agent session.
         var worktreeMergeOperations: [AgentSessionWorktreeMergeOperation] = []
+        /// Persisted follow-through bookkeeping for layer-above Coordinator runtimes.
+        var coordinatorFollowThroughState: CoordinatorFollowThroughState?
         /// Permission profile for the current session. Set to `.mcpSafeDefaults`
         /// when MCP control is active, `.userConfigured` otherwise.
         var permissionProfile: AgentPermissionProfile = .userConfigured

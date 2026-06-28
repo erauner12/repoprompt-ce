@@ -50,21 +50,7 @@ final class AgentModeViewModel: ObservableObject {
     typealias HeadlessProviderFactory = (_ agent: AgentProviderKind, _ modelString: String?) -> HeadlessAgentProvider
     typealias ACPProviderFactory = (_ agent: AgentProviderKind, _ modelString: String?) -> (any ACPAgentProvider)?
     typealias ACPControllerFactory = (_ provider: any ACPAgentProvider, _ runRequest: ACPRunRequest) throws -> ACPAgentSessionController
-    typealias ConnectionPolicyInstaller = (
-        _ clientName: String,
-        _ windowID: Int,
-        _ restrictedTools: Set<String>,
-        _ oneShot: Bool,
-        _ reason: String?,
-        _ ttl: TimeInterval,
-        _ tabID: UUID?,
-        _ runID: UUID?,
-        _ additionalTools: Set<String>?,
-        _ purpose: MCPRunPurpose,
-        _ taskLabelKind: AgentModelCatalog.TaskLabelKind?,
-        _ allowsAgentExternalControlTools: Bool,
-        _ requiresExpectedAgentPID: Bool
-    ) async -> Void
+    typealias ConnectionPolicyInstaller = (_ context: AgentModeMCPPolicyContext) async -> Void
     typealias MCPServerEnabler = () async -> Void
     typealias MCPRunRoutingCleaner = (_ runID: UUID, _ windowID: Int, _ reason: String) async -> Void
     typealias MCPRunToolCanceller = (_ runID: UUID, _ reason: String?) -> Int
@@ -476,18 +462,23 @@ final class AgentModeViewModel: ObservableObject {
         didSet {
             syncSidebarUIState(refresh: true, reason: .sessionIndex)
             scheduleSidebarAutoArchiveIfReady(reason: .sessionIndexChanged)
+            refreshCoordinatorModeIfVisible()
         }
     }
 
     /// Cached last-user-message timestamps for tabs (used for list ordering before sessions load)
     @Published private(set) var sessionListSortDates: [UUID: Date] = [:] {
-        didSet { syncSidebarUIState(refresh: true, reason: .sortDates) }
+        didSet {
+            syncSidebarUIState(refresh: true, reason: .sortDates)
+            refreshCoordinatorModeIfVisible()
+        }
     }
 
     @Published private(set) var sessionListCacheReady: Bool = false {
         didSet {
             guard sessionListCacheReady != oldValue else { return }
             syncSidebarUIState(refresh: true, reason: .sessionList)
+            refreshCoordinatorModeIfVisible()
         }
     }
 
@@ -515,6 +506,7 @@ final class AgentModeViewModel: ObservableObject {
         didSet {
             syncSidebarUIState(refresh: true, reason: .runState)
             scheduleSidebarAutoArchiveIfReady(reason: .runProtectionChanged)
+            refreshCoordinatorModeForChildLifecycleIfVisible()
         }
     }
 
@@ -525,6 +517,7 @@ final class AgentModeViewModel: ObservableObject {
             syncSidebarUIState(refresh: true, reason: .mcpControl)
             syncComposerUIState()
             scheduleSidebarAutoArchiveIfReady(reason: .mcpProtectionChanged)
+            refreshCoordinatorModeForChildLifecycleIfVisible()
         }
     }
 
@@ -537,7 +530,21 @@ final class AgentModeViewModel: ObservableObject {
     private let workspaceFileContextStore: WorkspaceFileContextStore?
     weak var workspaceManager: WorkspaceManagerViewModel?
     private weak var mcpServer: MCPServerViewModel?
-    lazy var coordinatorModeViewModel: CoordinatorModeViewModel = makeCoordinatorModeViewModel()
+    private var _coordinatorModeViewModel: CoordinatorModeViewModel?
+    var coordinatorModeViewModel: CoordinatorModeViewModel {
+        if let _coordinatorModeViewModel {
+            return _coordinatorModeViewModel
+        }
+        let viewModel = makeCoordinatorModeViewModel()
+        _coordinatorModeViewModel = viewModel
+        return viewModel
+    }
+
+    var visibleCoordinatorModeViewModel: CoordinatorModeViewModel? {
+        guard _coordinatorModeViewModel?.isVisible == true else { return nil }
+        return _coordinatorModeViewModel
+    }
+
     private let dataService = AgentSessionDataService.shared
     private var sidebarPrioritizedIndexBuilder: SidebarPrioritizedIndexBuilder = { request in
         try await AgentSessionDataService.shared.buildPrioritizedSidebarIndex(request)
@@ -1330,34 +1337,23 @@ final class AgentModeViewModel: ObservableObject {
     }
 
     private nonisolated static func defaultConnectionPolicyInstaller(
-        clientName: String,
-        windowID: Int,
-        restrictedTools: Set<String>,
-        oneShot: Bool,
-        reason: String?,
-        ttl: TimeInterval,
-        tabID: UUID?,
-        runID: UUID?,
-        additionalTools: Set<String>?,
-        purpose: MCPRunPurpose,
-        taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
-        allowsAgentExternalControlTools: Bool = false,
-        requiresExpectedAgentPID: Bool = false
+        _ context: AgentModeMCPPolicyContext
     ) async {
         await ServerNetworkManager.shared.installClientConnectionPolicy(
-            for: clientName,
-            windowID: windowID,
-            restrictedTools: restrictedTools,
-            oneShot: oneShot,
-            reason: reason,
-            ttl: ttl,
-            tabID: tabID,
-            runID: runID,
-            additionalTools: additionalTools,
-            purpose: purpose,
-            taskLabelKind: taskLabelKind,
-            allowsAgentExternalControlTools: allowsAgentExternalControlTools,
-            requiresExpectedAgentPID: requiresExpectedAgentPID
+            for: context.clientName,
+            windowID: context.windowID,
+            restrictedTools: context.restrictedTools,
+            oneShot: context.oneShot,
+            reason: context.reason,
+            ttl: context.ttl,
+            tabID: context.tabID,
+            runID: context.runID,
+            additionalTools: context.additionalTools,
+            purpose: context.purpose,
+            taskLabelKind: context.taskLabelKind,
+            allowsAgentExternalControlTools: context.allowsAgentExternalControlTools,
+            isCoordinatorRuntime: context.isCoordinatorRuntime,
+            requiresExpectedAgentPID: context.requiresExpectedAgentPID
         )
     }
 
@@ -1440,22 +1436,8 @@ final class AgentModeViewModel: ObservableObject {
         acpControllerFactory = { provider, runRequest in
             try ACPAgentSessionController(provider: provider, runRequest: runRequest)
         }
-        connectionPolicyInstaller = { clientName, windowID, restrictedTools, oneShot, reason, ttl, tabID, runID, additionalTools, purpose, taskLabelKind, allowsAgentExternalControlTools, requiresExpectedAgentPID in
-            await Self.defaultConnectionPolicyInstaller(
-                clientName: clientName,
-                windowID: windowID,
-                restrictedTools: restrictedTools,
-                oneShot: oneShot,
-                reason: reason,
-                ttl: ttl,
-                tabID: tabID,
-                runID: runID,
-                additionalTools: additionalTools,
-                purpose: purpose,
-                taskLabelKind: taskLabelKind,
-                allowsAgentExternalControlTools: allowsAgentExternalControlTools,
-                requiresExpectedAgentPID: requiresExpectedAgentPID
-            )
+        connectionPolicyInstaller = { context in
+            await Self.defaultConnectionPolicyInstaller(context)
         }
         mcpServerEnabler = { [weak mcpServer] in
             guard let mcpServer else { return }
@@ -1564,22 +1546,8 @@ final class AgentModeViewModel: ObservableObject {
             acpControllerFactory: @escaping ACPControllerFactory = { provider, runRequest in
                 try ACPAgentSessionController(provider: provider, runRequest: runRequest)
             },
-            connectionPolicyInstaller: @escaping ConnectionPolicyInstaller = { clientName, windowID, restrictedTools, oneShot, reason, ttl, tabID, runID, additionalTools, purpose, taskLabelKind, allowsAgentExternalControlTools, requiresExpectedAgentPID in
-                await AgentModeViewModel.defaultConnectionPolicyInstaller(
-                    clientName: clientName,
-                    windowID: windowID,
-                    restrictedTools: restrictedTools,
-                    oneShot: oneShot,
-                    reason: reason,
-                    ttl: ttl,
-                    tabID: tabID,
-                    runID: runID,
-                    additionalTools: additionalTools,
-                    purpose: purpose,
-                    taskLabelKind: taskLabelKind,
-                    allowsAgentExternalControlTools: allowsAgentExternalControlTools,
-                    requiresExpectedAgentPID: requiresExpectedAgentPID
-                )
+            connectionPolicyInstaller: @escaping ConnectionPolicyInstaller = { context in
+                await AgentModeViewModel.defaultConnectionPolicyInstaller(context)
             },
             mcpRunRoutingCleaner: @escaping MCPRunRoutingCleaner = { runID, windowID, reason in
                 await AgentModeViewModel.defaultMCPRunRoutingCleaner(
@@ -2888,6 +2856,9 @@ final class AgentModeViewModel: ObservableObject {
             // deferral cannot make durability depend on derived UI refresh work.
             scheduleSave(for: session.tabID)
             scheduleDerivedTranscriptRefresh(for: session, reason: .liveMutation, mutation: mutation)
+            if session.isCoordinatorRuntime {
+                refreshCoordinatorModeForChildLifecycleIfVisible()
+            }
         }
         newSession.onRunStateChanged = { [weak self] session in
             guard let self else { return }
@@ -3074,6 +3045,7 @@ final class AgentModeViewModel: ObservableObject {
         session.selectedModelRaw = normalizedSelection.modelRaw
         session.selectedReasoningEffortRaw = indexEntry.agentReasoningEffortRaw
         session.autoEditEnabled = indexEntry.autoEditEnabled
+        session.isCoordinatorRuntime = indexEntry.isCoordinatorRuntime
     }
 
     func applyTranscriptViewportBindingState(
@@ -3328,7 +3300,7 @@ final class AgentModeViewModel: ObservableObject {
 
     /// Single creation point for attaching an Agent session identity to a compose tab.
     @discardableResult
-    private func ensureSessionBoundToTab(_ session: TabSession) -> UUID? {
+    func ensureSessionBoundToTab(_ session: TabSession) -> UUID? {
         if let existing = session.activeAgentSessionID {
             return existing
         }
@@ -3874,8 +3846,10 @@ final class AgentModeViewModel: ObservableObject {
         session.hasSentFirstMessage = payload.transcript.turns.contains { $0.request != nil }
         session.parentSessionID = agentSession.parentSessionID
         session.isMCPOriginated = agentSession.isMCPOriginated
+        session.isCoordinatorRuntime = agentSession.isCoordinatorRuntime
         session.worktreeBindings = agentSession.worktreeBindings
         session.worktreeMergeOperations = agentSession.worktreeMergeOperations
+        session.coordinatorFollowThroughState = agentSession.coordinatorFollowThroughState
         session.nextSequenceIndex = payload.transcript.nextSequenceIndex
         session.lastActivityAt = agentSession.savedAt
         session.lastUserMessageAt = payload.lastUserMessageAt
@@ -4260,6 +4234,7 @@ final class AgentModeViewModel: ObservableObject {
 
     private func handleObservedMCPStateChange(for session: TabSession) {
         guard !session.terminalCommitInProgress else { return }
+        refreshCoordinatorModeForChildLifecycleIfVisible()
         // Terminal waiter publication is owned exclusively by AgentRunTerminalCommitBarrier.
         // Legacy/special-purpose state changes without a canonical revision must not race it.
         if session.runState.isTerminalForCommit {
@@ -5143,6 +5118,9 @@ final class AgentModeViewModel: ObservableObject {
         guard sourceSession.parentSessionID != nil else {
             return
         }
+        if controlContext.allowsAgentExternalControlTools {
+            return
+        }
         if isExploreOnly {
             return
         }
@@ -5734,8 +5712,12 @@ final class AgentModeViewModel: ObservableObject {
                 parentSessionID: parentSessionID,
                 hasUnknownConversationContent: existingEntry.hasUnknownConversationContent,
                 isMCPOriginated: existingEntry.isMCPOriginated || session.isMCPOriginated,
+                isCoordinatorRuntime: existingEntry.isCoordinatorRuntime || session.isCoordinatorRuntime,
+                coordinatorMissionTemplate: existingEntry.coordinatorMissionTemplate,
+                coordinatorMissionPlan: existingEntry.coordinatorMissionPlan,
                 worktreeBindingSummaries: existingEntry.worktreeBindingSummaries,
-                activeWorktreeMergeSummaries: existingEntry.activeWorktreeMergeSummaries
+                activeWorktreeMergeSummaries: existingEntry.activeWorktreeMergeSummaries,
+                workflowSummary: existingEntry.workflowSummary
             )
             guard repairedEntry != existingEntry else { return }
             applyLocalSessionIndexUpsert(repairedEntry)
@@ -5754,7 +5736,8 @@ final class AgentModeViewModel: ObservableObject {
             agentReasoningEffortRaw: session.selectedReasoningEffortRaw,
             autoEditEnabled: session.autoEditEnabled,
             parentSessionID: parentSessionID,
-            isMCPOriginated: session.isMCPOriginated
+            isMCPOriginated: session.isMCPOriginated,
+            isCoordinatorRuntime: session.isCoordinatorRuntime
         )
     }
 
@@ -5869,7 +5852,7 @@ final class AgentModeViewModel: ObservableObject {
         return .init(tabID: hydrated.tabID, sessionID: resolvedSessionID, origin: .existingSession)
     }
 
-    private func mcpCreateBackgroundSessionTab(name: String?) async throws -> UUID {
+    func mcpCreateBackgroundSessionTab(name: String?) async throws -> UUID {
         guard let promptManager else {
             throw MCPError.internalError("Prompt manager unavailable.")
         }
@@ -5881,6 +5864,12 @@ final class AgentModeViewModel: ObservableObject {
             throw MCPError.invalidParams("Background agent session capacity is full. Wait for detached agents to finish, close or stash idle agent sessions, or raise agentMode.maxBackgroundAgentComposeTabs.")
         }
         return createdTab.id
+    }
+
+    func mcpCreateCoordinatorRuntimeTab(name: String?) async throws -> UUID {
+        let tabID = try await mcpCreateBackgroundSessionTab(name: name)
+        await mcpMarkCoordinatorRuntime(tabID: tabID, isCoordinatorRuntime: true)
+        return tabID
     }
 
     func mcpConfigureSession(
@@ -5982,6 +5971,7 @@ final class AgentModeViewModel: ObservableObject {
         sessionID: UUID,
         originatingConnectionID: UUID?,
         taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
+        allowsAgentExternalControlTools: Bool = false,
         startPending: Bool = false
     ) async throws {
         let session = await ensureSessionReady(tabID: tabID)
@@ -6037,7 +6027,8 @@ final class AgentModeViewModel: ObservableObject {
             suppressUserNotifications: true,
             forceAutoEditEnabled: true,
             autoEditEnabledBeforeOverride: priorAutoEditEnabled,
-            taskLabelKind: taskLabelKind
+            taskLabelKind: taskLabelKind,
+            allowsAgentExternalControlTools: allowsAgentExternalControlTools
         )
         session.mcpFollowUpRunPending = startPending
         mcpControlledTabIDs.insert(tabID)
@@ -9112,8 +9103,12 @@ final class AgentModeViewModel: ObservableObject {
         parentSessionID: UUID? = nil,
         hasUnknownConversationContent: Bool = false,
         isMCPOriginated: Bool = false,
+        isCoordinatorRuntime: Bool = false,
+        coordinatorMissionTemplate: CoordinatorMissionTemplateSummary? = nil,
+        coordinatorMissionPlan: CoordinatorMissionPlan? = nil,
         worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary] = [],
-        activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary] = []
+        activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary] = [],
+        workflowSummary: AgentSessionWorkflowSummary? = nil
     ) {
         applyLocalSessionIndexUpsert(AgentSessionIndexEntry(
             id: sessionID,
@@ -9130,8 +9125,12 @@ final class AgentModeViewModel: ObservableObject {
             parentSessionID: parentSessionID,
             hasUnknownConversationContent: hasUnknownConversationContent,
             isMCPOriginated: isMCPOriginated,
+            isCoordinatorRuntime: isCoordinatorRuntime,
+            coordinatorMissionTemplate: coordinatorMissionTemplate,
+            coordinatorMissionPlan: coordinatorMissionPlan,
             worktreeBindingSummaries: worktreeBindingSummaries,
-            activeWorktreeMergeSummaries: activeWorktreeMergeSummaries
+            activeWorktreeMergeSummaries: activeWorktreeMergeSummaries,
+            workflowSummary: workflowSummary
         ))
     }
 
@@ -10421,6 +10420,44 @@ final class AgentModeViewModel: ObservableObject {
         scheduleSave(for: tabID)
     }
 
+    func mcpMarkCoordinatorInternalSession(tabID: UUID, isCoordinatorInternal: Bool) async {
+        let session = await ensureSessionReady(tabID: tabID)
+        session.isCoordinatorInternalSession = isCoordinatorInternal
+    }
+
+    func mcpMarkCoordinatorRuntime(tabID: UUID, isCoordinatorRuntime: Bool) async {
+        let session = await ensureSessionReady(tabID: tabID)
+        session.isCoordinatorRuntime = isCoordinatorRuntime
+        session.isDirty = true
+        if let sessionID = session.activeAgentSessionID {
+            if var entry = ownerValidatedSessionIndex[sessionID] {
+                entry.isCoordinatorRuntime = isCoordinatorRuntime
+                applyLocalSessionIndexUpsert(entry)
+            }
+            scheduleSave(for: tabID)
+        }
+    }
+
+    func mcpIsCoordinatorRuntime(sessionID: UUID?) -> Bool {
+        guard let sessionID else { return false }
+        if ownerValidatedSessionIndex[sessionID]?.isCoordinatorRuntime == true {
+            return true
+        }
+        return sessions.values.contains { session in
+            session.activeAgentSessionID == sessionID && session.isCoordinatorRuntime
+        }
+    }
+
+    func mcpCoordinatorMissionPlan(sessionID: UUID?) -> CoordinatorMissionPlan? {
+        guard let sessionID else { return nil }
+        if let livePlan = sessions.values.first(where: { session in
+            session.activeAgentSessionID == sessionID
+        })?.coordinatorFollowThroughState?.missionPlan {
+            return livePlan
+        }
+        return ownerValidatedSessionIndex[sessionID]?.coordinatorMissionPlan
+    }
+
     private func saveSession(for tabID: UUID) async {
         #if DEBUG
             let diagnosticsStartMS = AgentModePerfDiagnostics.timestampMSIfEnabled()
@@ -10662,8 +10699,10 @@ final class AgentModeViewModel: ObservableObject {
             pendingHandoffSourceItemID: session.pendingHandoff.sourceItemID,
             pendingHandoffDefersProviderLockUntilSend: session.pendingHandoff.defersProviderLockUntilSend,
             isMCPOriginated: session.isMCPOriginated,
+            isCoordinatorRuntime: session.isCoordinatorRuntime,
             worktreeBindings: session.worktreeBindings,
-            worktreeMergeOperations: session.worktreeMergeOperations
+            worktreeMergeOperations: session.worktreeMergeOperations,
+            coordinatorFollowThroughState: session.coordinatorFollowThroughState
         )
         codexCoordinator.applyCodexPersistence(from: session, to: &agentSession)
         guard let saveToken = makeSaveCommitToken(for: session, workspaceID: workspace.id),
@@ -10706,6 +10745,7 @@ final class AgentModeViewModel: ObservableObject {
                 autoEditEnabled: agentSession.autoEditEnabled,
                 parentSessionID: agentSession.parentSessionID,
                 isMCPOriginated: agentSession.isMCPOriginated,
+                isCoordinatorRuntime: agentSession.isCoordinatorRuntime,
                 worktreeBindingSummaries: agentSession.worktreeBindings.worktreeBindingSummaries,
                 activeWorktreeMergeSummaries: agentSession.worktreeMergeOperations.activeWorktreeMergeSummaries
             )
@@ -13142,7 +13182,11 @@ final class AgentModeViewModel: ObservableObject {
         let systemPrompt = SystemPromptService.agentModePrompt(
             agentKind: session.selectedAgent,
             taskLabelKind: session.mcpControlContext?.taskLabelKind,
-            codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled()
+            allowsAgentExternalControlTools: session.mcpControlContext?.allowsAgentExternalControlTools ?? false,
+            codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled(),
+            coordinatorRuntimeDemo: session.isCoordinatorRuntimeDemo,
+            coordinatorRuntimeAutoMode: session.isCoordinatorRuntimeDemo &&
+                CoordinatorModeAutomationPreference.isEnabled()
         )
         return AgentMessage(systemPrompt: systemPrompt, userMessage: fullMessage, resumeSessionID: resumeSessionID)
     }

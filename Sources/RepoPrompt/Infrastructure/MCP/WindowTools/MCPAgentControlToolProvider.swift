@@ -20,7 +20,8 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
         [
             agentExploreTool(),
             agentRunTool(),
-            agentManageTool()
+            agentManageTool(),
+            coordinatorChatTool()
         ]
     }
 
@@ -33,6 +34,8 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             Short-lived, read-only explore child agents for narrow codebase probes. Each child runs in a fresh session with its own context window. Always uses the `explore` role; no custom `model_id`, workflows, session reuse, `steer`, or `respond`.
 
             Explore children inherit the caller's worktree bindings by default; pass `inherit_worktree=false` to opt out. Start-only worktree controls can bind an existing worktree or create one before provider startup, overriding an inherited primary-root binding. Multi-message creates produce one worktree per child when branch/path are implicit and reject a shared explicit branch or path.
+
+            Valid for workflow-less Coordinator Mission Plan probe nodes when the work is narrow, read-only, and disposable. For Coordinator pre-approval lightweight discovery, pass the planned node's `mission_node_id`. Do not use `agent_explore` for workflow-bearing nodes: it cannot attach `workflow_name`/`workflow_id`; planned Investigate/Deep Plan/Orchestrate/Review nodes must use `agent_run.start` or `agent_run.steer` with the same workflow metadata recorded in the Mission Plan.
 
             **Operations**: start | poll | wait | cancel
 
@@ -48,7 +51,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 description: """
                 Provide `op` plus operation-specific fields.
 
-                **start**: message or messages (required, mutually exclusive), detach?, timeout?, inherit_worktree?, worktree|worktree_id|worktree_create? and worktree_* args
+                **start**: message or messages (required, mutually exclusive), mission_node_id?, detach?, timeout?, inherit_worktree?, worktree|worktree_id|worktree_create? and worktree_* args
                 **poll / wait**: session_id or session_ids (mutually exclusive), timeout? (wait only)
                 **cancel**: session_id (required)
                 """,
@@ -56,6 +59,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                     "op": .string(description: "Operation.", enum: ["start", "poll", "wait", "cancel"]),
                     "message": .string(description: "[start] Exploration instruction text for one fresh explore child. Mutually exclusive with messages."),
                     "messages": .array(description: "[start] Array of exploration instruction strings. Mutually exclusive with message. Starts one fresh explore child per entry.", items: .string()),
+                    "mission_node_id": .string(description: "[start] Optional Coordinator Mission Plan node UUID for policy checks. Required for the pre-approval lightweight discovery exception."),
                     "detach": .boolean(description: "[start] Return immediately instead of waiting. Default false."),
                     "timeout": .number(description: "[start, wait] Max wait seconds. 0 = poll. Default \(defaultWaitSeconds)."),
                     "worktree": .string(description: "[start] Existing worktree selector to bind before provider startup: @current, @main, @branch:<name>, name, branch, path, or @id:<worktree_id>. Mutually exclusive with worktree_id and worktree_create."),
@@ -98,11 +102,11 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
 
             **Operations**: start | poll | wait | cancel | steer | respond
 
-            - `start`: Launch an agent run in a **new** session/tab. Do NOT pass `session_id` — use `steer` to continue an existing session. Omit `model_id` to use the `pair` role, or pass `model_id` with a role label (resolved via the global role-default mapping in `agent_manage.list_agents` `task_labels`) or an explicit compound `model_id` from `agents[].models[].model_id`. When started from an Agent Mode run, the new child session inherits the source session's worktree bindings by default; pass `inherit_worktree=false` to keep parent session threading but skip worktree inheritance. Optional start-only worktree args can bind the new session to an existing worktree (`worktree`/`worktree_id`) or create an app-managed worktree (`worktree_create=true`) before provider startup; explicit worktree args still bind the requested worktree. Returns a `session_id` — save it for all follow-up calls. Waits up to `timeout` seconds (default \(defaultWaitSeconds)). Pass `detach: true` to return immediately.
+            - `start`: Launch an agent run in a **new** session/tab. Do NOT pass `session_id` — use `steer` to continue an existing session. Omit `model_id` to use the `pair` role, or pass `model_id` with a role label (resolved via the global role-default mapping in `agent_manage.list_agents` `task_labels`) or an explicit compound `model_id` from `agents[].models[].model_id`. When started from an Agent Mode run, the new child session inherits the source session's worktree bindings by default; pass `inherit_worktree=false` to keep parent session threading but skip worktree inheritance. Optional start-only worktree args can bind the new session to an existing worktree (`worktree`/`worktree_id`) or create an app-managed worktree (`worktree_create=true`) before provider startup; explicit worktree args still bind the requested worktree. Returns a `session_id` — save it for all follow-up calls. Waits up to `timeout` seconds (default \(defaultWaitSeconds)). Pass `detach: true` to return immediately. Required for workflow-bearing Coordinator Mission Plan nodes, including read-only Investigate nodes; pass the node's `workflow_name`/`workflow_id`. For narrow workflow-less read-only probe nodes, prefer `agent_explore.start`.
             - `poll`: Return current snapshot immediately. Accepts `session_id` (single) or `session_ids` (array — returns all current snapshots).
             - `wait`: Block until the run finishes or needs input. Default \(defaultWaitSeconds)s. `timeout: 0` = poll. Accepts `session_id` (single) or `session_ids` (array — returns when first session reaches interesting state). Returns `interaction_id` when input is pending.
             - `cancel`: Stop an active agent run. Only valid when the run is `running` or `waiting_for_input`. Requires `session_id`.
-            - `steer`: Continue an existing agent session by sending a follow-up instruction to the `session_id` returned by `start`. If the run is still active, the instruction is steered into that run; if the last run already finished, RepoPrompt starts the next run in the same session. Pass `wait: true` (or `timeout_seconds`) to block until the steered run finishes or needs input. Do NOT use `steer` when status is `waiting_for_input` — use `respond` instead.
+            - `steer`: Continue an existing agent session by sending a follow-up instruction to the `session_id` returned by `start`. If the run is still active, the instruction is steered into that run; if the last run already finished, RepoPrompt starts the next run in the same session. Pass `wait: true` (or `timeout_seconds`) to block until the steered run finishes or needs input. Do NOT use `steer` when status is `waiting_for_input` — use `respond` instead. For workflow-bearing Coordinator Mission Plan nodes, pass the same `workflow_name`/`workflow_id` recorded on the node.
             - `respond`: Resolve a pending interaction (question, approval, MCP elicitation, etc). Requires `session_id` and `interaction_id` from the snapshot. The `interaction_id` is returned as a top-level field in poll/wait responses when input is pending. For MCP elicitation, use `response` (`accept`, `decline`, or `cancel`) plus optional object `content` and `meta`.
 
             **session_id lifecycle**: `start` creates a new session and returns `session_id` in the response. All subsequent operations on that run require passing the same `session_id` back. Do NOT invent session IDs — always use the value returned by `start`.
@@ -118,7 +122,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 description: """
                 Provide `op` plus operation-specific fields.
 
-                **start**: message (required), model_id? (defaults to pair), session_name?, workflow_id|workflow_name?, detach?, timeout?, inherit_worktree?, worktree|worktree_id|worktree_create? and worktree_* args. Use workflow_name="orchestrate" to plan, decompose, and dispatch sub-agents.
+                **start**: message (required), model_id? (defaults to pair), session_name?, mission_node_id?, workflow_id|workflow_name?, detach?, timeout?, inherit_worktree?, coordinator_internal?, worktree|worktree_id|worktree_create? and worktree_* args. Use workflow_name="orchestrate" to plan, decompose, and dispatch sub-agents.
                 **poll / wait**: session_id or session_ids (mutually exclusive), timeout? (wait only)
                 **cancel**: session_id (required)
                 **steer**: session_id (required, from a prior `start`/`steer` response), message (required), wait?, timeout_seconds?, workflow_id|workflow_name?
@@ -131,8 +135,10 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                     "session_id": .string(description: "[poll, wait, cancel, steer, respond] Session UUID returned by a prior start/steer response. Do not fabricate it. Not accepted by start — use steer to continue an existing session."),
                     "session_ids": .array(description: "[wait, poll] Array of session UUIDs. For wait: returns when first session reaches interesting state. For poll: returns all current snapshots. Mutually exclusive with session_id.", items: .string()),
                     "session_name": .string(description: "[start] Display name for a new session."),
+                    "mission_node_id": .string(description: "[start] Optional Coordinator Mission Plan node UUID for policy checks and later Coordinator-side binding. Required for pre-approval Investigate, Deep Plan, and plan_critique exceptions."),
                     "workflow_id": .string(description: "[start, steer, respond] Workflow ID. Mutually exclusive with workflow_name."),
                     "workflow_name": .string(description: "[start, steer, respond] Workflow name. Mutually exclusive with workflow_id."),
+                    "coordinator_internal": .boolean(description: "[start] Coordinator-internal housekeeping session. Hides the child from Coordinator board/action-chip surfaces while preserving parentage and Agent Mode state. Default false."),
                     "detach": .boolean(description: "[start] Return immediately instead of waiting. Default false."),
                     "timeout": .number(description: "[start, wait] Max wait seconds. 0 = poll. Default \(defaultWaitSeconds)."),
                     "worktree": .string(description: "[start] Existing worktree selector to bind before provider startup: @current, @main, @branch:<name>, name, branch, path, or @id:<worktree_id>. Mutually exclusive with worktree_id and worktree_create."),
@@ -219,6 +225,160 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             )
         ) { [dependencies] _, args in
             try await dependencies.executeAgentManage(args)
+        }
+    }
+
+    private func coordinatorChatTool() -> Tool {
+        runtime.tool(
+            name: MCPWindowToolName.coordinatorChat,
+            freshnessPolicy: .providerManaged,
+            description: """
+            External test/control surface for Coordinator Mode. This mirrors the visible Coordinator UI: list parent threads, select a parent thread, start a fresh parent thread, idempotently ensure or atomically start a fresh Mission with an initial directive, stop the selected Mission, submit a directive to the selected parent, or record/read/wait on the selected Mission Plan.
+
+            **Operations**: list | select | new | ensure_mission | start_mission | stop_mission | submit | mission_plan | mission_status | wait_for_update
+
+            - `list`: Return current Coordinator parent selection, available parents, and board counts.
+            - `select`: Select an existing Coordinator parent by `coordinator_session_id`.
+            - `new`: Mirror New Coordinator. The rail switches to a blank parent context; the next submit creates the parent runtime.
+            - `ensure_mission`: External-driver operation. With `mission_key`, select an existing non-terminal Mission if present; otherwise start a fresh Coordinator Mission and submit the initial directive. Prefer this for retry-safe automation.
+            - `start_mission`: External-driver operation. Start a fresh Coordinator Mission and submit the initial directive in one operation. With `mission_key`, this is retry-safe and reuses a matching non-terminal Mission. Optional predecessor fields mark the new Mission as a follow-up to a prior Mission.
+            - `stop_mission`: Stop the selected or requested Coordinator Mission and cancel live linked sessions without archiving or deleting them.
+            - `submit`: Send a directive to the selected parent, to `coordinator_session_id`, or to a fresh parent when `new_parent=true`.
+            - `mission_plan`: Create or update the selected Coordinator Mission's DAG-lite plan. Use this before delegated child starts. Workstream and node arrays are upserts by default: include only changed entries for existing IDs/titles; omitted entries are preserved. Use `replace_workstreams=true` or `replace_nodes=true` when rewriting that part of the plan of record. Routing decisions append/upsert by id.
+            - `mission_status`: Read back the selected Coordinator Mission's current plan, node status, and newest 20 routing decisions. Use `compact=true` for polling from external automation.
+            - `wait_for_update`: Long-poll the selected or requested Coordinator Mission until its compact status fingerprint changes, then return compact mission_status.
+
+            Coordinator-role agents should use `mission_plan` to record concrete user-specific deliverables before delegating child Agent Mode sessions. Coordinator-role agents must not call `new`, `start_mission`, `ensure_mission`, or `submit` with `new_parent=true`; follow-up Missions must be proposed in the current Mission and started by an external user/CLI driver. Workflows such as Investigate, Deep Plan, Orchestrate, and Review belong in node workflow metadata only when the node is intended to run that real workflow. Workflow-less read-only probe nodes may be launched with `agent_explore.start`; workflow-bearing nodes should be launched or steered through `agent_run` with the same workflow, and `mission_status` reports planned/actual workflow matches for bound nodes.
+            """,
+            annotations: .repoPromptLocalEphemeralState,
+            inputSchema: .object(
+                description: """
+                Provide `op` plus operation-specific fields.
+
+                **list**: no additional fields
+                **select**: coordinator_session_id (required)
+                **new**: no additional fields
+                **ensure_mission**: mission_key and message (required), optional predecessor_mission_id/predecessor_title/predecessor_summary for linked follow-up Missions
+                **start_mission**: message (required), optional mission_key and predecessor_mission_id/predecessor_title/predecessor_summary for linked follow-up Missions
+                **stop_mission**: coordinator_session_id?
+                **submit**: message (required), coordinator_session_id? or new_parent?, compact?; returns compact state by default for external automation unless compact=false.
+                **mission_plan**: coordinator_session_id? plus one or more of mission_key, objective, predecessor context, status, approval_state, workstreams, nodes, routing_decisions, events. replace_workstreams/replace_nodes may be true for deliberate plan rewrites.
+                **mission_status**: coordinator_session_id?, compact?; returns current plan state and routing_decisions_recent newest-first, max 20. compact=true returns a smaller polling summary with liveness warnings, checkpoint submit hints, and short recent history.
+                **wait_for_update**: coordinator_session_id?, since_fingerprint?, timeout_seconds?; waits until compact mission_status.fingerprint changes and returns compact status.
+                """,
+                properties: [
+                    "op": .string(description: "Operation.", enum: ["list", "select", "new", "ensure_mission", "start_mission", "stop_mission", "submit", "mission_plan", "mission_status", "wait_for_update"]),
+                    "coordinator_session_id": .string(description: "[select, stop_mission, submit, mission_plan, mission_status, wait_for_update] Existing Coordinator parent session UUID. Defaults to the selected Coordinator for mission_plan/mission_status/wait_for_update."),
+                    "message": .string(description: "[ensure_mission, start_mission, submit] Directive text to send to the fresh, selected, or requested Coordinator parent."),
+                    "mission_key": .string(description: "[ensure_mission, start_mission, mission_plan] Stable external idempotency key for a Mission. External drivers should provide this when retrying mission creation."),
+                    "new_parent": .boolean(description: "[submit] Start from a blank Coordinator parent before sending this directive. Default false."),
+                    "compact": .boolean(description: "[submit, mission_status] For submit, return a compact automation response instead of the full Coordinator snapshot; default true. For mission_status, return a small polling summary with fingerprint, warnings, and checkpoint hints; default false."),
+                    "since_fingerprint": .string(description: "[wait_for_update] Last compact mission_status.fingerprint observed by the caller. If omitted, returns immediately."),
+                    "timeout_seconds": .number(description: "[wait_for_update] Maximum seconds to wait before returning the current compact status. Default 30, max 300."),
+                    "objective": .string(description: "[mission_plan] User-specific Mission objective."),
+                    "predecessor_mission_id": .string(description: "[ensure_mission, start_mission, mission_plan] Optional prior Mission UUID when this Mission is a follow-up."),
+                    "predecessor_title": .string(description: "[ensure_mission, start_mission, mission_plan] Optional prior Mission title shown as follow-up context."),
+                    "predecessor_summary": .string(description: "[ensure_mission, start_mission, mission_plan] Compact durable findings/decisions carried into this follow-up Mission."),
+                    "status": .string(description: "[mission_plan] Mission status.", enum: ["draft", "approved", "running", "blocked", "completed", "stopped"]),
+                    "approval_state": .string(description: "[mission_plan] Human approval state for the plan.", enum: ["not_required", "awaiting_approval", "approved", "revision_requested"]),
+                    "replace_workstreams": .boolean(description: "[mission_plan] Replace all existing workstreams with the provided workstreams instead of upserting/preserving omitted workstreams. Default false."),
+                    "replace_nodes": .boolean(description: "[mission_plan] Replace all existing nodes with the provided nodes instead of upserting/preserving omitted nodes. Default false."),
+                    "workstreams": .array(
+                        description: "[mission_plan] Workstream upsert objects. Existing workstreams may be patched by id or title. New workstreams require title, purpose, default_policy, and worktree_strategy { mode, worktree_id?, base_ref?, base_reason?, reason? }.",
+                        items: .object(
+                            description: "Mission workstream.",
+                            properties: [
+                                "id": .string(description: "Optional stable UUID."),
+                                "title": .string(description: "User-level workstream title."),
+                                "purpose": .string(description: "Why this workstream exists."),
+                                "role": .string(description: "Optional role label."),
+                                "default_policy": .string(description: "Default execution policy.", enum: ["coordinator_only", "fresh_readonly_child", "steer_primary", "fresh_sibling_on_same_worktree", "fresh_worktree", "ask_user"]),
+                                "worktree_strategy": .object(
+                                    description: "Worktree strategy.",
+                                    properties: [
+                                        "mode": .string(description: "Worktree mode.", enum: ["noneReadOnly", "createIsolated", "reuseExisting", "reuseWorkstream", "askUser"]),
+                                        "worktree_id": .string(description: "Optional worktree identifier."),
+                                        "base_ref": .string(description: "Required for createIsolated mutable workstreams before approval; resolved repository default branch/ref or explicit requested base."),
+                                        "base_reason": .string(description: "Why this worktree base was chosen."),
+                                        "reason": .string(description: "Reason for this strategy.")
+                                    ],
+                                    required: ["mode"]
+                                ),
+                                "primary_session_id": .string(description: "Optional primary child session UUID."),
+                                "related_session_ids": .array(description: "Optional related child session UUIDs.", items: .string())
+                            ],
+                            required: ["title"]
+                        )
+                    ),
+                    "nodes": .array(
+                        description: "[mission_plan] DAG-lite node upserts. Titles should be concrete deliverables, not generic phase names. Existing nodes may be patched by id or title. New nodes require title, workstream_id or workstream_title, and execution_policy; status defaults to pending.",
+                        items: .object(
+                            description: "Mission Plan node.",
+                            properties: [
+                                "id": .string(description: "Optional stable UUID."),
+                                "title": .string(description: "Concrete deliverable title."),
+                                "detail": .string(description: "Node detail."),
+                                "workflow_name": .string(description: "Optional workflow hint such as Deep Plan, Orchestrate, or Review."),
+                                "completion_evidence": .string(description: "Evidence that marks this node complete."),
+                                "workstream_id": .string(description: "Workstream UUID."),
+                                "workstream_title": .string(description: "Workstream title alternative."),
+                                "depends_on": .array(description: "Dependency node UUIDs.", items: .string()),
+                                "role": .string(description: "Optional role label."),
+                                "execution_policy": .string(description: "How this node should execute.", enum: ["coordinator_only", "fresh_readonly_child", "steer_primary", "fresh_sibling_on_same_worktree", "fresh_worktree", "plan_critique", "ask_user"]),
+                                "status": .string(description: "Node status.", enum: ["pending", "running", "completed", "blocked", "skipped", "cancelled"]),
+                                "bound_session_id": .string(description: "Optional delegated session UUID."),
+                                "bound_interaction_id": .string(description: "Optional interaction UUID.")
+                            ],
+                            required: ["title"]
+                        )
+                    ),
+                    "events": .array(
+                        description: "[mission_plan] Optional plan events.",
+                        items: .object(
+                            description: "Mission Plan event.",
+                            properties: [
+                                "id": .string(description: "Optional event UUID."),
+                                "kind": .string(description: "Event kind.", enum: ["created", "revised", "approved", "node_started", "node_completed", "node_blocked", "session_bound", "gate_cleared"]),
+                                "node_id": .string(description: "Optional node UUID."),
+                                "node_title": .string(description: "Optional node title alternative."),
+                                "session_id": .string(description: "Optional session UUID."),
+                                "interaction_id": .string(description: "Optional interaction UUID."),
+                                "timestamp": .string(description: "Optional ISO 8601 timestamp."),
+                                "summary": .string(description: "Event summary.")
+                            ],
+                            required: ["kind"]
+                        )
+                    ),
+                    "routing_decisions": .array(
+                        description: "[mission_plan] Optional Coordinator routing decision log entries. Entries append/upsert by id; omitted decisions are preserved. Record these before/with start, steer, respond, cancel, or hold choices.",
+                        items: .object(
+                            description: "Coordinator routing decision.",
+                            properties: [
+                                "id": .string(description: "Optional stable decision UUID. Reuse id to replace a previous decision."),
+                                "timestamp": .string(description: "Optional ISO 8601 timestamp."),
+                                "node_id": .string(description: "Optional Mission Plan node UUID."),
+                                "node_title": .string(description: "Optional node title alternative."),
+                                "workstream_id": .string(description: "Optional workstream UUID."),
+                                "workstream_title": .string(description: "Optional workstream title alternative."),
+                                "decision": .string(description: "Routing decision kind.", enum: ["start_fresh_readonly_child", "start_fresh_worktree", "steer_primary", "start_fresh_sibling_on_same_worktree", "respond_to_interaction", "hold_for_user", "cancel_or_replace"]),
+                                "operation": .string(description: "Concrete operation chosen.", enum: ["agent_explore.start", "agent_run.start", "agent_run.steer", "agent_run.respond", "agent_run.cancel", "coordinator_hold", "coordinator_publish"]),
+                                "session_id": .string(description: "Optional target/new child session UUID."),
+                                "prior_session_id": .string(description: "Optional previous/replaced session UUID."),
+                                "worktree_id": .string(description: "Optional worktree identifier."),
+                                "workflow_name": .string(description: "Optional workflow label such as Investigate, Orchestrate, or Review."),
+                                "model_id": .string(description: "Optional model_id target used for this route."),
+                                "role": .string(description: "Optional role label used for this route."),
+                                "reason": .string(description: "Why this route was chosen."),
+                                "context_summary": .string(description: "Compact handoff context used to make the routing decision.")
+                            ],
+                            required: ["decision", "operation", "reason"]
+                        )
+                    )
+                ],
+                required: ["op"]
+            )
+        ) { [dependencies] _, args in
+            try await dependencies.executeCoordinatorChat(args)
         }
     }
 }

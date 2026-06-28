@@ -208,7 +208,7 @@ final class AgentModeRunService {
         let connectionPolicyInstaller = dependencies.connectionPolicyInstaller
         let expectedPIDPolicyArmer = dependencies.expectedPIDPolicyArmer
         let taskLabelKind = session.mcpControlContext?.taskLabelKind
-        let allowsAgentExternalControlTools = session.mcpControlContext != nil && session.parentSessionID == nil
+        let allowsAgentExternalControlTools = session.mcpControlContext?.allowsAgentExternalControlTools ?? false
         let makeLease: (_ runID: UUID) -> MCPBootstrapLease = { runID in
             let leaseSpec = MCPBootstrapLeaseSpec.agentMode(
                 tabID: tabID,
