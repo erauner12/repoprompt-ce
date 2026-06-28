@@ -1151,7 +1151,7 @@ struct CoordinatorChatMCPToolService {
         guard let plan = option.missionPlan else {
             return .object([
                 "compact": .bool(true),
-                "fingerprint": .string(compactMissionStatusFingerprint(option: option, plan: nil, rows: rows)),
+                "fingerprint": .string(compactMissionStatusFingerprint(option: option, plan: nil, rows: rows, counts: snapshot.counts)),
                 "coordinator_session_id": .string(option.sessionID.uuidString),
                 "title": .string(option.title),
                 "selected": .bool(option.isSelected),
@@ -1189,7 +1189,7 @@ struct CoordinatorChatMCPToolService {
 
         return .object([
             "compact": .bool(true),
-            "fingerprint": .string(compactMissionStatusFingerprint(option: option, plan: plan, rows: rows)),
+            "fingerprint": .string(compactMissionStatusFingerprint(option: option, plan: plan, rows: rows, counts: snapshot.counts)),
             "coordinator_session_id": .string(option.sessionID.uuidString),
             "title": .string(option.title),
             "selected": .bool(option.isSelected),
@@ -1292,13 +1292,23 @@ struct CoordinatorChatMCPToolService {
     private func compactMissionStatusFingerprint(
         option: CoordinatorModeCoordinatorOption,
         plan: CoordinatorMissionPlan?,
-        rows: [CoordinatorModeRow]
+        rows: [CoordinatorModeRow],
+        counts: CoordinatorModeCounts
     ) -> String {
         var parts = [
             "coordinator",
             option.sessionID.uuidString,
             option.runState?.rawValue ?? "run_state:nil",
-            option.isSelected ? "selected:true" : "selected:false"
+            option.isSelected ? "selected:true" : "selected:false",
+            "counts",
+            "\(counts.totalRows)",
+            "\(counts.liveRows)",
+            "\(counts.stalePersistedOnly)",
+            "\(counts.needsYou)",
+            "\(counts.working)",
+            "\(counts.blocked)",
+            "\(counts.review)",
+            "\(counts.done)"
         ]
         guard let plan else {
             return stableFingerprint(parts)

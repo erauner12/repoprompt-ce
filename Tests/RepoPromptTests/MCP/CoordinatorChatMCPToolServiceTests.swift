@@ -615,8 +615,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 ]),
                 .object([
                     "decision": .string("hold_for_user"),
-                    "operation": .string("coordinator_publish"),
-                    "reason": .string("User approved Coordinator-owned commit, push, PR creation, and merge.")
+                    "operation": .string("coordinator_hold"),
+                    "reason": .string("User must approve commit, push, PR creation, and merge.")
                 ])
             ])
         ])
@@ -633,7 +633,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(decision["session_id"]?.stringValue, childID.uuidString)
         XCTAssertEqual(decision["model_id"]?.stringValue, "explore")
         XCTAssertNil(decision["workflow_name"]?.stringValue)
-        XCTAssertEqual(decisions.last?.objectValue?["operation"]?.stringValue, "coordinator_publish")
+        XCTAssertEqual(decisions.last?.objectValue?["operation"]?.stringValue, "coordinator_hold")
 
         let updated = try await service.execute(args: [
             "op": .string("mission_plan"),
@@ -650,7 +650,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let updatedDecisions = try XCTUnwrap(updated.objectValue?["mission_plan"]?.objectValue?["routing_decisions"]?.arrayValue)
         XCTAssertEqual(updatedDecisions.count, 2)
         XCTAssertEqual(updatedDecisions.first?.objectValue?["reason"]?.stringValue, "Corrected route rationale.")
-        XCTAssertEqual(updatedDecisions.last?.objectValue?["operation"]?.stringValue, "coordinator_publish")
+        XCTAssertEqual(updatedDecisions.last?.objectValue?["operation"]?.stringValue, "coordinator_hold")
     }
 
     func testMissionPlanSubsetUpdatePreservesExistingDagEntries() async throws {
@@ -1231,6 +1231,71 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertNotEqual(runningFingerprint, completedFingerprint)
     }
 
+    func testCompactMissionStatusFingerprintChangesForFleetCountMotion() async throws {
+        let coordinatorID = UUID()
+        let workerID = UUID()
+        let plan = CoordinatorMissionPlan(
+            objective: "Watch mission fleet counts",
+            status: .running,
+            approvalState: .approved
+        )
+        let workerRow = Self.childRow(
+            id: workerID,
+            parentCoordinatorID: coordinatorID,
+            title: "Primary worker",
+            workflow: nil
+        )
+        let liveCounts = CoordinatorModeCounts(
+            totalRows: 3,
+            needsYou: 0,
+            blocked: 0,
+            working: 2,
+            review: 0,
+            done: 1,
+            stalePersistedOnly: 0,
+            liveRows: 3
+        )
+        let staleCounts = CoordinatorModeCounts(
+            totalRows: 3,
+            needsYou: 0,
+            blocked: 0,
+            working: 1,
+            review: 0,
+            done: 1,
+            stalePersistedOnly: 1,
+            liveRows: 2
+        )
+        let liveService = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            counts: liveCounts,
+            rows: [workerRow],
+            missionPlans: { [coordinatorID: plan] }
+        )
+        let staleService = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            counts: staleCounts,
+            rows: [workerRow],
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let compactStatusArgs: [String: Value] = [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ]
+        let liveResponse = try await liveService.execute(args: compactStatusArgs)
+        let staleResponse = try await staleService.execute(args: compactStatusArgs)
+        let liveFingerprint = try XCTUnwrap(
+            liveResponse.objectValue?["mission_status"]?.objectValue?["fingerprint"]?.stringValue
+        )
+        let staleFingerprint = try XCTUnwrap(
+            staleResponse.objectValue?["mission_status"]?.objectValue?["fingerprint"]?.stringValue
+        )
+
+        XCTAssertNotEqual(liveFingerprint, staleFingerprint)
+    }
+
     func testMissionStatusFlagsBoundWorkflowMismatch() async throws {
         let coordinatorID = UUID()
         let workstreamID = UUID()
@@ -1552,6 +1617,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
         submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
+        counts: CoordinatorModeCounts = .empty,
         rows: [CoordinatorModeRow] = [],
         missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },
         updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in }
@@ -1566,6 +1632,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             submit: submit,
             pendingChild: pendingChild,
             submitPendingChild: submitPendingChild,
+            counts: counts,
             rows: rows,
             missionPlans: missionPlans,
             updateMissionPlan: updateMissionPlan
@@ -1585,6 +1652,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
         submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
+        counts: CoordinatorModeCounts = .empty,
         rows: [CoordinatorModeRow] = [],
         missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },
         updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in }
@@ -1599,6 +1667,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                         coordinatorIDs: coordinatorIDs,
                         selectedID: selectedID(),
                         coordinatorRunState: coordinatorRunState,
+                        counts: counts,
                         rows: rows,
                         missionPlans: missionPlans()
                     )
@@ -1619,6 +1688,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         coordinatorIDs: [UUID],
         selectedID: UUID,
         coordinatorRunState: AgentSessionRunState = .idle,
+        counts: CoordinatorModeCounts = .empty,
         rows: [CoordinatorModeRow] = [],
         missionPlans: [UUID: CoordinatorMissionPlan] = [:]
     ) -> CoordinatorModeSnapshot {
@@ -1646,7 +1716,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             workspaceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001"),
             sortMode: .lastUpdated,
             boardScope: .coordinatorFleet,
-            counts: .empty,
+            counts: counts,
             groups: CoordinatorModeStatusGroup.allCases.map { group in
                 CoordinatorModeStatusSection(group: group, rows: rows.filter { $0.statusGroup == group })
             },

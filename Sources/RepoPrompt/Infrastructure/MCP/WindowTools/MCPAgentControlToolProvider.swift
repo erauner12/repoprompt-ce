@@ -361,7 +361,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                                 "workstream_id": .string(description: "Optional workstream UUID."),
                                 "workstream_title": .string(description: "Optional workstream title alternative."),
                                 "decision": .string(description: "Routing decision kind.", enum: ["start_fresh_readonly_child", "start_fresh_worktree", "steer_primary", "start_fresh_sibling_on_same_worktree", "respond_to_interaction", "hold_for_user", "cancel_or_replace"]),
-                                "operation": .string(description: "Concrete operation chosen.", enum: ["agent_explore.start", "agent_run.start", "agent_run.steer", "agent_run.respond", "agent_run.cancel", "coordinator_hold", "coordinator_publish"]),
+                                "operation": .string(description: "Concrete operation chosen.", enum: ["agent_explore.start", "agent_run.start", "agent_run.steer", "agent_run.respond", "agent_run.cancel", "coordinator_hold"]),
                                 "session_id": .string(description: "Optional target/new child session UUID."),
                                 "prior_session_id": .string(description: "Optional previous/replaced session UUID."),
                                 "worktree_id": .string(description: "Optional worktree identifier."),
