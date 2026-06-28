@@ -174,6 +174,7 @@ struct CoordinatorChatMCPToolService {
         case "submit":
             let message = normalizedString(args["message"] ?? args["response"])
             let newParent = AgentMCPToolHelpers.parseBool(args["new_parent"]) ?? false
+            let compact = AgentMCPToolHelpers.parseBool(args["compact"]) ?? true
             if newParent, message == nil {
                 throw MCPError.invalidParams("message is required.")
             }
@@ -208,16 +209,22 @@ struct CoordinatorChatMCPToolService {
 
             switch result {
             case .accepted:
-                return stateResponse(environment.snapshot(), extra: [
+                let extra: [String: Value] = [
                     "accepted": .bool(true),
                     "routed_to": .string(routedToChildInteraction ? "child_interaction" : "coordinator")
-                ])
+                ]
+                return compact
+                    ? compactStateResponse(environment.snapshot(), extra: extra)
+                    : stateResponse(environment.snapshot(), extra: extra)
             case let .rejected(message):
-                return stateResponse(environment.snapshot(), extra: [
+                let extra: [String: Value] = [
                     "accepted": .bool(false),
                     "routed_to": .string(routedToChildInteraction ? "child_interaction" : "coordinator"),
                     "error": .string(message)
-                ])
+                ]
+                return compact
+                    ? compactStateResponse(environment.snapshot(), extra: extra)
+                    : stateResponse(environment.snapshot(), extra: extra)
             }
 
         case "mission_plan":

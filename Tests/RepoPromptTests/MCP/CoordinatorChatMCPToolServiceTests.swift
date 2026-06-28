@@ -97,6 +97,53 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(plan["predecessor_summary"]?.stringValue, "Doctor UX discovery found missing prerequisite guidance.")
     }
 
+    func testSubmitDefaultsToCompactResponseForExternalDrivers() async throws {
+        let coordinatorID = UUID()
+        var submittedMessages: [String] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submit: {
+                submittedMessages.append($0)
+                return .accepted
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("submit"),
+            "message": .string("Continue to the next safe step.")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(submittedMessages, ["Continue to the next safe step."])
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "coordinator")
+        XCTAssertNil(object["mission_plan"])
+        XCTAssertNil(object["coordinators"])
+        XCTAssertEqual(object["coordinator_count"]?.intValue, 1)
+    }
+
+    func testSubmitCanReturnFullStateWhenCompactFalse() async throws {
+        let coordinatorID = UUID()
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submit: { _ in .accepted }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("submit"),
+            "message": .string("Continue to the next safe step."),
+            "compact": .bool(false)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertNotNil(object["mission_plan"])
+        XCTAssertNotNil(object["coordinators"])
+        XCTAssertNil(object["coordinator_count"])
+    }
+
     func testStartMissionRejectsCoordinatorRuntimeCaller() async throws {
         let coordinatorID = UUID()
         var didStartNew = false
@@ -565,13 +612,18 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     "role": .string("explore"),
                     "reason": .string("The implementation surface is unknown, so start a narrow read-only probe first."),
                     "context_summary": .string("Need to map MCP session cleanup, provider metadata, and Oracle finalization.")
+                ]),
+                .object([
+                    "decision": .string("hold_for_user"),
+                    "operation": .string("coordinator_publish"),
+                    "reason": .string("User approved Coordinator-owned commit, push, PR creation, and merge.")
                 ])
             ])
         ])
 
         let plan = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue)
         let decisions = try XCTUnwrap(plan["routing_decisions"]?.arrayValue)
-        XCTAssertEqual(decisions.count, 1)
+        XCTAssertEqual(decisions.count, 2)
         let decision = try XCTUnwrap(decisions.first?.objectValue)
         XCTAssertEqual(decision["id"]?.stringValue, decisionID.uuidString)
         XCTAssertEqual(decision["node_id"]?.stringValue, nodeID.uuidString)
@@ -581,6 +633,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(decision["session_id"]?.stringValue, childID.uuidString)
         XCTAssertEqual(decision["model_id"]?.stringValue, "explore")
         XCTAssertNil(decision["workflow_name"]?.stringValue)
+        XCTAssertEqual(decisions.last?.objectValue?["operation"]?.stringValue, "coordinator_publish")
 
         let updated = try await service.execute(args: [
             "op": .string("mission_plan"),
@@ -595,8 +648,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             ])
         ])
         let updatedDecisions = try XCTUnwrap(updated.objectValue?["mission_plan"]?.objectValue?["routing_decisions"]?.arrayValue)
-        XCTAssertEqual(updatedDecisions.count, 1)
+        XCTAssertEqual(updatedDecisions.count, 2)
         XCTAssertEqual(updatedDecisions.first?.objectValue?["reason"]?.stringValue, "Corrected route rationale.")
+        XCTAssertEqual(updatedDecisions.last?.objectValue?["operation"]?.stringValue, "coordinator_publish")
     }
 
     func testMissionPlanSubsetUpdatePreservesExistingDagEntries() async throws {
@@ -775,7 +829,11 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     title: "Implement",
                     purpose: "Make the docs change.",
                     defaultPolicy: .freshWorktree,
-                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                        mode: .createIsolated,
+                        baseRef: "main",
+                        baseReason: "Issue implementation starts from the repository default branch."
+                    )
                 )
             ],
             nodes: [
@@ -874,7 +932,11 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     title: "Implementation",
                     purpose: "Apply provider cleanup.",
                     defaultPolicy: .freshWorktree,
-                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                        mode: .createIsolated,
+                        baseRef: "main",
+                        baseReason: "Issue implementation starts from the repository default branch."
+                    )
                 )
             ],
             nodes: [
@@ -907,6 +969,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertNotNil(status["fingerprint"]?.stringValue)
         XCTAssertEqual(status["run_state"]?.stringValue, "completed")
         XCTAssertEqual(status["plan"]?.objectValue?["status"]?.stringValue, "running")
+        let workstream = try XCTUnwrap(status["workstreams"]?.arrayValue?.first?.objectValue)
+        XCTAssertEqual(workstream["base_ref"]?.stringValue, "main")
         XCTAssertEqual(status["active_nodes"]?.arrayValue?.count, 1)
         XCTAssertEqual(status["running_delegated_nodes_without_bound_sessions"]?.arrayValue?.count, 1)
         let warnings = try XCTUnwrap(status["liveness_warnings"]?.arrayValue?.compactMap(\.stringValue))
@@ -1375,6 +1439,14 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         ))
         XCTAssertTrue(AgentModeMCPToolAdvertisementPolicy.shouldAdvertise(
             toolName: MCPWindowToolName.agentExplore,
+            taskLabelKind: .coordinator
+        ))
+        XCTAssertTrue(AgentModeMCPToolAdvertisementPolicy.shouldAdvertise(
+            toolName: MCPWindowToolName.agentRun,
+            taskLabelKind: .coordinator
+        ))
+        XCTAssertTrue(AgentModeMCPToolAdvertisementPolicy.shouldAdvertise(
+            toolName: MCPWindowToolName.agentManage,
             taskLabelKind: .coordinator
         ))
         for role in AgentModelCatalog.TaskLabelKind.allCases {

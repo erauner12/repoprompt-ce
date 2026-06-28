@@ -62,7 +62,7 @@ enum AgentModeMCPToolAdvertisementPolicy {
         case .engineer, .pair, .design:
             return nonExploreRoleHiddenTools.union(directAppControlTools)
         case .coordinator:
-            return nonExploreRoleHiddenTools
+            return []
         }
     }
 
@@ -91,8 +91,10 @@ enum AgentModeMCPToolAdvertisementPolicy {
         switch taskLabelKind {
         case .explore:
             return !exploreHiddenTools.contains(toolName)
-        case .engineer, .pair, .design, .coordinator:
+        case .engineer, .pair, .design:
             return !nonExploreRoleHiddenTools.contains(toolName)
+        case .coordinator:
+            return true
         }
     }
 

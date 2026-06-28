@@ -60,7 +60,7 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
         XCTAssertTrue(prompt.contains("repository default branch/ref"))
         XCTAssertTrue(prompt.contains("use the actual repo default"))
         XCTAssertTrue(prompt.contains("worktree_base_ref"))
-        XCTAssertTrue(prompt.contains("operation values must be `agent_explore.start`, `agent_run.start`, `agent_run.steer`, `agent_run.respond`, `agent_run.cancel`, or `coordinator_hold`"))
+        XCTAssertTrue(prompt.contains("operation values must be `agent_explore.start`, `agent_run.start`, `agent_run.steer`, `agent_run.respond`, `agent_run.cancel`, `coordinator_hold`, or `coordinator_publish`"))
         XCTAssertTrue(prompt.contains("Durable workstream economy"))
         XCTAssertTrue(prompt.contains("one workstream, one worktree sandbox, and one primary child session"))
         XCTAssertTrue(prompt.contains("supervised normal Agent Mode sessions"))

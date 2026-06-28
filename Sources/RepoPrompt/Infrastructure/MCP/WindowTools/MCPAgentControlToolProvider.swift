@@ -261,7 +261,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 **ensure_mission**: mission_key and message (required), optional predecessor_mission_id/predecessor_title/predecessor_summary for linked follow-up Missions
                 **start_mission**: message (required), optional mission_key and predecessor_mission_id/predecessor_title/predecessor_summary for linked follow-up Missions
                 **stop_mission**: coordinator_session_id?
-                **submit**: message (required), coordinator_session_id? or new_parent?
+                **submit**: message (required), coordinator_session_id? or new_parent?, compact?; returns compact state by default for external automation unless compact=false.
                 **mission_plan**: coordinator_session_id? plus one or more of mission_key, objective, predecessor context, status, approval_state, workstreams, nodes, routing_decisions, events. replace_workstreams/replace_nodes may be true for deliberate plan rewrites.
                 **mission_status**: coordinator_session_id?, compact?; returns current plan state and routing_decisions_recent newest-first, max 20. compact=true returns a smaller polling summary with liveness warnings, checkpoint submit hints, and short recent history.
                 **wait_for_update**: coordinator_session_id?, since_fingerprint?, timeout_seconds?; waits until compact mission_status.fingerprint changes and returns compact status.
@@ -272,7 +272,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                     "message": .string(description: "[ensure_mission, start_mission, submit] Directive text to send to the fresh, selected, or requested Coordinator parent."),
                     "mission_key": .string(description: "[ensure_mission, start_mission, mission_plan] Stable external idempotency key for a Mission. External drivers should provide this when retrying mission creation."),
                     "new_parent": .boolean(description: "[submit] Start from a blank Coordinator parent before sending this directive. Default false."),
-                    "compact": .boolean(description: "[mission_status] Return a small polling summary instead of the full Coordinator snapshot. Includes fingerprint and plan-approval checkpoint actions when available. Default false."),
+                    "compact": .boolean(description: "[submit, mission_status] For submit, return a compact automation response instead of the full Coordinator snapshot; default true. For mission_status, return a small polling summary with fingerprint, warnings, and checkpoint hints; default false."),
                     "since_fingerprint": .string(description: "[wait_for_update] Last compact mission_status.fingerprint observed by the caller. If omitted, returns immediately."),
                     "timeout_seconds": .number(description: "[wait_for_update] Maximum seconds to wait before returning the current compact status. Default 30, max 300."),
                     "objective": .string(description: "[mission_plan] User-specific Mission objective."),
@@ -284,7 +284,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                     "replace_workstreams": .boolean(description: "[mission_plan] Replace all existing workstreams with the provided workstreams instead of upserting/preserving omitted workstreams. Default false."),
                     "replace_nodes": .boolean(description: "[mission_plan] Replace all existing nodes with the provided nodes instead of upserting/preserving omitted nodes. Default false."),
                     "workstreams": .array(
-                        description: "[mission_plan] Workstream upsert objects. Existing workstreams may be patched by id or title. New workstreams require title, purpose, default_policy, and worktree_strategy { mode, worktree_id?, reason? }.",
+                        description: "[mission_plan] Workstream upsert objects. Existing workstreams may be patched by id or title. New workstreams require title, purpose, default_policy, and worktree_strategy { mode, worktree_id?, base_ref?, base_reason?, reason? }.",
                         items: .object(
                             description: "Mission workstream.",
                             properties: [
@@ -298,6 +298,8 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                                     properties: [
                                         "mode": .string(description: "Worktree mode.", enum: ["noneReadOnly", "createIsolated", "reuseExisting", "reuseWorkstream", "askUser"]),
                                         "worktree_id": .string(description: "Optional worktree identifier."),
+                                        "base_ref": .string(description: "Required for createIsolated mutable workstreams before approval; resolved repository default branch/ref or explicit requested base."),
+                                        "base_reason": .string(description: "Why this worktree base was chosen."),
                                         "reason": .string(description: "Reason for this strategy.")
                                     ],
                                     required: ["mode"]
@@ -359,7 +361,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                                 "workstream_id": .string(description: "Optional workstream UUID."),
                                 "workstream_title": .string(description: "Optional workstream title alternative."),
                                 "decision": .string(description: "Routing decision kind.", enum: ["start_fresh_readonly_child", "start_fresh_worktree", "steer_primary", "start_fresh_sibling_on_same_worktree", "respond_to_interaction", "hold_for_user", "cancel_or_replace"]),
-                                "operation": .string(description: "Concrete operation chosen.", enum: ["agent_explore.start", "agent_run.start", "agent_run.steer", "agent_run.respond", "agent_run.cancel", "coordinator_hold"]),
+                                "operation": .string(description: "Concrete operation chosen.", enum: ["agent_explore.start", "agent_run.start", "agent_run.steer", "agent_run.respond", "agent_run.cancel", "coordinator_hold", "coordinator_publish"]),
                                 "session_id": .string(description: "Optional target/new child session UUID."),
                                 "prior_session_id": .string(description: "Optional previous/replaced session UUID."),
                                 "worktree_id": .string(description: "Optional worktree identifier."),

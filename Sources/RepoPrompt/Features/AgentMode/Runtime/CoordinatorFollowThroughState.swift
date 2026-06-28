@@ -753,6 +753,7 @@ enum CoordinatorMissionRoutingOperation: String, Codable, Equatable, CaseIterabl
     case agentRunRespond = "agent_run.respond"
     case agentRunCancel = "agent_run.cancel"
     case coordinatorHold = "coordinator_hold"
+    case coordinatorPublish = "coordinator_publish"
 
     var displayName: String {
         switch self {
@@ -762,6 +763,7 @@ enum CoordinatorMissionRoutingOperation: String, Codable, Equatable, CaseIterabl
         case .agentRunRespond: "agent_run.respond"
         case .agentRunCancel: "agent_run.cancel"
         case .coordinatorHold: "Coordinator hold"
+        case .coordinatorPublish: "Coordinator publish"
         }
     }
 }
