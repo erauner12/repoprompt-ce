@@ -260,14 +260,14 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 **stop_mission**: coordinator_session_id?
                 **submit**: message (required), coordinator_session_id? or new_parent?
                 **mission_plan**: coordinator_session_id? plus one or more of objective, status, approval_state, workstreams, nodes, routing_decisions, events. replace_workstreams/replace_nodes may be true for deliberate plan rewrites.
-                **mission_status**: coordinator_session_id?, compact?; returns current plan state and routing_decisions_recent newest-first, max 20. compact=true returns a smaller polling summary with liveness warnings and short recent history.
+                **mission_status**: coordinator_session_id?, compact?; returns current plan state and routing_decisions_recent newest-first, max 20. compact=true returns a smaller polling summary with liveness warnings, checkpoint submit hints, and short recent history.
                 """,
                 properties: [
                     "op": .string(description: "Operation.", enum: ["list", "select", "new", "start_mission", "stop_mission", "submit", "mission_plan", "mission_status"]),
                     "coordinator_session_id": .string(description: "[select, stop_mission, submit, mission_plan, mission_status] Existing Coordinator parent session UUID. Defaults to the selected Coordinator for mission_plan/mission_status."),
                     "message": .string(description: "[start_mission, submit] Directive text to send to the fresh, selected, or requested Coordinator parent."),
                     "new_parent": .boolean(description: "[submit] Start from a blank Coordinator parent before sending this directive. Default false."),
-                    "compact": .boolean(description: "[mission_status] Return a small polling summary instead of the full Coordinator snapshot. Default false."),
+                    "compact": .boolean(description: "[mission_status] Return a small polling summary instead of the full Coordinator snapshot. Includes plan-approval checkpoint actions when available. Default false."),
                     "objective": .string(description: "[mission_plan] User-specific Mission objective."),
                     "status": .string(description: "[mission_plan] Mission status.", enum: ["draft", "approved", "running", "blocked", "completed", "stopped"]),
                     "approval_state": .string(description: "[mission_plan] Human approval state for the plan.", enum: ["not_required", "awaiting_approval", "approved", "revision_requested"]),

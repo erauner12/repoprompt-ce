@@ -786,6 +786,57 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertTrue(warnings.contains("running_delegated_nodes_without_bound_sessions"))
     }
 
+    func testMissionStatusCompactIncludesPlanApprovalCheckpointActions() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let plan = CoordinatorMissionPlan(
+            objective: "Plan the next PR",
+            status: .draft,
+            approvalState: .awaitingApproval,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Planning",
+                    purpose: "Choose the next safe slice.",
+                    defaultPolicy: .coordinatorOnly,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Choose next PR scope",
+                    workstreamID: workstreamID,
+                    executionPolicy: .coordinatorOnly,
+                    status: .pending
+                )
+            ]
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ])
+        let status = try XCTUnwrap(response.objectValue?["mission_status"]?.objectValue)
+        let checkpoint = try XCTUnwrap(status["checkpoint"]?.objectValue)
+        let actions = try XCTUnwrap(checkpoint["actions"]?.arrayValue?.compactMap(\.objectValue))
+        let labels = actions.compactMap { $0["label"]?.stringValue }
+
+        XCTAssertEqual(checkpoint["kind"]?.stringValue, "plan_approval")
+        XCTAssertTrue(labels.contains("Proceed"))
+        XCTAssertTrue(labels.contains("Gather evidence"))
+        XCTAssertTrue(labels.contains("Get independent critique"))
+        let proceed = try XCTUnwrap(actions.first { $0["label"]?.stringValue == "Proceed" })
+        XCTAssertEqual(proceed["submit_op"]?.stringValue, "submit")
+        XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("Approved to proceed") == true)
+    }
+
     func testMissionStatusFlagsBoundWorkflowMismatch() async throws {
         let coordinatorID = UUID()
         let workstreamID = UUID()

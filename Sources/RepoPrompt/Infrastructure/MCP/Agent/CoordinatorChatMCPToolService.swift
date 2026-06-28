@@ -1054,6 +1054,7 @@ struct CoordinatorChatMCPToolService {
             ),
             "missing_bound_rows": .array(missingBoundRows.map { compactMissionStatusNodeValue($0, rowsBySessionID: rowsBySessionID) }),
             "liveness_warnings": .array(warnings.map(Value.string)),
+            "checkpoint": compactMissionCheckpointValue(plan),
             "recent_events": .array(
                 plan.events
                     .sorted { lhs, rhs in
@@ -1072,6 +1073,60 @@ struct CoordinatorChatMCPToolService {
                     .prefix(5)
                     .map(missionRoutingDecisionValue)
             )
+        ])
+    }
+
+    private func compactMissionCheckpointValue(_ plan: CoordinatorMissionPlan) -> Value {
+        guard plan.approvalState == .awaitingApproval,
+              !plan.nodes.isEmpty,
+              plan.status != .stopped,
+              plan.status != .completed
+        else {
+            return .null
+        }
+
+        return .object([
+            "kind": .string("plan_approval"),
+            "title": .string("Approval required"),
+            "description": .string("Submit one of these messages with coordinator_chat op=submit to continue through the existing Coordinator checkpoint contract."),
+            "actions": .array([
+                compactMissionCheckpointAction(
+                    label: "Proceed",
+                    message: CoordinatorModeViewModel.ContinuationAction.proceed.directiveText
+                ),
+                compactMissionCheckpointAction(
+                    label: "Revise",
+                    message: "Revise the plan: "
+                ),
+                compactMissionCheckpointAction(
+                    label: "Gather evidence",
+                    message: CoordinatorModeViewModel.ContinuationAction.runLightweightDiscovery.directiveText
+                ),
+                compactMissionCheckpointAction(
+                    label: "Deepen plan",
+                    message: CoordinatorModeViewModel.ContinuationAction.runDeepPlan.directiveText
+                ),
+                compactMissionCheckpointAction(
+                    label: "Get independent critique",
+                    message: CoordinatorModeViewModel.ContinuationAction.runDesignCritique.directiveText
+                ),
+                compactMissionCheckpointAction(
+                    label: "Start smaller",
+                    message: CoordinatorModeViewModel.ContinuationAction.startSmaller.directiveText
+                ),
+                compactMissionCheckpointAction(
+                    label: "Stop",
+                    message: CoordinatorModeViewModel.ContinuationAction.stopHere.directiveText
+                )
+            ])
+        ])
+    }
+
+    private func compactMissionCheckpointAction(label: String, message: String) -> Value {
+        .object([
+            "label": .string(label),
+            "submit_op": .string("submit"),
+            "submit_message": .string(message)
         ])
     }
 
