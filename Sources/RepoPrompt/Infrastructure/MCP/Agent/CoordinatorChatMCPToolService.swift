@@ -188,12 +188,14 @@ struct CoordinatorChatMCPToolService {
         let objective = normalizedString(args["objective"])
         let status = try parseOptionalMissionPlanStatus(args["status"])
         let approvalState = try parseOptionalMissionPlanApprovalState(args["approval_state"] ?? args["approvalState"])
+        let replaceWorkstreams = AgentMCPToolHelpers.parseBool(args["replace_workstreams"] ?? args["replaceWorkstreams"]) ?? false
+        let replaceNodes = AgentMCPToolHelpers.parseBool(args["replace_nodes"] ?? args["replaceNodes"]) ?? false
         let workstreams = try args.keys.contains("workstreams")
-            ? parseMissionWorkstreams(args["workstreams"], existingPlan: existingPlan)
+            ? parseMissionWorkstreams(args["workstreams"], existingPlan: replaceWorkstreams ? nil : existingPlan)
             : nil
         let effectiveWorkstreams = workstreams ?? existingPlan?.workstreams ?? []
         let nodes = try args.keys.contains("nodes")
-            ? parseMissionPlanNodes(args["nodes"], workstreams: effectiveWorkstreams, existingPlan: existingPlan)
+            ? parseMissionPlanNodes(args["nodes"], workstreams: effectiveWorkstreams, existingPlan: replaceNodes ? nil : existingPlan)
             : nil
         let effectiveNodes = nodes ?? existingPlan?.nodes ?? []
         let hasRoutingDecisions = args.keys.contains("routing_decisions") || args.keys.contains("routingDecisions")
@@ -217,6 +219,8 @@ struct CoordinatorChatMCPToolService {
             approvalState: approvalState,
             workstreams: workstreams,
             nodes: nodes,
+            replaceWorkstreams: replaceWorkstreams,
+            replaceNodes: replaceNodes,
             routingDecisions: routingDecisions,
             events: events,
             updatedAt: parseOptionalDate(args["updated_at"] ?? args["updatedAt"], name: "updated_at") ?? Date()

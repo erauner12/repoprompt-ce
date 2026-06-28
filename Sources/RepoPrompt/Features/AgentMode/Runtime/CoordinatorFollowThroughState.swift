@@ -70,12 +70,14 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         let workstreams = mergeWorkstreams(
             existing: missionPlan?.workstreams ?? [],
             incoming: update.workstreams,
+            replace: update.replaceWorkstreams,
             existingByID: existingByID,
             existingByTitle: existingByTitle
         )
         let nodes = mergeNodes(
             existing: missionPlan?.nodes ?? [],
-            incoming: update.nodes
+            incoming: update.nodes,
+            replace: update.replaceNodes
         )
         let routingDecisions = mergeRoutingDecisions(
             existing: missionPlan?.routingDecisions ?? [],
@@ -109,9 +111,13 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
     private func mergeWorkstreams(
         existing: [CoordinatorMissionWorkstreamSummary],
         incoming: [CoordinatorMissionWorkstreamSummary]?,
+        replace: Bool,
         existingByID: [UUID: CoordinatorMissionWorkstreamSummary],
         existingByTitle: [String: CoordinatorMissionWorkstreamSummary]
     ) -> [CoordinatorMissionWorkstreamSummary] {
+        if replace {
+            return incoming ?? []
+        }
         guard let incoming else { return existing }
         guard !existing.isEmpty else { return incoming }
 
@@ -135,8 +141,12 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
 
     private func mergeNodes(
         existing: [CoordinatorMissionPlanNode],
-        incoming: [CoordinatorMissionPlanNode]?
+        incoming: [CoordinatorMissionPlanNode]?,
+        replace: Bool
     ) -> [CoordinatorMissionPlanNode] {
+        if replace {
+            return incoming ?? []
+        }
         guard let incoming else { return existing }
         guard !existing.isEmpty else { return incoming }
 
@@ -304,6 +314,8 @@ struct CoordinatorMissionPlanUpdate: Equatable {
     var approvalState: CoordinatorMissionPlanApprovalState?
     var workstreams: [CoordinatorMissionWorkstreamSummary]?
     var nodes: [CoordinatorMissionPlanNode]?
+    var replaceWorkstreams: Bool
+    var replaceNodes: Bool
     var routingDecisions: [CoordinatorMissionRoutingDecision]?
     var events: [CoordinatorMissionPlanEvent]
     var updatedAt: Date
@@ -314,6 +326,8 @@ struct CoordinatorMissionPlanUpdate: Equatable {
         approvalState: CoordinatorMissionPlanApprovalState? = nil,
         workstreams: [CoordinatorMissionWorkstreamSummary]? = nil,
         nodes: [CoordinatorMissionPlanNode]? = nil,
+        replaceWorkstreams: Bool = false,
+        replaceNodes: Bool = false,
         routingDecisions: [CoordinatorMissionRoutingDecision]? = nil,
         events: [CoordinatorMissionPlanEvent] = [],
         updatedAt: Date = Date()
@@ -323,6 +337,8 @@ struct CoordinatorMissionPlanUpdate: Equatable {
         self.approvalState = approvalState
         self.workstreams = workstreams
         self.nodes = nodes
+        self.replaceWorkstreams = replaceWorkstreams
+        self.replaceNodes = replaceNodes
         self.routingDecisions = routingDecisions
         self.events = events
         self.updatedAt = updatedAt

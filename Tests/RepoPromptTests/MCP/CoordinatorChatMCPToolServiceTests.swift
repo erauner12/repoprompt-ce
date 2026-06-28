@@ -204,6 +204,83 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(strategy["base_reason"]?.stringValue, "Issue implementation starts from this repository's default branch.")
     }
 
+    func testMissionPlanCanReplaceWorkstreamsAndNodes() async throws {
+        let coordinatorID = UUID()
+        let staleWorkstreamID = UUID()
+        let replacementWorkstreamID = UUID()
+        let replacementNodeID = UUID()
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { missionPlans },
+            updateMissionPlan: { sessionID, update in
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(update)
+                missionPlans[sessionID] = state.missionPlan
+            }
+        )
+
+        _ = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "objective": .string("Ship next PR"),
+            "workstreams": .array([
+                .object([
+                    "id": .string(staleWorkstreamID.uuidString),
+                    "title": .string("Old platform smoke"),
+                    "purpose": .string("No longer part of this PR."),
+                    "default_policy": .string("fresh_worktree"),
+                    "worktree_strategy": .object([
+                        "mode": .string("createIsolated")
+                    ])
+                ])
+            ]),
+            "nodes": .array([
+                .object([
+                    "title": .string("Old platform smoke node"),
+                    "workstream_id": .string(staleWorkstreamID.uuidString),
+                    "execution_policy": .string("fresh_worktree"),
+                    "status": .string("blocked")
+                ])
+            ])
+        ])
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "replace_workstreams": .bool(true),
+            "replace_nodes": .bool(true),
+            "workstreams": .array([
+                .object([
+                    "id": .string(replacementWorkstreamID.uuidString),
+                    "title": .string("Developer UX"),
+                    "purpose": .string("Add prerequisites and doctor checks."),
+                    "default_policy": .string("fresh_worktree"),
+                    "worktree_strategy": .object([
+                        "mode": .string("createIsolated")
+                    ])
+                ])
+            ]),
+            "nodes": .array([
+                .object([
+                    "id": .string(replacementNodeID.uuidString),
+                    "title": .string("Add doctor prerequisite checks"),
+                    "workstream_id": .string(replacementWorkstreamID.uuidString),
+                    "execution_policy": .string("fresh_worktree"),
+                    "status": .string("pending")
+                ])
+            ])
+        ])
+
+        let plan = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue)
+        let workstreams = try XCTUnwrap(plan["workstreams"]?.arrayValue)
+        let nodes = try XCTUnwrap(plan["nodes"]?.arrayValue)
+        XCTAssertEqual(workstreams.count, 1)
+        XCTAssertEqual(workstreams.first?.objectValue?["title"]?.stringValue, "Developer UX")
+        XCTAssertEqual(nodes.count, 1)
+        XCTAssertEqual(nodes.first?.objectValue?["id"]?.stringValue, replacementNodeID.uuidString)
+        XCTAssertEqual(nodes.first?.objectValue?["title"]?.stringValue, "Add doctor prerequisite checks")
+    }
+
     func testMissionPlanAcceptsNodesStatusAndEvents() async throws {
         let coordinatorID = UUID()
         let workstreamID = UUID()
