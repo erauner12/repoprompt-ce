@@ -744,6 +744,20 @@ final class CodexNativeSessionController {
         return try await client.request(method: method, params: params, timeout: timeout)
     }
 
+    func cleanupConversation(
+        _ handle: ProviderConversationCleanupHandle,
+        action: ProviderConversationCleanupAction
+    ) async -> ProviderConversationCleanupOutcome {
+        let cleanup = CodexConversationCleanupService(
+            requestExecutor: { [weak self] method, params, timeout in
+                guard let self else { throw CodexAppServerClient.ClientError.invalidResponse }
+                return try await performRequest(method: method, params: params, timeout: timeout)
+            },
+            timeout: options.requestTimeout
+        )
+        return await cleanup.cleanup(handle, action: action)
+    }
+
     init(
         client: CodexAppServerClient,
         runID: UUID,
