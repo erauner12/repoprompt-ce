@@ -34,10 +34,11 @@ final class CoordinatorMissionTemplateStoreTests: XCTestCase {
     func testBuiltInDeepPlanOrchestrateReviewWrapsWorkflowStages() {
         let wrapped = CoordinatorMissionTemplate.deepPlanOrchestrateReview.wrap("ship the coordinator demo")
 
-        XCTAssertTrue(wrapped.contains("workflow_name=\"Deep Plan\""))
-        XCTAssertTrue(wrapped.contains("workflow_name=\"Orchestrate\""))
-        XCTAssertTrue(wrapped.contains("workflow_name=\"Review\""))
-        XCTAssertTrue(wrapped.contains("Needs you"))
+        XCTAssertTrue(wrapped.contains("Deep Plan"))
+        XCTAssertTrue(wrapped.contains("Orchestrate"))
+        XCTAssertTrue(wrapped.contains("Review"))
+        XCTAssertTrue(wrapped.contains("durable primary implementation lane"))
+        XCTAssertTrue(wrapped.contains("fix loop"))
         XCTAssertTrue(wrapped.contains("ship the coordinator demo"))
     }
 

@@ -1167,6 +1167,70 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(status["fingerprint"]?.stringValue, fingerprint)
     }
 
+    func testCompactMissionStatusFingerprintChangesForGrandchildFleetMotion() async throws {
+        let coordinatorID = UUID()
+        let workerID = UUID()
+        let helperID = UUID()
+        let plan = CoordinatorMissionPlan(
+            objective: "Watch mission fleet",
+            status: .running,
+            approvalState: .approved
+        )
+
+        let workerRow = Self.childRow(
+            id: workerID,
+            parentCoordinatorID: coordinatorID,
+            title: "Primary worker",
+            workflow: nil
+        )
+        let runningHelperRow = Self.childRow(
+            id: helperID,
+            parentCoordinatorID: coordinatorID,
+            title: "Worker helper",
+            parentSessionID: workerID,
+            runState: .running,
+            statusGroup: .working,
+            workflow: nil
+        )
+        let completedHelperRow = Self.childRow(
+            id: helperID,
+            parentCoordinatorID: coordinatorID,
+            title: "Worker helper",
+            parentSessionID: workerID,
+            runState: .completed,
+            statusGroup: .done,
+            workflow: nil
+        )
+
+        let runningService = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            rows: [workerRow, runningHelperRow],
+            missionPlans: { [coordinatorID: plan] }
+        )
+        let completedService = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            rows: [workerRow, completedHelperRow],
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let compactStatusArgs: [String: Value] = [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ]
+        let runningResponse = try await runningService.execute(args: compactStatusArgs)
+        let completedResponse = try await completedService.execute(args: compactStatusArgs)
+        let runningFingerprint = try XCTUnwrap(
+            runningResponse.objectValue?["mission_status"]?.objectValue?["fingerprint"]?.stringValue
+        )
+        let completedFingerprint = try XCTUnwrap(
+            completedResponse.objectValue?["mission_status"]?.objectValue?["fingerprint"]?.stringValue
+        )
+
+        XCTAssertNotEqual(runningFingerprint, completedFingerprint)
+    }
+
     func testMissionStatusFlagsBoundWorkflowMismatch() async throws {
         let coordinatorID = UUID()
         let workstreamID = UUID()
@@ -1615,6 +1679,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         id: UUID,
         parentCoordinatorID: UUID,
         title: String,
+        parentSessionID: UUID? = nil,
+        runState: AgentSessionRunState = .running,
+        statusGroup: CoordinatorModeStatusGroup = .working,
         workflow: CoordinatorModeWorkflowDisplaySummary?
     ) -> CoordinatorModeRow {
         CoordinatorModeRow(
@@ -1624,9 +1691,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             title: title,
             providerName: "codexExec",
             modelName: "gpt-5.5",
-            runState: .running,
-            statusGroup: .working,
-            parentSessionID: parentCoordinatorID,
+            runState: runState,
+            statusGroup: statusGroup,
+            parentSessionID: parentSessionID ?? parentCoordinatorID,
             parentCoordinator: CoordinatorModeRow.ParentCoordinator(
                 sessionID: parentCoordinatorID,
                 title: "Coordinator mission",

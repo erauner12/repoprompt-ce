@@ -1334,20 +1334,47 @@ struct CoordinatorChatMCPToolService {
                 node.boundInteractionID?.uuidString ?? "bound_interaction:nil"
             ])
         }
-        let childRows = rows
-            .filter { $0.parentSessionID == option.sessionID }
-            .sorted { $0.sessionID.uuidString < $1.sessionID.uuidString }
+        let childRows = compactMissionDescendantRows(option: option, rows: rows)
+        parts.append(contentsOf: [
+            "descendant_rows",
+            "\(childRows.count)"
+        ])
         for row in childRows {
             parts.append(contentsOf: [
                 "row",
                 row.sessionID.uuidString,
+                row.parentSessionID?.uuidString ?? "parent:nil",
                 row.runState.rawValue,
                 row.statusGroup.rawValue,
                 row.workflow?.id ?? "workflow:nil",
-                row.pendingInteraction?.id.uuidString ?? "interaction:nil"
+                row.pendingInteraction?.id.uuidString ?? "interaction:nil",
+                row.childSessionIDs.map(\.uuidString).sorted().joined(separator: ",")
             ])
         }
         return stableFingerprint(parts)
+    }
+
+    private func compactMissionDescendantRows(
+        option: CoordinatorModeCoordinatorOption,
+        rows: [CoordinatorModeRow]
+    ) -> [CoordinatorModeRow] {
+        var descendantIDs = Set<UUID>()
+        var changed = true
+        while changed {
+            changed = false
+            for row in rows {
+                let isDirectChild = row.parentSessionID == option.sessionID
+                    || row.parentCoordinator?.sessionID == option.sessionID
+                let isDescendant = row.parentSessionID.map(descendantIDs.contains) ?? false
+                guard isDirectChild || isDescendant else { continue }
+                if descendantIDs.insert(row.sessionID).inserted {
+                    changed = true
+                }
+            }
+        }
+        return rows
+            .filter { descendantIDs.contains($0.sessionID) }
+            .sorted { $0.sessionID.uuidString < $1.sessionID.uuidString }
     }
 
     private func compactMissionRoutingWarnings(
