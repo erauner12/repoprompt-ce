@@ -240,7 +240,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             - `list`: Return current Coordinator parent selection, available parents, and board counts.
             - `select`: Select an existing Coordinator parent by `coordinator_session_id`.
             - `new`: Mirror New Coordinator. The rail switches to a blank parent context; the next submit creates the parent runtime.
-            - `start_mission`: Start a fresh Coordinator Mission and submit the initial directive in one operation. Prefer this for external automation starting a new mission.
+            - `start_mission`: Start a fresh Coordinator Mission and submit the initial directive in one operation. Prefer this for external automation starting a new mission. Optional predecessor fields mark the new Mission as a follow-up to a prior Mission.
             - `stop_mission`: Stop the selected or requested Coordinator Mission and cancel live linked sessions without archiving or deleting them.
             - `submit`: Send a directive to the selected parent, to `coordinator_session_id`, or to a fresh parent when `new_parent=true`.
             - `mission_plan`: Create or update the selected Coordinator Mission's DAG-lite plan. Use this before delegated child starts. Workstream and node arrays are upserts by default: include only changed entries for existing IDs/titles; omitted entries are preserved. Use `replace_workstreams=true` or `replace_nodes=true` when rewriting that part of the plan of record. Routing decisions append/upsert by id.
@@ -257,10 +257,10 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 **list**: no additional fields
                 **select**: coordinator_session_id (required)
                 **new**: no additional fields
-                **start_mission**: message (required)
+                **start_mission**: message (required), optional predecessor_mission_id/predecessor_title/predecessor_summary for linked follow-up Missions
                 **stop_mission**: coordinator_session_id?
                 **submit**: message (required), coordinator_session_id? or new_parent?
-                **mission_plan**: coordinator_session_id? plus one or more of objective, status, approval_state, workstreams, nodes, routing_decisions, events. replace_workstreams/replace_nodes may be true for deliberate plan rewrites.
+                **mission_plan**: coordinator_session_id? plus one or more of objective, predecessor context, status, approval_state, workstreams, nodes, routing_decisions, events. replace_workstreams/replace_nodes may be true for deliberate plan rewrites.
                 **mission_status**: coordinator_session_id?, compact?; returns current plan state and routing_decisions_recent newest-first, max 20. compact=true returns a smaller polling summary with liveness warnings, checkpoint submit hints, and short recent history.
                 **wait_for_update**: coordinator_session_id?, since_fingerprint?, timeout_seconds?; waits until compact mission_status.fingerprint changes and returns compact status.
                 """,
@@ -273,6 +273,9 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                     "since_fingerprint": .string(description: "[wait_for_update] Last compact mission_status.fingerprint observed by the caller. If omitted, returns immediately."),
                     "timeout_seconds": .number(description: "[wait_for_update] Maximum seconds to wait before returning the current compact status. Default 30, max 300."),
                     "objective": .string(description: "[mission_plan] User-specific Mission objective."),
+                    "predecessor_mission_id": .string(description: "[start_mission, mission_plan] Optional prior Mission UUID when this Mission is a follow-up."),
+                    "predecessor_title": .string(description: "[start_mission, mission_plan] Optional prior Mission title shown as follow-up context."),
+                    "predecessor_summary": .string(description: "[start_mission, mission_plan] Compact durable findings/decisions carried into this follow-up Mission."),
                     "status": .string(description: "[mission_plan] Mission status.", enum: ["draft", "approved", "running", "blocked", "completed", "stopped"]),
                     "approval_state": .string(description: "[mission_plan] Human approval state for the plan.", enum: ["not_required", "awaiting_approval", "approved", "revision_requested"]),
                     "replace_workstreams": .boolean(description: "[mission_plan] Replace all existing workstreams with the provided workstreams instead of upserting/preserving omitted workstreams. Default false."),

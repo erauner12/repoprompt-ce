@@ -80,6 +80,7 @@ struct CoordinatorChatMCPToolService {
             else {
                 throw MCPError.invalidParams("message is required.")
             }
+            let predecessorUpdate = try parseMissionPredecessorUpdate(args)
 
             environment.refresh()
             environment.startNewCoordinatorRun()
@@ -88,6 +89,12 @@ struct CoordinatorChatMCPToolService {
 
             switch result {
             case .accepted:
+                if predecessorUpdate.hasPredecessorContext,
+                   let coordinatorSessionID = environment.snapshot().coordinatorRail.coordinatorSessionID
+                {
+                    try environment.updateMissionPlan(coordinatorSessionID, predecessorUpdate.update)
+                    environment.refresh()
+                }
                 return stateResponse(environment.snapshot(), extra: [
                     "accepted": .bool(true),
                     "routed_to": .string("coordinator"),
@@ -254,6 +261,7 @@ struct CoordinatorChatMCPToolService {
         existingPlan: CoordinatorMissionPlan?
     ) throws -> CoordinatorMissionPlanUpdate {
         let objective = normalizedString(args["objective"])
+        let predecessorUpdate = try parseMissionPredecessorUpdate(args)
         let status = try parseOptionalMissionPlanStatus(args["status"])
         let approvalState = try parseOptionalMissionPlanApprovalState(args["approval_state"] ?? args["approvalState"])
         let replaceWorkstreams = AgentMCPToolHelpers.parseBool(args["replace_workstreams"] ?? args["replaceWorkstreams"]) ?? false
@@ -272,6 +280,7 @@ struct CoordinatorChatMCPToolService {
             : nil
         let events = try parseMissionPlanEvents(args["events"], nodes: effectiveNodes)
         if objective == nil,
+           !predecessorUpdate.hasPredecessorContext,
            status == nil,
            approvalState == nil,
            workstreams == nil,
@@ -279,10 +288,13 @@ struct CoordinatorChatMCPToolService {
            routingDecisions == nil,
            events.isEmpty
         {
-            throw MCPError.invalidParams("mission_plan requires at least one of objective, status, approval_state, workstreams, nodes, routing_decisions, or events.")
+            throw MCPError.invalidParams("mission_plan requires at least one of objective, predecessor context, status, approval_state, workstreams, nodes, routing_decisions, or events.")
         }
         return try CoordinatorMissionPlanUpdate(
             objective: objective,
+            predecessorMissionID: predecessorUpdate.update.predecessorMissionID,
+            predecessorTitle: predecessorUpdate.update.predecessorTitle,
+            predecessorSummary: predecessorUpdate.update.predecessorSummary,
             status: status,
             approvalState: approvalState,
             workstreams: workstreams,
@@ -292,6 +304,32 @@ struct CoordinatorChatMCPToolService {
             routingDecisions: routingDecisions,
             events: events,
             updatedAt: parseOptionalDate(args["updated_at"] ?? args["updatedAt"], name: "updated_at") ?? Date()
+        )
+    }
+
+    private func parseMissionPredecessorUpdate(_ args: [String: Value]) throws -> (
+        hasPredecessorContext: Bool,
+        update: CoordinatorMissionPlanUpdate
+    ) {
+        let hasPredecessorID = args.keys.contains("predecessor_mission_id") || args.keys.contains("predecessorMissionID")
+        let hasPredecessorTitle = args.keys.contains("predecessor_title") || args.keys.contains("predecessorTitle")
+        let hasPredecessorSummary = args.keys.contains("predecessor_summary") || args.keys.contains("predecessorSummary")
+        let predecessorMissionID = hasPredecessorID
+            ? try optionalUUID(args["predecessor_mission_id"] ?? args["predecessorMissionID"], name: "predecessor_mission_id")
+            : nil
+        let predecessorTitle = hasPredecessorTitle
+            ? normalizedString(args["predecessor_title"] ?? args["predecessorTitle"])
+            : nil
+        let predecessorSummary = hasPredecessorSummary
+            ? normalizedString(args["predecessor_summary"] ?? args["predecessorSummary"])
+            : nil
+        return (
+            hasPredecessorID || hasPredecessorTitle || hasPredecessorSummary,
+            CoordinatorMissionPlanUpdate(
+                predecessorMissionID: predecessorMissionID,
+                predecessorTitle: predecessorTitle,
+                predecessorSummary: predecessorSummary
+            )
         )
     }
 
@@ -1089,6 +1127,9 @@ struct CoordinatorChatMCPToolService {
             "plan": .object([
                 "revision": .int(plan.revision),
                 "objective": AgentMCPToolHelpers.stringOrNull(plan.objective),
+                "predecessor_mission_id": AgentMCPToolHelpers.stringOrNull(plan.predecessorMissionID?.uuidString),
+                "predecessor_title": AgentMCPToolHelpers.stringOrNull(plan.predecessorTitle),
+                "predecessor_summary": AgentMCPToolHelpers.stringOrNull(plan.predecessorSummary),
                 "status": .string(plan.status.rawValue),
                 "approval_state": .string(plan.approvalState.rawValue)
             ]),
@@ -1196,7 +1237,10 @@ struct CoordinatorChatMCPToolService {
             plan.status.rawValue,
             plan.approvalState.rawValue,
             "\(plan.nodes.count)",
-            "\(plan.workstreams.count)"
+            "\(plan.workstreams.count)",
+            plan.predecessorMissionID?.uuidString ?? "predecessor:nil",
+            plan.predecessorTitle ?? "predecessor_title:nil",
+            plan.predecessorSummary ?? "predecessor_summary:nil"
         ])
         for workstream in plan.workstreams {
             parts.append(contentsOf: [
@@ -1529,6 +1573,9 @@ struct CoordinatorChatMCPToolService {
             "id": .string(plan.id.uuidString),
             "revision": .int(plan.revision),
             "objective": AgentMCPToolHelpers.stringOrNull(plan.objective),
+            "predecessor_mission_id": AgentMCPToolHelpers.stringOrNull(plan.predecessorMissionID?.uuidString),
+            "predecessor_title": AgentMCPToolHelpers.stringOrNull(plan.predecessorTitle),
+            "predecessor_summary": AgentMCPToolHelpers.stringOrNull(plan.predecessorSummary),
             "status": .string(plan.status.rawValue),
             "approval_state": .string(plan.approvalState.rawValue),
             "updated_at": .string(AgentMCPToolHelpers.timestamp(plan.updatedAt)),

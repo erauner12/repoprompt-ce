@@ -88,6 +88,11 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             revision: (missionPlan?.revision ?? 0) + 1,
             objective: update.objective?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                 ?? missionPlan?.objective,
+            predecessorMissionID: update.predecessorMissionID ?? missionPlan?.predecessorMissionID,
+            predecessorTitle: update.predecessorTitle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                ?? missionPlan?.predecessorTitle,
+            predecessorSummary: update.predecessorSummary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                ?? missionPlan?.predecessorSummary,
             status: update.status ?? missionPlan?.status ?? .draft,
             approvalState: update.approvalState ?? missionPlan?.approvalState ?? .notRequired,
             template: missionTemplate,
@@ -310,6 +315,9 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
 
 struct CoordinatorMissionPlanUpdate: Equatable {
     var objective: String?
+    var predecessorMissionID: UUID?
+    var predecessorTitle: String?
+    var predecessorSummary: String?
     var status: CoordinatorMissionPlanStatus?
     var approvalState: CoordinatorMissionPlanApprovalState?
     var workstreams: [CoordinatorMissionWorkstreamSummary]?
@@ -322,6 +330,9 @@ struct CoordinatorMissionPlanUpdate: Equatable {
 
     init(
         objective: String? = nil,
+        predecessorMissionID: UUID? = nil,
+        predecessorTitle: String? = nil,
+        predecessorSummary: String? = nil,
         status: CoordinatorMissionPlanStatus? = nil,
         approvalState: CoordinatorMissionPlanApprovalState? = nil,
         workstreams: [CoordinatorMissionWorkstreamSummary]? = nil,
@@ -333,6 +344,9 @@ struct CoordinatorMissionPlanUpdate: Equatable {
         updatedAt: Date = Date()
     ) {
         self.objective = objective
+        self.predecessorMissionID = predecessorMissionID
+        self.predecessorTitle = predecessorTitle
+        self.predecessorSummary = predecessorSummary
         self.status = status
         self.approvalState = approvalState
         self.workstreams = workstreams
@@ -349,6 +363,9 @@ struct CoordinatorMissionPlan: Codable, Equatable {
     var id: UUID
     var revision: Int
     var objective: String?
+    var predecessorMissionID: UUID?
+    var predecessorTitle: String?
+    var predecessorSummary: String?
     var status: CoordinatorMissionPlanStatus
     var approvalState: CoordinatorMissionPlanApprovalState
     var template: CoordinatorMissionTemplateSummary?
@@ -362,6 +379,9 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         id: UUID = UUID(),
         revision: Int = 1,
         objective: String? = nil,
+        predecessorMissionID: UUID? = nil,
+        predecessorTitle: String? = nil,
+        predecessorSummary: String? = nil,
         status: CoordinatorMissionPlanStatus = .draft,
         approvalState: CoordinatorMissionPlanApprovalState = .notRequired,
         template: CoordinatorMissionTemplateSummary? = nil,
@@ -374,6 +394,9 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         self.id = id
         self.revision = max(1, revision)
         self.objective = objective?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.predecessorMissionID = predecessorMissionID
+        self.predecessorTitle = predecessorTitle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.predecessorSummary = predecessorSummary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.status = status
         self.approvalState = approvalState
         self.template = template
@@ -421,6 +444,9 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         case id
         case revision
         case objective
+        case predecessorMissionID
+        case predecessorTitle
+        case predecessorSummary
         case status
         case approvalState
         case template
@@ -437,6 +463,9 @@ struct CoordinatorMissionPlan: Codable, Equatable {
             id: container.decode(UUID.self, forKey: .id),
             revision: container.decode(Int.self, forKey: .revision),
             objective: container.decodeIfPresent(String.self, forKey: .objective),
+            predecessorMissionID: container.decodeIfPresent(UUID.self, forKey: .predecessorMissionID),
+            predecessorTitle: container.decodeIfPresent(String.self, forKey: .predecessorTitle),
+            predecessorSummary: container.decodeIfPresent(String.self, forKey: .predecessorSummary),
             status: container.decode(CoordinatorMissionPlanStatus.self, forKey: .status),
             approvalState: container.decode(CoordinatorMissionPlanApprovalState.self, forKey: .approvalState),
             template: container.decodeIfPresent(CoordinatorMissionTemplateSummary.self, forKey: .template),

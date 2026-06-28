@@ -64,8 +64,12 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
 
     func testMissionPlanNodeWorkflowHintAndEvidenceCodableRoundTrip() throws {
         let workstreamID = UUID()
+        let predecessorID = UUID()
         let plan = CoordinatorMissionPlan(
             objective: "Add CSV export to orders table",
+            predecessorMissionID: predecessorID,
+            predecessorTitle: "PR #5 Contract Fixtures",
+            predecessorSummary: "Negative fixture tests now define the contract harness shape.",
             workstreams: [
                 CoordinatorMissionWorkstreamSummary(
                     id: workstreamID,
@@ -98,6 +102,9 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(decoded.nodes.first?.workflowHint?.name, "Orchestrate")
         XCTAssertEqual(decoded.nodes.first?.workflowHint?.id, "builtin-orchestrate")
         XCTAssertEqual(decoded.nodes.first?.completionEvidence, "Downloaded CSV matches the currently visible filtered data.")
+        XCTAssertEqual(decoded.predecessorMissionID, predecessorID)
+        XCTAssertEqual(decoded.predecessorTitle, "PR #5 Contract Fixtures")
+        XCTAssertEqual(decoded.predecessorSummary, "Negative fixture tests now define the contract harness shape.")
     }
 
     func testPlanCritiqueExecutionPolicyCodableAndDisplayName() throws {

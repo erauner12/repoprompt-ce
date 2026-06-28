@@ -330,6 +330,20 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         }
     }
 
+    func testCoordinatorChatSchemaAdvertisesFollowUpMissionFields() async throws {
+        let window = Self.makeWindowWithoutAutoStart()
+        let tools = await window.mcpServer.windowMCPTools
+        let coordinatorChat = try XCTUnwrap(tools.first { $0.name == MCPWindowToolName.coordinatorChat })
+        let properties = try Self.schemaProperties(for: coordinatorChat)
+
+        XCTAssertNotNil(properties["predecessor_mission_id"])
+        XCTAssertNotNil(properties["predecessor_title"])
+        XCTAssertNotNil(properties["predecessor_summary"])
+        let predecessorIDDescription = try XCTUnwrap(properties["predecessor_mission_id"]?.objectValue?["description"]?.stringValue)
+        XCTAssertTrue(predecessorIDDescription.contains("start_mission"))
+        XCTAssertTrue(predecessorIDDescription.contains("mission_plan"))
+    }
+
     private static func makeWindowWithoutAutoStart() -> WindowState {
         let previousAutoStart = GlobalSettingsStore.shared.mcpAutoStart()
         GlobalSettingsStore.shared.setMCPAutoStart(false, commit: false)
@@ -490,7 +504,7 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         "17|agent_explore|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=0e8a797c836d23c3c085bc400d8e3dbab02144690baeab37689c4d1caa454f72|schema=2c8c2927050343e25b3868290db071e57a1754f2390d0c9f584c38a6f448fd33",
         "18|agent_run|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=b6ff4d5a7b55131656557000d6196c5bac46dcdeb56fffcfb4420ce8fd36dcea|schema=b046889882a5994e137378ada5ae3dd71438be9067e3a0019f181a9c721c6364",
         "19|agent_manage|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=03e16bee789cb9343f6b1b16cb4d472aedd3d811a43f6f95ad8ea5e8f69dc28d|schema=f5bc6b05cf0683ef3acb7a82ee4a14b75fadf26f32c56b0314be1424688a2ba5",
-        "20|coordinator_chat|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=48b5005f8d91bc08807bf55956b674d537c02825f9036e94944d85696cef6fe4|schema=1a53f8d0717b76a2f7fd35b2fe24d5bed8e1d8d398d0fbe8f2f719ce24e7bbe8",
+        "20|coordinator_chat|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=d5840864b4479bb3c7bd6a42365eaf70b1349c2488b0a6152c75286cd058d561|schema=53586e13d0c41f165d821fe72b123e97046f54f1e18e692d478702fb38787ec2",
         "21|share_thoughts|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=b1ac755b39a4ac2d8a621e78801a258c5d95ec2ff4e063f600081fa27891a852|schema=a5dea0c92fd4da06a15f991e1e8a287235ca681ae381cef1b594bc7c07e538d7",
         "22|set_status|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=19bbfd6fc47639e02295de4e9289ea77f25c6a91ad150998726768b84c266783|schema=0854d727c81f1eb8fa0a14edb9d6ab8bb58974d919cc53150bd72473f1ae0196",
         "23|wait_for_next_user_instruction|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=3a59a13a0026414ae04dd21d730a7144b91c67146dce77340fe730c865bea3d7|schema=15335c3bbadf042948d0a1ba52f0fcb01125428dda4952dbda418051904d82ef"

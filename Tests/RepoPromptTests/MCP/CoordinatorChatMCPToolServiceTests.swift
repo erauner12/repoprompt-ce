@@ -50,7 +50,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
 
     func testStartMissionStartsFreshCoordinatorAndSubmitsInitialDirective() async throws {
         let coordinatorID = UUID()
+        let predecessorID = UUID()
         var events: [String] = []
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
@@ -64,12 +66,21 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             pendingChild: {
                 XCTFail("start_mission should not route to an existing pending child interaction")
                 return Self.pendingChildRow(parentCoordinatorID: coordinatorID)
+            },
+            missionPlans: { missionPlans },
+            updateMissionPlan: { sessionID, update in
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(update)
+                missionPlans[sessionID] = state.missionPlan
             }
         )
 
         let response = try await service.execute(args: [
             "op": .string("start_mission"),
-            "message": .string("Plan the next safe repo change.")
+            "message": .string("Plan the next safe repo change."),
+            "predecessor_mission_id": .string(predecessorID.uuidString),
+            "predecessor_title": .string("PR #6 Tooling UX"),
+            "predecessor_summary": .string("Doctor UX discovery found missing prerequisite guidance.")
         ])
         let object = try XCTUnwrap(response.objectValue)
 
@@ -80,6 +91,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(object["accepted"]?.boolValue, true)
         XCTAssertEqual(object["started_new_mission"]?.boolValue, true)
         XCTAssertEqual(object["routed_to"]?.stringValue, "coordinator")
+        let plan = try XCTUnwrap(object["mission_plan"]?.objectValue)
+        XCTAssertEqual(plan["predecessor_mission_id"]?.stringValue, predecessorID.uuidString)
+        XCTAssertEqual(plan["predecessor_title"]?.stringValue, "PR #6 Tooling UX")
+        XCTAssertEqual(plan["predecessor_summary"]?.stringValue, "Doctor UX discovery found missing prerequisite guidance.")
     }
 
     func testStopMissionSelectsRequestedCoordinatorAndStopsIt() async throws {
@@ -113,6 +128,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
     func testMissionPlanUpdatesStateWithoutSubmittingChatTurn() async throws {
         let coordinatorID = UUID()
         let childID = UUID()
+        let predecessorID = try XCTUnwrap(UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"))
         var submittedMessages: [String] = []
         var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
         let service = makeService(
@@ -126,6 +142,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             updateMissionPlan: { sessionID, update in
                 missionPlans[sessionID] = CoordinatorMissionPlan(
                     objective: update.objective,
+                    predecessorMissionID: update.predecessorMissionID,
+                    predecessorTitle: update.predecessorTitle,
+                    predecessorSummary: update.predecessorSummary,
                     status: update.status ?? .draft,
                     approvalState: update.approvalState ?? .notRequired,
                     workstreams: update.workstreams ?? [],
@@ -139,6 +158,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let args: [String: Value] = [
             "op": .string("mission_plan"),
             "objective": .string("Ship docs"),
+            "predecessor_mission_id": .string(predecessorID.uuidString),
+            "predecessor_title": .string("PR #5 Contract Fixtures"),
+            "predecessor_summary": .string("Contract fixture work established negative testdata conventions."),
             "workstreams": .array([
                 .object([
                     "title": .string("Docs implementation"),
@@ -163,6 +185,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(object["updated"]?.boolValue, true)
         let plan = try XCTUnwrap(object["mission_plan"]?.objectValue)
         XCTAssertEqual(plan["objective"]?.stringValue, "Ship docs")
+        XCTAssertEqual(plan["predecessor_mission_id"]?.stringValue, "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")
+        XCTAssertEqual(plan["predecessor_title"]?.stringValue, "PR #5 Contract Fixtures")
+        XCTAssertEqual(plan["predecessor_summary"]?.stringValue, "Contract fixture work established negative testdata conventions.")
         XCTAssertEqual(plan["revision"]?.intValue, 1)
         let workstream = try XCTUnwrap(plan["workstreams"]?.arrayValue?.first?.objectValue)
         XCTAssertEqual(workstream["title"]?.stringValue, "Docs implementation")

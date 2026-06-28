@@ -1232,6 +1232,31 @@ struct CoordinatorModeView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            if plan.predecessorMissionID != nil || plan.predecessorTitle != nil || plan.predecessorSummary != nil {
+                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                    HStack(spacing: metrics.tightSpacing) {
+                        Image(systemName: "arrow.turn.down.right")
+                            .font(metrics.micro)
+                            .foregroundStyle(Color.accentColor)
+                        Text("Follow-up to")
+                            .font(metrics.microMedium)
+                            .foregroundStyle(Color.accentColor)
+                        Text(plan.predecessorTitle ?? plan.predecessorMissionID?.uuidString.prefix(8).description ?? "prior Mission")
+                            .font(metrics.microMedium)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                    }
+
+                    if let predecessorSummary = plan.predecessorSummary {
+                        Text(predecessorSummary)
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.top, metrics.tightSpacing)
+            }
         }
         .padding(metrics.pendingPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
