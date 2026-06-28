@@ -233,14 +233,15 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             name: MCPWindowToolName.coordinatorChat,
             freshnessPolicy: .providerManaged,
             description: """
-            External test/control surface for Coordinator Mode. This mirrors the visible Coordinator UI: list parent threads, select a parent thread, start a fresh parent thread, atomically start a fresh Mission with an initial directive, submit a directive to the selected parent, or record/read the selected Mission Plan.
+            External test/control surface for Coordinator Mode. This mirrors the visible Coordinator UI: list parent threads, select a parent thread, start a fresh parent thread, atomically start a fresh Mission with an initial directive, stop the selected Mission, submit a directive to the selected parent, or record/read the selected Mission Plan.
 
-            **Operations**: list | select | new | start_mission | submit | mission_plan | mission_status
+            **Operations**: list | select | new | start_mission | stop_mission | submit | mission_plan | mission_status
 
             - `list`: Return current Coordinator parent selection, available parents, and board counts.
             - `select`: Select an existing Coordinator parent by `coordinator_session_id`.
             - `new`: Mirror New Coordinator. The rail switches to a blank parent context; the next submit creates the parent runtime.
             - `start_mission`: Start a fresh Coordinator Mission and submit the initial directive in one operation. Prefer this for external automation starting a new mission.
+            - `stop_mission`: Stop the selected or requested Coordinator Mission and cancel live linked sessions without archiving or deleting them.
             - `submit`: Send a directive to the selected parent, to `coordinator_session_id`, or to a fresh parent when `new_parent=true`.
             - `mission_plan`: Create or update the selected Coordinator Mission's DAG-lite plan. Use this before delegated child starts. Workstream and node arrays are upserts by default: include only changed entries for existing IDs/titles; omitted entries are preserved. Use `replace_workstreams=true` or `replace_nodes=true` when rewriting that part of the plan of record. Routing decisions append/upsert by id.
             - `mission_status`: Read back the selected Coordinator Mission's current plan, node status, and newest 20 routing decisions. Use `compact=true` for polling from external automation.
@@ -256,13 +257,14 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 **select**: coordinator_session_id (required)
                 **new**: no additional fields
                 **start_mission**: message (required)
+                **stop_mission**: coordinator_session_id?
                 **submit**: message (required), coordinator_session_id? or new_parent?
                 **mission_plan**: coordinator_session_id? plus one or more of objective, status, approval_state, workstreams, nodes, routing_decisions, events. replace_workstreams/replace_nodes may be true for deliberate plan rewrites.
                 **mission_status**: coordinator_session_id?, compact?; returns current plan state and routing_decisions_recent newest-first, max 20. compact=true returns a smaller polling summary with liveness warnings and short recent history.
                 """,
                 properties: [
-                    "op": .string(description: "Operation.", enum: ["list", "select", "new", "start_mission", "submit", "mission_plan", "mission_status"]),
-                    "coordinator_session_id": .string(description: "[select, submit, mission_plan, mission_status] Existing Coordinator parent session UUID. Defaults to the selected Coordinator for mission_plan/mission_status."),
+                    "op": .string(description: "Operation.", enum: ["list", "select", "new", "start_mission", "stop_mission", "submit", "mission_plan", "mission_status"]),
+                    "coordinator_session_id": .string(description: "[select, stop_mission, submit, mission_plan, mission_status] Existing Coordinator parent session UUID. Defaults to the selected Coordinator for mission_plan/mission_status."),
                     "message": .string(description: "[start_mission, submit] Directive text to send to the fresh, selected, or requested Coordinator parent."),
                     "new_parent": .boolean(description: "[submit] Start from a blank Coordinator parent before sending this directive. Default false."),
                     "compact": .boolean(description: "[mission_status] Return a small polling summary instead of the full Coordinator snapshot. Default false."),

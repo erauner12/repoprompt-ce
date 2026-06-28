@@ -8,6 +8,7 @@ struct CoordinatorChatMCPToolService {
         var refresh: () -> Void
         var selectCoordinator: (_ sessionID: UUID?) -> Void
         var startNewCoordinatorRun: () -> Void
+        var stopSelectedCoordinatorMission: () async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var submitDirective: (_ text: String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var activePendingChildInteractionRow: () -> CoordinatorModeRow?
         var submitPendingChildInteractionResponse: (_ submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission, _ row: CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
@@ -29,6 +30,7 @@ struct CoordinatorChatMCPToolService {
                 refresh: { coordinatorViewModel.refresh() },
                 selectCoordinator: { coordinatorViewModel.selectCoordinator(sessionID: $0) },
                 startNewCoordinatorRun: { coordinatorViewModel.startNewCoordinatorRun() },
+                stopSelectedCoordinatorMission: { await coordinatorViewModel.stopSelectedCoordinatorMission() },
                 submitDirective: { await coordinatorViewModel.submitCoordinatorDirective($0) },
                 activePendingChildInteractionRow: { coordinatorViewModel.activePendingChildInteractionRow() },
                 submitPendingChildInteractionResponse: { await coordinatorViewModel.submitPendingChildInteractionResponse($0, to: $1) },
@@ -96,6 +98,30 @@ struct CoordinatorChatMCPToolService {
                     "accepted": .bool(false),
                     "routed_to": .string("coordinator"),
                     "started_new_mission": .bool(true),
+                    "error": .string(message)
+                ])
+            }
+
+        case "stop_mission":
+            environment.refresh()
+            if let rawSessionID = args["coordinator_session_id"] {
+                let sessionID = try requireCoordinatorSessionID(rawSessionID)
+                try validateCoordinatorExists(sessionID, in: environment.snapshot())
+                environment.selectCoordinator(sessionID)
+                environment.refresh()
+            }
+            let result = await environment.stopSelectedCoordinatorMission()
+            environment.refresh()
+            switch result {
+            case .accepted:
+                return stateResponse(environment.snapshot(), extra: [
+                    "accepted": .bool(true),
+                    "routed_to": .string("coordinator_stop")
+                ])
+            case let .rejected(message):
+                return stateResponse(environment.snapshot(), extra: [
+                    "accepted": .bool(false),
+                    "routed_to": .string("coordinator_stop"),
                     "error": .string(message)
                 ])
             }
@@ -177,7 +203,7 @@ struct CoordinatorChatMCPToolService {
                 : stateResponse(snapshot, extra: extra)
 
         default:
-            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, start_mission, submit, mission_plan, mission_status.")
+            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, start_mission, stop_mission, submit, mission_plan, mission_status.")
         }
     }
 

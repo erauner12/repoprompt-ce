@@ -82,6 +82,34 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(object["routed_to"]?.stringValue, "coordinator")
     }
 
+    func testStopMissionSelectsRequestedCoordinatorAndStopsIt() async throws {
+        let firstID = UUID()
+        let secondID = UUID()
+        var selectedID = firstID
+        var stoppedSelection: UUID?
+        let service = makeService(
+            coordinatorIDs: [firstID, secondID],
+            selectedID: { selectedID },
+            select: { selectedID = $0 ?? firstID },
+            stopMission: {
+                stoppedSelection = selectedID
+                return .accepted
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("stop_mission"),
+            "coordinator_session_id": .string(secondID.uuidString)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(selectedID, secondID)
+        XCTAssertEqual(stoppedSelection, secondID)
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "coordinator_stop")
+        XCTAssertEqual(object["selected_coordinator_session_id"]?.stringValue, secondID.uuidString)
+    }
+
     func testMissionPlanUpdatesStateWithoutSubmittingChatTurn() async throws {
         let coordinatorID = UUID()
         let childID = UUID()
@@ -1046,6 +1074,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         selectedID: UUID,
         coordinatorRunState: AgentSessionRunState = .idle,
         startNew: @escaping () -> Void = {},
+        stopMission: @escaping () async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { .accepted },
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
         submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
@@ -1058,6 +1087,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             selectedID: { selectedID },
             coordinatorRunState: coordinatorRunState,
             startNew: startNew,
+            stopMission: stopMission,
             submit: submit,
             pendingChild: pendingChild,
             submitPendingChild: submitPendingChild,
@@ -1073,6 +1103,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         coordinatorRunState: AgentSessionRunState = .idle,
         select: @escaping (UUID?) -> Void = { _ in },
         startNew: @escaping () -> Void = {},
+        stopMission: @escaping () async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { .accepted },
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
         submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
@@ -1094,6 +1125,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 refresh: {},
                 selectCoordinator: select,
                 startNewCoordinatorRun: startNew,
+                stopSelectedCoordinatorMission: stopMission,
                 submitDirective: submit,
                 activePendingChildInteractionRow: pendingChild,
                 submitPendingChildInteractionResponse: submitPendingChild,
