@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var showMCPStatusSheet = false
     @State private var showRecommendationsPopover = false
     @State private var showWorkspaceSwitchOverlay = false
+    @SceneStorage("repoprompt.mainSurfaceSelection") private var mainSurfaceRawValue = MainSurface.defaultSurface.rawValue
 
     /// Recommendation wizard view model (lazy initialized)
     @State private var recommendationWizardViewModel: RecommendationWizardViewModel?
@@ -30,14 +31,17 @@ struct ContentView: View {
         ContentRootShellView(
             viewModel: viewModel,
             workspaceApprovalManager: workspaceApprovalManager,
-            showWorkspaceSwitchOverlay: $showWorkspaceSwitchOverlay
+            showWorkspaceSwitchOverlay: $showWorkspaceSwitchOverlay,
+            mainSurfaceSelection: mainSurfaceSelection
         )
         .toolbar {
             ContentViewToolbarContent(
                 windowState: viewModel.state,
                 recommendationWizardViewModel: recommendationWizardViewModel,
                 showRecommendationsPopover: $showRecommendationsPopover,
-                showMCPServerPopover: $showMCPServerPopover
+                showMCPServerPopover: $showMCPServerPopover,
+                mainSurfaceSelection: mainSurfaceSelection,
+                isMainSurfaceSwitchingAvailable: viewModel.canSelectMainSurface
             )
         }
         .onAppear {
@@ -68,6 +72,13 @@ struct ContentView: View {
         ) { notification in
             if let isVisible = notification.userInfo?["isVisible"] as? Bool {
                 showWorkspaceSwitchOverlay = isVisible
+            }
+        }
+        .focusedSceneValue(\.mainSurfaceSelection, mainSurfaceSelection)
+        .focusedSceneValue(\.isMainSurfaceSwitchingAvailable, viewModel.canSelectMainSurface)
+        .onChange(of: viewModel.canSelectMainSurface) { _, canSelect in
+            if !canSelect {
+                mainSurfaceRawValue = MainSurface.defaultSurface.rawValue
             }
         }
         .workspaceSwitchConfirmation(manager: viewModel.workspaceManager)
@@ -103,6 +114,26 @@ struct ContentView: View {
             }
         }
         .environmentObject(viewModel.workspaceManager)
+    }
+
+    private var mainSurfaceSelection: Binding<MainSurface> {
+        Binding {
+            guard AppLaunchConfiguration.current.forcedRootRoute != .main else {
+                return .agentMode
+            }
+            guard viewModel.canSelectMainSurface else {
+                return .agentMode
+            }
+            return MainSurface(rawValue: mainSurfaceRawValue) ?? .defaultSurface
+        } set: { newValue in
+            guard AppLaunchConfiguration.current.forcedRootRoute != .main,
+                  viewModel.canSelectMainSurface
+            else {
+                mainSurfaceRawValue = MainSurface.defaultSurface.rawValue
+                return
+            }
+            mainSurfaceRawValue = newValue.rawValue
+        }
     }
 
     private func closeAllSheets() {
