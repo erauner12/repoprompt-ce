@@ -130,6 +130,39 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         }
     }
 
+    func testStartMissionRejectsAgentModeWorkerCaller() async throws {
+        let coordinatorID = UUID()
+        var didStartNew = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex-worker",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .pair
+                )
+            },
+            startNew: {
+                didStartNew = true
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("start_mission"),
+                "message": .string("Start a worker-created mission.")
+            ])
+            XCTFail("Agent Mode workers must not be allowed to create Coordinator Missions.")
+        } catch {
+            XCTAssertFalse(didStartNew)
+            XCTAssertTrue(String(describing: error).contains("cannot create other Coordinator Missions"))
+            XCTAssertTrue(String(describing: error).contains("external user or CLI driver"))
+        }
+    }
+
     func testEnsureMissionSelectsExistingMissionByKey() async throws {
         let firstID = UUID()
         let secondID = UUID()
@@ -1351,6 +1384,24 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 taskLabelKind: role
             ), "\(role)")
         }
+    }
+
+    func testAllowedWorkerAdvertisesAgentRunButNotCoordinatorChat() {
+        XCTAssertTrue(AgentModeMCPToolAdvertisementPolicy.shouldAdvertise(
+            toolName: MCPWindowToolName.agentRun,
+            taskLabelKind: .pair,
+            allowsAgentExternalControlTools: true
+        ))
+        XCTAssertTrue(AgentModeMCPToolAdvertisementPolicy.shouldAdvertise(
+            toolName: MCPWindowToolName.agentManage,
+            taskLabelKind: .pair,
+            allowsAgentExternalControlTools: true
+        ))
+        XCTAssertFalse(AgentModeMCPToolAdvertisementPolicy.shouldAdvertise(
+            toolName: MCPWindowToolName.coordinatorChat,
+            taskLabelKind: .pair,
+            allowsAgentExternalControlTools: true
+        ))
     }
 
     private func makeService(

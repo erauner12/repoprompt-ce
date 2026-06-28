@@ -48,6 +48,11 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
         XCTAssertTrue(prompt.contains("execution_policy:\"plan_critique\""))
         XCTAssertTrue(prompt.contains("mission_node_id"))
         XCTAssertTrue(prompt.contains("model_id:\"design\""))
+        XCTAssertTrue(prompt.contains("Role/model selection is flexible"))
+        XCTAssertTrue(prompt.contains("model_id:\"engineer\""))
+        XCTAssertTrue(prompt.contains("model_id:\"pair\""))
+        XCTAssertTrue(prompt.contains("ambiguous implementation, integration work"))
+        XCTAssertTrue(prompt.contains("Record the chosen role/model and the reason in `routing_decisions`"))
         XCTAssertTrue(prompt.contains("worktree_create:true"))
         XCTAssertTrue(prompt.contains("For `createIsolated` mutable workstreams"))
         XCTAssertTrue(prompt.contains("worktree_strategy.base_ref"))
@@ -58,6 +63,10 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
         XCTAssertTrue(prompt.contains("operation values must be `agent_explore.start`, `agent_run.start`, `agent_run.steer`, `agent_run.respond`, `agent_run.cancel`, or `coordinator_hold`"))
         XCTAssertTrue(prompt.contains("Durable workstream economy"))
         XCTAssertTrue(prompt.contains("one workstream, one worktree sandbox, and one primary child session"))
+        XCTAssertTrue(prompt.contains("supervised normal Agent Mode sessions"))
+        XCTAssertTrue(prompt.contains("normal"))
+        XCTAssertTrue(prompt.contains("tools for narrow same-worktree helpers"))
+        XCTAssertTrue(prompt.contains("Do not ask workers to create Coordinator Missions"))
         XCTAssertTrue(prompt.contains("same-workstream follow-up nodes should default to `execution_policy:\"steer_primary\"`"))
         XCTAssertTrue(prompt.contains("Decompose broad directives into durable workstreams and concrete nodes"))
         XCTAssertTrue(prompt.contains("not a new child session per question"))
@@ -120,5 +129,59 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
         )
 
         XCTAssertFalse(prompt.contains("Coordinator Auto pace"))
+    }
+
+    func testAllowedWorkerPromptUsesNormalAgentRunDelegationSurface() {
+        let prompt = SystemPromptService.agentModePrompt(
+            agentKind: .codexExec,
+            taskLabelKind: .pair,
+            allowsAgentExternalControlTools: true
+        )
+
+        XCTAssertTrue(prompt.contains("*Agent Delegation:*"))
+        XCTAssertTrue(prompt.contains("Spawn and control a separate Agent Mode session"))
+        XCTAssertTrue(prompt.contains("List agents, sessions, logs, and workflows"))
+        XCTAssertTrue(prompt.contains("Explore agents (`model_id=\"explore\"`) are read-only child sessions"))
+        XCTAssertFalse(prompt.contains("*Read-only Sub-agent Probes:*"))
+    }
+
+    func testRestrictedSubAgentPromptUsesReadOnlyProbeSurface() {
+        let prompt = SystemPromptService.agentModePrompt(
+            agentKind: .codexExec,
+            taskLabelKind: .pair,
+            allowsAgentExternalControlTools: false
+        )
+
+        XCTAssertTrue(prompt.contains("*Read-only Sub-agent Probes:*"))
+        XCTAssertTrue(prompt.contains("Launch/control short read-only explore child agents"))
+        XCTAssertFalse(prompt.contains("Spawn and control a separate Agent Mode session"))
+    }
+
+    func testAllowedEngineerWorkerPromptUsesNormalAgentRunDelegationSurface() {
+        let prompt = SystemPromptService.agentModePrompt(
+            agentKind: .codexExec,
+            taskLabelKind: .engineer,
+            allowsAgentExternalControlTools: true
+        )
+
+        XCTAssertTrue(prompt.contains("ENGINEER MODE"))
+        XCTAssertTrue(prompt.contains("*Agent Delegation:*"))
+        XCTAssertTrue(prompt.contains("Spawn and control a separate Agent Mode session"))
+        XCTAssertTrue(prompt.contains("List agents, sessions, logs, and workflows"))
+        XCTAssertTrue(prompt.contains("one primary writer per worktree"))
+        XCTAssertFalse(prompt.contains("*Read-only Sub-agent Probes:*"))
+    }
+
+    func testRestrictedEngineerSubAgentPromptUsesReadOnlyProbeSurface() {
+        let prompt = SystemPromptService.agentModePrompt(
+            agentKind: .codexExec,
+            taskLabelKind: .engineer,
+            allowsAgentExternalControlTools: false
+        )
+
+        XCTAssertTrue(prompt.contains("ENGINEER MODE"))
+        XCTAssertTrue(prompt.contains("*Read-only Sub-agent Probes:*"))
+        XCTAssertTrue(prompt.contains("Launch/control short read-only explore child agents"))
+        XCTAssertFalse(prompt.contains("Spawn and control a separate Agent Mode session"))
     }
 }

@@ -811,9 +811,22 @@ final class CoordinatorModeViewModel: ObservableObject {
 
         append(coordinatorSessionID)
 
-        for row in snapshot.groups.flatMap(\.rows) {
+        let rows = snapshot.groups.flatMap(\.rows)
+        let directChildIDs = Set(rows.compactMap { row in
+            row.parentSessionID == coordinatorSessionID ? row.sessionID : nil
+        })
+        var descendantIDs = directChildIDs
+        var didAppend = true
+        while didAppend {
+            didAppend = false
+            for row in rows where row.parentSessionID.map(descendantIDs.contains) == true {
+                didAppend = descendantIDs.insert(row.sessionID).inserted || didAppend
+            }
+        }
+
+        for row in rows {
             let belongsToCoordinator = row.parentCoordinator?.sessionID == coordinatorSessionID
-                || row.parentSessionID == coordinatorSessionID
+                || descendantIDs.contains(row.sessionID)
             guard belongsToCoordinator else { continue }
             append(row.sessionID)
             for childSessionID in row.childSessionIDs {

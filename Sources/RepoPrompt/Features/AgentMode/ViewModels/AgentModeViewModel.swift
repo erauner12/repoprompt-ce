@@ -5118,6 +5118,9 @@ final class AgentModeViewModel: ObservableObject {
         guard sourceSession.parentSessionID != nil else {
             return
         }
+        if controlContext.allowsAgentExternalControlTools {
+            return
+        }
         if isExploreOnly {
             return
         }
@@ -5968,6 +5971,7 @@ final class AgentModeViewModel: ObservableObject {
         sessionID: UUID,
         originatingConnectionID: UUID?,
         taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
+        allowsAgentExternalControlTools: Bool = false,
         startPending: Bool = false
     ) async throws {
         let session = await ensureSessionReady(tabID: tabID)
@@ -6023,7 +6027,8 @@ final class AgentModeViewModel: ObservableObject {
             suppressUserNotifications: true,
             forceAutoEditEnabled: true,
             autoEditEnabledBeforeOverride: priorAutoEditEnabled,
-            taskLabelKind: taskLabelKind
+            taskLabelKind: taskLabelKind,
+            allowsAgentExternalControlTools: allowsAgentExternalControlTools
         )
         session.mcpFollowUpRunPending = startPending
         mcpControlledTabIDs.insert(tabID)
@@ -13177,6 +13182,7 @@ final class AgentModeViewModel: ObservableObject {
         let systemPrompt = SystemPromptService.agentModePrompt(
             agentKind: session.selectedAgent,
             taskLabelKind: session.mcpControlContext?.taskLabelKind,
+            allowsAgentExternalControlTools: session.mcpControlContext?.allowsAgentExternalControlTools ?? false,
             codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled(),
             coordinatorRuntimeDemo: session.isCoordinatorRuntimeDemo,
             coordinatorRuntimeAutoMode: session.isCoordinatorRuntimeDemo &&

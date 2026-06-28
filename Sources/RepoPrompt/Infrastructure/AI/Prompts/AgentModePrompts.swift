@@ -23,8 +23,9 @@ enum ExportDelegationAudience: Hashable {
     /// Non-explore sub-agent (engineer / pair / design) without
     /// orchestrator permission: sees `agent_explore` only.
     case agentExploreOnly
-    /// Orchestrator sub-agent with `allowsAgentExternalControlTools`
-    /// enabled: sees both delegation tools. Rare.
+    /// Agent Mode session with `allowsAgentExternalControlTools`
+    /// enabled: sees both delegation tools. Used for top-level sessions
+    /// and Coordinator-supervised non-explore workers.
     case both
     /// Caller has no delegation tools (explore sub-agents, discover
     /// agents, delegate-edit agents). Guidance must be omitted.
@@ -113,6 +114,7 @@ enum AgentModePrompts {
     /// prompt but stripped of agent delegation and biased toward minimal, targeted changes.
     static func engineerPrompt(
         agentKind: AgentProviderKind?,
+        allowsAgentExternalControlTools: Bool = false,
         codeMapsDisabled: Bool = false
     ) -> String {
         let readPolicy = Fragments.providerReadPolicy(agentKind: agentKind)
@@ -129,6 +131,27 @@ enum AgentModePrompts {
         let codeQuestionWorkflow = codeMapsDisabled
             ? "Explore with `file_search` and `RepoPrompt__read_file`, then explain clearly."
             : "Explore with `file_search`, `RepoPrompt__read_file`, and `get_code_structure`, then explain clearly."
+        let agentDelegationSection = if allowsAgentExternalControlTools {
+            """
+            *Agent Delegation:*
+            - `agent_run` - Spawn and control a separate Agent Mode session in another tab
+            - `agent_manage` - List agents, sessions, logs, and workflows for delegated sessions
+            - Use `model_id` with a role label (`explore`, `engineer`, `pair`, `design`) to auto-pick the best agent+model for each role
+            - Explore agents (`model_id="explore"`) are read-only child sessions for narrow, self-contained investigations
+            - Keep one primary writer per worktree. Use helpers mainly for read-only probes or review/critique against the same task worktree.
+            \(Fragments.agentRunExportGuidance)
+
+            \(Fragments.agentRunExploreWhenToDispatchGuidance)
+            """
+        } else {
+            """
+            *Read-only Sub-agent Probes:*
+            - `agent_explore` - Launch/control short read-only explore child agents (`start`, `poll`, `wait`, `cancel` only; pass `messages` to start several probes in one call)
+            \(Fragments.agentExploreExportGuidance)
+
+            \(Fragments.agentExploreWhenToDispatchGuidance)
+            """
+        }
 
         let prompt = """
         **🔧 ENGINEER MODE — PRECISE EXECUTION**
@@ -166,11 +189,7 @@ enum AgentModePrompts {
         - `ask_oracle` - Consult a second AI for planning or review
         - `oracle_chat_log` - Recover Oracle context after compaction
 
-        *Read-only Sub-agent Probes:*
-        - `agent_explore` - Launch/control short read-only explore child agents (`start`, `poll`, `wait`, `cancel` only; pass `messages` to start several probes in one call)
-        \(Fragments.agentExploreExportGuidance)
-
-        \(Fragments.agentExploreWhenToDispatchGuidance)
+        \(agentDelegationSection)
 
         *User Interaction:*
         - `ask_user` - Ask the user a question when you need clarification\(toolSuffix)
@@ -222,17 +241,18 @@ enum AgentModePrompts {
         // `AgentModeMCPToolAdvertisementPolicy`:
         //
         // - `agentRunExportGuidance`: caller sees `agent_run`
-        //   (top-level agent-mode session / external MCP client).
+        //   (top-level agent-mode session, external MCP client, or
+        //   Coordinator-supervised normal worker).
         // - `agentExploreExportGuidance`: caller sees `agent_explore`
         //   but not `agent_run` (non-explore sub-agent without
         //   orchestrator permission).
-        // - `agentBothExportGuidance`: rare orchestrator sub-agent that
-        //   sees both; currently unused by the prompt layer but kept
-        //   here so the advertisement/prompt story can grow in lockstep.
+        // - `agentBothExportGuidance`: caller sees both. Kept here so
+        //   the advertisement/prompt story can grow in lockstep if a
+        //   future surface advertises both tools at once.
         //
         // Do NOT reference `agent_run` and `agent_explore` together in
-        // caller-facing copy outside of this fragment — the policy
-        // never exposes both simultaneously.
+        // caller-facing copy outside of this fragment unless the caller
+        // is explicitly known to receive both tool surfaces.
 
         /// Guidance for callers that have `agent_run` (top-level agent
         /// surface / external MCP client). Never names `agent_explore`.
@@ -274,9 +294,11 @@ enum AgentModePrompts {
         - Do not pretend an inferred draft is fully grounded. Mark implementation nodes as pending behind the discovery node, use `completion_evidence` to describe what evidence is needed, and after discovery update only the changed workstreams/nodes; omitted workstreams and nodes are preserved.
         - Mission Plan node titles should name the actual work product or decision from the user's request, not generic phases. Use "Add export action to orders table" instead of "Orchestrate"; "Review implementation from a fresh session" instead of only "Review". Generic phase-only node titles are acceptable only for tiny smoke tests or when the user explicitly asks for abstract demo state.
         - Default workflow mapping: leave workflow metadata absent only for disposable read-only probe nodes launched with `agent_explore.start` and coordinator-only bookkeeping/reporting nodes. Formal investigation or planning deliverables use `workflow_name:"Investigate"` or `workflow_name:"Deep Plan"` with `agent_run.start`. Mutable implementation nodes use `workflow_name:"Orchestrate"` by default. Independent review nodes use `workflow_name:"Review"` by default. Same-session follow-up nodes may omit a new workflow only when they continue the active child without changing phase. Use `completion_evidence` to state what proves the node is done.
+        - Role/model selection is flexible and should match the node, not a fixed demo script. Use `model_id:"engineer"` for small, well-scoped implementation; `model_id:"pair"` for ambiguous implementation, integration work, or a worker that may need to coordinate same-worktree helpers; `model_id:"design"` for plan critique, architecture review, risk analysis, or durable written reports; and `agent_explore.start` or `model_id:"explore"` only for narrow read-only probes. Record the chosen role/model and the reason in `routing_decisions`.
         - Workflow fidelity rule: Mission Plan workflow metadata is an execution contract, not decoration. When executing a node with `workflow_name` or `workflow_id`, pass that exact workflow to `agent_run.start` or `agent_run.steer`. Planned read-only discovery with `workflow_name:"Investigate"` must use `agent_run.start` with the built-in `workflow_name:"Investigate"`; workflow-less read-only probe nodes may use `agent_explore.start` and should not pretend to be Investigate. If the workflow is unavailable, call `agent_manage` `list_workflows`, revise the Mission Plan to the real workflow, and ask before executing instead of launching a mismatched child.
         - Review nodes should depend on the implementation or verification nodes they review. Parallel nodes are allowed only when their files, worktrees, and context boundaries do not overlap.
         - Durable workstream economy: one coherent effort should usually have one workstream, one worktree sandbox, and one primary child session. After a workstream has `primary_session_id`, same-workstream follow-up nodes should default to `execution_policy:"steer_primary"` and `agent_run.steer` instead of starting another fresh child. Fresh sessions need a specific independence reason: first lane start, independent Review, design critique, narrow disposable probe, risky spike, or truly separate parallel work.
+        - Coordinator-launched non-explore `agent_run` workers are supervised normal Agent Mode sessions, not crippled subtasks. They remain parented to this Mission for observability, steering, and Stop, but may use their normal `agent_run` / `agent_manage` tools for narrow same-worktree helpers when the workflow warrants it. Prefer one primary writer; helper sessions should normally be read-only probes or review/critique bound to the same task worktree. Do not ask workers to create Coordinator Missions, extra mutable writers, or extra worktrees unless the Mission Plan explicitly justifies that isolation.
         - Record Coordinator routing choices in `routing_decisions` before or alongside each start, steer, respond, cancel, or user-hold action. Use decision values `start_fresh_readonly_child`, `start_fresh_worktree`, `steer_primary`, `start_fresh_sibling_on_same_worktree`, `respond_to_interaction`, `hold_for_user`, or `cancel_or_replace`; operation values must be `agent_explore.start`, `agent_run.start`, `agent_run.steer`, `agent_run.respond`, `agent_run.cancel`, or `coordinator_hold`. Include `reason`, relevant `node_id`/`workstream_id`, and `model_id` when you choose a model. Reuse a decision `id` only to correct/replace that decision.
         - Keep the Mission Plan current through `coordinator_chat op=mission_plan` as status, approval state, workstreams, DAG-lite nodes, routing decisions, or node events change. Omitted fields preserve their prior value. Do not rely on assistant prose to update UI plan/workstream state.
         - Use `coordinator_chat op=mission_status` whenever you need a compact read-only Mission/DAG status snapshot with dependency state, node counts, recent events, newest routing decisions, and board/session bindings.
@@ -351,10 +373,9 @@ enum AgentModePrompts {
         **After a probe returns**, treat its summary as a report of what it intended to do, not a trace of what it actually saw. Spot-check load-bearing claims with your own `read_file` / `file_search` / `git` before acting on them — especially file:line references or "X doesn't exist" findings. If the answer is thin or ambiguous, dispatch a narrow follow-up probe rather than re-doing the investigation yourself.
         """
 
-        /// Guidance for rare orchestrator sub-agents that see both
-        /// delegation tools. Used only when the run policy has
-        /// explicitly opted into `allowsAgentExternalControlTools` for a
-        /// non-explore sub-agent.
+        /// Guidance for sessions that see both delegation tools. Used by
+        /// top-level sessions and Coordinator-supervised workers when the
+        /// run policy explicitly opts into `allowsAgentExternalControlTools`.
         static let agentBothExportGuidance = """
         - To hand the export to a delegated agent, include the returned \
         `oracle_export_path` inside the `message` / `messages` of your next \

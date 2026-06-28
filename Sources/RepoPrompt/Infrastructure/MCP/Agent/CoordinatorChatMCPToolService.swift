@@ -290,7 +290,7 @@ struct CoordinatorChatMCPToolService {
     }
 
     private func validateExternalMissionCreation(_ metadata: RequestMetadata) throws {
-        if metadata.isCoordinatorRuntime || metadata.taskLabelKind == .coordinator {
+        if metadata.isCoordinatorRuntime || metadata.taskLabelKind == .coordinator || metadata.runPurpose == .agentModeRun {
             throw MCPError.invalidParams("Coordinator runtime sessions cannot create other Coordinator Missions. Record a follow-up recommendation in the current Mission and wait for an external user or CLI driver to start it.")
         }
     }

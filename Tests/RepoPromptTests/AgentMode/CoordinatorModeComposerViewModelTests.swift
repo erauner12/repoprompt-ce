@@ -194,6 +194,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         let visibleChildID = uuid(2)
         let planBoundChildID = uuid(3)
         let unrelatedChildID = uuid(4)
+        let helperChildID = uuid(5)
         let workstreamID = uuid(20)
         let runningNodeID = uuid(30)
         let blockedNodeID = uuid(31)
@@ -261,6 +262,14 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                             parent: coordinatorID
                         ),
                         self.live(
+                            id: helperChildID,
+                            tab: self.uuid(104),
+                            title: "Worker helper",
+                            updatedAt: self.date(35),
+                            state: .running,
+                            parent: visibleChildID
+                        ),
+                        self.live(
                             id: unrelatedChildID,
                             tab: self.uuid(103),
                             title: "Unrelated child",
@@ -282,7 +291,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 return CoordinatorMissionStopResult(
                     requestedSessionIDs: request.sessionIDs,
                     cancelledSessionIDs: [coordinatorID],
-                    skippedSessionIDs: [visibleChildID, planBoundChildID]
+                    skippedSessionIDs: [visibleChildID, helperChildID, planBoundChildID]
                 )
             }
         )
@@ -293,7 +302,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
 
         XCTAssertEqual(result, .accepted)
         XCTAssertEqual(stopRequests.first?.coordinatorSessionID, coordinatorID)
-        XCTAssertEqual(stopRequests.first?.sessionIDs, [coordinatorID, visibleChildID, planBoundChildID])
+        XCTAssertEqual(stopRequests.first?.sessionIDs, [coordinatorID, visibleChildID, helperChildID, planBoundChildID])
         let stoppedPlan = try XCTUnwrap(state.missionPlan)
         XCTAssertEqual(stoppedPlan.status, .stopped)
         XCTAssertEqual(stoppedPlan.nodes.map(\.status), [.cancelled, .cancelled, .pending])
@@ -304,7 +313,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         )
         XCTAssertTrue(viewModel.railTranscriptEntries.contains { entry in
             entry.role == .event
-                && entry.text == "Mission stopped. Requested cancellation for 1 active session; skipped 2 inactive or unavailable linked sessions."
+                && entry.text == "Mission stopped. Requested cancellation for 1 active session; skipped 3 inactive or unavailable linked sessions."
         })
     }
 

@@ -169,6 +169,7 @@ struct AgentRunMCPToolService {
         _ modelRaw: String?,
         _ reasoningEffortRaw: String?,
         _ taskLabelKind: AgentModelCatalog.TaskLabelKind?,
+        _ allowsAgentExternalControlTools: Bool,
         _ workflow: AgentWorkflowDefinition?
     ) async throws -> AgentExternalMCPRunStarter.StartOutcome
 
@@ -314,8 +315,8 @@ struct AgentRunMCPToolService {
         if sourceTabID != nil, spawnParentSessionID == nil {
             throw MCPError.invalidParams("agent_run.start was routed from an Agent Mode run, but RepoPrompt could not resolve its parent Agent session. Refusing to create an unparented run; reconnect the agent MCP client or retry after the source session is active.")
         }
-        let isCoordinatorParent = await agentModeVM.mcpIsCoordinatorRuntime(sessionID: spawnParentSessionID)
-        let coordinatorMissionPlan = await agentModeVM.mcpCoordinatorMissionPlan(sessionID: spawnParentSessionID)
+        let isCoordinatorParent = agentModeVM.mcpIsCoordinatorRuntime(sessionID: spawnParentSessionID)
+        let coordinatorMissionPlan = agentModeVM.mcpCoordinatorMissionPlan(sessionID: spawnParentSessionID)
         let coordinatorMissionPlanDecision = AgentRunCoordinatorMissionPlanPolicy.decision(
             isCoordinatorParent: isCoordinatorParent,
             missionPlan: coordinatorMissionPlan,
@@ -350,6 +351,8 @@ struct AgentRunMCPToolService {
             availability: targetWindow.apiSettingsViewModel.agentModeAvailabilityContext
         )
         try Self.rejectDedicatedLaunchRoleIfNeeded(selection.taskLabelKind, operation: "agent_run.start")
+        let allowsAgentExternalControlTools = spawnParentSessionID == nil
+            || (isCoordinatorParent && selection.taskLabelKind != .explore)
 
         let sessionName = normalizedString(args["session_name"])
         let target = try await agentModeVM.mcpResolveOrCreateSessionTarget(
@@ -397,6 +400,7 @@ struct AgentRunMCPToolService {
                 selection.modelRaw,
                 nil,
                 selection.taskLabelKind,
+                allowsAgentExternalControlTools,
                 workflow
             )
         } catch {

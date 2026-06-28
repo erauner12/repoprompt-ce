@@ -485,7 +485,7 @@ final class MCPServerViewModel: ObservableObject {
             endAgentRunWait: { [self] token, completion in
                 endAgentRunWaitScope(token, completion: completion)
             },
-            startRun: { target, message, metadata, bindCurrentRequestToTab, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, workflow in
+            startRun: { target, message, metadata, bindCurrentRequestToTab, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, allowsAgentExternalControlTools, workflow in
                 try await AgentExternalMCPRunStarter.start(
                     target: target,
                     message: message,
@@ -496,6 +496,7 @@ final class MCPServerViewModel: ObservableObject {
                     modelRaw: modelRaw,
                     reasoningEffortRaw: reasoningEffortRaw,
                     taskLabelKind: taskLabelKind,
+                    allowsAgentExternalControlTools: allowsAgentExternalControlTools,
                     workflow: workflow
                 )
             }
@@ -531,7 +532,7 @@ final class MCPServerViewModel: ObservableObject {
             endAgentRunWait: { [self] token, completion in
                 endAgentRunWaitScope(token, completion: completion)
             },
-            startRun: { target, message, metadata, bindCurrentRequestToTab, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, workflow in
+            startRun: { target, message, metadata, bindCurrentRequestToTab, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, allowsAgentExternalControlTools, workflow in
                 try await AgentExternalMCPRunStarter.start(
                     target: target,
                     message: message,
@@ -542,6 +543,7 @@ final class MCPServerViewModel: ObservableObject {
                     modelRaw: modelRaw,
                     reasoningEffortRaw: reasoningEffortRaw,
                     taskLabelKind: taskLabelKind,
+                    allowsAgentExternalControlTools: allowsAgentExternalControlTools,
                     workflow: workflow
                 )
             }

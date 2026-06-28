@@ -1335,6 +1335,7 @@ final class ClaudeAgentModeCoordinator {
         SystemPromptService.agentModePrompt(
             agentKind: session.selectedAgent,
             taskLabelKind: session.mcpControlContext?.taskLabelKind,
+            allowsAgentExternalControlTools: session.mcpControlContext?.allowsAgentExternalControlTools ?? false,
             codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled(),
             coordinatorRuntimeDemo: session.isCoordinatorRuntimeDemo,
             coordinatorRuntimeAutoMode: session.isCoordinatorRuntimeDemo &&

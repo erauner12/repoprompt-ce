@@ -323,6 +323,7 @@ struct AgentExploreMCPToolService {
             context.selection.modelRaw,
             nil,
             .explore,
+            false,
             nil
         )
     }

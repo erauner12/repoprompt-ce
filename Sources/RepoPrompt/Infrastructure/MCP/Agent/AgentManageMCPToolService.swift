@@ -430,6 +430,7 @@ struct AgentManageMCPToolService {
         let sourceTabID = await resolveSpawnSourceTabID(metadata)
         try agentModeVM.mcpValidateAgentRunSpawnAllowed(sourceTabID: sourceTabID)
         let spawnParentSessionID = await resolveSpawnParentSessionID(metadata, targetWindow)
+        let isCoordinatorParent = agentModeVM.mcpIsCoordinatorRuntime(sessionID: spawnParentSessionID)
         // create_session always creates a new session — default to the global engineer role when model_id is omitted.
         // Validate selection before creating a target to avoid phantom sessions on bad model_id.
         let selection = try AgentMCPSelectionResolver.resolve(
@@ -438,6 +439,8 @@ struct AgentManageMCPToolService {
             availability: targetWindow.apiSettingsViewModel.agentModeAvailabilityContext
         )
         try Self.rejectDedicatedLaunchRoleIfNeeded(selection.taskLabelKind, operation: "agent_manage.create_session")
+        let allowsAgentExternalControlTools = spawnParentSessionID == nil
+            || (isCoordinatorParent && selection.taskLabelKind != .explore)
         let resolved = resolvedModelAndEffort(agentRaw: selection.agentRaw, modelRaw: selection.modelRaw, args: args)
         let target = try await agentModeVM.mcpResolveOrCreateSessionTarget(
             tabID: nil,
@@ -463,6 +466,7 @@ struct AgentManageMCPToolService {
                 sessionID: sessionID,
                 originatingConnectionID: metadata.connectionID,
                 taskLabelKind: selection.taskLabelKind,
+                allowsAgentExternalControlTools: allowsAgentExternalControlTools,
                 startPending: false
             )
         } catch {
@@ -499,6 +503,7 @@ struct AgentManageMCPToolService {
         let sourceTabID = await resolveSpawnSourceTabID(metadata)
         try agentModeVM.mcpValidateAgentRunSpawnAllowed(sourceTabID: sourceTabID)
         let spawnParentSessionID = await resolveSpawnParentSessionID(metadata, targetWindow)
+        let isCoordinatorParent = agentModeVM.mcpIsCoordinatorRuntime(sessionID: spawnParentSessionID)
         guard let sessionID = try await agentModeVM.mcpResolveSessionID(reference: sessionReference, workspace: workspace) else {
             throw MCPError.invalidParams("Session '\(sessionReference)' was not found in the active workspace.")
         }
@@ -507,6 +512,8 @@ struct AgentManageMCPToolService {
             availability: targetWindow.apiSettingsViewModel.agentModeAvailabilityContext
         )
         try Self.rejectDedicatedLaunchRoleIfNeeded(selection.taskLabelKind, operation: "agent_manage.resume_session")
+        let allowsAgentExternalControlTools = spawnParentSessionID == nil
+            || (isCoordinatorParent && selection.taskLabelKind != .explore)
         let resolved = resolvedModelAndEffort(agentRaw: selection.agentRaw, modelRaw: selection.modelRaw, args: args)
         let target = try await agentModeVM.mcpResolveOrCreateSessionTarget(
             tabID: nil,
@@ -526,6 +533,7 @@ struct AgentManageMCPToolService {
                     sessionID: sessionID,
                     originatingConnectionID: metadata.connectionID,
                     taskLabelKind: selection.taskLabelKind,
+                    allowsAgentExternalControlTools: allowsAgentExternalControlTools,
                     startPending: false
                 )
             }

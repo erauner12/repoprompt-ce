@@ -3819,7 +3819,7 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
             && requiresTransportStart
         let shouldWaitForRouting = requiresTransportStart
         if shouldInstallPolicy {
-            let allowsAgentExternalControlTools = session.mcpControlContext != nil && session.parentSessionID == nil
+            let allowsAgentExternalControlTools = session.mcpControlContext?.allowsAgentExternalControlTools ?? false
             guard let lease = makeCodexRunLease(
                 tabID: session.tabID,
                 runID: runID,
@@ -3871,6 +3871,7 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
         let basePrompt = SystemPromptService.agentModePrompt(
             agentKind: .codexExec,
             taskLabelKind: session.mcpControlContext?.taskLabelKind,
+            allowsAgentExternalControlTools: session.mcpControlContext?.allowsAgentExternalControlTools ?? false,
             codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled(),
             coordinatorRuntimeDemo: session.isCoordinatorRuntimeDemo,
             coordinatorRuntimeAutoMode: session.isCoordinatorRuntimeDemo &&
