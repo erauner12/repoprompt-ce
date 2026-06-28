@@ -49,6 +49,12 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
         XCTAssertTrue(prompt.contains("use the actual repo default"))
         XCTAssertTrue(prompt.contains("worktree_base_ref"))
         XCTAssertTrue(prompt.contains("operation values must be `agent_explore.start`, `agent_run.start`, `agent_run.steer`, `agent_run.respond`, `agent_run.cancel`, or `coordinator_hold`"))
+        XCTAssertTrue(prompt.contains("Durable workstream economy"))
+        XCTAssertTrue(prompt.contains("one workstream, one worktree sandbox, and one primary child session"))
+        XCTAssertTrue(prompt.contains("same-workstream follow-up nodes should default to `execution_policy:\"steer_primary\"`"))
+        XCTAssertTrue(prompt.contains("Decompose broad directives into durable workstreams and concrete nodes"))
+        XCTAssertTrue(prompt.contains("not a new child session per question"))
+        XCTAssertTrue(prompt.contains("Task-aware read-only helpers and fresh review should bind to the same task worktree"))
         XCTAssertFalse(prompt.contains("COORDINATOR_CHECKPOINT"))
     }
 
@@ -71,10 +77,14 @@ final class SystemPromptServiceCoordinatorModeTests: XCTestCase {
         XCTAssertTrue(CoordinatorMissionTemplate.scopedChange.template.contains("visible plan"))
         XCTAssertTrue(CoordinatorMissionTemplate.scopedChange.template.contains("read-only discovery"))
         XCTAssertTrue(CoordinatorMissionTemplate.scopedChange.template.contains("isolated worktree"))
+        XCTAssertTrue(CoordinatorMissionTemplate.scopedChange.template.contains("durable primary implementation lane"))
+        XCTAssertTrue(CoordinatorMissionTemplate.scopedChange.template.contains("steering the same primary lane"))
         XCTAssertTrue(CoordinatorMissionTemplate.scopedChange.template.contains("independent Review"))
 
         XCTAssertTrue(CoordinatorMissionTemplate.deepPlanOrchestrateReview.template.contains("Deep Plan"))
         XCTAssertTrue(CoordinatorMissionTemplate.deepPlanOrchestrateReview.template.contains("Orchestrate"))
+        XCTAssertTrue(CoordinatorMissionTemplate.deepPlanOrchestrateReview.template.contains("durable primary implementation lane"))
+        XCTAssertTrue(CoordinatorMissionTemplate.deepPlanOrchestrateReview.template.contains("steering the primary lane"))
         XCTAssertTrue(CoordinatorMissionTemplate.deepPlanOrchestrateReview.template.contains("independent Review"))
         XCTAssertTrue(CoordinatorMissionTemplate.deepPlanOrchestrateReview.template.contains("fix loop"))
     }

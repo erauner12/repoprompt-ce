@@ -279,9 +279,10 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
         Prefer:
         - one visible plan before delegation
         - narrow read-only discovery before edits when the implementation surface is uncertain
-        - one primary implementation lane in an isolated worktree
+        - one durable primary implementation lane in an isolated worktree
+        - steering the same primary lane for related follow-up work instead of spawning fresh sessions
         - concrete deliverable names instead of generic phase names
-        - independent Review before handoff
+        - independent Review before handoff, usually against the same task worktree
         - a concise final summary of changes, validation, and remaining risks
 
         Ask before irreversible actions such as commit, push, merge, or PR creation.
@@ -304,9 +305,10 @@ struct CoordinatorMissionTemplate: Identifiable, Equatable, Hashable {
         Preferred shape:
         - Deep Plan or grounding first when the solution needs architectural context
         - Orchestrate implementation only after the plan is grounded and approved
-        - one primary implementation lane in an isolated worktree
+        - one durable primary implementation lane in an isolated worktree
+        - steering the primary lane for related implementation and fix-loop work
         - focused validation before review
-        - independent Review on the implementation result
+        - independent Review on the implementation result, usually against the same task worktree
         - one fix loop if Review finds must-fix issues
         - a concise final summary of decisions, changes, validation, and remaining risks
 
