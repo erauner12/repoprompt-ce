@@ -776,6 +776,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertNil(object["mission_plan"])
         XCTAssertNil(object["coordinators"])
         XCTAssertEqual(status["compact"]?.boolValue, true)
+        XCTAssertNotNil(status["fingerprint"]?.stringValue)
         XCTAssertEqual(status["run_state"]?.stringValue, "completed")
         XCTAssertEqual(status["plan"]?.objectValue?["status"]?.stringValue, "running")
         XCTAssertEqual(status["active_nodes"]?.arrayValue?.count, 1)
@@ -835,6 +836,63 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let proceed = try XCTUnwrap(actions.first { $0["label"]?.stringValue == "Proceed" })
         XCTAssertEqual(proceed["submit_op"]?.stringValue, "submit")
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("Approved to proceed") == true)
+    }
+
+    func testWaitForUpdateReturnsImmediatelyWithoutPriorFingerprint() async throws {
+        let coordinatorID = UUID()
+        let plan = CoordinatorMissionPlan(
+            objective: "Watch mission",
+            status: .running,
+            approvalState: .approved
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("wait_for_update"),
+            "timeout_seconds": .int(0)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+        let status = try XCTUnwrap(object["mission_status"]?.objectValue)
+
+        XCTAssertEqual(object["changed"]?.boolValue, true)
+        XCTAssertEqual(object["timed_out"]?.boolValue, false)
+        XCTAssertEqual(status["compact"]?.boolValue, true)
+        XCTAssertNotNil(status["fingerprint"]?.stringValue)
+    }
+
+    func testWaitForUpdateTimesOutWhenFingerprintIsUnchanged() async throws {
+        let coordinatorID = UUID()
+        let plan = CoordinatorMissionPlan(
+            objective: "Watch mission",
+            status: .running,
+            approvalState: .approved
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let initial = try await service.execute(args: [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ])
+        let fingerprint = try XCTUnwrap(initial.objectValue?["mission_status"]?.objectValue?["fingerprint"]?.stringValue)
+        let response = try await service.execute(args: [
+            "op": .string("wait_for_update"),
+            "since_fingerprint": .string(fingerprint),
+            "timeout_seconds": .int(0)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+        let status = try XCTUnwrap(object["mission_status"]?.objectValue)
+
+        XCTAssertEqual(object["changed"]?.boolValue, false)
+        XCTAssertEqual(object["timed_out"]?.boolValue, true)
+        XCTAssertEqual(status["fingerprint"]?.stringValue, fingerprint)
     }
 
     func testMissionStatusFlagsBoundWorkflowMismatch() async throws {

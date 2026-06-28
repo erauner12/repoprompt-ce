@@ -233,9 +233,9 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             name: MCPWindowToolName.coordinatorChat,
             freshnessPolicy: .providerManaged,
             description: """
-            External test/control surface for Coordinator Mode. This mirrors the visible Coordinator UI: list parent threads, select a parent thread, start a fresh parent thread, atomically start a fresh Mission with an initial directive, stop the selected Mission, submit a directive to the selected parent, or record/read the selected Mission Plan.
+            External test/control surface for Coordinator Mode. This mirrors the visible Coordinator UI: list parent threads, select a parent thread, start a fresh parent thread, atomically start a fresh Mission with an initial directive, stop the selected Mission, submit a directive to the selected parent, or record/read/wait on the selected Mission Plan.
 
-            **Operations**: list | select | new | start_mission | stop_mission | submit | mission_plan | mission_status
+            **Operations**: list | select | new | start_mission | stop_mission | submit | mission_plan | mission_status | wait_for_update
 
             - `list`: Return current Coordinator parent selection, available parents, and board counts.
             - `select`: Select an existing Coordinator parent by `coordinator_session_id`.
@@ -245,6 +245,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             - `submit`: Send a directive to the selected parent, to `coordinator_session_id`, or to a fresh parent when `new_parent=true`.
             - `mission_plan`: Create or update the selected Coordinator Mission's DAG-lite plan. Use this before delegated child starts. Workstream and node arrays are upserts by default: include only changed entries for existing IDs/titles; omitted entries are preserved. Use `replace_workstreams=true` or `replace_nodes=true` when rewriting that part of the plan of record. Routing decisions append/upsert by id.
             - `mission_status`: Read back the selected Coordinator Mission's current plan, node status, and newest 20 routing decisions. Use `compact=true` for polling from external automation.
+            - `wait_for_update`: Long-poll the selected or requested Coordinator Mission until its compact status fingerprint changes, then return compact mission_status.
 
             Coordinator-role agents should use `mission_plan` to record concrete user-specific deliverables before delegating child Agent Mode sessions. Workflows such as Investigate, Deep Plan, Orchestrate, and Review belong in node workflow metadata only when the node is intended to run that real workflow. Workflow-less read-only probe nodes may be launched with `agent_explore.start`; workflow-bearing nodes should be launched or steered through `agent_run` with the same workflow, and `mission_status` reports planned/actual workflow matches for bound nodes.
             """,
@@ -261,13 +262,16 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 **submit**: message (required), coordinator_session_id? or new_parent?
                 **mission_plan**: coordinator_session_id? plus one or more of objective, status, approval_state, workstreams, nodes, routing_decisions, events. replace_workstreams/replace_nodes may be true for deliberate plan rewrites.
                 **mission_status**: coordinator_session_id?, compact?; returns current plan state and routing_decisions_recent newest-first, max 20. compact=true returns a smaller polling summary with liveness warnings, checkpoint submit hints, and short recent history.
+                **wait_for_update**: coordinator_session_id?, since_fingerprint?, timeout_seconds?; waits until compact mission_status.fingerprint changes and returns compact status.
                 """,
                 properties: [
-                    "op": .string(description: "Operation.", enum: ["list", "select", "new", "start_mission", "stop_mission", "submit", "mission_plan", "mission_status"]),
-                    "coordinator_session_id": .string(description: "[select, stop_mission, submit, mission_plan, mission_status] Existing Coordinator parent session UUID. Defaults to the selected Coordinator for mission_plan/mission_status."),
+                    "op": .string(description: "Operation.", enum: ["list", "select", "new", "start_mission", "stop_mission", "submit", "mission_plan", "mission_status", "wait_for_update"]),
+                    "coordinator_session_id": .string(description: "[select, stop_mission, submit, mission_plan, mission_status, wait_for_update] Existing Coordinator parent session UUID. Defaults to the selected Coordinator for mission_plan/mission_status/wait_for_update."),
                     "message": .string(description: "[start_mission, submit] Directive text to send to the fresh, selected, or requested Coordinator parent."),
                     "new_parent": .boolean(description: "[submit] Start from a blank Coordinator parent before sending this directive. Default false."),
-                    "compact": .boolean(description: "[mission_status] Return a small polling summary instead of the full Coordinator snapshot. Includes plan-approval checkpoint actions when available. Default false."),
+                    "compact": .boolean(description: "[mission_status] Return a small polling summary instead of the full Coordinator snapshot. Includes fingerprint and plan-approval checkpoint actions when available. Default false."),
+                    "since_fingerprint": .string(description: "[wait_for_update] Last compact mission_status.fingerprint observed by the caller. If omitted, returns immediately."),
+                    "timeout_seconds": .number(description: "[wait_for_update] Maximum seconds to wait before returning the current compact status. Default 30, max 300."),
                     "objective": .string(description: "[mission_plan] User-specific Mission objective."),
                     "status": .string(description: "[mission_plan] Mission status.", enum: ["draft", "approved", "running", "blocked", "completed", "stopped"]),
                     "approval_state": .string(description: "[mission_plan] Human approval state for the plan.", enum: ["not_required", "awaiting_approval", "approved", "revision_requested"]),

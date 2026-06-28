@@ -202,9 +202,51 @@ struct CoordinatorChatMCPToolService {
                 ? compactStateResponse(snapshot, extra: extra)
                 : stateResponse(snapshot, extra: extra)
 
+        case "wait_for_update":
+            let timeout = try parseCoordinatorWaitTimeout(args["timeout_seconds"] ?? args["timeout"])
+            let sinceFingerprint = normalizedString(args["since_fingerprint"] ?? args["sinceFingerprint"])
+            let deadline = Date().addingTimeInterval(timeout)
+            var latestSnapshot: CoordinatorModeSnapshot
+            var latestCoordinatorSessionID: UUID
+            var latestStatus: Value
+            repeat {
+                environment.refresh()
+                latestSnapshot = environment.snapshot()
+                latestCoordinatorSessionID = try resolveCoordinatorSessionID(args["coordinator_session_id"], in: latestSnapshot)
+                try validateCoordinatorExists(latestCoordinatorSessionID, in: latestSnapshot)
+                latestStatus = compactMissionStatusValue(
+                    coordinatorSessionID: latestCoordinatorSessionID,
+                    snapshot: latestSnapshot
+                )
+                let fingerprint = latestStatus.objectValue?["fingerprint"]?.stringValue
+                if sinceFingerprint == nil || fingerprint != sinceFingerprint {
+                    return compactStateResponse(latestSnapshot, extra: [
+                        "changed": .bool(true),
+                        "timed_out": .bool(false),
+                        "mission_status": latestStatus
+                    ])
+                }
+                if Date() >= deadline {
+                    return compactStateResponse(latestSnapshot, extra: [
+                        "changed": .bool(false),
+                        "timed_out": .bool(true),
+                        "mission_status": latestStatus
+                    ])
+                }
+                try await Task.sleep(nanoseconds: 500_000_000)
+            } while true
+
         default:
-            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, start_mission, stop_mission, submit, mission_plan, mission_status.")
+            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, start_mission, stop_mission, submit, mission_plan, mission_status, wait_for_update.")
         }
+    }
+
+    private func parseCoordinatorWaitTimeout(_ value: Value?) throws -> TimeInterval {
+        let parsed = try AgentMCPToolHelpers.parseTimeoutSeconds(value) ?? 30
+        guard parsed <= 300 else {
+            throw MCPError.invalidParams("timeout_seconds must be 300 seconds or less.")
+        }
+        return parsed
     }
 
     private func parseMissionPlanUpdate(
@@ -999,6 +1041,7 @@ struct CoordinatorChatMCPToolService {
         guard let plan = option.missionPlan else {
             return .object([
                 "compact": .bool(true),
+                "fingerprint": .string(compactMissionStatusFingerprint(option: option, plan: nil, rows: rows)),
                 "coordinator_session_id": .string(option.sessionID.uuidString),
                 "title": .string(option.title),
                 "selected": .bool(option.isSelected),
@@ -1035,6 +1078,7 @@ struct CoordinatorChatMCPToolService {
 
         return .object([
             "compact": .bool(true),
+            "fingerprint": .string(compactMissionStatusFingerprint(option: option, plan: plan, rows: rows)),
             "coordinator_session_id": .string(option.sessionID.uuidString),
             "title": .string(option.title),
             "selected": .bool(option.isSelected),
@@ -1074,6 +1118,73 @@ struct CoordinatorChatMCPToolService {
                     .map(missionRoutingDecisionValue)
             )
         ])
+    }
+
+    private func compactMissionStatusFingerprint(
+        option: CoordinatorModeCoordinatorOption,
+        plan: CoordinatorMissionPlan?,
+        rows: [CoordinatorModeRow]
+    ) -> String {
+        var parts = [
+            "coordinator",
+            option.sessionID.uuidString,
+            option.runState?.rawValue ?? "run_state:nil",
+            option.isSelected ? "selected:true" : "selected:false"
+        ]
+        guard let plan else {
+            return stableFingerprint(parts)
+        }
+
+        parts.append(contentsOf: [
+            "plan",
+            "\(plan.revision)",
+            plan.status.rawValue,
+            plan.approvalState.rawValue,
+            "\(plan.nodes.count)",
+            "\(plan.workstreams.count)"
+        ])
+        for workstream in plan.workstreams {
+            parts.append(contentsOf: [
+                "workstream",
+                workstream.id.uuidString,
+                workstream.primarySessionID?.uuidString ?? "primary:nil",
+                workstream.worktreeStrategy.worktreeID ?? "worktree:nil"
+            ])
+        }
+        for node in plan.nodes {
+            parts.append(contentsOf: [
+                "node",
+                node.id.uuidString,
+                node.status.rawValue,
+                node.executionPolicy.rawValue,
+                node.boundSessionID?.uuidString ?? "bound_session:nil",
+                node.boundInteractionID?.uuidString ?? "bound_interaction:nil"
+            ])
+        }
+        let childRows = rows
+            .filter { $0.parentSessionID == option.sessionID }
+            .sorted { $0.sessionID.uuidString < $1.sessionID.uuidString }
+        for row in childRows {
+            parts.append(contentsOf: [
+                "row",
+                row.sessionID.uuidString,
+                row.runState.rawValue,
+                row.statusGroup.rawValue,
+                row.workflow?.id ?? "workflow:nil",
+                row.pendingInteraction?.id.uuidString ?? "interaction:nil"
+            ])
+        }
+        return stableFingerprint(parts)
+    }
+
+    private func stableFingerprint(_ parts: [String]) -> String {
+        let joined = parts.joined(separator: "\u{1F}")
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in joined.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(format: "%016llx", hash)
     }
 
     private func compactMissionCheckpointValue(_ plan: CoordinatorMissionPlan) -> Value {
