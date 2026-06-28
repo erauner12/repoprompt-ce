@@ -86,6 +86,8 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         missionPlan = CoordinatorMissionPlan(
             id: missionPlan?.id ?? UUID(),
             revision: (missionPlan?.revision ?? 0) + 1,
+            missionKey: update.missionKey?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                ?? missionPlan?.missionKey,
             objective: update.objective?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                 ?? missionPlan?.objective,
             predecessorMissionID: update.predecessorMissionID ?? missionPlan?.predecessorMissionID,
@@ -314,6 +316,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
 }
 
 struct CoordinatorMissionPlanUpdate: Equatable {
+    var missionKey: String?
     var objective: String?
     var predecessorMissionID: UUID?
     var predecessorTitle: String?
@@ -330,6 +333,7 @@ struct CoordinatorMissionPlanUpdate: Equatable {
 
     init(
         objective: String? = nil,
+        missionKey: String? = nil,
         predecessorMissionID: UUID? = nil,
         predecessorTitle: String? = nil,
         predecessorSummary: String? = nil,
@@ -343,6 +347,7 @@ struct CoordinatorMissionPlanUpdate: Equatable {
         events: [CoordinatorMissionPlanEvent] = [],
         updatedAt: Date = Date()
     ) {
+        self.missionKey = missionKey
         self.objective = objective
         self.predecessorMissionID = predecessorMissionID
         self.predecessorTitle = predecessorTitle
@@ -362,6 +367,7 @@ struct CoordinatorMissionPlanUpdate: Equatable {
 struct CoordinatorMissionPlan: Codable, Equatable {
     var id: UUID
     var revision: Int
+    var missionKey: String?
     var objective: String?
     var predecessorMissionID: UUID?
     var predecessorTitle: String?
@@ -378,6 +384,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
     init(
         id: UUID = UUID(),
         revision: Int = 1,
+        missionKey: String? = nil,
         objective: String? = nil,
         predecessorMissionID: UUID? = nil,
         predecessorTitle: String? = nil,
@@ -393,6 +400,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
     ) {
         self.id = id
         self.revision = max(1, revision)
+        self.missionKey = missionKey?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.objective = objective?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.predecessorMissionID = predecessorMissionID
         self.predecessorTitle = predecessorTitle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
@@ -443,6 +451,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id
         case revision
+        case missionKey
         case objective
         case predecessorMissionID
         case predecessorTitle
@@ -462,6 +471,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         try self.init(
             id: container.decode(UUID.self, forKey: .id),
             revision: container.decode(Int.self, forKey: .revision),
+            missionKey: container.decodeIfPresent(String.self, forKey: .missionKey),
             objective: container.decodeIfPresent(String.self, forKey: .objective),
             predecessorMissionID: container.decodeIfPresent(UUID.self, forKey: .predecessorMissionID),
             predecessorTitle: container.decodeIfPresent(String.self, forKey: .predecessorTitle),

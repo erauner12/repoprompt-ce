@@ -1352,6 +1352,7 @@ final class AgentModeViewModel: ObservableObject {
             purpose: context.purpose,
             taskLabelKind: context.taskLabelKind,
             allowsAgentExternalControlTools: context.allowsAgentExternalControlTools,
+            isCoordinatorRuntime: context.isCoordinatorRuntime,
             requiresExpectedAgentPID: context.requiresExpectedAgentPID
         )
     }

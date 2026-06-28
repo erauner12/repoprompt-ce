@@ -595,6 +595,7 @@ actor MCPBootstrapLease {
             purpose: spec.purpose,
             taskLabelKind: spec.taskLabelKind,
             allowsAgentExternalControlTools: spec.allowsAgentExternalControlTools,
+            isCoordinatorRuntime: spec.agentModePolicyContext?.isCoordinatorRuntime ?? (spec.taskLabelKind == .coordinator),
             requiresExpectedAgentPID: spec.requiresExpectedAgentPID
         )
     }

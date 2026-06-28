@@ -97,6 +97,76 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(plan["predecessor_summary"]?.stringValue, "Doctor UX discovery found missing prerequisite guidance.")
     }
 
+    func testStartMissionRejectsCoordinatorRuntimeCaller() async throws {
+        let coordinatorID = UUID()
+        var didStartNew = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            startNew: {
+                didStartNew = true
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("start_mission"),
+                "message": .string("Start another mission.")
+            ])
+            XCTFail("Coordinator runtime callers must not be allowed to create peer Missions.")
+        } catch {
+            XCTAssertFalse(didStartNew)
+            XCTAssertTrue(String(describing: error).contains("cannot create other Coordinator Missions"))
+        }
+    }
+
+    func testEnsureMissionSelectsExistingMissionByKey() async throws {
+        let firstID = UUID()
+        let secondID = UUID()
+        var selectedID = firstID
+        var didStartNew = false
+        let existingPlan = CoordinatorMissionPlan(
+            missionKey: "homelab-garden:pr6-doctor",
+            objective: "Existing PR #6 Mission",
+            status: .draft
+        )
+        let service = makeService(
+            coordinatorIDs: [firstID, secondID],
+            selectedID: { selectedID },
+            select: { selectedID = $0 ?? firstID },
+            startNew: {
+                didStartNew = true
+            },
+            missionPlans: {
+                [secondID: existingPlan]
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("ensure_mission"),
+            "mission_key": .string("homelab-garden:pr6-doctor"),
+            "message": .string("Retry-safe start.")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(selectedID, secondID)
+        XCTAssertFalse(didStartNew)
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["started_new_mission"]?.boolValue, false)
+        XCTAssertEqual(object["selected_existing_mission"]?.boolValue, true)
+        XCTAssertEqual(object["mission_key"]?.stringValue, "homelab-garden:pr6-doctor")
+    }
+
     func testStopMissionSelectsRequestedCoordinatorAndStopsIt() async throws {
         let firstID = UUID()
         let secondID = UUID()
@@ -1286,6 +1356,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
     private func makeService(
         coordinatorIDs: [UUID],
         selectedID: UUID,
+        captureRequestMetadata: @escaping () async -> MCPServerViewModel.RequestMetadata = {
+            MCPServerViewModel.RequestMetadata(connectionID: nil, clientName: nil, windowID: nil)
+        },
         coordinatorRunState: AgentSessionRunState = .idle,
         startNew: @escaping () -> Void = {},
         stopMission: @escaping () async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { .accepted },
@@ -1299,6 +1372,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         makeService(
             coordinatorIDs: coordinatorIDs,
             selectedID: { selectedID },
+            captureRequestMetadata: captureRequestMetadata,
             coordinatorRunState: coordinatorRunState,
             startNew: startNew,
             stopMission: stopMission,
@@ -1314,6 +1388,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
     private func makeService(
         coordinatorIDs: [UUID],
         selectedID: @escaping () -> UUID,
+        captureRequestMetadata: @escaping () async -> MCPServerViewModel.RequestMetadata = {
+            MCPServerViewModel.RequestMetadata(connectionID: nil, clientName: nil, windowID: nil)
+        },
         coordinatorRunState: AgentSessionRunState = .idle,
         select: @escaping (UUID?) -> Void = { _ in },
         startNew: @escaping () -> Void = {},
@@ -1325,7 +1402,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },
         updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in }
     ) -> CoordinatorChatMCPToolService {
-        CoordinatorChatMCPToolService(toolName: MCPWindowToolName.coordinatorChat) {
+        CoordinatorChatMCPToolService(
+            toolName: MCPWindowToolName.coordinatorChat,
+            captureRequestMetadata: captureRequestMetadata
+        ) {
             CoordinatorChatMCPToolService.Environment(
                 snapshot: {
                     Self.snapshot(

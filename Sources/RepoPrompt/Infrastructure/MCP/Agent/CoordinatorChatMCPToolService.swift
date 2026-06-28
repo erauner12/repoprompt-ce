@@ -3,6 +3,8 @@ import MCP
 
 @MainActor
 struct CoordinatorChatMCPToolService {
+    typealias RequestMetadata = MCPServerViewModel.RequestMetadata
+
     struct Environment {
         var snapshot: () -> CoordinatorModeSnapshot
         var refresh: () -> Void
@@ -17,12 +19,15 @@ struct CoordinatorChatMCPToolService {
 
     private let toolName: String
     private let makeEnvironment: () throws -> Environment
+    private let captureRequestMetadata: () async -> RequestMetadata
 
     init(
         toolName: String,
-        requireTargetWindow: @escaping MCPWindowToolDependencies.RequireTargetWindow
+        requireTargetWindow: @escaping MCPWindowToolDependencies.RequireTargetWindow,
+        captureRequestMetadata: @escaping () async -> RequestMetadata
     ) {
         self.toolName = toolName
+        self.captureRequestMetadata = captureRequestMetadata
         makeEnvironment = {
             let coordinatorViewModel = try requireTargetWindow().agentModeViewModel.coordinatorModeViewModel
             return Environment(
@@ -41,14 +46,19 @@ struct CoordinatorChatMCPToolService {
 
     init(
         toolName: String,
+        captureRequestMetadata: @escaping () async -> RequestMetadata = {
+            RequestMetadata(connectionID: nil, clientName: nil, windowID: nil)
+        },
         makeEnvironment: @escaping () throws -> Environment
     ) {
         self.toolName = toolName
+        self.captureRequestMetadata = captureRequestMetadata
         self.makeEnvironment = makeEnvironment
     }
 
     func execute(args: [String: Value]) async throws -> Value {
         let environment = try makeEnvironment()
+        let metadata = await captureRequestMetadata()
         let op = try AgentMCPToolHelpers.requireNonEmptyString(args["op"], name: "op")
             .lowercased()
 
@@ -68,43 +78,71 @@ struct CoordinatorChatMCPToolService {
             ])
 
         case "new":
+            try validateExternalMissionCreation(metadata)
             environment.startNewCoordinatorRun()
             environment.refresh()
             return stateResponse(environment.snapshot(), extra: [
                 "new_parent_pending": .bool(true)
             ])
 
-        case "start_mission":
+        case "ensure_mission", "start_mission":
+            try validateExternalMissionCreation(metadata)
             guard let message = normalizedString(args["message"] ?? args["response"]),
                   !message.isEmpty
             else {
                 throw MCPError.invalidParams("message is required.")
             }
+            let missionKey = normalizedString(args["mission_key"] ?? args["missionKey"])
+            if op == "ensure_mission", missionKey == nil {
+                throw MCPError.invalidParams("mission_key is required for ensure_mission.")
+            }
             let predecessorUpdate = try parseMissionPredecessorUpdate(args)
 
             environment.refresh()
+            if let existingSessionID = missionKey.flatMap({ findReusableMissionID(missionKey: $0, in: environment.snapshot()) }) {
+                environment.selectCoordinator(existingSessionID)
+                environment.refresh()
+                return compactStateResponse(environment.snapshot(), extra: [
+                    "accepted": .bool(true),
+                    "routed_to": .string("coordinator"),
+                    "started_new_mission": .bool(false),
+                    "selected_existing_mission": .bool(true),
+                    "mission_key": .string(missionKey ?? "")
+                ])
+            }
             environment.startNewCoordinatorRun()
             let result = await environment.submitDirective(message)
             environment.refresh()
 
             switch result {
             case .accepted:
+                var update = predecessorUpdate.update
+                update.missionKey = missionKey
                 if predecessorUpdate.hasPredecessorContext,
                    let coordinatorSessionID = environment.snapshot().coordinatorRail.coordinatorSessionID
                 {
-                    try environment.updateMissionPlan(coordinatorSessionID, predecessorUpdate.update)
+                    try environment.updateMissionPlan(coordinatorSessionID, update)
+                    environment.refresh()
+                } else if missionKey != nil,
+                          let coordinatorSessionID = environment.snapshot().coordinatorRail.coordinatorSessionID
+                {
+                    try environment.updateMissionPlan(coordinatorSessionID, update)
                     environment.refresh()
                 }
                 return stateResponse(environment.snapshot(), extra: [
                     "accepted": .bool(true),
                     "routed_to": .string("coordinator"),
-                    "started_new_mission": .bool(true)
+                    "started_new_mission": .bool(true),
+                    "selected_existing_mission": .bool(false),
+                    "mission_key": AgentMCPToolHelpers.stringOrNull(missionKey)
                 ])
             case let .rejected(message):
                 return stateResponse(environment.snapshot(), extra: [
                     "accepted": .bool(false),
                     "routed_to": .string("coordinator"),
                     "started_new_mission": .bool(true),
+                    "selected_existing_mission": .bool(false),
+                    "mission_key": AgentMCPToolHelpers.stringOrNull(missionKey),
                     "error": .string(message)
                 ])
             }
@@ -138,6 +176,9 @@ struct CoordinatorChatMCPToolService {
             let newParent = AgentMCPToolHelpers.parseBool(args["new_parent"]) ?? false
             if newParent, message == nil {
                 throw MCPError.invalidParams("message is required.")
+            }
+            if newParent {
+                try validateExternalMissionCreation(metadata)
             }
 
             environment.refresh()
@@ -244,8 +285,29 @@ struct CoordinatorChatMCPToolService {
             } while true
 
         default:
-            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, start_mission, stop_mission, submit, mission_plan, mission_status, wait_for_update.")
+            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, ensure_mission, start_mission, stop_mission, submit, mission_plan, mission_status, wait_for_update.")
         }
+    }
+
+    private func validateExternalMissionCreation(_ metadata: RequestMetadata) throws {
+        if metadata.isCoordinatorRuntime || metadata.taskLabelKind == .coordinator {
+            throw MCPError.invalidParams("Coordinator runtime sessions cannot create other Coordinator Missions. Record a follow-up recommendation in the current Mission and wait for an external user or CLI driver to start it.")
+        }
+    }
+
+    private func findReusableMissionID(missionKey: String, in snapshot: CoordinatorModeSnapshot) -> UUID? {
+        let normalizedKey = missionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedKey.isEmpty else { return nil }
+        return snapshot.coordinatorRail.availableCoordinators
+            .first { option in
+                guard let plan = option.missionPlan,
+                      plan.missionKey == normalizedKey,
+                      plan.status != .stopped,
+                      plan.status != .completed
+                else { return false }
+                return true
+            }?
+            .sessionID
     }
 
     private func parseCoordinatorWaitTimeout(_ value: Value?) throws -> TimeInterval {
@@ -260,6 +322,7 @@ struct CoordinatorChatMCPToolService {
         _ args: [String: Value],
         existingPlan: CoordinatorMissionPlan?
     ) throws -> CoordinatorMissionPlanUpdate {
+        let missionKey = normalizedString(args["mission_key"] ?? args["missionKey"])
         let objective = normalizedString(args["objective"])
         let predecessorUpdate = try parseMissionPredecessorUpdate(args)
         let status = try parseOptionalMissionPlanStatus(args["status"])
@@ -279,7 +342,8 @@ struct CoordinatorChatMCPToolService {
             ? parseMissionRoutingDecisions(args["routing_decisions"] ?? args["routingDecisions"], nodes: effectiveNodes, workstreams: effectiveWorkstreams)
             : nil
         let events = try parseMissionPlanEvents(args["events"], nodes: effectiveNodes)
-        if objective == nil,
+        if missionKey == nil,
+           objective == nil,
            !predecessorUpdate.hasPredecessorContext,
            status == nil,
            approvalState == nil,
@@ -288,10 +352,11 @@ struct CoordinatorChatMCPToolService {
            routingDecisions == nil,
            events.isEmpty
         {
-            throw MCPError.invalidParams("mission_plan requires at least one of objective, predecessor context, status, approval_state, workstreams, nodes, routing_decisions, or events.")
+            throw MCPError.invalidParams("mission_plan requires at least one of mission_key, objective, predecessor context, status, approval_state, workstreams, nodes, routing_decisions, or events.")
         }
         return try CoordinatorMissionPlanUpdate(
             objective: objective,
+            missionKey: missionKey,
             predecessorMissionID: predecessorUpdate.update.predecessorMissionID,
             predecessorTitle: predecessorUpdate.update.predecessorTitle,
             predecessorSummary: predecessorUpdate.update.predecessorSummary,
@@ -1126,6 +1191,7 @@ struct CoordinatorChatMCPToolService {
             "debug_summary": .string(debugSummary),
             "plan": .object([
                 "revision": .int(plan.revision),
+                "mission_key": AgentMCPToolHelpers.stringOrNull(plan.missionKey),
                 "objective": AgentMCPToolHelpers.stringOrNull(plan.objective),
                 "predecessor_mission_id": AgentMCPToolHelpers.stringOrNull(plan.predecessorMissionID?.uuidString),
                 "predecessor_title": AgentMCPToolHelpers.stringOrNull(plan.predecessorTitle),
@@ -1238,6 +1304,7 @@ struct CoordinatorChatMCPToolService {
             plan.approvalState.rawValue,
             "\(plan.nodes.count)",
             "\(plan.workstreams.count)",
+            plan.missionKey ?? "mission_key:nil",
             plan.predecessorMissionID?.uuidString ?? "predecessor:nil",
             plan.predecessorTitle ?? "predecessor_title:nil",
             plan.predecessorSummary ?? "predecessor_summary:nil"
@@ -1572,6 +1639,7 @@ struct CoordinatorChatMCPToolService {
         return .object([
             "id": .string(plan.id.uuidString),
             "revision": .int(plan.revision),
+            "mission_key": AgentMCPToolHelpers.stringOrNull(plan.missionKey),
             "objective": AgentMCPToolHelpers.stringOrNull(plan.objective),
             "predecessor_mission_id": AgentMCPToolHelpers.stringOrNull(plan.predecessorMissionID?.uuidString),
             "predecessor_title": AgentMCPToolHelpers.stringOrNull(plan.predecessorTitle),

@@ -568,7 +568,8 @@ final class MCPServerViewModel: ObservableObject {
     private var coordinatorChatToolService: CoordinatorChatMCPToolService {
         CoordinatorChatMCPToolService(
             toolName: MCPWindowToolName.coordinatorChat,
-            requireTargetWindow: { [self] in try requireTargetWindow() }
+            requireTargetWindow: { [self] in try requireTargetWindow() },
+            captureRequestMetadata: { [self] in await captureRequestMetadata() }
         )
     }
 

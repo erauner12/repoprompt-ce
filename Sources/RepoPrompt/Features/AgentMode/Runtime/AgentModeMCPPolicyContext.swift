@@ -49,6 +49,6 @@ struct AgentModeMCPPolicyContext {
         self.taskLabelKind = taskLabelKind
         self.allowsAgentExternalControlTools = allowsAgentExternalControlTools
         self.requiresExpectedAgentPID = requiresExpectedAgentPID
-        self.isCoordinatorRuntime = isCoordinatorRuntime
+        self.isCoordinatorRuntime = isCoordinatorRuntime || taskLabelKind == .coordinator
     }
 }
