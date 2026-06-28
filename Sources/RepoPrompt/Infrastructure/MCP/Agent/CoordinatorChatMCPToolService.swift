@@ -1066,13 +1066,14 @@ struct CoordinatorChatMCPToolService {
             guard let boundSessionID = node.boundSessionID else { return false }
             return rowsBySessionID[boundSessionID] == nil && !node.status.isTerminal
         }
+        let routingWarnings = compactMissionRoutingWarnings(plan: plan, rowsBySessionID: rowsBySessionID)
         let warnings = compactMissionStatusWarnings(
             option: option,
             plan: plan,
             activeNodes: activeNodes,
             runningDelegatedNodesWithoutBoundSessions: runningDelegatedNodesWithoutBoundSessions,
             missingBoundRows: missingBoundRows
-        )
+        ) + routingWarnings
         let runStateSummary = option.runState?.rawValue ?? "unknown"
         let debugSummary = "\(option.title): \(plan.status.rawValue), \(runStateSummary), r\(plan.revision), \(terminalCount)/\(plan.nodes.count) terminal nodes, \(activeNodes.count) active/blocking."
 
@@ -1092,6 +1093,9 @@ struct CoordinatorChatMCPToolService {
                 "approval_state": .string(plan.approvalState.rawValue)
             ]),
             "node_counts": missionPlanNodeCountsValue(nodeCounts),
+            "workstreams": .array(plan.workstreams.map { workstream in
+                compactMissionStatusWorkstreamValue(workstream, plan: plan, rowsBySessionID: rowsBySessionID)
+            }),
             "active_nodes": .array(activeNodes.map { compactMissionStatusNodeValue($0, rowsBySessionID: rowsBySessionID) }),
             "running_delegated_nodes_without_bound_sessions": .array(
                 runningDelegatedNodesWithoutBoundSessions.map { compactMissionStatusNodeValue($0, rowsBySessionID: rowsBySessionID) }
@@ -1118,6 +1122,57 @@ struct CoordinatorChatMCPToolService {
                     .map(missionRoutingDecisionValue)
             )
         ])
+    }
+
+    private func compactMissionStatusWorkstreamValue(
+        _ workstream: CoordinatorMissionWorkstreamSummary,
+        plan: CoordinatorMissionPlan,
+        rowsBySessionID: [UUID: CoordinatorModeRow]
+    ) -> Value {
+        let primaryRow = workstream.primarySessionID.flatMap { rowsBySessionID[$0] }
+        let boundRows = workstream.linkedSessionIDs.compactMap { rowsBySessionID[$0] }
+        return .object([
+            "id": .string(workstream.id.uuidString),
+            "title": .string(workstream.title),
+            "default_policy": .string(workstream.defaultPolicy.rawValue),
+            "worktree_id": AgentMCPToolHelpers.stringOrNull(workstream.worktreeStrategy.worktreeID),
+            "worktree_mode": .string(workstream.worktreeStrategy.mode.rawValue),
+            "base_ref": AgentMCPToolHelpers.stringOrNull(workstream.worktreeStrategy.baseRef),
+            "primary_session_id": AgentMCPToolHelpers.stringOrNull(workstream.primarySessionID?.uuidString),
+            "primary_session_state": AgentMCPToolHelpers.stringOrNull(primaryRow?.runState.rawValue),
+            "primary_session_status_group": AgentMCPToolHelpers.stringOrNull(primaryRow?.statusGroup.rawValue),
+            "bound_row_count": .int(boundRows.count),
+            "next_recommended_route": .string(compactMissionNextRecommendedRoute(workstream: workstream, plan: plan))
+        ])
+    }
+
+    private func compactMissionNextRecommendedRoute(
+        workstream: CoordinatorMissionWorkstreamSummary,
+        plan: CoordinatorMissionPlan
+    ) -> String {
+        if workstream.primarySessionID != nil {
+            return "steer_primary"
+        }
+        let hasPendingWorkstreamNodes = plan.nodes.contains { node in
+            node.workstreamID == workstream.id && !node.status.isTerminal
+        }
+        guard hasPendingWorkstreamNodes else { return "none" }
+        switch workstream.defaultPolicy {
+        case .freshReadOnlyChild:
+            return "start_fresh_readonly_child"
+        case .freshWorktree:
+            return "start_fresh_worktree"
+        case .freshSiblingOnSameWorktree:
+            return "start_fresh_sibling_on_same_worktree"
+        case .steerPrimary:
+            return "steer_primary"
+        case .coordinatorOnly:
+            return "coordinator_hold"
+        case .askUser:
+            return "hold_for_user"
+        case .planCritique:
+            return "start_plan_critique"
+        }
     }
 
     private func compactMissionStatusFingerprint(
@@ -1175,6 +1230,47 @@ struct CoordinatorChatMCPToolService {
             ])
         }
         return stableFingerprint(parts)
+    }
+
+    private func compactMissionRoutingWarnings(
+        plan: CoordinatorMissionPlan,
+        rowsBySessionID: [UUID: CoordinatorModeRow]
+    ) -> [String] {
+        var warnings = Set<String>()
+        let workstreamsByID = Dictionary(uniqueKeysWithValues: plan.workstreams.map { ($0.id, $0) })
+        for workstream in plan.workstreams where workstream.primarySessionID != nil {
+            let freshBoundNodes = plan.nodes.filter { node in
+                node.workstreamID == workstream.id
+                    && node.boundSessionID != nil
+                    && (node.executionPolicy == .freshWorktree || node.executionPolicy == .freshReadOnlyChild)
+            }
+            if freshBoundNodes.count > 1 {
+                warnings.insert("workstream_has_multiple_fresh_sessions")
+            }
+            if freshBoundNodes.contains(where: { !$0.status.isTerminal }) {
+                warnings.insert("node_should_steer_primary_but_started_fresh")
+            }
+        }
+        for node in plan.nodes {
+            guard let workstream = workstreamsByID[node.workstreamID],
+                  workstream.worktreeStrategy.mode != .noneReadOnly,
+                  compactMissionNodeNeedsTaskWorktree(node),
+                  let boundSessionID = node.boundSessionID,
+                  let row = rowsBySessionID[boundSessionID],
+                  row.workstream == nil
+            else { continue }
+            warnings.insert("task_aware_child_missing_worktree_binding")
+        }
+        return warnings.sorted()
+    }
+
+    private func compactMissionNodeNeedsTaskWorktree(_ node: CoordinatorMissionPlanNode) -> Bool {
+        switch node.executionPolicy {
+        case .freshWorktree, .steerPrimary, .freshSiblingOnSameWorktree:
+            true
+        case .coordinatorOnly, .freshReadOnlyChild, .planCritique, .askUser:
+            node.workflowHint != nil
+        }
     }
 
     private func stableFingerprint(_ parts: [String]) -> String {

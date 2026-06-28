@@ -838,6 +838,86 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("Approved to proceed") == true)
     }
 
+    func testMissionStatusCompactFlagsFreshSessionDriftAfterPrimaryExists() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let primarySessionID = UUID()
+        let extraSessionID = UUID()
+        let firstNodeID = UUID()
+        let secondNodeID = UUID()
+        let plan = CoordinatorMissionPlan(
+            objective: "Ship implementation",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Implementation",
+                    purpose: "Implement the change.",
+                    defaultPolicy: .freshWorktree,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                        mode: .createIsolated,
+                        worktreeID: "wt-implementation"
+                    ),
+                    primarySessionID: primarySessionID
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: firstNodeID,
+                    title: "Initial implementation",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .running,
+                    boundSessionID: primarySessionID
+                ),
+                CoordinatorMissionPlanNode(
+                    id: secondNodeID,
+                    title: "Follow-up implementation",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .running,
+                    boundSessionID: extraSessionID
+                )
+            ]
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            rows: [
+                Self.childRow(
+                    id: primarySessionID,
+                    parentCoordinatorID: coordinatorID,
+                    title: "Primary implementation",
+                    workflow: CoordinatorModeWorkflowDisplaySummary(AgentWorkflow.orchestrate.definition)
+                ),
+                Self.childRow(
+                    id: extraSessionID,
+                    parentCoordinatorID: coordinatorID,
+                    title: "Extra implementation",
+                    workflow: CoordinatorModeWorkflowDisplaySummary(AgentWorkflow.orchestrate.definition)
+                )
+            ],
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ])
+        let status = try XCTUnwrap(response.objectValue?["mission_status"]?.objectValue)
+        let workstream = try XCTUnwrap(status["workstreams"]?.arrayValue?.first?.objectValue)
+        let warnings = try XCTUnwrap(status["liveness_warnings"]?.arrayValue?.compactMap(\.stringValue))
+
+        XCTAssertEqual(workstream["primary_session_id"]?.stringValue, primarySessionID.uuidString)
+        XCTAssertEqual(workstream["primary_session_state"]?.stringValue, "running")
+        XCTAssertEqual(workstream["worktree_id"]?.stringValue, "wt-implementation")
+        XCTAssertEqual(workstream["next_recommended_route"]?.stringValue, "steer_primary")
+        XCTAssertTrue(warnings.contains("workstream_has_multiple_fresh_sessions"))
+        XCTAssertTrue(warnings.contains("node_should_steer_primary_but_started_fresh"))
+        XCTAssertTrue(warnings.contains("task_aware_child_missing_worktree_binding"))
+    }
+
     func testWaitForUpdateReturnsImmediatelyWithoutPriorFingerprint() async throws {
         let coordinatorID = UUID()
         let plan = CoordinatorMissionPlan(
