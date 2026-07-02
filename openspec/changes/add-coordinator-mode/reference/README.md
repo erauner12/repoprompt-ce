@@ -1,11 +1,16 @@
-# Coordinator Mode UI Prototype Reference
+# Director Mode — deliverable set (mock v3.2.2)
 
-`RepoPrompt_Command_Center.html` is a standalone UI prototype exported from the design pass.
+Everything here is current as of this export; superseded drafts have been removed. The mock is verified by a 170-check harness (all green), including a static check that every UI action has a handler.
 
-It is non-normative: use it as visual and structural implementation reference only. The OpenSpec requirements remain the behavioral contract. Do not encode incidental HTML/CSS details, pixel widths, class names, or mock-only interactions as requirements.
+## The mock
+- **RepoPrompt_Command_Center.html** — the interactive mock, v3.2.2. Open in a browser. Demo beats (child question + deferral, bar miss, review-driven rework) play **once per reload** on the first Scoped Change run; reload to replay them. The ▸ Try chips on the New Mission policy cards prefill the four showcase directives — your words choose the plan (shape inference), the policy chooses how much stops for you.
 
-The prototype's Coordinator-rail `Chat`/`Agents` toggle and `Agents` roster are non-normative mock chrome from design exploration, not v1 requirements. The board/list is the human-facing active-workspace fleet view. A Coordinator can enumerate available models or child sessions through `agent_manage` tools (`list_agents` for the catalog, `list_sessions` for sessions), so v1 should not add a second by-agent roster in the rail.
+## Specs & design (normative)
+- **Mock_Iteration_Spec_v2.md** — the spec of record: per-version deltas (v2 → v3.2.2), state map, component → Swift mapping, interaction contracts, open questions Q1–Q19. Read the newest delta paragraphs first.
+- **Director_Design_v2.3.md** — chapter 1: shape inference, mission policies, decision counting, close-conflict rule. Complementary to v2.4, not superseded by it.
+- **Director_Design_v2.4.md** — chapter 2: autonomy as decision classes, ⚙ decision logging, child questions, the four built-in policies, standing guidance (four channels), Swift table.
+- **Director_Prompt_Design.md** — verbatim prompt skeletons for every model call (§1 inference incl. namedClose · §2 drafting incl. revision + multi-land contracts · §3 delegation · §4 steer/re-review · §5 adjudication · §9b cross-step rework · §9c discovered-scope · §10 landing, once per land node).
 
-`coordinator-demo-use-cases.md` records the production-demo prompt and gesture taxonomy. Use it to distinguish single delegation, one-parent fan-out, sequential multi-parent supervision, simultaneous multi-parent supervision, switch-back supervision, and the DAG-lite Mission status smoke without changing the normative requirements.
-
-Workflow-bearing demo prompts intentionally use Agent Mode workflow names such as `Investigate` and `Review`; those examples rely on the sourced `agent_run workflow_name`/`workflow_id` path rather than Coordinator-only mock state.
+## Implementation & demo
+- **Swift_Implementation_Preflight.md** — decide-before-day-one items (naming collision: Director vs the repo's Coordinator stack), the v1 cutline (3 shapes; defer bake-off/measured/reshape), data-model unifications (one MissionDecision record; checkpoints as state), architecture cross-check, and the multi-land/workspace notes (build the runner land-node-parameterized from day one).
+- **Mission_Demo_Scripts.md** — cold open, walkthrough scripts V0–V6, the policy × scenario matrix (Try chips), mechanics bullets, and the reviewer question bank.
