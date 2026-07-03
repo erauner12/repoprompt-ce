@@ -2,7 +2,7 @@
 
 RepoPrompt CE already has the raw data needed for Coordinator mode, but the data is split across Agent Mode and MCP status surfaces:
 
-Naming convention for this change: **Coordinator mode** is the peer `.main` surface, and **Coordinator view** is that surface's UI. **Coordinator** / **Coordinator session** is the resolved Agent Mode session shown in the rail and targeted by the composer.
+Naming convention for this change: **Director** is the user-facing supervisory actor and Command Center surface vocabulary. **Coordinator mode** remains the peer `.main` surface name in technical docs/code for this change, and **Coordinator view** is that surface's UI. **Coordinator** / **Coordinator session** is the resolved Agent Mode session shown in the rail and targeted by the composer. Swift symbols, MCP operation names, Codable keys, and existing debug payloads stay Coordinator-named until a separate no-behavior rename pass.
 
 - `AgentSession` persists session identity, provider/model metadata, `parentSessionID`, MCP origin, run state, worktree bindings, and active merge summaries.
 - `AgentModeSidebarSessionBuilder` already demonstrates lineage-aware session grouping, status vocabulary, attention state, and calm row presentation.
@@ -40,6 +40,46 @@ For the production-feeling demo, the selected/detected Coordinator may still be 
 - Objective labels, title-derived workstream chips, PR/check metadata, external MCP error triage, or detailed active-scope visualization in v1.
 
 ## Decisions
+
+### 0A. Director is the user-facing actor; Coordinator remains the technical contract
+
+The Command Center cutline uses Director for visible product copy: rail/conversation labels, Mission Policy, decision/evidence summaries, and receipt surfaces should read as the user talking to and auditing a Director. Coordinator remains the technical contract name in this change because Swift symbols, MCP operation names such as `coordinator_chat`, persisted Codable keys, and existing fixtures are already shipped through multiple seams. A full symbol/API/key rename is intentionally deferred to a separate no-behavior migration so product vocabulary can move without destabilizing runtime and persistence contracts.
+
+This also means the shortcut flip is deferred. User-facing Director wording should not silently change current main-surface ordering or keyboard behavior; if the product decides Director should become `Command-1`, that requires an explicit follow-up OpenSpec/UI pass.
+
+### 0B. Mission Policy and autonomy are Mission-owned trust guidance
+
+Mission Policy is separate from Mission Templates. Templates remain prompt wrappers and topology instructions for fresh Mission starts. Policies are trust/settings/guidance snapshots attached to a Mission: stable policy ID/name, default pace, a string-keyed autonomy map, optional Definition of Done, optional standing guidance, and pinned skills/context IDs. Built-ins for the first pass are Default, Hands-off, Careful writes, and Read-only.
+
+The autonomy map shares its string key space with decision classes. Known v1 classes are `plan`, `advance`, `writes`, `childAsk`, `recover`, and `irreversible`; unknown classes round-trip but resolve to Ask. This keeps the ledger foundation open to future classes without accidentally granting autonomy.
+
+### 0C. Decision/evidence ledgers are append-only Mission state
+
+The Mission Plan becomes the durable home for shape summary, policy snapshot, autonomy, decision ledger, evidence ledger, and receipt inputs. All fields are additive/defaulted so old Missions decode. The receipt is a projection from Mission-owned contract, decision, evidence, and close data; rendered receipt markdown is not a persisted source of truth.
+
+Decision ledger records use one record type for user and director decisions. Each record carries a stable ID, string decision class, actor, label, optional reason, timestamp, and references such as node/session/interaction/checkpoint ID. Evidence records are also Mission-owned and distinguish at least meeting evidence from short verdicts, with node/session refs when available.
+
+Ledger merge semantics are deliberately conservative: decision and evidence arrays are append-only; omitted `mission_plan` fields preserve prior values; and dedupe is by record `id` only. There is no replace flag for v1 ledger arrays. This allows app/MCP-submit and runtime writers to operate concurrently without one replacing the other's records.
+
+User-actor decision IDs are deterministic UUIDs derived from `(checkpointInstanceID, label)` using the existing stable-fingerprint style. The checkpoint instance must be instance-specific: plan approval includes `plan.revision`, while follow-through and child-answer checkpoints use their existing unique event/interaction IDs. Retried submits for the same checkpoint instance and label dedupe; revise-then-approve at the same checkpoint instance produces two labels and therefore two records.
+
+### 0D. Actor-split writers keep responsibility clear
+
+Each actor records its own decisions. The app records user-actor decisions at checkpoint choke points through the existing Mission Plan update seam: plan approval, requested plan revision, step continuation/follow-through, child-answer submit, and Mission stop. External MCP `op=submit` is also a user action when it resolves the same checkpoint, so the MCP submit path records the same user-actor decision with the same deterministic ID scheme before or alongside forwarding the submit.
+
+The runtime records director-actor decisions and all evidence through `coordinator_chat op="mission_plan"`. Continuation directives and mirrored compact checkpoint action payloads must explicitly tell the runtime to append director decisions and evidence only. They must not instruct the runtime to re-record user decisions already written by app/MCP submit.
+
+### 0E. MCP ledger serialization and waiting extend existing coordinator_chat
+
+The existing `coordinator_chat` surface remains the demo/control API. `mission_plan` partial updates grow additive fields for shape, policy snapshot, autonomy map, appended decisions, and appended evidence while preserving compatibility with old objective/workstream/node/routing/event payloads. `mission_status` becomes receipt-ready: shape, policy, autonomy summary, decision counts by actor, evidence counts, recent ledger entries, and a compact receipt summary are serialized without mutating state.
+
+`wait_for_update` depends on the compact Mission status fingerprint, so the hand-rolled fingerprint must include every ledger/status field that can unblock a waiter. A decision or evidence append must advance the compact fingerprint; otherwise external clients can hang even though Mission state changed.
+
+Ledger-visible fields also need to move the Coordinator/Director snapshot when projected. The preferred implementation path is to keep Mission Plan equality/fingerprinting ledger-aware and call refresh after app-local ledger writes, rather than creating a separate SwiftUI source of truth.
+
+### 0F. V1 Command Center deferrals
+
+The v1 cutline deliberately defers broader Command Center reshaping: full symbol/API/key rename, shared Agent Board/direct-Agent expansion, a dedicated Decisions rail, Plan-is-board layout, and shortcut flip. The current selected-Mission board plus read-only Plan presentation remains the layout boundary until a later OpenSpec changes it. Direct Agent sessions stay in Agent Mode unless structurally owned by a Coordinator/Director Mission; preserving `CoordinatorModeRowOrigin.directAgent` is for a later shared-board/filter relaxation, not this pass.
 
 ### 1. Coordinator mode lives inside `.main`
 
@@ -256,6 +296,7 @@ The board header should remain a compact control lane for view, sorting, and com
 - **Workflow lookup cost** → Keep workflow display on cheap live request-anchor metadata and persisted session-index summaries. Index rebuilds may do targeted full-session decodes to recover missing workflow summaries, but UI projection must not load transcripts per row or depend on opening Agent chats to hydrate labels.
 - **Pending decision asymmetry** → Run-state waiting values still enter `Needs you`; MCP-controlled live interactions only enrich the prompt/detail payload.
 - **Route gaps** → Store nullable routes on rows/summaries and hide navigation when route prerequisites are missing.
+- **Command Center scope creep** → Keep the v1 deferrals in Decisions 0F explicit: no full symbol/API/key rename, shared Agent Board/direct-Agent expansion, Decisions rail, Plan-is-board layout, or shortcut flip in this pass.
 
 ## Migration Plan
 

@@ -1,5 +1,23 @@
 ## ADDED Requirements
 
+### Requirement: User-facing Director and technical Coordinator split
+The system SHALL present the supervisory Command Center actor as Director in user-facing product copy while keeping existing technical Coordinator names stable for this change.
+
+#### Scenario: User-visible supervisory surface is named Director
+- **WHEN** the app labels the supervising mode, rail, Mission conversation, Mission Policy, decision/evidence summaries, or receipt-facing surfaces
+- **THEN** user-facing copy SHALL use Director vocabulary
+- **AND** it SHALL avoid exposing Coordinator as the product actor name except where showing raw technical/debug data is intentional.
+
+#### Scenario: Technical contracts remain Coordinator-named
+- **WHEN** code symbols, MCP operations, Codable keys, persisted records, test fixtures, or raw debug payloads refer to existing Coordinator contracts
+- **THEN** the system SHALL keep those names stable in this change
+- **AND** a full Coordinator-to-Director symbol/API/key rename SHALL be deferred to a separate no-behavior change.
+
+#### Scenario: Shortcut and surface order remain explicit product decisions
+- **WHEN** Director user-facing copy is introduced
+- **THEN** it SHALL NOT silently flip existing main-surface shortcut order or routing behavior
+- **AND** any shortcut/order change SHALL be recorded as a separate OpenSpec-backed product decision.
+
 ### Requirement: Coordinator mode surface
 The system SHALL provide a non-default Coordinator mode peer surface inside the existing `.main` app experience.
 
@@ -826,3 +844,73 @@ The system SHALL keep the Coordinator view calm by default and expose detail onl
 #### Scenario: User needs deep detail
 - **WHEN** the user needs full transcript, raw log, detailed runtime state, file context, diff context, or action handling
 - **THEN** the Coordinator view SHALL route the user to the existing Agent Mode surface.
+
+### Requirement: Mission Policy, autonomy, decision, evidence, and receipt state
+The system SHALL extend Mission-owned state with additive Mission Policy, autonomy, decision, evidence, and receipt-projection inputs without introducing a second source of truth.
+
+#### Scenario: Mission Policy is distinct from Mission Templates
+- **WHEN** a Mission is started or restored
+- **THEN** the Mission MAY carry a policy snapshot with stable policy ID, display name, default pace, autonomy map, optional Definition of Done, optional standing guidance, and pinned skills or context IDs
+- **AND** Mission Policy SHALL represent trust/settings/guidance rather than prompt-wrapper topology
+- **AND** Mission Templates SHALL remain separate prompt wrappers until a deliberate policy replacement path exists.
+
+#### Scenario: Autonomy map uses shared decision classes
+- **WHEN** the system evaluates or serializes Mission autonomy
+- **THEN** autonomy classes SHALL use the same string-key space as decision classes
+- **AND** known v1 classes SHALL include `plan`, `advance`, `writes`, `childAsk`, `recover`, and `irreversible`
+- **AND** unknown classes SHALL round-trip and resolve to Ask when queried.
+
+#### Scenario: Decision ledger is append-only and ID-deduped
+- **WHEN** Mission decision records are merged from app, MCP submit, or runtime updates
+- **THEN** records SHALL be appended and deduplicated by record `id` only
+- **AND** omitted `mission_plan` update fields SHALL preserve existing decisions
+- **AND** no replace flag SHALL exist for decision arrays in v1.
+
+#### Scenario: Evidence ledger is append-only and receipt-ready
+- **WHEN** Mission evidence records are merged from runtime updates
+- **THEN** records SHALL be appended and deduplicated by record `id` only
+- **AND** evidence SHALL distinguish at least meeting evidence from short verdicts
+- **AND** evidence records SHOULD carry node or session references when available
+- **AND** the completed-Mission receipt SHALL be projected from Mission-owned state rather than persisted as rendered markdown.
+
+#### Scenario: User decision IDs are deterministic per checkpoint instance
+- **WHEN** the app or external MCP submit path records a user-actor checkpoint decision
+- **THEN** the decision ID SHALL be a deterministic UUID derived from `(checkpointInstanceID, label)`
+- **AND** plan approval checkpoint IDs SHALL include `plan.revision` so approval before and after a revision are distinct
+- **AND** follow-through, child-answer, and stop checkpoint IDs SHALL use already instance-unique event or interaction identifiers
+- **AND** retried submits for the same checkpoint instance and label SHALL dedupe to the same record.
+
+#### Scenario: Actor-split writer rules are enforced
+- **WHEN** a checkpoint or runtime action records Mission ledger data
+- **THEN** the app and external MCP `op=submit` path SHALL record user-actor decisions for plan approval, requested plan revision, step continuation, child-answer submit, and Mission stop through the existing Mission Plan update seam
+- **AND** the runtime SHALL record director-actor decisions and evidence through `coordinator_chat` `op: "mission_plan"`
+- **AND** continuation directives and compact checkpoint action payloads SHALL tell the runtime to append only director-actor decisions and evidence, not to re-record the user decision already written by app/MCP submit.
+
+#### Scenario: Ledger-visible state affects projection refresh
+- **WHEN** decision, evidence, policy, autonomy, shape, or receipt-input state changes in a way the Director surface projects
+- **THEN** the Coordinator/Director snapshot fingerprint SHALL move through the projected Mission Plan state
+- **AND** the visible Director surface SHALL refresh from Mission-owned data rather than local SwiftUI-only state.
+
+### Requirement: MCP Mission Plan serialization and update waiting
+The system SHALL extend the existing `coordinator_chat` surface for Mission Policy, ledgers, receipt-ready status, and deterministic wait behavior while preserving old payload compatibility.
+
+#### Scenario: mission_plan accepts additive ledger fields
+- **WHEN** an external Coordinator/debugging client calls `coordinator_chat` with `op: "mission_plan"`
+- **THEN** the update MAY include shape summary, policy snapshot, autonomy map, appended decisions, and appended evidence records
+- **AND** existing clients that send only objective, workstreams, nodes, routing, approval, status, or events SHALL continue to work
+- **AND** ledger arrays SHALL be append-only and ID-deduped rather than replaceable.
+
+#### Scenario: mission_status serializes receipt-ready ledger summaries
+- **WHEN** an external Coordinator/debugging client calls `coordinator_chat` with `op: "mission_status"`
+- **THEN** the response SHALL include serialized shape, policy, autonomy summary, decision counts by actor, evidence counts, recent ledger entries, and receipt-ready summary when present
+- **AND** the response SHALL remain read-only and SHALL NOT submit a Coordinator/Director chat turn or mutate Mission state.
+
+#### Scenario: compact status fingerprint covers wait-unblocking fields
+- **WHEN** a client waits for Mission updates through `coordinator_chat` `op: "wait_for_update"`
+- **THEN** the compact Mission status fingerprint SHALL include every ledger/status field that can unblock the wait
+- **AND** a decision or evidence append SHALL advance the fingerprint so `wait_for_update` does not hang after append-only Mission state changes.
+
+#### Scenario: v1 defers broader Command Center layout changes
+- **WHEN** this Mission Policy and ledger foundation ships
+- **THEN** shared Agent Board/direct-Agent expansion, a separate Decisions rail, Plan-is-board layout, shortcut flip, and full symbol/API/key rename SHALL remain deferred v1 follow-ups
+- **AND** the existing selected-Mission board, Plan presentation, and Agent Mode deep-link boundaries SHALL remain authoritative unless a later OpenSpec change replaces them.

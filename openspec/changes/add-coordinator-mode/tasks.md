@@ -172,6 +172,20 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [x] 10.55 Replace the visible right-panel List toggle with a read-only Plan presentation while retaining List as the narrow Board fallback.
 - [x] 10.56 Add a shared inspector target for Board rows and Plan nodes so DAG-lite node/workstream details can be inspected without creating phantom board cards.
 
+## 10A. Director / Command Center policy and ledger alignment
+
+- [ ] 10A.1 Update user-facing surface, rail, Mission, policy, decision/evidence, and receipt copy to use Director vocabulary while keeping Swift symbols, MCP op names, Codable keys, fixtures, and raw debug payloads Coordinator-named.
+- [ ] 10A.2 Add Mission Policy as a Mission-owned snapshot distinct from Mission Templates, including built-in Default, Hands-off, Careful writes, and Read-only policies with default pace, autonomy map, optional Definition of Done, standing guidance, and pinned skills/context IDs.
+- [ ] 10A.3 Extend Mission Plan state with additive/defaulted shape summary, policy snapshot, autonomy map, decision ledger, evidence ledger, and receipt-projection inputs without introducing a separate store.
+- [ ] 10A.4 Implement append-only decision/evidence merge semantics with ID-only dedupe, omitted-field preservation, and deterministic UUID user-decision IDs from `(checkpointInstanceID, label)`, including `plan.revision` for plan approvals.
+- [ ] 10A.5 Record user-actor decisions through the app and external MCP `op=submit` paths at plan approval/revision, step continuation, child-answer, and Mission-stop checkpoints using the existing Mission Plan update seam.
+- [ ] 10A.6 Update continuation directives and compact checkpoint action payloads so the runtime records director-actor decisions and evidence through `coordinator_chat op="mission_plan"` without re-recording app/MCP user decisions.
+- [ ] 10A.7 Extend `coordinator_chat op="mission_plan"` serialization to accept shape, policy, autonomy, appended decisions, and appended evidence while preserving old objective/workstream/node/routing/event payload compatibility.
+- [ ] 10A.8 Extend `coordinator_chat op="mission_status"`, compact status, compact Mission status fingerprints, and `wait_for_update` behavior so policy/ledger/receipt-ready fields serialize and unblock waiters after decision/evidence appends.
+- [ ] 10A.9 Project Mission Policy, autonomy, decisions, evidence, and receipt-ready summaries from Mission-owned state into Director/Coordinator snapshot surfaces only after ledger-visible state participates in refresh/fingerprints.
+- [ ] 10A.10 Add focused persistence, projector, app/MCP submit, runtime-directive, and MCP serialization tests for unknown autonomy Ask behavior, unknown decision-class round-trip, append-only ledger dedupe, deterministic IDs, plan re-approval after revision, and wait-for-update advancement.
+- [ ] 10A.11 Respect the v1 deferrals recorded in `design.md` Decisions 0F / Risks rather than implementing broader Command Center reshaping in this wave.
+
 ## 11. Validation
 
 - [x] 11.1 Run the focused unit tests added for snapshot projection, Coordinator identity, Coordinator composer, pending interactions, MCP projection, and deep links.
