@@ -83,6 +83,14 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             existing: missionPlan?.routingDecisions ?? [],
             incoming: update.routingDecisions
         )
+        let decisions = mergeDecisionRecords(
+            existing: missionPlan?.decisions ?? [],
+            incoming: update.decisions
+        )
+        let evidence = mergeEvidenceRecords(
+            existing: missionPlan?.evidence ?? [],
+            incoming: update.evidence
+        )
         missionPlan = CoordinatorMissionPlan(
             id: missionPlan?.id ?? UUID(),
             revision: (missionPlan?.revision ?? 0) + 1,
@@ -98,9 +106,14 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             status: update.status ?? missionPlan?.status ?? .draft,
             approvalState: update.approvalState ?? missionPlan?.approvalState ?? .notRequired,
             template: missionTemplate,
+            shapeSummary: update.shapeSummary ?? missionPlan?.shapeSummary,
+            policySnapshot: update.policySnapshot ?? missionPlan?.policySnapshot,
+            autonomy: update.autonomy ?? missionPlan?.autonomy ?? CoordinatorMissionPolicySnapshot.defaultAutonomy,
             workstreams: workstreams,
             nodes: nodes,
             routingDecisions: routingDecisions,
+            decisions: decisions,
+            evidence: evidence,
             events: (missionPlan?.events ?? []) + [
                 CoordinatorMissionPlanEvent(
                     kind: missionPlan == nil ? .created : .revised,
@@ -193,6 +206,34 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
             return lhs.timestamp < rhs.timestamp
         }
+    }
+
+    private func mergeDecisionRecords(
+        existing: [CoordinatorMissionDecisionRecord],
+        incoming: [CoordinatorMissionDecisionRecord]?
+    ) -> [CoordinatorMissionDecisionRecord] {
+        guard let incoming, !incoming.isEmpty else { return existing }
+        var seenIDs = Set(existing.map(\.id))
+        var merged = existing
+        for record in incoming where !seenIDs.contains(record.id) {
+            merged.append(record)
+            seenIDs.insert(record.id)
+        }
+        return merged
+    }
+
+    private func mergeEvidenceRecords(
+        existing: [CoordinatorMissionEvidenceRecord],
+        incoming: [CoordinatorMissionEvidenceRecord]?
+    ) -> [CoordinatorMissionEvidenceRecord] {
+        guard let incoming, !incoming.isEmpty else { return existing }
+        var seenIDs = Set(existing.map(\.id))
+        var merged = existing
+        for record in incoming where !seenIDs.contains(record.id) {
+            merged.append(record)
+            seenIDs.insert(record.id)
+        }
+        return merged
     }
 
     @discardableResult
@@ -323,11 +364,16 @@ struct CoordinatorMissionPlanUpdate: Equatable {
     var predecessorSummary: String?
     var status: CoordinatorMissionPlanStatus?
     var approvalState: CoordinatorMissionPlanApprovalState?
+    var shapeSummary: CoordinatorMissionShapeSummary?
+    var policySnapshot: CoordinatorMissionPolicySnapshot?
+    var autonomy: [String: CoordinatorMissionAutonomyMode]?
     var workstreams: [CoordinatorMissionWorkstreamSummary]?
     var nodes: [CoordinatorMissionPlanNode]?
     var replaceWorkstreams: Bool
     var replaceNodes: Bool
     var routingDecisions: [CoordinatorMissionRoutingDecision]?
+    var decisions: [CoordinatorMissionDecisionRecord]?
+    var evidence: [CoordinatorMissionEvidenceRecord]?
     var events: [CoordinatorMissionPlanEvent]
     var updatedAt: Date
 
@@ -339,11 +385,16 @@ struct CoordinatorMissionPlanUpdate: Equatable {
         predecessorSummary: String? = nil,
         status: CoordinatorMissionPlanStatus? = nil,
         approvalState: CoordinatorMissionPlanApprovalState? = nil,
+        shapeSummary: CoordinatorMissionShapeSummary? = nil,
+        policySnapshot: CoordinatorMissionPolicySnapshot? = nil,
+        autonomy: [String: CoordinatorMissionAutonomyMode]? = nil,
         workstreams: [CoordinatorMissionWorkstreamSummary]? = nil,
         nodes: [CoordinatorMissionPlanNode]? = nil,
         replaceWorkstreams: Bool = false,
         replaceNodes: Bool = false,
         routingDecisions: [CoordinatorMissionRoutingDecision]? = nil,
+        decisions: [CoordinatorMissionDecisionRecord]? = nil,
+        evidence: [CoordinatorMissionEvidenceRecord]? = nil,
         events: [CoordinatorMissionPlanEvent] = [],
         updatedAt: Date = Date()
     ) {
@@ -354,11 +405,16 @@ struct CoordinatorMissionPlanUpdate: Equatable {
         self.predecessorSummary = predecessorSummary
         self.status = status
         self.approvalState = approvalState
+        self.shapeSummary = shapeSummary
+        self.policySnapshot = policySnapshot
+        self.autonomy = autonomy
         self.workstreams = workstreams
         self.nodes = nodes
         self.replaceWorkstreams = replaceWorkstreams
         self.replaceNodes = replaceNodes
         self.routingDecisions = routingDecisions
+        self.decisions = decisions
+        self.evidence = evidence
         self.events = events
         self.updatedAt = updatedAt
     }
@@ -375,9 +431,14 @@ struct CoordinatorMissionPlan: Codable, Equatable {
     var status: CoordinatorMissionPlanStatus
     var approvalState: CoordinatorMissionPlanApprovalState
     var template: CoordinatorMissionTemplateSummary?
+    var shapeSummary: CoordinatorMissionShapeSummary?
+    var policySnapshot: CoordinatorMissionPolicySnapshot?
+    var autonomy: [String: CoordinatorMissionAutonomyMode]
     var workstreams: [CoordinatorMissionWorkstreamSummary]
     var nodes: [CoordinatorMissionPlanNode]
     var routingDecisions: [CoordinatorMissionRoutingDecision]
+    var decisions: [CoordinatorMissionDecisionRecord]
+    var evidence: [CoordinatorMissionEvidenceRecord]
     var events: [CoordinatorMissionPlanEvent]
     var updatedAt: Date
 
@@ -392,9 +453,14 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         status: CoordinatorMissionPlanStatus = .draft,
         approvalState: CoordinatorMissionPlanApprovalState = .notRequired,
         template: CoordinatorMissionTemplateSummary? = nil,
+        shapeSummary: CoordinatorMissionShapeSummary? = nil,
+        policySnapshot: CoordinatorMissionPolicySnapshot? = nil,
+        autonomy: [String: CoordinatorMissionAutonomyMode] = CoordinatorMissionPolicySnapshot.defaultAutonomy,
         workstreams: [CoordinatorMissionWorkstreamSummary] = [],
         nodes: [CoordinatorMissionPlanNode] = [],
         routingDecisions: [CoordinatorMissionRoutingDecision] = [],
+        decisions: [CoordinatorMissionDecisionRecord] = [],
+        evidence: [CoordinatorMissionEvidenceRecord] = [],
         events: [CoordinatorMissionPlanEvent] = [],
         updatedAt: Date = Date()
     ) {
@@ -408,12 +474,17 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         self.status = status
         self.approvalState = approvalState
         self.template = template
+        self.shapeSummary = shapeSummary
+        self.policySnapshot = policySnapshot
+        self.autonomy = autonomy
         self.workstreams = workstreams
         self.nodes = nodes
         self.routingDecisions = routingDecisions.sorted { lhs, rhs in
             if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
             return lhs.timestamp < rhs.timestamp
         }
+        self.decisions = decisions
+        self.evidence = evidence
         self.events = events
         self.updatedAt = updatedAt
     }
@@ -459,9 +530,14 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         case status
         case approvalState
         case template
+        case shapeSummary
+        case policySnapshot
+        case autonomy
         case workstreams
         case nodes
         case routingDecisions
+        case decisions
+        case evidence
         case events
         case updatedAt
     }
@@ -479,12 +555,338 @@ struct CoordinatorMissionPlan: Codable, Equatable {
             status: container.decode(CoordinatorMissionPlanStatus.self, forKey: .status),
             approvalState: container.decode(CoordinatorMissionPlanApprovalState.self, forKey: .approvalState),
             template: container.decodeIfPresent(CoordinatorMissionTemplateSummary.self, forKey: .template),
+            shapeSummary: container.decodeIfPresent(CoordinatorMissionShapeSummary.self, forKey: .shapeSummary),
+            policySnapshot: container.decodeIfPresent(CoordinatorMissionPolicySnapshot.self, forKey: .policySnapshot),
+            autonomy: container.decodeIfPresent([String: CoordinatorMissionAutonomyMode].self, forKey: .autonomy)
+                ?? CoordinatorMissionPolicySnapshot.defaultAutonomy,
             workstreams: container.decode([CoordinatorMissionWorkstreamSummary].self, forKey: .workstreams),
             nodes: container.decode([CoordinatorMissionPlanNode].self, forKey: .nodes),
             routingDecisions: container.decodeIfPresent([CoordinatorMissionRoutingDecision].self, forKey: .routingDecisions) ?? [],
+            decisions: container.decodeIfPresent([CoordinatorMissionDecisionRecord].self, forKey: .decisions) ?? [],
+            evidence: container.decodeIfPresent([CoordinatorMissionEvidenceRecord].self, forKey: .evidence) ?? [],
             events: container.decode([CoordinatorMissionPlanEvent].self, forKey: .events),
             updatedAt: container.decode(Date.self, forKey: .updatedAt)
         )
+    }
+}
+
+extension CoordinatorMissionPlan {
+    func resolvedAutonomy(for decisionClass: String) -> CoordinatorMissionAutonomyMode {
+        CoordinatorMissionPolicySnapshot.resolveAutonomy(autonomy[decisionClass], for: decisionClass)
+    }
+
+    func resolvedAutonomy(for decisionClass: CoordinatorMissionDecisionClass) -> CoordinatorMissionAutonomyMode {
+        resolvedAutonomy(for: decisionClass.rawValue)
+    }
+}
+
+struct CoordinatorMissionShapeSummary: Codable, Equatable, Identifiable {
+    var id: String
+    var displayName: String
+    var reason: String?
+    var namedClose: String?
+
+    init(
+        id: String,
+        displayName: String,
+        reason: String? = nil,
+        namedClose: String? = nil
+    ) {
+        self.id = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.displayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.reason = reason?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.namedClose = namedClose?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+}
+
+struct CoordinatorMissionPolicySnapshot: Codable, Equatable, Identifiable {
+    static let defaultAutonomy: [String: CoordinatorMissionAutonomyMode] = [
+        CoordinatorMissionDecisionClass.plan.rawValue: .ask,
+        CoordinatorMissionDecisionClass.advance.rawValue: .ask,
+        CoordinatorMissionDecisionClass.writes.rawValue: .auto,
+        CoordinatorMissionDecisionClass.childAsk.rawValue: .ask,
+        CoordinatorMissionDecisionClass.recover.rawValue: .auto,
+        CoordinatorMissionDecisionClass.irreversible.rawValue: .ask
+    ]
+
+    static let defaultPolicy = CoordinatorMissionPolicySnapshot(
+        id: "default",
+        name: "Default",
+        defaultPace: .step,
+        autonomy: defaultAutonomy,
+        standingGuidance: "Keep every boundary visible while trust is earned."
+    )
+
+    static let handsOff = CoordinatorMissionPolicySnapshot(
+        id: "hands-off",
+        name: "Hands-off",
+        defaultPace: .auto,
+        autonomy: autonomy(asking: [.plan, .irreversible]),
+        standingGuidance: "Approve the Mission once, then let the Director proceed when evidence clears the bar."
+    )
+
+    static let carefulWrites = CoordinatorMissionPolicySnapshot(
+        id: "careful-writes",
+        name: "Careful writes",
+        defaultPace: .step,
+        autonomy: autonomy(asking: [.plan, .advance, .writes, .childAsk, .irreversible]),
+        standingGuidance: "Ask before crossing into mutable work."
+    )
+
+    static let readOnly = CoordinatorMissionPolicySnapshot(
+        id: "read-only",
+        name: "Read-only",
+        defaultPace: .auto,
+        autonomy: autonomy(asking: [.plan, .writes, .irreversible]),
+        definitionOfDone: "A written report of the findings. No code changes.",
+        standingGuidance: "Keep the Mission read-only and report findings clearly."
+    )
+
+    static let builtInPolicies: [CoordinatorMissionPolicySnapshot] = [
+        .defaultPolicy,
+        .handsOff,
+        .carefulWrites,
+        .readOnly
+    ]
+
+    var id: String
+    var name: String
+    var defaultPace: CoordinatorMissionPolicyPace
+    var autonomy: [String: CoordinatorMissionAutonomyMode]
+    var definitionOfDone: String?
+    var standingGuidance: String?
+    var pinnedSkillIDs: [String]
+    var pinnedContextIDs: [String]
+
+    init(
+        id: String,
+        name: String,
+        defaultPace: CoordinatorMissionPolicyPace,
+        autonomy: [String: CoordinatorMissionAutonomyMode] = Self.defaultAutonomy,
+        definitionOfDone: String? = nil,
+        standingGuidance: String? = nil,
+        pinnedSkillIDs: [String] = [],
+        pinnedContextIDs: [String] = []
+    ) {
+        self.id = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.defaultPace = defaultPace
+        self.autonomy = autonomy
+        self.definitionOfDone = definitionOfDone?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.standingGuidance = standingGuidance?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.pinnedSkillIDs = pinnedSkillIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        self.pinnedContextIDs = pinnedContextIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
+
+    func resolvedAutonomy(for decisionClass: String) -> CoordinatorMissionAutonomyMode {
+        Self.resolveAutonomy(autonomy[decisionClass], for: decisionClass)
+    }
+
+    func resolvedAutonomy(for decisionClass: CoordinatorMissionDecisionClass) -> CoordinatorMissionAutonomyMode {
+        resolvedAutonomy(for: decisionClass.rawValue)
+    }
+
+    static func resolveAutonomy(
+        _ mode: CoordinatorMissionAutonomyMode?,
+        for decisionClass: String
+    ) -> CoordinatorMissionAutonomyMode {
+        guard let knownClass = CoordinatorMissionDecisionClass(rawValue: decisionClass) else { return .ask }
+        if knownClass == .irreversible { return .ask }
+        return mode ?? defaultAutonomy[decisionClass] ?? .ask
+    }
+
+    private static func autonomy(
+        asking askClasses: Set<CoordinatorMissionDecisionClass>
+    ) -> [String: CoordinatorMissionAutonomyMode] {
+        Dictionary(uniqueKeysWithValues: CoordinatorMissionDecisionClass.allCases.map { decisionClass in
+            (decisionClass.rawValue, askClasses.contains(decisionClass) ? .ask : .auto)
+        })
+    }
+}
+
+enum CoordinatorMissionPolicyPace: String, Codable, Equatable, CaseIterable {
+    case step
+    case auto
+}
+
+enum CoordinatorMissionAutonomyMode: String, Codable, Equatable, CaseIterable {
+    case ask
+    case auto
+}
+
+enum CoordinatorMissionDecisionClass: String, Codable, Equatable, Hashable, CaseIterable {
+    case plan
+    case advance
+    case writes
+    case childAsk
+    case recover
+    case irreversible
+}
+
+enum CoordinatorMissionUserDecisionLabel: String, Codable, Equatable, CaseIterable {
+    case approvedMissionPlan = "approved the Mission plan"
+    case requestedPlanRevision = "requested plan revision"
+    case stoppedMission = "stopped the Mission"
+    case continuedPastStepCheckIn = "continued past a step check-in"
+    case answeredChildQuestion = "answered a child question"
+}
+
+enum CoordinatorMissionDecisionActor: String, Codable, Equatable, CaseIterable {
+    case user
+    case director
+}
+
+struct CoordinatorMissionDecisionRecord: Codable, Equatable, Identifiable {
+    let id: UUID
+    var decisionClass: String
+    var actor: CoordinatorMissionDecisionActor
+    var label: String
+    var reason: String?
+    var timestamp: Date
+    var nodeID: UUID?
+    var workstreamID: UUID?
+    var sessionID: UUID?
+    var interactionID: UUID?
+    var checkpointID: String?
+    var checkpointInstanceID: String?
+
+    init(
+        id: UUID = UUID(),
+        decisionClass: String,
+        actor: CoordinatorMissionDecisionActor,
+        label: String,
+        reason: String? = nil,
+        timestamp: Date = Date(),
+        nodeID: UUID? = nil,
+        workstreamID: UUID? = nil,
+        sessionID: UUID? = nil,
+        interactionID: UUID? = nil,
+        checkpointID: String? = nil,
+        checkpointInstanceID: String? = nil
+    ) {
+        self.id = id
+        self.decisionClass = decisionClass.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.actor = actor
+        self.label = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.reason = reason?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.timestamp = timestamp
+        self.nodeID = nodeID
+        self.workstreamID = workstreamID
+        self.sessionID = sessionID
+        self.interactionID = interactionID
+        self.checkpointID = checkpointID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.checkpointInstanceID = checkpointInstanceID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+
+    init(
+        userDecision label: CoordinatorMissionUserDecisionLabel,
+        decisionClass: CoordinatorMissionDecisionClass,
+        checkpointInstanceID: String,
+        reason: String? = nil,
+        timestamp: Date = Date(),
+        nodeID: UUID? = nil,
+        workstreamID: UUID? = nil,
+        sessionID: UUID? = nil,
+        interactionID: UUID? = nil,
+        checkpointID: String? = nil
+    ) {
+        self.init(
+            id: Self.deterministicUserDecisionID(
+                checkpointInstanceID: checkpointInstanceID,
+                label: label.rawValue
+            ),
+            decisionClass: decisionClass.rawValue,
+            actor: .user,
+            label: label.rawValue,
+            reason: reason,
+            timestamp: timestamp,
+            nodeID: nodeID,
+            workstreamID: workstreamID,
+            sessionID: sessionID,
+            interactionID: interactionID,
+            checkpointID: checkpointID,
+            checkpointInstanceID: checkpointInstanceID
+        )
+    }
+
+    var resolvedAutonomyClass: CoordinatorMissionDecisionClass? {
+        CoordinatorMissionDecisionClass(rawValue: decisionClass)
+    }
+
+    static func deterministicUserDecisionID(checkpointInstanceID: String, label: String) -> UUID {
+        CoordinatorMissionStableIdentity.uuid(
+            namespace: "coordinator-mission-user-decision",
+            parts: [checkpointInstanceID, label]
+        )
+    }
+}
+
+enum CoordinatorMissionEvidenceVerdict: String, Codable, Equatable, CaseIterable {
+    case meets
+    case short
+}
+
+struct CoordinatorMissionEvidenceRecord: Codable, Equatable, Identifiable {
+    let id: UUID
+    var verdict: CoordinatorMissionEvidenceVerdict
+    var summary: String
+    var timestamp: Date
+    var nodeID: UUID?
+    var workstreamID: UUID?
+    var sessionID: UUID?
+    var interactionID: UUID?
+    var decisionID: UUID?
+
+    init(
+        id: UUID = UUID(),
+        verdict: CoordinatorMissionEvidenceVerdict,
+        summary: String,
+        timestamp: Date = Date(),
+        nodeID: UUID? = nil,
+        workstreamID: UUID? = nil,
+        sessionID: UUID? = nil,
+        interactionID: UUID? = nil,
+        decisionID: UUID? = nil
+    ) {
+        self.id = id
+        self.verdict = verdict
+        self.summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.timestamp = timestamp
+        self.nodeID = nodeID
+        self.workstreamID = workstreamID
+        self.sessionID = sessionID
+        self.interactionID = interactionID
+        self.decisionID = decisionID
+    }
+}
+
+private enum CoordinatorMissionStableIdentity {
+    static func uuid(namespace: String, parts: [String]) -> UUID {
+        let payload = ([namespace] + parts).joined(separator: "\u{1F}")
+        var bytes = bytes(from: fnv1a64(payload)) + bytes(from: fnv1a64("uuid-v2\u{1F}\(payload)"))
+        bytes[6] = (bytes[6] & 0x0F) | 0x50
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+
+    private static func fnv1a64(_ value: String) -> UInt64 {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return hash
+    }
+
+    private static func bytes(from value: UInt64) -> [UInt8] {
+        (0..<8).map { shift in
+            UInt8((value >> UInt64((7 - shift) * 8)) & 0xFF)
+        }
     }
 }
 
@@ -602,6 +1004,7 @@ struct CoordinatorMissionPlanNode: Codable, Equatable, Identifiable {
     var detail: String?
     var workflowHint: CoordinatorMissionPlanNodeWorkflowHint?
     var completionEvidence: String?
+    var doneCriteria: String?
     var workstreamID: UUID
     var dependsOn: [UUID]
     var role: String?
@@ -616,6 +1019,7 @@ struct CoordinatorMissionPlanNode: Codable, Equatable, Identifiable {
         detail: String? = nil,
         workflowHint: CoordinatorMissionPlanNodeWorkflowHint? = nil,
         completionEvidence: String? = nil,
+        doneCriteria: String? = nil,
         workstreamID: UUID,
         dependsOn: [UUID] = [],
         role: String? = nil,
@@ -629,6 +1033,7 @@ struct CoordinatorMissionPlanNode: Codable, Equatable, Identifiable {
         self.detail = detail?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.workflowHint = workflowHint
         self.completionEvidence = completionEvidence?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.doneCriteria = doneCriteria?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.workstreamID = workstreamID
         self.dependsOn = dependsOn
         self.role = role?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
@@ -645,6 +1050,7 @@ struct CoordinatorMissionPlanNode: Codable, Equatable, Identifiable {
             detail: detail,
             workflowHint: workflowHint,
             completionEvidence: completionEvidence,
+            doneCriteria: doneCriteria,
             workstreamID: workstreamID,
             dependsOn: dependsOn,
             role: role,
