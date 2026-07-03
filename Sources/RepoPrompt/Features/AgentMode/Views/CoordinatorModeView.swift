@@ -576,7 +576,7 @@ struct CoordinatorModeView: View {
         .padding(metrics.headerControlInset)
         .frame(width: metrics.automationModeControlWidth, height: metrics.headerControlHeight)
         .coordinatorHeaderControlBackground()
-        .accessibilityLabel("Coordinator automation mode")
+        .accessibilityLabel("Director automation mode")
     }
 
     private func sortPicker(metrics: CoordinatorVisualMetrics) -> some View {
@@ -684,7 +684,7 @@ struct CoordinatorModeView: View {
                         .font(.system(size: metrics.searchClearIconSize))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Clear Coordinator filter")
+                .accessibilityLabel("Clear Director filter")
             }
         }
         .padding(.horizontal, metrics.searchHorizontalPadding)
@@ -753,8 +753,8 @@ struct CoordinatorModeView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .hoverTooltip("Show Coordinator Rail")
-            .accessibilityLabel("Show Coordinator Rail")
+            .hoverTooltip("Show Director Rail")
+            .accessibilityLabel("Show Director Rail")
             .padding(.top, metrics.outerPadding)
 
             Spacer(minLength: 0)
@@ -769,8 +769,8 @@ struct CoordinatorModeView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.tightSpacing) {
             coordinatorNavigationButton(
-                title: "Coordinator Chat",
-                subtitle: "Selected parent and linked work",
+                title: "Director Chat",
+                subtitle: "Selected Mission and linked work",
                 systemImage: "bubble.left.and.bubble.right",
                 scope: .coordinatorFleet,
                 metrics: metrics
@@ -778,7 +778,7 @@ struct CoordinatorModeView: View {
 
             coordinatorNavigationButton(
                 title: "All Agents Board",
-                subtitle: "Active work across Coordinator mode",
+                subtitle: "Active work across Director Missions",
                 systemImage: "rectangle.3.group.bubble",
                 scope: .allAgents,
                 metrics: metrics
@@ -790,7 +790,7 @@ struct CoordinatorModeView: View {
             fillOpacity: CoordinatorStyle.railCardFillOpacity,
             strokeOpacity: 0
         )
-        .accessibilityLabel("Coordinator navigation")
+        .accessibilityLabel("Director navigation")
     }
 
     private func coordinatorNavigationButton(
@@ -958,7 +958,7 @@ struct CoordinatorModeView: View {
                     Text("New Mission")
                         .font(metrics.bodySemibold)
                         .lineLimit(1)
-                    Text("Start a blank Coordinator run")
+                    Text("Start a blank Director Mission")
                         .font(metrics.micro)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -1190,7 +1190,7 @@ struct CoordinatorModeView: View {
                         if plan.workstreams.isEmpty, plan.nodes.isEmpty {
                             missionPlanEmptyState(
                                 title: "No workstreams yet",
-                                subtitle: "The Coordinator can record lanes with coordinator_chat op=mission_plan.",
+                                subtitle: "The Director can record lanes with coordinator_chat op=mission_plan.",
                                 metrics: metrics
                             )
                         } else if plan.nodes.isEmpty {
@@ -1203,7 +1203,7 @@ struct CoordinatorModeView: View {
                     } else {
                         missionPlanEmptyState(
                             title: "No Mission Plan yet",
-                            subtitle: "When the Coordinator records a plan, workstreams and DAG-lite nodes appear here.",
+                            subtitle: "When the Director records a plan, workstreams and DAG-lite nodes appear here.",
                             metrics: metrics
                         )
                         .frame(maxWidth: .infinity, minHeight: proxy.size.height - metrics.outerPadding * 2, alignment: .center)
@@ -1232,6 +1232,9 @@ struct CoordinatorModeView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            missionStatusStrip(plan, metrics: metrics)
+                .padding(.top, metrics.tightSpacing)
 
             if plan.predecessorMissionID != nil || plan.predecessorTitle != nil || plan.predecessorSummary != nil {
                 VStack(alignment: .leading, spacing: metrics.tightSpacing) {
@@ -1263,6 +1266,51 @@ struct CoordinatorModeView: View {
         .background(
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
                 .fill(Color.accentColor.opacity(0.045))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.12), lineWidth: 0.75)
+        )
+    }
+
+    private func missionStatusStrip(_ plan: CoordinatorMissionPlan, metrics: CoordinatorVisualMetrics) -> some View {
+        let completedNodeCount = plan.nodes.count(where: { node in
+            if case .completed = node.status {
+                return true
+            }
+            return false
+        })
+        let activeNodeCount = plan.nodes.count(where: { node in
+            switch node.status {
+            case .running, .blocked:
+                true
+            default:
+                false
+            }
+        })
+
+        return HStack(spacing: metrics.smallSpacing) {
+            Label("Mission status", systemImage: "waveform.path.ecg")
+                .font(metrics.microMedium)
+                .foregroundStyle(Color.accentColor)
+            statusChip(plan.status.displayName, color: plan.status.tint, metrics: metrics)
+            statusChip(plan.approvalState.displayName, color: plan.approvalState.tint, metrics: metrics)
+            if !plan.nodes.isEmpty {
+                statusChip("\(completedNodeCount)/\(plan.nodes.count) nodes done", color: completedNodeCount == plan.nodes.count ? .green : .blue, metrics: metrics)
+                if activeNodeCount > 0 {
+                    statusChip("\(activeNodeCount) active", color: .orange, metrics: metrics)
+                }
+            }
+            if !plan.workstreams.isEmpty {
+                statusChip("\(plan.workstreams.count) workstreams", color: .secondary, metrics: metrics)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, metrics.pendingPadding)
+        .padding(.vertical, metrics.smallSpacing)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.22))
         )
         .overlay(
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
@@ -1391,8 +1439,8 @@ struct CoordinatorModeView: View {
         case .coordinatorOnly:
             return MissionPlanExecutionLane(
                 id: "\(workstreamKey)-coordinator",
-                title: "Coordinator lane",
-                subtitle: "Coordinator-owned work",
+                title: "Director lane",
+                subtitle: "Director-owned work",
                 systemImage: "sparkles",
                 policy: node.executionPolicy,
                 nodes: []
@@ -1446,7 +1494,7 @@ struct CoordinatorModeView: View {
             return MissionPlanExecutionLane(
                 id: "\(workstreamKey)-ask-user",
                 title: "User decision lane",
-                subtitle: "Paused for a coordinator-owned choice",
+                subtitle: "Paused for a Director-owned choice",
                 systemImage: "questionmark.bubble",
                 policy: node.executionPolicy,
                 nodes: []
@@ -1615,7 +1663,7 @@ struct CoordinatorModeView: View {
         case .freshSiblingOnSameWorktree:
             return "Fresh sibling"
         case .coordinatorOnly:
-            return "Coordinator"
+            return "Director"
         case .planCritique:
             return "Critique"
         case .askUser:
@@ -2018,7 +2066,7 @@ struct CoordinatorModeView: View {
                         keyValue("Children", "\(row.childSessionIDs.count)", metrics: metrics)
                         keyValue("MCP originated", row.isMCPOriginated ? "Yes" : "No", metrics: metrics)
                         if let parentCoordinator = row.parentCoordinator {
-                            keyValue("Coordinator", parentCoordinator.title, metrics: metrics)
+                            keyValue("Director", parentCoordinator.title, metrics: metrics)
                         }
                         if let workflow = row.workflow {
                             keyValue("Workflow", workflow.displayName, metrics: metrics)
@@ -2387,7 +2435,7 @@ struct CoordinatorModeView: View {
     private func coordinatorRailStatusReport(_ report: CoordinatorModeSessionStatusReport?, metrics: CoordinatorVisualMetrics) -> some View {
         if let report, report.hasDisplayableContent {
             VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                Label("Coordinator status", systemImage: "waveform.path.ecg")
+                Label("Director status", systemImage: "waveform.path.ecg")
                     .font(metrics.microMedium)
                     .foregroundStyle(.secondary)
                 if let statusText = report.statusText {
@@ -2443,7 +2491,7 @@ struct CoordinatorModeView: View {
                 .font(metrics.micro)
                 .foregroundStyle(Color.red.opacity(viewModel.canStopSelectedCoordinatorMission ? 0.95 : 0.45))
                 .disabled(!viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission)
-                .hoverTooltip("Stop the selected Coordinator Mission and cancel its live linked sessions without archiving or deleting them.")
+                .hoverTooltip("Stop the selected Mission and cancel its live linked sessions without archiving or deleting them.")
                 Button("Clear") {
                     viewModel.clearCoordinatorRailTranscript()
                 }
@@ -2503,7 +2551,7 @@ struct CoordinatorModeView: View {
             if let pending = coordinatorPendingAskUserState(for: pendingInteraction) {
                 coordinatorCompactCheckpointCard(
                     pending: pending,
-                    badgeTitle: "Coordinator question",
+                    badgeTitle: "Director question",
                     badgeSystemImage: "questionmark.bubble.fill",
                     accentColor: Color.accentColor,
                     submitLabel: "Submit",
@@ -2533,7 +2581,7 @@ struct CoordinatorModeView: View {
             if let pending = coordinatorPlanApprovalCheckpointState() {
                 coordinatorCompactCheckpointCard(
                     pending: pending,
-                    badgeTitle: "Coordinator checkpoint",
+                    badgeTitle: "Director checkpoint",
                     badgeSystemImage: "flag.checkered",
                     accentColor: Color.accentColor,
                     submitLabel: "Continue",
@@ -2656,6 +2704,8 @@ struct CoordinatorModeView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            missionStatusStrip(plan, metrics: metrics)
+
             if !plan.workstreams.isEmpty {
                 VStack(alignment: .leading, spacing: metrics.tightSpacing) {
                     ForEach(plan.workstreams.prefix(4)) { workstream in
@@ -2737,7 +2787,7 @@ struct CoordinatorModeView: View {
         var options = [
             AgentAskUserOption(
                 label: "Proceed",
-                description: "Run the next safe step the Coordinator proposed."
+                description: "Run the next safe step the Director proposed."
             ),
             AgentAskUserOption(
                 label: "Revise",
@@ -2769,11 +2819,11 @@ struct CoordinatorModeView: View {
         let interaction = AgentAskUserInteraction(
             id: Self.planApprovalCheckpointID,
             title: "Approval required",
-            context: "Choose how the Coordinator should continue from this checkpoint.",
+            context: "Choose how the Director should continue from this checkpoint.",
             questions: [
                 AgentAskUserQuestion(
                     id: "decision",
-                    header: "Coordinator decision",
+                    header: "Director decision",
                     question: "What should happen next?",
                     options: options,
                     allowsMultiple: false,
@@ -2795,7 +2845,7 @@ struct CoordinatorModeView: View {
         let options = [
             AgentAskUserOption(
                 label: "Continue",
-                description: "Resume the Coordinator with this observed boundary."
+                description: "Resume the Director with this observed boundary."
             ),
             AgentAskUserOption(
                 label: "Revise",
@@ -2813,7 +2863,7 @@ struct CoordinatorModeView: View {
             questions: [
                 AgentAskUserQuestion(
                     id: "decision",
-                    header: "Coordinator decision",
+                    header: "Director decision",
                     question: "What should happen next?",
                     options: options,
                     allowsMultiple: false,
@@ -2898,7 +2948,7 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-            Text(rail.state == .chooseCoordinator ? "Start a Mission." : "Ask the Coordinator what to do next.")
+            Text(rail.state == .chooseCoordinator ? "Start a Mission." : "Ask the Director what to do next.")
                 .font(metrics.bodyMedium)
                 .foregroundStyle(.primary.opacity(0.82))
             Text("Delegated sessions will appear on the board as this conversation creates work.")
@@ -3113,7 +3163,7 @@ struct CoordinatorModeView: View {
                 .padding(.top, 2)
             }
 
-            Text("Your next message will be sent to this child session, then the Coordinator can continue from the result.")
+            Text("Your next message will be sent to this child session, then the Director can continue from the result.")
                 .font(metrics.micro)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -3501,7 +3551,7 @@ struct CoordinatorModeView: View {
         _ pendingInteraction: CoordinatorModePendingInteractionSummary,
         pending: AgentAskUserPendingState
     ) {
-        let displayText = "Skipped \(pending.interaction.title ?? "Coordinator question")"
+        let displayText = "Skipped \(pending.interaction.title ?? "Director question")"
         let submission = CoordinatorModeViewModel.ChildInteractionResponseSubmission(
             text: nil,
             skip: true,
@@ -3565,7 +3615,7 @@ struct CoordinatorModeView: View {
     private func coordinatorComposer(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
         let pendingChildRow = viewModel.activePendingChildInteractionRow()
         let pendingChildStructuredState = pendingChildRow.flatMap { coordinatorPendingAskUserState(for: $0) }
-        let placeholder = pendingChildRow == nil ? "Message Coordinator..." : "Answer child question..."
+        let placeholder = coordinatorComposerPlaceholder(rail, pendingChildRow: pendingChildRow)
 
         return VStack(alignment: .leading, spacing: metrics.smallSpacing) {
             if let pendingChildRow, let pendingChildStructuredState {
@@ -3577,7 +3627,7 @@ struct CoordinatorModeView: View {
             } else if let pendingChildRow, let pending = pendingChildRow.pendingInteraction {
                 coordinatorPendingChildInteractionCard(row: pendingChildRow, pending: pending, metrics: metrics)
             } else if rail.state == .selected, !rail.isComposerSendEnabled, viewModel.currentRailActivityText == nil {
-                coordinatorComposerNotice("Coordinator is working. You can send the next message when it reaches a turn boundary.", metrics: metrics)
+                coordinatorComposerNotice("Director is working. You can send the next message when it reaches a turn boundary.", metrics: metrics)
             } else if let notice = viewModel.composerNotice, !notice.isEmpty {
                 coordinatorComposerNotice(notice, metrics: metrics)
             }
@@ -3627,6 +3677,33 @@ struct CoordinatorModeView: View {
         }
     }
 
+    private func coordinatorComposerPlaceholder(
+        _ rail: CoordinatorModeCoordinatorRail,
+        pendingChildRow: CoordinatorModeRow?
+    ) -> String {
+        if pendingChildRow != nil {
+            return "Answer the child question..."
+        }
+        switch rail.state {
+        case .chooseCoordinator:
+            return "Tell the Director the Mission..."
+        case .selected:
+            if let plan = rail.missionPlan {
+                switch plan.status {
+                case .completed:
+                    return "Start a follow-up Mission..."
+                case .stopped:
+                    return "Restart or revise this Mission..."
+                case .draft:
+                    return "Revise the Mission Plan..."
+                case .approved, .running, .blocked:
+                    return "Message the Director..."
+                }
+            }
+            return rail.isLiveInCurrentWindow ? "Message the live Director..." : "Message the Director..."
+        }
+    }
+
     private func coordinatorComposerControlStrip(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
         let pendingChildRow = viewModel.activePendingChildInteractionRow()
 
@@ -3635,7 +3712,7 @@ struct CoordinatorModeView: View {
                 Image(systemName: pendingChildRow == nil ? "sparkles" : "questionmark.bubble.fill")
                     .font(.system(size: metrics.microIconSize, weight: .medium))
                     .foregroundStyle(pendingChildRow == nil ? Color.accentColor : CoordinatorModeStatusGroup.needsYou.accentColor)
-                Text(pendingChildRow == nil ? "Coordinator" : "Child reply")
+                Text(pendingChildRow == nil ? "Director" : "Child reply")
                     .font(metrics.microMedium)
                     .foregroundStyle(.primary.opacity(0.82))
             }
@@ -3795,7 +3872,7 @@ struct CoordinatorModeView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(isCoordinatorToolsPopoverPresented ? Color.accentColor : Color.secondary)
-            .hoverTooltip("Configure MCP and tool settings for Coordinator runs. Type / to insert a skill.")
+            .hoverTooltip("Configure MCP and tool settings for Director Missions. Type / to insert a skill.")
             .popover(isPresented: $isCoordinatorToolsPopoverPresented, arrowEdge: .bottom) {
                 coordinatorComposerToolsPopover(metrics: metrics)
                     .id(coordinatorToolsRevision)
@@ -4033,7 +4110,7 @@ struct CoordinatorModeView: View {
             Capsule(style: .continuous)
                 .fill(Color(nsColor: .controlBackgroundColor).opacity(0.22))
         )
-        .accessibilityLabel("Coordinator chat automation mode")
+        .accessibilityLabel("Director chat automation mode")
     }
 
     private func coordinatorComposerAutomationModeButton(
@@ -4068,13 +4145,25 @@ struct CoordinatorModeView: View {
         if let activityText = viewModel.currentRailActivityText, !activityText.isEmpty {
             return activityText
         }
+        if let plan = rail.missionPlan {
+            switch plan.status {
+            case .completed:
+                return "Mission complete"
+            case .stopped:
+                return "Mission stopped"
+            case .blocked:
+                return "Blocked"
+            case .draft, .approved, .running:
+                break
+            }
+        }
         if rail.state == .chooseCoordinator {
-            return "New run"
+            return "Fresh Mission"
         }
         if rail.isComposerSendEnabled {
             return rail.isLiveInCurrentWindow ? "Live" : "Ready"
         }
-        return "Working"
+        return "Director working"
     }
 
     private func inspectorChildComposer(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
@@ -4428,7 +4517,7 @@ struct CoordinatorModeView: View {
                 .foregroundStyle(.secondary)
             Text(snapshot.workspaceID == nil ? "Open a workspace" : (isAllAgents ? "No active delegated work yet" : "No delegated work yet"))
                 .font(metrics.headerTitle)
-            Text(isAllAgents ? "The board shows active delegated work across Coordinator Missions." : "The board shows delegated work from the selected Mission.")
+            Text(isAllAgents ? "The board shows active delegated work across Director Missions." : "The board shows delegated work from the selected Mission.")
                 .font(metrics.sectionTitle)
                 .foregroundStyle(.secondary)
         }
@@ -4684,7 +4773,7 @@ struct CoordinatorModeView: View {
 
             keyValue("Objective", summary.objective, metrics: metrics)
             if let parentCoordinator = row.parentCoordinator {
-                keyValue("Coordinator", parentCoordinator.title, metrics: metrics)
+                keyValue("Director", parentCoordinator.title, metrics: metrics)
             }
             if let declared = summary.declaredWorkstream {
                 if !declared.purpose.isEmpty {
@@ -6051,7 +6140,7 @@ private extension CoordinatorModeSortMode {
 private extension CoordinatorModeBoardScope {
     var displayName: String {
         switch self {
-        case .coordinatorFleet: "Coordinator Chat"
+        case .coordinatorFleet: "Director Chat"
         case .allAgents: "All Agents Board"
         }
     }
@@ -6067,7 +6156,7 @@ private extension CoordinatorModeBoardScope {
 private extension CoordinatorModeRowOrigin {
     var displayName: String {
         switch self {
-        case .coordinatorFleet: "Coordinator fleet"
+        case .coordinatorFleet: "Director Mission"
         case .directAgent: "Direct Agent Mode"
         }
     }
@@ -6149,7 +6238,7 @@ private extension CoordinatorModeRailTranscriptEntry.Role {
     var displayName: String {
         switch self {
         case .user: "You"
-        case .coordinator: "Coordinator"
+        case .coordinator: "Director"
         case .event: "Update"
         }
     }
@@ -6396,7 +6485,7 @@ private extension CoordinatorFollowThroughEvent {
         case .childTerminal:
             "Delegated work reached a boundary"
         case .gateCleared:
-            "Coordinator gate cleared"
+            "Director gate cleared"
         }
     }
 
@@ -6448,15 +6537,15 @@ private extension CoordinatorFollowThroughChildPhase {
         }
     }
 
-    #Preview("Coordinator Board") {
+    #Preview("Director Board") {
         CoordinatorModePreviewHarness(snapshot: .previewBoard)
     }
 
-    #Preview("Coordinator List Fallback") {
+    #Preview("Director List Fallback") {
         CoordinatorModePreviewHarness(snapshot: .previewBoard, width: 700, height: 640)
     }
 
-    #Preview("Coordinator Empty") {
+    #Preview("Director Empty") {
         CoordinatorModePreviewHarness(snapshot: .empty)
     }
 

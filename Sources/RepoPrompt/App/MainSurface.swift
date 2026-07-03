@@ -13,7 +13,7 @@ enum MainSurface: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .agentMode: "Agent"
-        case .coordinatorMode: "Coordinator"
+        case .coordinatorMode: "Director"
         }
     }
 
@@ -134,7 +134,7 @@ struct MainSurfaceCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .toolbar) {
-            Toggle("Coordinator", isOn: selectedBinding(for: .coordinatorMode))
+            Toggle("Director", isOn: selectedBinding(for: .coordinatorMode))
                 .keyboardShortcut("1", modifiers: .command)
                 .disabled(!canSwitch)
 
