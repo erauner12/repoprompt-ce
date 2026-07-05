@@ -34,7 +34,7 @@ struct MissionDecision {
 }
 ```
 
-Everything projects from this one ledger: the ⚙ cards, the two-sided stat, the strip pills, the Decisions view — and the **receipt** (§5.2). The goal is reviewability: every decision recorded and attributable.
+Everything projects from this one ledger: the ⚙ cards, the two-sided stat, the strip pills, the Decisions view — and the **receipt** (§5.2). This is the reviewable, attributable decision record.
 
 **2.2 Checkpoints are state; markers are events.** In the mock, a checkpoint is both `mission.checkpoint` *and* marker messages — a duplication that worked for HTML rendering. In Swift: `checkpoint` is a state machine value (`approval / step / writesGate / childAsk / merge / …`), and the thread renders it *live* from state; only resolved checkpoints leave an event behind. Don't port the double representation.
 
@@ -60,11 +60,11 @@ The three-column `NavigationSplitView` shell from the Coordinator work maps dire
 
 ## 5. Architecture cross-check
 
-**5.1 Where the design is already aligned (no action).** The mission contract is policy (autonomy + done + guidance + pins) × directive × announced shape. Curated state, not transcript accumulation, maps to the evidence ledger + scoped delegation charters (Prompt §3 sends ledger excerpts and bars, never transcripts; Prompt §6 keeps reviewer context sparse and independent). The attention queue maps to the Decisions view. Decomposition changes the job, which is why shapes exist. Reviewable/attributable decisions map to the unified decision ledger (§2.1). The framing to keep: *the user is the reviewer, not the integration layer* — that's our two-sided stat argued as an org-design claim.
+**5.1 Where the design is already aligned (no action).** The mission contract is policy (autonomy + done + guidance + pins) × directive × announced shape. Curated state, not transcript accumulation, maps to the evidence ledger + scoped delegation charters (Prompt §3 sends ledger excerpts and bars, never transcripts; Prompt §6 keeps reviewer context sparse and independent). The attention queue maps to the Decisions view. Decomposition changes the job, which is why shapes exist. Reviewable and attributable decisions map to the unified decision ledger (§2.1). The framing to keep: *the user is the reviewer, not the integration layer* — that's our two-sided stat argued as an org-design claim.
 
 **5.2 The Mission Receipt (pulled into v1 — implemented in the mock as of v2.6).** Once §2.1 lands, a receipt is a projection, not a feature: contract snapshot (directive, shape + reason, policy incl. guidance/done, autonomy at start) + the decision ledger (both actors, with reasons) + the evidence ledger + steer/re-pass record + the closing artifact link → one exportable markdown. Prompt §10 already writes PR bodies *from the ledger*; the receipt is the same projection aimed at the operator. Logs are for debugging; receipts are for deciding whether the work was worth doing. For us, this is nearly free.
 
-**5.3 Roadmap, explicitly not now.** (a) **Tool governance** — our pins are *context* pins, not a tool policy (required/allowed/risky/fallback/per-worker); real per-mission MCP/tool policy should ride on `AgentModeMCPPolicyContext` when it comes, not be invented in v1. (b) **Model routing per node** — the blueprint field exists; keep it scripted/static in v1. (c) **Mission survives the worker** — durable mission state lives above any one session/model; our ID-based lineage + mission-owned ledgers are the precondition, and nothing in v1 should hang mission state off a live session object.
+**5.3 Roadmap, explicitly not now.** (a) **Tool governance** — our pins are *context* pins, not a tool policy (required/allowed/risky/fallback/per-worker); real per-mission MCP/tool policy should ride on `AgentModeMCPPolicyContext` when it comes, not be invented in v1. (b) **Model routing per node** — the blueprint field exists; keep it scripted/static in v1. (c) **Mission survives the worker** — the deeper architectural claim (durable state above the session/model); our ID-based lineage + mission-owned ledgers are the precondition, and nothing in v1 should hang mission state off a live session object.
 
 ## 6. v1 acceptance summary
 

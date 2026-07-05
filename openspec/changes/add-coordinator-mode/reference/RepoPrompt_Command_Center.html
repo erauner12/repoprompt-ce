@@ -500,6 +500,10 @@
     .stat-big { font-size: 13px; font-weight: 800; color: var(--text); white-space: nowrap; }
     .stat-big.dim { font-weight: 700; color: var(--muted); }
     .stat-parts { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+    .auto-card .ov-btn { margin-left: auto; flex: none; }
+    .auto-card.overruled { opacity: .92; border-color: rgba(217,167,67,.4); }
+    .ov-strike { text-decoration: line-through; opacity: .6; }
+    .ov-tag { color: var(--amber, #d9a743); font-weight: 700; }
     .auto-card { display: flex; gap: 9px; align-items: flex-start; border: 1px dashed rgba(160,150,255,.4); background: rgba(140,130,255,.07); border-radius: 10px; padding: 9px 11px; margin: 4px 0; }
     .auto-gear { font-size: 13px; line-height: 1.3; }
     .auto-copy { font-size: 12px; color: var(--text); line-height: 1.5; }
@@ -523,6 +527,7 @@
     .wf-card.wf-live { cursor: pointer; border-color: rgba(64,200,120,.32); }
     .wf-card.wf-live:hover { background: rgba(64,200,120,.06); border-color: rgba(64,200,120,.5); }
     .wf-card.wf-live.picked { background: rgba(64,200,120,.09); border-color: rgba(64,200,120,.7); box-shadow: 0 0 0 1px rgba(64,200,120,.35), 0 0 18px rgba(64,200,120,.12); }
+    .cap-stat { font-size: 10.5px; color: var(--muted); align-self: center; border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; white-space: nowrap; }
     .always-note { font-size: 10.5px; color: var(--muted); letter-spacing: .2px; align-self: center; white-space: nowrap; }
     .nav-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 4px; margin-left: 6px; border-radius: 999px; background: var(--amber, #d9a743); color: #1a1408; font-size: 10.5px; font-weight: 700; line-height: 1; }
     .seg-tag { font-size: 10px; color: var(--muted); padding: 0 4px 0 8px; align-self: center; letter-spacing: .3px; }
@@ -533,6 +538,7 @@
     .ask-note { font-size: 12px; color: var(--muted); background: rgba(255,255,255,.03); border-radius: 8px; padding: 7px 10px; }
     .ask-q { font-weight: 600; font-size: 13.5px; margin-top: 2px; }
     .ask-opt { display: flex; align-items: center; gap: 10px; text-align: left; background: rgba(255,255,255,.025); border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; cursor: pointer; color: var(--text); font-size: 12.5px; }
+    .opt-desc { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
     .ask-opt:hover { border-color: rgba(63,134,255,.45); }
     .ask-opt.on { border-color: var(--blue, #3f86ff); background: rgba(63,134,255,.08); }
     .ask-opt.on .radio { border-color: var(--blue, #3f86ff); box-shadow: inset 0 0 0 4px var(--blue, #3f86ff); }
@@ -616,6 +622,8 @@
     .ev-ic { color: #6fd99a; font-weight: 800; }
     .ev-title { font-size: 12px; font-weight: 800; color: var(--text); }
     .ev-meets { font-size: 10px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; color: #6fd99a; }
+    .ev-bundle { font-size: 10.5px; color: var(--muted); border-top: 1px dashed var(--line); margin-top: 6px; padding-top: 5px; }
+    .ev-note-claim { font-size: 11px; color: var(--muted); font-style: italic; margin: 2px 0 4px; }
     .ev-done { font-size: 11.5px; color: var(--muted); margin-bottom: 3px; }
     .ev-done .ev-k { font-size: 9.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); margin-right: 5px; }
     .ev-proof { font-size: 12px; color: var(--text); font-family: var(--mono); line-height: 1.45; }
@@ -905,7 +913,7 @@
       .mission-split { grid-template-columns: minmax(340px, 46%) minmax(0, 1fr); }
       .director-shell.all-board { grid-template-columns: 220px 1fr; }
     }
-    /* ===== RESPONSIVE SYSTEM (v3.19) =====
+    /* ===== RESPONSIVE SYSTEM (v3.20) =====
        >1100px: full desktop (untouched).
        <=1100px SHARED: fixed top bar (mode switch + ＋New), header flex fixes, stamp.
        641-1100px HALF-SCREEN: in-grid slim rail, board 2x2, thread over plan.
@@ -1141,12 +1149,42 @@
         ],
         nodes: {
           n1: { title:"Map the relevant code paths", workflow:"Explore", policy:"Read-only child", role:"explore", deps:0, done:"the questions needed to plan are answered — entry points, provider metadata, and the Oracle lifecycle are all clear", evidence:"Mapped 3 entry points across AIQueriesService + AgentRuntimeProviderService; chased the Oracle-lifecycle gap; checked existing cleanup tests. Read-only, nothing changed.", loop:{ kind:"probe", unit:"context", trail:[{label:"Scan the cleanup entry points", note:"3 call sites across AIQueriesService + AgentRuntimeProviderService"},{label:"Gap — Oracle lifecycle unclear · probe deeper", note:"traced teardown to Oracle.dispose(); context now adequate"}], stop:"the questions needed to plan are answered" }, desc:"Read-only probe to scope the work — the Director keeps probing (chasing gaps) until it has adequate context, then stops. Nothing is edited.", summary:"Discovery done — mapped the entry points, provider metadata, and Oracle lifecycle (chased that gap), plus existing tests. Read-only, nothing changed.", pick:"Map the code paths for $mission" },
-          n2: { title:"Implement the change in an isolated worktree", workflow:"Orchestrate", policy:"Fresh worktree", role:"implement", deps:1, produces:"tested diff", subtasks:["Provider cleanup contract","Oracle deletion path"], done:"cleanup runs on teardown, unsupported providers fail closed, focused tests cover both paths and pass, and the change stays in one worktree", evidence:"providerCleanup() added + called on Agent/Oracle teardown; unsupported path throws (fails closed); 12 focused tests green (both paths); worktree diff = 2 files; build passes; branch pushed.", barMiss:{ evidence:"providerCleanup() added + called on Agent teardown; unsupported path throws; 9 focused tests green — but cleanup() is never called on Oracle teardown, and its 3 focused tests are red.", gap:"the Oracle deletion path isn't wired — cleanup() never runs on Oracle teardown, and its focused tests fail" }, childAsk:{ question:"The Oracle provider still has a legacy `oracle_v1` alias in two call sites — remove it in this pass, or keep it deprecated?", suggested:"Keep the alias deprecated — #298 scopes alias removal to a follow-up pass.", reason:"the issue's scope note answers it", defer:"Deferred discovery: legacy `oracle_v1` alias removal — out of scope for this mission; follow-up candidate.", options:["Remove the `oracle_v1` alias in this pass.","Keep the alias deprecated — defer removal to the follow-up."] }, childAsk2:{ question:"Two test fixtures also reference the `oracle_v1` alias — update the fixtures in this pass, or leave them exercising the deprecation shim?", suggested:"Leave them — they're the only coverage the shim has; note it beside the deferred alias removal.", reason:"the deferral you just approved implies it", options:["Update the two fixtures in this pass.","Leave the fixtures exercising the deprecation shim."] }, desc:"Mutable but reversible — a fresh worktree. Fans out focused sub-agents, and the Director steers this **same** session through its focused tests until the suite is green before handing off — no separate tests step. Auto can iterate here.", summary:"Implementation reached a stable handoff — provider cleanup contract and Oracle deletion path, split across two sub-agents, with focused tests green in the same worktree. Branch pushed — handing off for review.", detail:"**Cleanup contract**\n\n```mermaid\nsequenceDiagram\n  participant S as Session teardown\n  participant P as Provider\n  S->>P: cleanup()\n  alt supported\n    P-->>S: released\n  else unsupported\n    P-->>S: throw, fail closed\n  end\n```\n\n- add `providerCleanup()`; call on Agent + Oracle teardown\n- unsupported providers **fail closed**\n- focused tests cover both paths (part of this step's bar)", pick:"Implement $mission in an isolated worktree" },
+          n2: { title:"Implement the change in an isolated worktree", workflow:"Orchestrate", policy:"Fresh worktree", role:"implement", deps:1, produces:"tested diff", subtasks:["Provider cleanup contract","Oracle deletion path"], done:"cleanup runs on teardown, unsupported providers fail closed, focused tests cover both paths and pass, and the change stays in one worktree", evidence:"providerCleanup() added + called on Agent/Oracle teardown; unsupported path throws (fails closed); 12 focused tests green (both paths); worktree diff = 2 files; build passes; branch pushed.", barMiss:{ evidence:"providerCleanup() added + called on Agent teardown; unsupported path throws; 9 focused tests green — but cleanup() is never called on Oracle teardown, and its 3 focused tests are red.", gap:"the Oracle deletion path isn't wired — cleanup() never runs on Oracle teardown, and its focused tests fail" }, childAsk:{ question:"The Oracle provider still has a legacy `oracle_v1` alias in two call sites — remove it in this pass, or keep it deprecated?", suggested:"Keep the alias deprecated — #298 scopes alias removal to a follow-up pass.", reason:"the issue's scope note answers it", defer:"Deferred discovery: legacy `oracle_v1` alias removal — out of scope for this mission; follow-up candidate.", options:[{label:"Remove the `oracle_v1` alias in this pass.",description:"takes the churn now; #298 says follow-up"},{label:"Keep the alias deprecated — defer removal to the follow-up.",description:"matches the issue's scope note"}] }, childAsk2:{ question:"Two test fixtures also reference the `oracle_v1` alias — update the fixtures in this pass, or leave them exercising the deprecation shim?", suggested:"Leave them — they're the only coverage the shim has; note it beside the deferred alias removal.", reason:"the deferral you just approved implies it", options:[{label:"Update the two fixtures in this pass.",description:"fixtures track the new call sites immediately"},{label:"Leave the fixtures exercising the deprecation shim.",description:"they're the shim's only coverage until the follow-up"}] }, desc:"Mutable but reversible — a fresh worktree. Fans out focused sub-agents, and the Director steers this **same** session through its focused tests until the suite is green before handing off — no separate tests step. Auto can iterate here.", summary:"Implementation reached a stable handoff — provider cleanup contract and Oracle deletion path, split across two sub-agents, with focused tests green in the same worktree. Branch pushed — handing off for review.", detail:"**Cleanup contract**\n\n```mermaid\nsequenceDiagram\n  participant S as Session teardown\n  participant P as Provider\n  S->>P: cleanup()\n  alt supported\n    P-->>S: released\n  else unsupported\n    P-->>S: throw, fail closed\n  end\n```\n\n- add `providerCleanup()`; call on Agent + Oracle teardown\n- unsupported providers **fail closed**\n- focused tests cover both paths (part of this step's bar)", pick:"Implement $mission in an isolated worktree" },
           n4: { title:"Review the changes", workflow:"Review", policy:"Independent · read-only", role:"review", deps:1, after:["n2"], done:"an independent read finds no blocking issues in the diff", evidence:"Independent review returned 1 nit, no blockers; read-only, nothing changed.", reviewBlock:{ evidence:"Independent review: cleanup() is not idempotent — a double teardown throws on the second call. Blocker; everything else clean.", gap:"cleanup() must be safe to call twice — the review bar blocks until it is", fixed:"providerCleanup() made idempotent (guard on released handles); double-teardown test added; 13 focused tests green; worktree diff = 2 files; branch pushed." }, desc:"A separate, independent review session reads the diff and reports recommendations — a fresh session the first time (a clean pair of eyes); a re-review after changes steers that same session, not a new one. On Auto the director applies fixes and re-reviews; on Step you get the report and decide.", summary:"Review came back — recommendations are ready. Read-only, so nothing changed; send feedback to re-review, or continue to land.", pick:"Independently review the changes for $mission" },
           n5: { title:"Land repoprompt-ce — PR 1 of 2", workflow:"Validation", policy:"Director handles directly", role:"land", terminal:"pr", deps:1, after:["n4"], pr:142, repo:"repoprompt-ce", reworkScope:["n2","n4"], desc:"The director opens the app PR via CLI, then asks you to confirm the merge — the first of two consecutive landings. Part 2 starts only after this merges.", pick:"Open the PR and land $mission" },
           n7: { title:"Implement the swift-sdk companion", workflow:"Orchestrate", policy:"Fresh worktree · swift-sdk", role:"implement", deps:1, after:["n5"], done:"the `ProviderHandle` contract in swift-sdk mirrors the released app API, with focused tests green", evidence:"Companion applied in swift-sdk: ProviderHandle contract updated to the released API; deprecation shim kept for one minor; 6 focused tests green; companion branch pushed.", desc:"**Starts after PR 1 merges** — the SDK references the released API, so this builds on the new base in its own swift-sdk worktree. One supervised session; reversible until it lands.", summary:"Companion built on the new base — swift-sdk contract mirrors the released API; tests green.", pick:"Implement the swift-sdk companion for $mission" },
           n8: { title:"Review the companion diff", workflow:"Review", policy:"Independent · read-only", role:"review", deps:1, after:["n7"], done:"an independent read finds no blocking issues in the companion diff", evidence:"Companion review — the contract change mirrors the merged app PR exactly; no blockers. Read-only, nothing changed.", desc:"Independent review of the swift-sdk diff against the merged app PR — read-only. Nothing in the stack lands without review.", summary:"Companion review clean — ready to land part 2.", pick:"Review the swift-sdk companion diff" },
           n6: { title:"Land swift-sdk companion — PR 2 of 2", workflow:"Validation", policy:"Director handles directly", role:"land", terminal:"pr", deps:1, after:["n8"], pr:143, repo:"swift-sdk", branchSuffix:"-sdk", reworkScope:["n7","n8"], entryLine:"The companion passed review — opening the swift-sdk PR now, then I'll check with you before merging. Second and final landing.", desc:"The companion PR opens once part 2 passes review, and merges with **its own confirmation** — the second notification arrives when this is actually ready, not before.", pick:"Open the swift-sdk companion PR for $mission" }
+        }
+      },
+      {
+        id: "prd-slices", name: "PRD Slices", icon: "book",
+        desc: "A PRD as the hub: slice it, then run each slice through its own deep-plan → orchestrate → review chain, and review the combined result at the end.",
+        brief: "Hand off a PRD. The Director decomposes it into slices with per-slice acceptance, runs the independent slices through their own plan → build → review chains in parallel — and a DEPENDENT slice waits: its chain starts only after the parallel slices are done and consolidated, planned against their combined result. One final review by you, then the stack lands.",
+        done: "You accept the combined result against the PRD; the slice branches land as a stack after final review.",
+        pace: "Step", planApproval: true, mutableGate: true, terminal: "pr", budget: null,
+        skills: ["planning", "decomposition"], vars: ["$mission", "$workflow", "$skill"],
+        overview: "**A PRD as the hub — each slice runs its own chain.** Slice $mission into independently shippable pieces, each with its own acceptance; every slice runs **deep plan → orchestrate → review** in its own worktree; you review the **combined result** once at the end.\n\n```mermaid\nflowchart LR\n  P[\"PRD — sliced\"] --> A1[\"Plan slice A\"] --> A2[\"Build A · wt-a\"] --> A3[\"Review A\"]\n  P --> B1[\"Plan slice B\"] --> B2[\"Build B · wt-b\"] --> B3[\"Review B\"]\n  A3 --> C1\n  B3 --> C1[\"Plan slice C — needs A+B\"] --> C2[\"Build C · wt-c\"] --> C3[\"Review C\"]\n  C3 --> F[\"Final review — combined\"] --> L[\"Land the stack\"]\n```\n\n**Why chains, not one shared spec:** each slice carries its own plan doc and its own review bar, so a bounced review re-opens *that slice*, never its neighbor. **Acceptance:** slices defined with per-slice acceptance · every slice reviewed · the combined result reviewed by you · nothing lands without that.",
+        workstreams: [
+          { key:"ws1", title:"Slice the PRD", role:"architect", policy:"Read-only", strategy:"Decompose, then per-slice chains", purpose:"Read the PRD and decompose it into independently shippable slices, each with its own acceptance criteria.", nodes:["n1"] },
+          { key:"ws2", title:"Slice A — notification digests", role:"engineer", policy:"Plan → build → review", strategy:"Own chain, own worktree", purpose:"Run the digests slice through its own deep-plan → orchestrate → review chain in an isolated worktree.", nodes:["a1","a2","a3"] },
+          { key:"ws3", title:"Slice B — quiet hours", role:"engineer", policy:"Plan → build → review", strategy:"Own chain, own worktree", purpose:"Run the quiet-hours slice through its own chain, in parallel — separate worktree, separate acceptance.", nodes:["b1","b2","b3"] },
+          { key:"ws4", title:"Slice C — preferences pane (after A+B)", role:"engineer", policy:"Plan → build → review · dependent", strategy:"Chain starts only after A+B consolidate", purpose:"The preferences pane surfaces both features, so its own deep plan can only be written against the CONSOLIDATED result of slices A and B — the chain waits for both reviews to pass, then runs plan → build → review like the others.", nodes:["c1","c2","c3"] },
+          { key:"ws5", title:"Final review & land", role:"pair", policy:"You review the combined result", strategy:"One look at the whole, then land", purpose:"Bring the slices together, review the combined result against the PRD once, then land the stack.", nodes:["n8","n9"] }
+        ],
+        nodes: {
+          n1: { title:"Slice the PRD & set per-slice acceptance", workflow:"Explore", policy:"Read-only", role:"explore", deps:0, after:[], done:"the PRD is decomposed into independently shippable slices, each with its own acceptance criteria", evidence:"PRD decomposed into 2 slices — notification digests, quiet hours — each with acceptance mapped to PRD sections; no shared files between them.", desc:"Read the PRD and decompose it: which pieces ship independently, what does *done* mean for each. Read-only — the slicing is the contract everything below runs against.", summary:"Sliced — 2 independently shippable slices with per-slice acceptance.", pick:"Slice the PRD for $mission and set acceptance" },
+          a1: { title:"Deep-plan slice: notification digests", workflow:"Deep Plan", policy:"Read-only · Deep Plan", role:"spec", deps:1, after:["n1"], done:"a slice plan exists (docs/plans/…) with tasks + validation mapped to the slice's acceptance", evidence:"Plan drafted — docs/plans/notification-digests.md; 4 tasks, validation per task, mapped to the PRD's digest section.", desc:"The slice runs its own Deep Plan first — tasks, affected areas, validation — exactly the plan you'd have written by hand before orchestrating.", summary:"Slice plan drafted — docs/plans/notification-digests.md.", pick:"Deep-plan the digests slice" },
+          a2: { title:"Build slice: notification digests", workflow:"Orchestrate", policy:"Fresh worktree", role:"implement", deps:1, after:["a1"], partWorktree:"wt/…-digests", subtasks:["digest scheduler","digest renderer"], desc:"Orchestrate the slice's plan in its own isolated worktree — sub-agents per task, checked against the slice plan.", summary:"Digests slice built in its own worktree — slice tests green.", pick:"Orchestrate the digests slice per its plan" },
+          a3: { title:"Review slice: notification digests", workflow:"Review", policy:"Independent · read-only", role:"review", deps:1, after:["a2"], probeBeat:{ question:"Did the digest slice's focused tests actually run in its worktree (not just compile)?", answer:"Probe: test invocation found in the worktree log — 6/6 focused tests executed and passed; export recorded.", tokens:412 }, done:"an independent read finds no blocking issues against the slice's plan + acceptance", evidence:"Slice review — matches its plan; 1 nit, no blockers. Read-only. Probe: 6/6 focused tests verified executed (answer + export path recorded).", desc:"An independent review of the slice diff against *its own* plan and acceptance — a bounced review re-opens this slice's chain, never its neighbor's.", summary:"Digests slice review clean.", pick:"Review the digests slice against its plan" },
+          b1: { title:"Deep-plan slice: quiet hours", workflow:"Deep Plan", policy:"Read-only · Deep Plan", role:"spec", deps:1, after:["n1"], done:"a slice plan exists with tasks + validation mapped to the slice's acceptance", evidence:"Plan drafted — docs/plans/quiet-hours.md; 3 tasks with validation, mapped to the PRD's quiet-hours section.", desc:"The second slice's own Deep Plan — runs in parallel with slice A's chain; no shared files.", summary:"Slice plan drafted — docs/plans/quiet-hours.md.", pick:"Deep-plan the quiet-hours slice" },
+          b2: { title:"Build slice: quiet hours", workflow:"Orchestrate", policy:"Fresh worktree", role:"implement", deps:1, after:["b1"], partWorktree:"wt/…-quiet", subtasks:["schedule store","suppression check"], desc:"Orchestrate the quiet-hours plan in a separate isolated worktree, in parallel with slice A.", summary:"Quiet-hours slice built in its own worktree — slice tests green.", pick:"Orchestrate the quiet-hours slice per its plan" },
+          b3: { title:"Review slice: quiet hours", workflow:"Review", policy:"Independent · read-only", role:"review", deps:1, after:["b2"], done:"an independent read finds no blocking issues against the slice's plan + acceptance", evidence:"Slice review — matches its plan; no blockers. Read-only.", desc:"Independent review of the quiet-hours diff against its own plan — same bar, own chain.", summary:"Quiet-hours slice review clean.", pick:"Review the quiet-hours slice against its plan" },
+          c1: { title:"Deep-plan slice: preferences pane (needs A+B)", workflow:"Deep Plan", policy:"Read-only · Deep Plan", role:"spec", deps:2, after:["a3","b3"], done:"a slice plan exists, written against the CONSOLIDATED result of slices A and B", evidence:"Plan drafted — docs/plans/preferences-pane.md; binds to the digest scheduler AND the quiet-hours store as actually landed; 3 tasks with validation.", desc:"The dependent slice: the preferences pane surfaces both features, so its deep plan waits for both slice reviews to pass and is written against their consolidated interfaces — then this chain runs exactly like the others.", summary:"Dependent slice planned — against the consolidated A+B result.", pick:"Deep-plan the preferences pane against the consolidated slices" },
+          c2: { title:"Build slice: preferences pane", workflow:"Orchestrate", policy:"Fresh worktree", role:"implement", deps:1, after:["c1"], partWorktree:"wt/…-prefs", subtasks:["settings surface","binding to both stores"], desc:"Orchestrate the preferences plan in its own worktree — started only after A+B consolidated; binds to both landed interfaces.", summary:"Preferences slice built — bound to both features, slice tests green.", pick:"Orchestrate the preferences pane per its plan" },
+          c3: { title:"Review slice: preferences pane", workflow:"Review", policy:"Independent · read-only", role:"review", deps:1, after:["c2"], done:"an independent read finds no blocking issues against the slice's plan + acceptance", evidence:"Slice review — matches its plan; verified against both consolidated interfaces; no blockers. Read-only.", desc:"Independent review of the dependent slice against its own plan — same bar, own chain, last to close.", summary:"Preferences slice review clean.", pick:"Review the preferences slice against its plan" },
+          n8: { title:"Final review — the combined result", workflow:"Review", policy:"You review once, at the end", role:"review", deps:1, after:["c3"], done:"you accept the combined result against the PRD", evidence:"Combined diff assembled across both slices — matches the PRD end to end; per-slice receipts attached.", desc:"The review-at-the-end you asked for: one look at the combined result against the PRD, with each slice's plan, evidence, and review already in the receipt.", summary:"Combined result ready for your final review against the PRD.", pick:"Review the combined result against the PRD" },
+          n9: { title:"Land the slices — stacked PRs", workflow:"Validation", policy:"Director handles directly", role:"land", terminal:"pr", deps:1, after:["n8"], pr:151, repo:"repoprompt-ce", reworkScope:["n8"], desc:"The director opens the stacked PRs (one per slice) and asks you to confirm the merge — irreversible always asks.", summary:"Stacked PRs opened — confirm to land.", pick:"Land the slice PRs" }
         }
       },
       {
@@ -1261,6 +1299,8 @@
         return { name:"Measured Improvement", reason:"it names a metric to improve — I'll baseline it first, then run a measured try/keep-or-revert loop" };
       if (/investigat|root.?cause|diagnos|why (is|does|did)|file (an? )?(issue|bug)|crash(es|ing|ed)?\b|no code change|read.?only/.test(t))
         return { name:"Root-Cause Report", reason:"this reads as diagnosis, not a change — read-only evidence gathering, ending in a filed issue" };
+      if (/\bprd\b|work the slices/.test(t))
+        return { name:"PRD Slices", reason:"a PRD as the hub — I'll slice it, run each slice through its own plan → build → review chain, and bring you the combined result at the end" };
       if (/\bspec\b|design (first|doc)|architect|\brework\b|overhaul|\bredesign\b|across modules|multiple (modules|services)|migrat/.test(t))
         return { name:"Spec-First Build", reason:"the scope is big enough to design first — spec, sign-off, then parallel module builds and integrate" };
       return { name:"Scoped Change", reason:"a small, well-scoped change — explore, implement with focused tests, independent review, then a PR" };
@@ -1276,12 +1316,12 @@
     let userPolSeq = 1;
     function slug(s){ return String(s||"flow").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,24) || "flow"; }
     const MISSION_POLICIES = [
-      { id:"pol-default",   name:"Default",        pace:"Step", autonomy:{ plan:"ask",  writes:"auto", reshape:"ask",  fork:"ask", childAsk:"ask"  }, done:"", budget:null, pins:[],
+      { id:"pol-default",   name:"Default",        pace:"Step", autonomy:{ plan:"ask",  writes:"auto", reshape:"ask",  fork:"ask", childAsk:"ask"  }, done:"", budget:null, maxConcurrent:3, pins:[],
         demo:{ line:"full supervision on a cross-repo change (2 PRs)", directive:"clean up provider handle teardown so the handle can't leak" } },
       { id:"pol-hands-off", name:"Hands-off",      pace:"Auto", autonomy:{ plan:"ask",  writes:"auto", reshape:"auto", fork:"ask", childAsk:"auto" }, done:"", budget:null, pins:[],
         demo:{ line:"overnight perf hunt — it decides, you read the receipt", directive:"overnight: hunt down the session-list render perf regression and make it faster" } },
       { id:"pol-careful",   name:"Careful writes", pace:"Step", autonomy:{ plan:"ask",  writes:"ask",  reshape:"ask",  fork:"ask", childAsk:"ask"  }, done:"", budget:null, pins:[],
-        demo:{ line:"stacked spec-first build — every write gated, one PR per module", directive:"rework the provider registry across modules — land it as a stack, one PR per module" } },
+        demo:{ line:"a PRD in slices — parallel chains, then a dependent slice after they consolidate", directive:"here's the PRD for notification digests + quiet hours + a preferences pane that depends on both — work the slices; the preferences slice starts only after the first two are done and consolidated; per slice: deep plan → orchestrate → review; I'll review the combined result at the end" } },
       { id:"pol-readonly",  name:"Read-only",      pace:"Auto", autonomy:{ plan:"ask",  writes:"auto", reshape:"auto", fork:"ask", childAsk:"auto" }, done:"A written report of the findings. No code changes.", budget:null, pins:[], guidance:"Cite file paths and line numbers for every claim. Findings only — never propose code edits inline.",
         demo:{ line:"investigation — and the directive names an issue, so watch the close-conflict note", directive:"investigate the flaky teardown test and file an issue" } }
     ];
@@ -1689,7 +1729,7 @@
               <button class="${state.surface==='director'?'active':''}" data-action="surface-director" title="${dq ? dq + " decision" + (dq>1?"s":"") + " waiting" : "Director"}">Director<span class="kbd">⌘2</span>${dq ? `<span class="nav-badge">${dq}</span>` : ""}</button>
             </div>
             <button class="mobile-new" data-action="${state.surface === 'agent' ? 'mobile-new-session' : 'new-mission'}">＋ New</button>
-            <span class="build-stamp">v3.19</span>
+            <span class="build-stamp">v3.20</span>
             ${pill("MCP active","green")}
           </div>
         </div>`;
@@ -1961,7 +2001,7 @@
         </div>`;
     }
 
-    function renderMessage(msg){
+    function renderMessage(msg, midx){
       if (msg.role === "session") {
         const s = session(msg.id);
         return s ? renderDelegatedCard(s) : "";
@@ -2001,7 +2041,14 @@
         return `<div class="stat-card"><div class="stat-line"><span class="stat-big">Needed you ${msg.total}×</span><span class="stat-parts">${(msg.parts||[]).map(escapeHtml).join(" · ")}</span></div>${msg.autoTotal ? `<div class="stat-line auto"><span class="stat-big dim">Decided itself ${msg.autoTotal}×</span><span class="stat-parts">${(msg.autoParts||[]).map(escapeHtml).join(" · ")}</span></div>` : ""}<div class="stat-line"><button class="ghost-button" data-action="toggle-receipt">Mission receipt →</button></div></div>`;
       }
       if (msg.role === "auto") {
-        return `<div class="auto-card"><span class="auto-gear">⚙</span><span class="auto-copy"><strong>Director decided — ${escapeHtml(msg.label)}.</strong> ${escapeHtml(msg.reason)}</span></div>`;
+        // (v3.23) Auto is never silent — and never FINAL: every ⚙ decision is contestable. Overruling
+        // converts it to YOUR decision, steers the affected session with your correction, and the receipt
+        // records both (the Director's call and your overrule). The Director's judgment is also a claim.
+        if (msg.overruled) {
+          return `<div class="auto-card overruled"><span class="auto-gear">⚙</span><span class="auto-copy"><strong>Director decided — ${escapeHtml(msg.label)}</strong> <span class="ov-strike">${escapeHtml(msg.reason)}</span><br><span class="ov-tag">Overruled by you:</span> ${escapeHtml(msg.overruleText)}</span></div>`;
+        }
+        const mi = (midx !== undefined && midx >= 0) ? midx : "";
+        return `<div class="auto-card"><span class="auto-gear">⚙</span><span class="auto-copy"><strong>Director decided — ${escapeHtml(msg.label)}.</strong> ${escapeHtml(msg.reason)}</span><button class="ghost-button xs ov-btn" data-action="overrule-auto" data-mi="${mi}">Overrule</button></div>`;
       }
       if (msg.role === "guidance") {
         return `<div class="guidance-card"><span class="guidance-tag">▤ standing guidance · ${escapeHtml(msg.policy)}</span><span class="guidance-copy">${escapeHtml(msg.text)}</span></div>`;
@@ -2026,15 +2073,19 @@
         if (msg.miss) {
           return `<div class="ev-card miss">
             <div class="ev-head"><span class="ev-ic">✗</span><span class="ev-title">Evidence · ${escapeHtml(msg.title)}</span><span class="spacer"></span><span class="ev-meets">short of the bar</span></div>
+            <div class="ev-note-claim">A delegate's report is a claim — the bar wants evidence.</div>
+            <div class="ev-bundle">Judged on: done-when · returned evidence · diff stats — one-shot on the recorded bundle; the gap below is cited from it.</div>
             <div class="ev-done"><span class="ev-k">Done when</span> ${escapeHtml(msg.done)}</div>
             <div class="ev-proof">${escapeHtml(msg.evidence)}</div>
             <div class="ev-gap"><span class="ev-k">Gap</span> ${escapeHtml(msg.gap)}</div>
           </div>`;
         }
+        const evTok = Math.max(180, Math.round(((msg.evidence || "").length + ((msg.done || "").length)) / 3.4));
         return `<div class="ev-card">
           <div class="ev-head"><span class="ev-ic">✓</span><span class="ev-title">Evidence · ${escapeHtml(msg.title)}</span><span class="spacer"></span><span class="ev-meets">meets the bar</span></div>
           <div class="ev-done"><span class="ev-k">Done when</span> ${escapeHtml(msg.done)}</div>
           <div class="ev-proof">${escapeHtml(msg.evidence)}</div>
+          <div class="ev-bundle">Judged on: done-when · structured evidence · diff stats${msg.probe ? " · probe answer" : ""} — ~${evTok} tokens, one-shot; bundle recorded to the receipt. Never the transcript.</div>
           ${trail}
         </div>`;
       }
@@ -2209,6 +2260,7 @@
         if (n.barMiss) node.barMiss = n.barMiss;               // scripted first-pass evidence miss: the bar rejects it, the Director re-steers the SAME session (plays once per mission)
         if (n.childAsk) node.childAsk = n.childAsk;            // scripted mid-step child question: ask -> a childAsk checkpoint; auto -> the Director answers from mission context and logs it (plays once per mission)
         if (n.childAsk2) node.childAsk2 = n.childAsk2;         // the FOLLOW-UP question (v3.11): lands right after the first is answered — flip the Child-Qs toggle between them and watch autonomy get read at decision time
+        if (n.probeBeat) node.probeBeat = n.probeBeat;         // (v3.24) thin-evidence ESCALATION: the Director runs a read-only probe (context_builder question) — the ANSWER becomes evidence; the transcript never enters Director context
         if (n.reviewBlock) node.reviewBlock = n.reviewBlock;   // scripted review-driven REWORK: review finds a blocker -> the Director re-opens implement (same session), steers the fix, re-reviews (same reviewer) — recovery one level up, logged (plays once per reload)
         if (n.role === "implement") { node.mutableBoundary = true; node.gate = askOn(m, "writes"); node.subtasks = n.subtasks; }
         else if (n.role === "tests") { node.steerOf = id+"-"+n.steerOf; }
@@ -2605,6 +2657,10 @@
     }
     // Start every ready step together (real parallelism); a convergence node waits until all its deps complete.
     function startNextNode(m, auto){
+      // (v3.23) FLIGHT CAP — G2: never more sessions in flight than the policy allows (default 3).
+      // Ready nodes beyond the cap simply wait; the strip shows running N/cap. (Moonray's Backlog: <=3.)
+      const cap = m.maxConcurrent || 3;
+      if (missionNodeList(m).filter(x => x.node.status === "Running").length >= cap) return null;
       const ready = readyPending(m);
       if (!ready.length) return null;
       const cmp = ready.find(x => x.node.compareChoice);   // a fork: stops for your pick when fork="ask"; on "auto" the Director picks on the evidence and logs it
@@ -2616,7 +2672,8 @@
       }
       if (auto) m._autoAdvances = (m._autoAdvances || 0) + 1;   // counted for the stat, marker-only (no ⚙ card per advance)
       const nonLand = ready.filter(x => !x.node.directorDirect);
-      const toStart = nonLand.length ? nonLand : [ready[0]];   // never batch the land step alongside others
+      const room = cap - missionNodeList(m).filter(x => x.node.status === "Running").length;
+      const toStart = (nonLand.length ? nonLand : [ready[0]]).slice(0, Math.max(1, room));   // never batch the land step alongside others; never batch past the flight cap
       toStart.forEach(e => startNodeEntry(m, e));
       const nodes = missionNodeList(m);
       const label = toStart.length > 1
@@ -2689,6 +2746,20 @@
     }
     function recordDecision(m, label){ if (!m) return; if (!m.userDecisions) m.userDecisions = []; m.userDecisions.push(label); }
     function recordAutoDecision(m, label){ if (!m) return; if (!m.autoDecisions) m.autoDecisions = []; m.autoDecisions.push(label); }
+    /* (v3.23) OVERRULE — G1 from the architecture review. The ⚙ decision stays in the record (struck
+       through), your correction is appended as YOUR decision, and the correction steers the session the
+       original decision touched (best-effort: the most recent director-steered session). */
+    function overruleAutoDecision(m, mi, text){
+      const msg = m && m.messages && m.messages[mi];
+      if (!msg || msg.role !== "auto" || msg.overruled) return false;
+      msg.overruled = true;
+      msg.overruleText = text || "Reversed — proceed the other way; treat the Director's call as withdrawn.";
+      recordDecision(m, "overruled the Director — " + msg.label);
+      m.messages.push({ role: "note", text: "Your overrule was sent to the affected worker as a steer." });
+      const cs = sessions.find(x => x.mission === m.id && !x.archived && (x.status === "Working" || x.status === "Needs you"));
+      if (cs && cs.transcript) cs.transcript.push({ role: "director", text: "Director (overruled by you): " + msg.overruleText });
+      return true;
+    }
     // Post the "⚙ Director decided" card + log it. `advance`-class auto-decisions are the exception: they keep
     // the lightweight "» auto-approved" step markers (a card per advance would be noise) and are counted, not carded.
     function directorDecides(m, label, reason){
@@ -2963,6 +3034,22 @@
     let runTimer = null;
     function clearRun(){ if (runTimer) { clearTimeout(runTimer); runTimer = null; } }
     function runnerTick(m){
+      // PROBE (v3.24): before accepting a node's evidence, the Director may find it THIN — it escalates
+      // with a read-only probe (context_builder response_type=question in the real app): a probe session
+      // appears on the board, its ANSWER is appended to the node's evidence, and only that answer enters
+      // the ledger. Escalation by probe, never by transcript import (Director Context Contract §4).
+      const probing = missionNodeList(m).find(x => x.node.status === "Running" && x.node.probeBeat && !x.node._probePlayed);
+      if (probing) {
+        const n = probing.node;
+        n._probePlayed = true;
+        const pid = "s-probe-" + (newSessionSeq++);
+        sessions.push({ id: pid, mission: m.id, directorChild: true, probe: true, workflow: "Investigate", policy: "Read-only probe", role: "explore",
+          title: "Probe: " + n.probeBeat.question.slice(0, 44) + "…", status: "Done", runState: "completed",
+          worktree: "current checkout", branch: "probe/read-only", model: "gpt-5.5",
+          transcript: ["Read-only probe (context_builder · question): " + n.probeBeat.question, n.probeBeat.answer], tools: [] });
+        directorDecides(m, "ran a read-only probe", `Evidence looked thin on "${n.title}" — asked: ${n.probeBeat.question} The answer (not the transcript) was added to the ledger (~${n.probeBeat.tokens} tokens).`);
+        return;
+      }
       // A loop node plays its iterations one at a time before it completes, so the loop is visible in the thread.
       const looping = missionNodeList(m).find(x => x.node.status === "Running" && x.node.loop && (x.node.loopIter||0) < x.node.loop.trail.length);
       if (looping) {
@@ -3354,6 +3441,7 @@
               <button class="${(isDraft ? state.draftPace==='Step' : (m && m.pace==='Step'))?'active':''}" data-action="set-pace" data-pace="Step">Step</button>
               <button class="${(isDraft ? state.draftPace==='Auto' : (m && m.pace==='Auto'))?'active':''}" data-action="set-pace" data-pace="Auto">Auto</button>
             </span>
+            ${(() => { if (isDraft || !m || m.status !== "Running") return ""; const rn = missionNodeList(m).filter(x => x.node.status === "Running").length; return rn ? `<span class="cap-stat" title="Flight cap — the policy allows at most ${m.maxConcurrent || 3} sessions in flight; ready steps beyond it wait">running ${rn}/${m.maxConcurrent || 3}</span>` : ""; })()}
             <span class="seg" title="Who answers workers' questions — Me: they stop for you with a drafted answer; Director: answered from mission context (⚙ carded). Governs future questions; a raised one stays raised.">
               <button class="${(isDraft ? (state.draftAutonomy && state.draftAutonomy.childAsk) !== 'auto' : (m && askOn(m, 'childAsk')))?'active':''}" data-action="set-childask" data-mode="ask">Me</button>
               <button class="${(isDraft ? (state.draftAutonomy && state.draftAutonomy.childAsk) === 'auto' : (m && !askOn(m, 'childAsk')))?'active':''}" data-action="set-childask" data-mode="auto">Director</button>
@@ -3373,7 +3461,7 @@
               ${renderSendButton(executing, isDraft ? "start-new-mission" : (executing ? undefined : "send-mission"))}
             </div>
           </div>
-          <div class="hint" style="padding:6px 2px 0">${isDraft ? `<strong>Your words choose the plan</strong> — the Director infers the mission's shape from the directive (a metric to improve → measured loop · "investigate… file an issue" → read-only root-cause · "across modules" → spec-first · "+ as a stack, one PR per module" → one PR per module). The <em>policy</em> chooses how much stops for you on that plan. The ▸ Try chips prefill both — press Enter to send.` : (refine ? "Send feedback to refine this step before continuing — or accept it at the checkpoint above." : "This composer steers the mission. Individual runs open in Agent Mode.")}</div>
+          <div class="hint" style="padding:6px 2px 0">${isDraft ? `<strong>Your words choose the plan</strong> — the Director infers the mission's shape from the directive (a metric to improve → measured loop · "investigate… file an issue" → read-only root-cause · "across modules" → spec-first · "+ as a stack, one PR per module" → one PR per module · "here's the PRD, work the slices" → per-slice plan → build → review chains, you review at the end). The <em>policy</em> chooses how much stops for you on that plan. The ▸ Try chips prefill both — press Enter to send.` : (refine ? "Send feedback to refine this step before continuing — or accept it at the checkpoint above." : "This composer steers the mission. Individual runs open in Agent Mode.")}</div>
         </div>`;
     }
 
@@ -3671,7 +3759,7 @@
                           <div class="ask-head"><span class="ask-q-ic">?</span><span><strong>${escapeHtml(t.title)}</strong><span class="ask-sub-n">Question 1 of 1</span></span></div>
                           <div class="ask-note">${escapeHtml(t.sub)}</div>
                           <div class="ask-q">${escapeHtml(t.q)}</div>
-                          ${t.options.map(o => `<button class="ask-opt ${state.sessionAskPick === o ? "on" : ""}" data-action="session-ask-option" data-ask="${t.id}" data-v="${escapeHtml(o)}"><span class="radio"></span><span>${escapeHtml(o)}</span></button>`).join("")}
+                          ${t.options.map(o => { const L = o.label || o, D = o.description || ""; return `<button class="ask-opt ${state.sessionAskPick === L ? "on" : ""}" data-action="session-ask-option" data-ask="${t.id}" data-v="${escapeHtml(L)}"><span class="radio"></span><span>${escapeHtml(L)}${D ? `<span class="opt-desc">${escapeHtml(D)}</span>` : ""}</span></button>`; }).join("")}
                           <input class="ask-other" id="askOtherInput" placeholder="Other…">
                           <div class="ask-foot"><button class="ghost-button xs" data-action="session-ask-skip" data-ask="${t.id}">⏭ Skip All</button><button class="ghost-button xs" data-action="session-ask-skip" data-ask="${t.id}">Skip Question</button><span class="spacer"></span><button class="primary-button sm" data-action="session-ask-submit" data-ask="${t.id}">✓ Submit Answers</button></div>
                         </div>`)
@@ -3684,7 +3772,7 @@
                 return `<div class="ask-panel">
                   <div class="ask-head"><span class="ask-q-ic">?</span><span><strong>Waiting on an answer to proceed</strong><span class="ask-sub-n">This session is held on its question — answer here, or from the Mission (both resolve the same decision)</span></span></div>
                   <div class="ask-q">${escapeHtml(pq.question)}</div>
-                  ${(pq.options || []).map(o => `<button class="ask-opt" data-action="agent-child-answer" data-v="${escapeHtml(o)}"><span class="radio"></span><span>${escapeHtml(o)}</span></button>`).join("")}
+                  ${(pq.options || []).map(o => { const L = o.label || o, D = o.description || ""; return `<button class="ask-opt" data-action="agent-child-answer" data-v="${escapeHtml(L)}"><span class="radio"></span><span>${escapeHtml(L)}${D ? `<span class="opt-desc">${escapeHtml(D)}</span>` : ""}</span></button>`; }).join("")}
                   <input class="ask-other" id="childAnswerAgentInput" placeholder="Custom answer — the Director's answer arrives through this same channel…">
                   <div class="ask-foot"><span class="hint">Suggested by the Director: ${escapeHtml(pq.suggested)}</span><span class="spacer"></span><button class="primary-button sm" data-action="agent-child-answer" data-v="">Send</button></div>
                 </div>`;
@@ -3910,7 +3998,7 @@
         worktree: state.execPick === "worktree" ? mintWorktree(text) : "current checkout", branch: "agent/deep-plan", model: "gpt-5.5",
         transcript: [
           `I'll treat "${short}" as the planning topic and create a plan-only document under docs/plans/. First, per the deep-plan workflow, I need your involvement preference.`,
-          { role: "ask", id: "q-involve", title: "Plan involvement", sub: "This decides where I pause for your input. The default if you skip or don't reply is hands-off.", q: "How involved would you like to be while I shape this plan?", options: ["Up front — I want to clarify the prompt before exploration begins.", "Mid-flow — check in with me before the design agent reviews the draft.", "Hands-off — surface the plan when it is ready, then we can refine it interactively."], answered: null }
+          { role: "ask", id: "q-involve", title: "Plan involvement", sub: "This decides where I pause for your input. The default if you skip or don't reply is hands-off.", q: "How involved would you like to be while I shape this plan?", options: [{label:"Up front — I want to clarify the prompt before exploration begins.",description:"one round of questions first"},{label:"Mid-flow — check in with me before the design agent reviews the draft.",description:"a checkpoint at the midpoint"},{label:"Hands-off — surface the plan when it is ready, then we can refine it interactively.",description:"the default if you skip"}], answered: null }
         ], tools: []
       });
       state.agentSelection = "session"; state.agentSession = id;
@@ -4149,6 +4237,13 @@
           if (a === "session-ask-option") { state.sessionAskPick = t.dataset.v; }
           if (a === "session-ask-submit") { const sa = session(state.agentSession); const other = document.getElementById("askOtherInput"); const choice = (other && other.value.trim()) || state.sessionAskPick; if (sa && choice) answerSessionAsk(sa, t.dataset.ask, choice); }
           if (a === "session-ask-skip") { const sa = session(state.agentSession); if (sa) answerSessionAsk(sa, t.dataset.ask, "Hands-off — default (skipped)"); }
+          if (a === "overrule-auto") {
+            const om = mission(state.selectedMission);
+            const oi = parseInt(t.dataset.mi, 10);
+            const otext = (document.getElementById("missionChatInput") || {}).value;
+            if (om) overruleAutoDecision(om, oi, (otext || "").trim() || null);
+            const oEl = document.getElementById("missionChatInput"); if (oEl) oEl.value = "";
+          }
           if (a === "agent-child-answer") {
             const sa2 = session(state.agentSession); const am2 = sa2 && sa2.mission ? mission(sa2.mission) : null;
             if (am2 && am2.checkpoint === "childAsk") {

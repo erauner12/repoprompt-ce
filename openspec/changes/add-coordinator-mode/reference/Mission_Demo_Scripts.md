@@ -94,7 +94,8 @@ Six layers, each ≤3 minutes, each building on the last. Video 1 starts where R
 
 ## Video 5 — Words Choose the Plan *(shapes & steering)*
 
-1. **Three directives, three plans** (rapid): Hands-off chip → *Measured loop* (baseline → try/keep-or-revert). Careful-writes chip → *stacked Spec-First*: spec → **two modules building in parallel** → one review → **PR per module, dependency order**, writes gate arming before every mutable step.
+1. **Three directives, three plans** (rapid): Hands-off chip → *Measured loop* (baseline → try/keep-or-revert). Careful-writes chip → *PRD Slices* — the flow aAtila described verbatim, plus ordering: slice the PRD → **two slices run their own deep-plan → orchestrate → review chains in parallel** → a **dependent third slice waits** — its chain starts only after both are done and consolidated, planned against their combined result → one combined review by you → stacked PRs, writes gate arming before every mutable step. Point at the plan: the C chain's first node visibly hangs off BOTH slice reviews.
+   > "This one exists because a community member described exactly this: 'hand off the PRD and slices, let each run its own chain, and only come back at the end.' Your words chose this plan."
    > "The words chose each of these. The policy never picks the plan."
 2. **Steering is also words.** Mid-run, type: *"this is bigger than one worktree — split the independent parts."* Under Default the Director's proposal checkpoint appears; under Hands-off it applies with a ⚙ card.
    > "Split is a judgment with two initiators — the Director from evidence, or me in words. One machinery. No button."

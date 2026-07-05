@@ -12,5 +12,5 @@ Everything here is current as of this export; superseded drafts have been remove
 - **Director_Prompt_Design.md** — verbatim prompt skeletons for every model call (§1 inference incl. namedClose · §2 drafting incl. revision + multi-land contracts · §3 delegation · §4 steer/re-review · §5 adjudication · §9b cross-step rework · §9c discovered-scope · §10 landing, once per land node).
 
 ## Implementation & demo
-- **Swift_Implementation_Preflight.md** — decide-before-day-one items (naming collision: Director vs the repo's Coordinator stack), the v1 cutline (3 shapes; defer bake-off/measured/reshape), data-model unifications (one MissionDecision record; checkpoints as state), architecture cross-check, and the multi-land/workspace notes (build the runner land-node-parameterized from day one).
+- **Swift_Implementation_Preflight.md** — decide-before-day-one items (naming collision: Director vs the repo's Coordinator stack), the v1 cutline (3 shapes; defer bake-off/measured/reshape), data-model unifications (one MissionDecision record; checkpoints as state), source-neutral orchestration cross-check, and the multi-land/workspace notes (build the runner land-node-parameterized from day one).
 - **Mission_Demo_Scripts.md** — cold open, walkthrough scripts V0–V6, the policy × scenario matrix (Try chips), mechanics bullets, and the reviewer question bank.
