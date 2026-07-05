@@ -471,7 +471,9 @@ enum HistoryMCPToolService {
         let sessionsScanned = candidates.count
         let scanTruncated = filtered.count > candidates.count
         let enriched = await Self.enrichingStubBuiltSessions(candidates, scanner: scanner)
-        let totalSessions = enriched.count
+        // Report the full filtered count, matching the calendar path and list_sessions;
+        // `sessionsScanned`/`scanTruncated` convey the bounded-scan semantic separately.
+        let totalSessions = filtered.count
         let totalDuration = enriched.reduce(0) { $0 + $1.record.activeDurationSeconds(thresholdMinutes: idleThresholdMinutes) }
 
         let allGroups = groupSessions(enriched, by: groupBy, includeDetails: includeDetails, idleThresholdMinutes: idleThresholdMinutes)
@@ -845,12 +847,11 @@ enum HistoryMCPToolService {
 
     private static func getSessionContentBudget(maxChars: Int) -> Int {
         // `max_chars` applies to the user-visible formatted tool output, not just
-        // raw transcript text. Leave room for headings, bullets, and retry hints so
-        // the formatter can stay near the caller's requested token budget.
-        if maxChars <= 1200 {
-            return max(1, maxChars / 2)
-        }
-        return max(1, min(maxChars - 1200, Int(Double(maxChars) * 0.72)))
+        // raw transcript text. Reserve ~28% for headings, bullets, and retry hints so
+        // the formatter can stay near the caller's requested token budget. The same
+        // fraction is used at every budget, so the curve is continuous (no cliff
+        // between small and large budgets) and large budgets keep their ~72% share.
+        max(1, maxChars - max(1, Int(Double(maxChars) * 0.28)))
     }
 
     private static func resolveGetSessionTurnRange(
