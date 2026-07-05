@@ -659,4 +659,366 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(plan.nodes.map(\.status), [.completed, .running, .running])
         XCTAssertEqual(plan.events.last?.nodeID, planID)
     }
+
+    func testMissionPolicyBuiltInsAndFixedDecisionLabelsStayStable() {
+        XCTAssertEqual(
+            CoordinatorMissionPolicySnapshot.builtInPolicies.map(\.name),
+            ["Default", "Hands-off", "Careful writes", "Read-only"]
+        )
+        XCTAssertEqual(
+            CoordinatorMissionDecisionClass.allCases.map(\.rawValue),
+            ["plan", "advance", "writes", "childAsk", "recover", "irreversible"]
+        )
+        XCTAssertEqual(
+            CoordinatorMissionUserDecisionLabel.allCases.map(\.rawValue),
+            [
+                "approved the Mission plan",
+                "requested plan revision",
+                "stopped the Mission",
+                "continued past a step check-in",
+                "answered a child question"
+            ]
+        )
+    }
+
+    func testMissionPlanOldPersistedFixtureDecodesWithMissionDefaults() throws {
+        let plan = try decodeMissionPlanFixture(Self.oldMissionPlanFixture)
+
+        XCTAssertNil(plan.shapeSummary)
+        XCTAssertNil(plan.policySnapshot)
+        XCTAssertEqual(plan.autonomy, CoordinatorMissionPolicySnapshot.defaultAutonomy)
+        XCTAssertEqual(plan.decisions, [])
+        XCTAssertEqual(plan.evidence, [])
+        XCTAssertNil(plan.nodes.first?.doneCriteria)
+        XCTAssertEqual(plan.routingDecisions, [])
+        XCTAssertEqual(plan.nodes.first?.completionEvidence, "README explains the new behavior.")
+    }
+
+    func testMissionPlanCurrentPersistedFixtureRoundTripsMissionOwnedFields() throws {
+        let plan = try decodeMissionPlanFixture(Self.currentMissionPlanFixture)
+
+        XCTAssertEqual(plan.shapeSummary?.id, "single-track")
+        XCTAssertEqual(plan.shapeSummary?.displayName, "Single track")
+        XCTAssertEqual(plan.shapeSummary?.namedClose, "Close with receipt")
+        XCTAssertEqual(plan.policySnapshot?.id, "careful-writes")
+        XCTAssertEqual(plan.policySnapshot?.pinnedSkillIDs, ["rpce-test-quality"])
+        XCTAssertEqual(plan.autonomy[CoordinatorMissionDecisionClass.writes.rawValue], .ask)
+        XCTAssertEqual(plan.nodes.first?.doneCriteria, "README and tests describe the behavior.")
+        XCTAssertEqual(plan.decisions.map(\.label), ["approved the Mission plan", "started implementation"])
+        XCTAssertEqual(plan.evidence.map(\.verdict), [.meets, .short])
+
+        let data = try JSONEncoder().encode(plan)
+        let decodedAgain = try JSONDecoder().decode(CoordinatorMissionPlan.self, from: data)
+        XCTAssertEqual(decodedAgain, plan)
+    }
+
+    func testMissionPlanForwardFixtureUnknownAutonomyAndDecisionClassRoundTripLosslessly() throws {
+        let plan = try decodeMissionPlanFixture(Self.forwardMissionPlanFixture)
+
+        XCTAssertEqual(plan.autonomy["reshape"], .auto)
+        XCTAssertEqual(plan.resolvedAutonomy(for: "reshape"), .ask)
+        XCTAssertEqual(plan.resolvedAutonomy(for: "plan"), .auto)
+        XCTAssertEqual(plan.resolvedAutonomy(for: "irreversible"), .ask)
+        XCTAssertEqual(plan.decisions.first?.decisionClass, "reshape")
+        XCTAssertNil(plan.decisions.first?.resolvedAutonomyClass)
+
+        let data = try JSONEncoder().encode(plan)
+        let decodedAgain = try JSONDecoder().decode(CoordinatorMissionPlan.self, from: data)
+        XCTAssertEqual(decodedAgain.autonomy["reshape"], .auto)
+        XCTAssertEqual(decodedAgain.decisions.first?.decisionClass, "reshape")
+        XCTAssertEqual(decodedAgain.decisions.first?.label, "accepted future shape proposal")
+    }
+
+    func testDecisionAndEvidenceUpdatesAppendOnlyAndDedupeByRecordIDOnly() throws {
+        let originalDecisionID = try XCTUnwrap(UUID(uuidString: "00000000-0000-4000-8000-000000000701"))
+        let secondDecisionID = try XCTUnwrap(UUID(uuidString: "00000000-0000-4000-8000-000000000702"))
+        let originalEvidenceID = try XCTUnwrap(UUID(uuidString: "00000000-0000-4000-8000-000000000801"))
+        let secondEvidenceID = try XCTUnwrap(UUID(uuidString: "00000000-0000-4000-8000-000000000802"))
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Ship docs",
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    id: originalDecisionID,
+                    decisionClass: CoordinatorMissionDecisionClass.advance.rawValue,
+                    actor: .director,
+                    label: "continue after evidence",
+                    timestamp: Date(timeIntervalSince1970: 10)
+                )
+            ],
+            evidence: [
+                CoordinatorMissionEvidenceRecord(
+                    id: originalEvidenceID,
+                    verdict: .meets,
+                    summary: "Existing evidence stays first.",
+                    timestamp: Date(timeIntervalSince1970: 11)
+                )
+            ]
+        ))
+
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    id: originalDecisionID,
+                    decisionClass: CoordinatorMissionDecisionClass.irreversible.rawValue,
+                    actor: .director,
+                    label: "duplicate id must not replace",
+                    timestamp: Date(timeIntervalSince1970: 20)
+                ),
+                CoordinatorMissionDecisionRecord(
+                    id: secondDecisionID,
+                    decisionClass: CoordinatorMissionDecisionClass.advance.rawValue,
+                    actor: .director,
+                    label: "continue after evidence",
+                    timestamp: Date(timeIntervalSince1970: 21)
+                )
+            ],
+            evidence: [
+                CoordinatorMissionEvidenceRecord(
+                    id: originalEvidenceID,
+                    verdict: .short,
+                    summary: "Duplicate id must not replace.",
+                    timestamp: Date(timeIntervalSince1970: 22)
+                ),
+                CoordinatorMissionEvidenceRecord(
+                    id: secondEvidenceID,
+                    verdict: .meets,
+                    summary: "Same semantic evidence with a new id appends.",
+                    timestamp: Date(timeIntervalSince1970: 23)
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 30)
+        ))
+
+        let plan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(plan.decisions.map(\.id), [originalDecisionID, secondDecisionID])
+        XCTAssertEqual(plan.decisions.map(\.label), ["continue after evidence", "continue after evidence"])
+        XCTAssertEqual(plan.decisions.first?.decisionClass, CoordinatorMissionDecisionClass.advance.rawValue)
+        XCTAssertEqual(plan.evidence.map(\.id), [originalEvidenceID, secondEvidenceID])
+        XCTAssertEqual(plan.evidence.map(\.summary), ["Existing evidence stays first.", "Same semantic evidence with a new id appends."])
+        XCTAssertEqual(plan.evidence.first?.verdict, .meets)
+    }
+
+    func testPlanUserDecisionIDsAreDeterministicAcrossRetriesAndRevisionAware() throws {
+        let approvalR1 = CoordinatorMissionDecisionRecord(
+            userDecision: .approvedMissionPlan,
+            decisionClass: .plan,
+            checkpointInstanceID: "mission-plan:revision:1",
+            timestamp: Date(timeIntervalSince1970: 10)
+        )
+        let approvalR1Retry = CoordinatorMissionDecisionRecord(
+            userDecision: .approvedMissionPlan,
+            decisionClass: .plan,
+            checkpointInstanceID: "mission-plan:revision:1",
+            timestamp: Date(timeIntervalSince1970: 11)
+        )
+        let revisionRequestR1 = CoordinatorMissionDecisionRecord(
+            userDecision: .requestedPlanRevision,
+            decisionClass: .plan,
+            checkpointInstanceID: "mission-plan:revision:1",
+            timestamp: Date(timeIntervalSince1970: 12)
+        )
+        let approvalR3 = CoordinatorMissionDecisionRecord(
+            userDecision: .approvedMissionPlan,
+            decisionClass: .plan,
+            checkpointInstanceID: "mission-plan:revision:3",
+            timestamp: Date(timeIntervalSince1970: 13)
+        )
+
+        XCTAssertEqual(approvalR1.id, approvalR1Retry.id)
+        XCTAssertNotEqual(approvalR1.id, revisionRequestR1.id)
+        XCTAssertNotEqual(approvalR1.id, approvalR3.id)
+        XCTAssertEqual(approvalR1.actor, .user)
+        XCTAssertEqual(approvalR1.label, "approved the Mission plan")
+
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(objective: "Ship docs"))
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            decisions: [approvalR1, approvalR1Retry, revisionRequestR1, approvalR3],
+            updatedAt: Date(timeIntervalSince1970: 20)
+        ))
+
+        let decisions = try XCTUnwrap(state.missionPlan?.decisions)
+        XCTAssertEqual(decisions.map(\.id), [approvalR1.id, revisionRequestR1.id, approvalR3.id])
+        XCTAssertEqual(decisions.map(\.label), [
+            "approved the Mission plan",
+            "requested plan revision",
+            "approved the Mission plan"
+        ])
+    }
+
+    private func decodeMissionPlanFixture(_ json: String) throws -> CoordinatorMissionPlan {
+        try JSONDecoder().decode(CoordinatorMissionPlan.self, from: Data(json.utf8))
+    }
+
+    private static let oldMissionPlanFixture = """
+    {
+      "id": "00000000-0000-4000-8000-000000000101",
+      "revision": 1,
+      "objective": "Ship docs",
+      "status": "draft",
+      "approvalState": "not_required",
+      "workstreams": [
+        {
+          "id": "00000000-0000-4000-8000-000000000201",
+          "title": "Docs",
+          "purpose": "Update README wording.",
+          "defaultPolicy": "fresh_worktree",
+          "worktreeStrategy": {
+            "mode": "createIsolated"
+          },
+          "relatedSessionIDs": []
+        }
+      ],
+      "nodes": [
+        {
+          "id": "00000000-0000-4000-8000-000000000301",
+          "title": "Update README",
+          "completionEvidence": "README explains the new behavior.",
+          "workstreamID": "00000000-0000-4000-8000-000000000201",
+          "dependsOn": [],
+          "executionPolicy": "fresh_worktree",
+          "status": "pending"
+        }
+      ],
+      "events": [],
+      "updatedAt": 0
+    }
+    """
+
+    private static let currentMissionPlanFixture = """
+    {
+      "id": "00000000-0000-4000-8000-000000000102",
+      "revision": 2,
+      "missionKey": "mission-docs",
+      "objective": "Ship docs",
+      "status": "running",
+      "approvalState": "approved",
+      "shapeSummary": {
+        "id": "single-track",
+        "displayName": "Single track",
+        "reason": "One docs lane is enough.",
+        "namedClose": "Close with receipt"
+      },
+      "policySnapshot": {
+        "id": "careful-writes",
+        "name": "Careful writes",
+        "defaultPace": "step",
+        "autonomy": {
+          "plan": "ask",
+          "advance": "ask",
+          "writes": "ask",
+          "childAsk": "ask",
+          "recover": "auto",
+          "irreversible": "ask"
+        },
+        "definitionOfDone": "README and tests describe the behavior.",
+        "standingGuidance": "Ask before edits.",
+        "pinnedSkillIDs": ["rpce-test-quality"],
+        "pinnedContextIDs": ["docs-plan"]
+      },
+      "autonomy": {
+        "plan": "ask",
+        "advance": "ask",
+        "writes": "ask",
+        "childAsk": "ask",
+        "recover": "auto",
+        "irreversible": "ask"
+      },
+      "workstreams": [
+        {
+          "id": "00000000-0000-4000-8000-000000000202",
+          "title": "Docs",
+          "purpose": "Update README wording.",
+          "defaultPolicy": "fresh_worktree",
+          "worktreeStrategy": {
+            "mode": "createIsolated",
+            "worktreeID": "wt-docs"
+          },
+          "relatedSessionIDs": []
+        }
+      ],
+      "nodes": [
+        {
+          "id": "00000000-0000-4000-8000-000000000302",
+          "title": "Update README",
+          "completionEvidence": "README explains the new behavior.",
+          "doneCriteria": "README and tests describe the behavior.",
+          "workstreamID": "00000000-0000-4000-8000-000000000202",
+          "dependsOn": [],
+          "executionPolicy": "fresh_worktree",
+          "status": "running"
+        }
+      ],
+      "routingDecisions": [],
+      "decisions": [
+        {
+          "id": "00000000-0000-4000-8000-000000000401",
+          "decisionClass": "plan",
+          "actor": "user",
+          "label": "approved the Mission plan",
+          "reason": "Plan is small and clear.",
+          "timestamp": 10,
+          "checkpointID": "plan-approval",
+          "checkpointInstanceID": "mission-plan:revision:1"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000402",
+          "decisionClass": "advance",
+          "actor": "director",
+          "label": "started implementation",
+          "reason": "The approved plan has one unblocked node.",
+          "timestamp": 11,
+          "nodeID": "00000000-0000-4000-8000-000000000302"
+        }
+      ],
+      "evidence": [
+        {
+          "id": "00000000-0000-4000-8000-000000000501",
+          "verdict": "meets",
+          "summary": "README wording is updated.",
+          "timestamp": 12,
+          "nodeID": "00000000-0000-4000-8000-000000000302"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000502",
+          "verdict": "short",
+          "summary": "Tests are still pending.",
+          "timestamp": 13,
+          "nodeID": "00000000-0000-4000-8000-000000000302"
+        }
+      ],
+      "events": [],
+      "updatedAt": 14
+    }
+    """
+
+    private static let forwardMissionPlanFixture = """
+    {
+      "id": "00000000-0000-4000-8000-000000000103",
+      "revision": 3,
+      "objective": "Ship future shape",
+      "status": "draft",
+      "approvalState": "awaiting_approval",
+      "autonomy": {
+        "plan": "auto",
+        "reshape": "auto",
+        "irreversible": "auto"
+      },
+      "workstreams": [],
+      "nodes": [],
+      "routingDecisions": [],
+      "decisions": [
+        {
+          "id": "00000000-0000-4000-8000-000000000601",
+          "decisionClass": "reshape",
+          "actor": "director",
+          "label": "accepted future shape proposal",
+          "reason": "Forward fixture exercises unknown decision classes.",
+          "timestamp": 20
+        }
+      ],
+      "evidence": [],
+      "events": [],
+      "updatedAt": 21
+    }
+    """
 }
