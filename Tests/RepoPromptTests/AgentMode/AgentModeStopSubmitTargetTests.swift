@@ -867,6 +867,7 @@ final class AgentModeStopSubmitTargetTests: XCTestCase {
                 visibleText: "fix docs",
                 providerText: template.wrap("fix docs"),
                 missionTemplate: CoordinatorMissionTemplateSummary(template),
+                missionPolicySnapshot: nil,
                 coordinatorSessionID: coordinatorSessionID,
                 forceNewRuntime: false
             )

@@ -135,6 +135,7 @@ struct CoordinatorModeView: View {
     @State private var isInspectorVisible = true
     @State private var isSortMenuOpen = false
     @State private var areArchivedMissionsExpanded = false
+    @State private var isMissionPolicyPopoverPresented = false
     @State private var isMissionTemplatePopoverPresented = false
     @State private var isMissionTemplateConfigureSheetPresented = false
     @FocusState private var isCoordinatorComposerFocused: Bool
@@ -1304,6 +1305,20 @@ struct CoordinatorModeView: View {
             if !plan.workstreams.isEmpty {
                 statusChip("\(plan.workstreams.count) workstreams", color: .secondary, metrics: metrics)
             }
+            if let shapeSummary = plan.shapeSummary {
+                statusChip("Shape · \(shapeSummary.displayName)", color: Color.accentColor, metrics: metrics)
+            }
+            if let policySnapshot = plan.policySnapshot {
+                statusChip("Policy · \(policySnapshot.name)", color: .purple, metrics: metrics)
+            }
+            let userDecisionCount = plan.decisions.count(where: { $0.actor == .user })
+            if userDecisionCount > 0 {
+                statusChip("needed you \(userDecisionCount)×", color: .green, metrics: metrics)
+            }
+            if !plan.evidence.isEmpty {
+                let meetsCount = plan.evidence.count(where: { $0.verdict == .meets })
+                statusChip("evidence \(meetsCount)/\(plan.evidence.count)", color: meetsCount == plan.evidence.count ? .green : .orange, metrics: metrics)
+            }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, metrics.pendingPadding)
@@ -1618,6 +1633,20 @@ struct CoordinatorModeView: View {
 
             if let detail = node.detail {
                 Text(detail)
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let doneCriteria = node.doneCriteria {
+                Label("Done when: \(doneCriteria)", systemImage: "checkmark.seal")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let completionEvidence = node.completionEvidence {
+                Label(completionEvidence, systemImage: "doc.text.magnifyingglass")
                     .font(metrics.micro)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -2748,6 +2777,12 @@ struct CoordinatorModeView: View {
                     }
                 }
             }
+
+            missionLedgerPreview(plan, metrics: metrics)
+
+            if plan.status == .completed {
+                completedMissionReceipt(plan, metrics: metrics)
+            }
         }
         .padding(metrics.pendingPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2758,6 +2793,144 @@ struct CoordinatorModeView: View {
         .overlay(
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
                 .stroke(Color.accentColor.opacity(0.16), lineWidth: 0.8)
+        )
+    }
+
+    @ViewBuilder
+    private func missionLedgerPreview(
+        _ plan: CoordinatorMissionPlan,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        if !plan.decisions.isEmpty || !plan.evidence.isEmpty {
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                if !plan.decisions.isEmpty {
+                    ledgerSectionHeader("Decision ledger", systemImage: "checklist.checked", metrics: metrics)
+                    ForEach(plan.decisions.sorted { $0.timestamp > $1.timestamp }.prefix(4)) { decision in
+                        decisionLedgerRow(decision, metrics: metrics)
+                    }
+                }
+                if !plan.evidence.isEmpty {
+                    ledgerSectionHeader("Evidence", systemImage: "doc.text.magnifyingglass", metrics: metrics)
+                        .padding(.top, plan.decisions.isEmpty ? 0 : metrics.tightSpacing)
+                    ForEach(plan.evidence.sorted { $0.timestamp > $1.timestamp }.prefix(4)) { evidence in
+                        evidenceLedgerRow(evidence, metrics: metrics)
+                    }
+                }
+            }
+            .padding(.top, metrics.tightSpacing)
+        }
+    }
+
+    private func ledgerSectionHeader(
+        _ title: String,
+        systemImage: String,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(metrics.microMedium)
+            .foregroundStyle(.secondary)
+    }
+
+    private func decisionLedgerRow(
+        _ decision: CoordinatorMissionDecisionRecord,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: metrics.smallSpacing) {
+                statusChip(decision.actor == .user ? "You" : "Director", color: decision.actor == .user ? .green : .purple, metrics: metrics)
+                Text(decision.label)
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.primary.opacity(0.9))
+                    .lineLimit(1)
+                Spacer(minLength: metrics.smallSpacing)
+                Text(decision.timestamp.formatted(date: .omitted, time: .shortened))
+                    .font(metrics.micro)
+                    .foregroundStyle(.tertiary)
+            }
+            if let reason = decision.reason {
+                Text(reason)
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(metrics.tightSpacing)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.18))
+        )
+    }
+
+    private func evidenceLedgerRow(
+        _ evidence: CoordinatorMissionEvidenceRecord,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+            statusChip(evidence.verdict.rawValue, color: evidence.verdict == .meets ? .green : .orange, metrics: metrics)
+            Text(evidence.summary)
+                .font(metrics.micro)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            Spacer(minLength: metrics.smallSpacing)
+            Text(evidence.timestamp.formatted(date: .omitted, time: .shortened))
+                .font(metrics.micro)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(metrics.tightSpacing)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.18))
+        )
+    }
+
+    private func completedMissionReceipt(
+        _ plan: CoordinatorMissionPlan,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let completedNodeCount = plan.nodes.count(where: { $0.status == .completed })
+        let userDecisionCount = plan.decisions.count(where: { $0.actor == .user })
+        let directorDecisionCount = plan.decisions.count(where: { $0.actor == .director })
+        let meetsCount = plan.evidence.count(where: { $0.verdict == .meets })
+        let closeName = plan.shapeSummary?.namedClose ?? "Mission"
+
+        return VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            HStack(spacing: metrics.smallSpacing) {
+                Label("Completed Mission receipt", systemImage: "checkmark.seal.fill")
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.green)
+                Spacer(minLength: metrics.smallSpacing)
+                statusChip(closeName, color: .green, metrics: metrics)
+            }
+            HStack(spacing: metrics.smallSpacing) {
+                statusChip("\(completedNodeCount)/\(plan.nodes.count) nodes", color: .green, metrics: metrics)
+                statusChip("\(userDecisionCount) user", color: .green, metrics: metrics)
+                statusChip("\(directorDecisionCount) Director", color: .purple, metrics: metrics)
+                if plan.evidence.isEmpty {
+                    statusChip("No evidence", color: .secondary, metrics: metrics)
+                } else {
+                    statusChip("\(meetsCount)/\(plan.evidence.count) evidence", color: meetsCount == plan.evidence.count ? .green : .orange, metrics: metrics)
+                }
+            }
+            if let policySnapshot = plan.policySnapshot {
+                Text("Policy: \(policySnapshot.name)")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+            }
+            if let latestEvidence = plan.evidence.sorted(by: { $0.timestamp > $1.timestamp }).first {
+                Text(latestEvidence.summary)
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(metrics.tightSpacing)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.green.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.green.opacity(0.18), lineWidth: 0.75)
         )
     }
 
@@ -2889,6 +3062,7 @@ struct CoordinatorModeView: View {
         case "Proceed":
             submitCoordinatorContinuation(.proceed)
         case "Revise":
+            viewModel.queuePlanRevisionDecisionAfterAcceptedDirective()
             if coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 coordinatorDirectiveDraft = "Revise the plan: "
             }
@@ -2919,6 +3093,7 @@ struct CoordinatorModeView: View {
         case "Continue":
             submitPendingFollowThroughEvent(event)
         case "Revise":
+            viewModel.queueFollowThroughRevisionDecisionAfterAcceptedDirective(event)
             if coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 coordinatorDirectiveDraft = """
                 Revise before processing this observed boundary:
@@ -3751,6 +3926,7 @@ struct CoordinatorModeView: View {
                 coordinatorComposerToolsButton(metrics: metrics)
 
                 if rail.state == .chooseCoordinator {
+                    coordinatorMissionPolicyPicker(metrics: metrics)
                     coordinatorMissionTemplatePicker(metrics: metrics)
                 }
             }
@@ -3771,6 +3947,36 @@ struct CoordinatorModeView: View {
         }
         .frame(height: metrics.composerControlStripHeight)
         .padding(.horizontal, metrics.composerControlHorizontalPadding)
+    }
+
+    private func coordinatorMissionPolicyPicker(metrics: CoordinatorVisualMetrics) -> some View {
+        let policy = viewModel.selectedMissionPolicy
+        return Button {
+            isMissionPolicyPopoverPresented.toggle()
+        } label: {
+            HStack(spacing: metrics.miniPillIconSpacing) {
+                Image(systemName: "shield.lefthalf.filled")
+                    .font(.system(size: metrics.microIconSize, weight: .medium))
+                Text("Policy · \(policy.name)")
+                    .font(metrics.microMedium)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, metrics.miniPillHorizontalPadding)
+            .padding(.vertical, metrics.miniPillVerticalPadding)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.purple)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.purple.opacity(0.14))
+        )
+        .popover(isPresented: $isMissionPolicyPopoverPresented, arrowEdge: .bottom) {
+            CoordinatorMissionPolicyPopoverView(
+                selectedPolicy: $viewModel.selectedMissionPolicy,
+                isPresented: $isMissionPolicyPopoverPresented
+            )
+        }
+        .hoverTooltip("Choose the Mission Policy captured with the fresh Mission")
     }
 
     private func coordinatorMissionTemplatePicker(metrics: CoordinatorVisualMetrics) -> some View {
@@ -5005,6 +5211,114 @@ struct CoordinatorModeView: View {
 
     private func shortID(_ id: UUID) -> String {
         String(id.uuidString.prefix(8))
+    }
+}
+
+private struct CoordinatorMissionPolicyPopoverView: View {
+    @Binding var selectedPolicy: CoordinatorMissionPolicySnapshot
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Mission Policy")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Captured with a fresh Mission. Policy details are sent to the provider only; your visible directive stays unchanged.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+
+            Divider()
+                .opacity(0.35)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(CoordinatorMissionPolicySnapshot.builtInPolicies) { policy in
+                        policyRow(policy)
+                    }
+                }
+                .padding(8)
+            }
+        }
+        .frame(width: 340, height: 300)
+    }
+
+    private func policyRow(_ policy: CoordinatorMissionPolicySnapshot) -> some View {
+        let isSelected = selectedPolicy.id == policy.id
+        return Button {
+            selectedPolicy = policy
+            isPresented = false
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: policyIcon(policy))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.purple)
+                    .frame(width: 18)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(policy.name)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        Text(policy.defaultPace.rawValue)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.purple)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.purple.opacity(0.12)))
+                    }
+                    Text(policyAskSummary(policy))
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if let standingGuidance = policy.standingGuidance {
+                        Text(standingGuidance)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    if let definitionOfDone = policy.definitionOfDone {
+                        Text("Done: \(definitionOfDone)")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(2)
+                    }
+                }
+                Spacer(minLength: 6)
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.purple)
+                        .padding(.top, 1)
+                }
+            }
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? Color.purple.opacity(0.16) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .hoverTooltip(policy.standingGuidance ?? policy.name)
+    }
+
+    private func policyAskSummary(_ policy: CoordinatorMissionPolicySnapshot) -> String {
+        let askClasses = CoordinatorMissionDecisionClass.allCases
+            .filter { policy.resolvedAutonomy(for: $0) == .ask }
+            .map(\.rawValue)
+        guard !askClasses.isEmpty else { return "Asks: none" }
+        return "Asks: \(askClasses.joined(separator: " · "))"
+    }
+
+    private func policyIcon(_ policy: CoordinatorMissionPolicySnapshot) -> String {
+        switch policy.id {
+        case "hands-off": "forward.end.fill"
+        case "careful-writes": "pencil.and.outline"
+        case "read-only": "lock.doc"
+        default: "shield.lefthalf.filled"
+        }
     }
 }
 
@@ -6642,6 +6956,7 @@ private extension CoordinatorFollowThroughChildPhase {
                     childCounts: .empty,
                     missionTemplate: nil,
                     missionPlan: nil,
+                    missionSummary: nil,
                     pendingInteraction: nil,
                     openAgentChatRoute: nil,
                     statusReport: CoordinatorModeSessionStatusReport(

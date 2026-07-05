@@ -124,6 +124,104 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(reviewSummary.declaredWorkstream?.id, uuid(10))
     }
 
+    func testMissionSummaryProjectsShapePolicyLedgerCountsAndMovesFingerprint() throws {
+        let coordinatorID = uuid(1)
+        let basePlan = CoordinatorMissionPlan(
+            revision: 2,
+            objective: "Ship ledger projection",
+            approvalState: .awaitingApproval,
+            shapeSummary: CoordinatorMissionShapeSummary(
+                id: "scoped-change",
+                displayName: "Scoped Change",
+                reason: "Small repo-local change.",
+                namedClose: "PR"
+            ),
+            policySnapshot: .carefulWrites,
+            autonomy: [
+                CoordinatorMissionDecisionClass.plan.rawValue: .ask,
+                CoordinatorMissionDecisionClass.writes.rawValue: .ask,
+                "unknown": .auto
+            ],
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    userDecision: .approvedMissionPlan,
+                    decisionClass: .plan,
+                    checkpointInstanceID: "coordinator-1:plan:r2",
+                    timestamp: date(10),
+                    checkpointID: "plan-approval"
+                ),
+                CoordinatorMissionDecisionRecord(
+                    decisionClass: CoordinatorMissionDecisionClass.writes.rawValue,
+                    actor: .director,
+                    label: "selected read-only evidence lane",
+                    reason: "Policy allows evidence gathering.",
+                    timestamp: date(11)
+                )
+            ],
+            evidence: [
+                CoordinatorMissionEvidenceRecord(verdict: .meets, summary: "Tests passed.", timestamp: date(12)),
+                CoordinatorMissionEvidenceRecord(verdict: .short, summary: "Lint not run yet.", timestamp: date(13))
+            ],
+            updatedAt: date(20)
+        )
+
+        let snapshot = projector.project(input(
+            live: [
+                live(
+                    id: coordinatorID,
+                    tab: uuid(101),
+                    title: "Coordinator Runtime Demo",
+                    updatedAt: date(30),
+                    state: .idle,
+                    coordinatorRuntime: true,
+                    missionPlan: basePlan
+                )
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        let summary = try XCTUnwrap(snapshot.coordinatorRail.missionSummary)
+        XCTAssertEqual(summary.shape?.displayName, "Scoped Change")
+        XCTAssertEqual(summary.shape?.namedClose, "PR")
+        XCTAssertEqual(summary.policy?.name, "Careful writes")
+        XCTAssertEqual(summary.askAutonomyClasses, ["plan", "unknown", "writes"])
+        XCTAssertEqual(summary.decisions.userCount, 1)
+        XCTAssertEqual(summary.decisions.directorCount, 1)
+        XCTAssertEqual(summary.decisions.recentLabels, ["approved the Mission plan", "selected read-only evidence lane"])
+        XCTAssertEqual(summary.evidence.meetsCount, 1)
+        XCTAssertEqual(summary.evidence.shortCount, 1)
+        XCTAssertEqual(summary.evidence.recentSummaries, ["Tests passed.", "Lint not run yet."])
+        XCTAssertEqual(snapshot.coordinatorRail.availableCoordinators.first?.missionSummary, summary)
+
+        var revisedPlan = basePlan
+        revisedPlan.decisions.append(CoordinatorMissionDecisionRecord(
+            userDecision: .requestedPlanRevision,
+            decisionClass: .plan,
+            checkpointInstanceID: "coordinator-1:plan:r2",
+            timestamp: date(14),
+            checkpointID: "plan-approval"
+        ))
+        let revisedSnapshot = projector.project(input(
+            live: [
+                live(
+                    id: coordinatorID,
+                    tab: uuid(101),
+                    title: "Coordinator Runtime Demo",
+                    updatedAt: date(30),
+                    state: .idle,
+                    coordinatorRuntime: true,
+                    missionPlan: revisedPlan
+                )
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        XCTAssertNotEqual(snapshot.fingerprint, revisedSnapshot.fingerprint)
+        XCTAssertEqual(revisedSnapshot.coordinatorRail.missionSummary?.decisions.userCount, 2)
+    }
+
     func testBoardIncludesOnlyCurrentDemoCoordinatorDescendants() {
         let coordinatorID = uuid(1)
         let directChildID = uuid(2)

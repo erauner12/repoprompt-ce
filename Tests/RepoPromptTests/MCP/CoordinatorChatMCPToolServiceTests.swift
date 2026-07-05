@@ -653,6 +653,217 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(updatedDecisions.last?.objectValue?["operation"]?.stringValue, "coordinator_hold")
     }
 
+    func testMissionPlanAcceptsMissionContractAndAppendOnlyLedgers() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let decisionID = try XCTUnwrap(UUID(uuidString: "10000000-0000-4000-8000-000000000001"))
+        let evidenceID = try XCTUnwrap(UUID(uuidString: "10000000-0000-4000-8000-000000000002"))
+        let secondEvidenceID = try XCTUnwrap(UUID(uuidString: "10000000-0000-4000-8000-000000000003"))
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { missionPlans },
+            updateMissionPlan: { sessionID, update in
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(update)
+                missionPlans[sessionID] = state.missionPlan
+            }
+        )
+
+        _ = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "objective": .string("Ship ledger-backed status"),
+            "shape_summary": .object([
+                "id": .string("investigation"),
+                "display_name": .string("Investigation"),
+                "reason": .string("Need a bounded read-only proof."),
+                "named_close": .string("Receipt")
+            ]),
+            "policy_snapshot": .object([
+                "id": .string("careful-writes"),
+                "name": .string("Careful writes"),
+                "default_pace": .string("step"),
+                "autonomy": .object([
+                    "advance": .string("ask"),
+                    "writes": .string("ask")
+                ]),
+                "definition_of_done": .string("Tests prove the MCP ledger contract."),
+                "standing_guidance": .string("Keep write boundaries visible."),
+                "pinned_skill_ids": .array([.string("rpce-test-quality")]),
+                "pinned_context_ids": .array([.string("ctx-ledger")])
+            ]),
+            "autonomy": .object([
+                "advance": .string("ask"),
+                "writes": .string("auto"),
+                "customRisk": .string("ask")
+            ]),
+            "workstreams": .array([
+                .object([
+                    "id": .string(workstreamID.uuidString),
+                    "title": .string("Discovery"),
+                    "purpose": .string("Gather proof."),
+                    "default_policy": .string("fresh_readonly_child"),
+                    "worktree_strategy": .object(["mode": .string("noneReadOnly")])
+                ])
+            ]),
+            "nodes": .array([
+                .object([
+                    "id": .string(nodeID.uuidString),
+                    "title": .string("Verify MCP ledger path"),
+                    "workstream_id": .string(workstreamID.uuidString),
+                    "execution_policy": .string("fresh_readonly_child"),
+                    "completion_evidence": .string("Focused MCP test passes."),
+                    "done_criteria": .string("Decision and evidence append without replacing existing ledger records.")
+                ])
+            ]),
+            "decisions": .array([
+                .object([
+                    "id": .string(decisionID.uuidString),
+                    "decision_class": .string("advance"),
+                    "actor": .string("director"),
+                    "label": .string("started read-only proof"),
+                    "reason": .string("Runtime chose a read-only evidence pass."),
+                    "timestamp": .string("2026-07-02T10:00:00Z"),
+                    "node_title": .string("Verify MCP ledger path"),
+                    "workstream_title": .string("Discovery"),
+                    "checkpoint_id": .string("plan_approval"),
+                    "checkpoint_instance_id": .string("plan:r1")
+                ])
+            ]),
+            "evidence": .array([
+                .object([
+                    "id": .string(evidenceID.uuidString),
+                    "verdict": .string("meets"),
+                    "summary": .string("The old payload fields still coexist with ledgers."),
+                    "timestamp": .string("2026-07-02T10:01:00Z"),
+                    "node_title": .string("Verify MCP ledger path"),
+                    "decision_id": .string(decisionID.uuidString)
+                ])
+            ])
+        ])
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "decisions": .array([
+                .object([
+                    "id": .string(decisionID.uuidString),
+                    "decision_class": .string("advance"),
+                    "actor": .string("director"),
+                    "label": .string("should not replace existing decision"),
+                    "timestamp": .string("2026-07-02T10:02:00Z")
+                ])
+            ]),
+            "evidence": .array([
+                .object([
+                    "id": .string(evidenceID.uuidString),
+                    "verdict": .string("short"),
+                    "summary": .string("Should not replace existing evidence."),
+                    "timestamp": .string("2026-07-02T10:03:00Z")
+                ]),
+                .object([
+                    "id": .string(secondEvidenceID.uuidString),
+                    "verdict": .string("short"),
+                    "summary": .string("Follow-up proof is still short on UI projection."),
+                    "timestamp": .string("2026-07-02T10:04:00Z")
+                ])
+            ])
+        ])
+
+        let plan = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue)
+        XCTAssertEqual(plan["shape_summary"]?.objectValue?["display_name"]?.stringValue, "Investigation")
+        XCTAssertEqual(plan["policy_snapshot"]?.objectValue?["name"]?.stringValue, "Careful writes")
+        XCTAssertEqual(plan["policy_snapshot"]?.objectValue?["pinned_skill_ids"]?.arrayValue?.first?.stringValue, "rpce-test-quality")
+        XCTAssertEqual(plan["autonomy"]?.objectValue?["writes"]?.stringValue, "auto")
+        let node = try XCTUnwrap(plan["nodes"]?.arrayValue?.first?.objectValue)
+        XCTAssertEqual(node["done_criteria"]?.stringValue, "Decision and evidence append without replacing existing ledger records.")
+        let decisions = try XCTUnwrap(plan["decisions"]?.arrayValue)
+        XCTAssertEqual(decisions.count, 1)
+        XCTAssertEqual(decisions.first?.objectValue?["label"]?.stringValue, "started read-only proof")
+        XCTAssertEqual(decisions.first?.objectValue?["node_id"]?.stringValue, nodeID.uuidString)
+        let evidence = try XCTUnwrap(plan["evidence"]?.arrayValue)
+        XCTAssertEqual(evidence.count, 2)
+        XCTAssertEqual(evidence.first?.objectValue?["summary"]?.stringValue, "The old payload fields still coexist with ledgers.")
+        XCTAssertEqual(evidence.last?.objectValue?["summary"]?.stringValue, "Follow-up proof is still short on UI projection.")
+
+        let statusResponse = try await service.execute(args: ["op": .string("mission_status")])
+        let status = try XCTUnwrap(statusResponse.objectValue?["mission_status"]?.objectValue)
+        XCTAssertEqual(status["decision_counts_by_actor"]?.objectValue?["director"]?.intValue, 1)
+        XCTAssertEqual(status["decision_counts_by_actor"]?.objectValue?["user"]?.intValue, 0)
+        XCTAssertEqual(status["evidence_counts"]?.objectValue?["total"]?.intValue, 2)
+        XCTAssertEqual(status["evidence_counts"]?.objectValue?["short"]?.intValue, 1)
+        XCTAssertEqual(status["recent_ledger_entries"]?.arrayValue?.first?.objectValue?["kind"]?.stringValue, "evidence")
+        XCTAssertEqual(status["receipt_ready_summary"], .null)
+
+        let compactResponse = try await service.execute(args: [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ])
+        let compactStatus = try XCTUnwrap(compactResponse.objectValue?["mission_status"]?.objectValue)
+        let compactPlan = try XCTUnwrap(compactStatus["plan"]?.objectValue)
+        XCTAssertEqual(compactPlan["shape_summary"]?.objectValue?["id"]?.stringValue, "investigation")
+        XCTAssertEqual(compactPlan["policy_snapshot"]?.objectValue?["id"]?.stringValue, "careful-writes")
+        let effectiveAsk = compactPlan["autonomy_summary"]?.objectValue?["ask"]?.arrayValue?.compactMap(\.stringValue)
+        XCTAssertTrue(effectiveAsk?.contains("customRisk") == true)
+        XCTAssertTrue(effectiveAsk?.contains("irreversible") == true)
+        XCTAssertEqual(compactStatus["decision_counts_by_actor"]?.objectValue?["director"]?.intValue, 1)
+        XCTAssertEqual(compactStatus["recent_ledger_entries"]?.arrayValue?.count, 3)
+    }
+
+    func testMissionPlanRejectsUserDecisionActorAndMissingLedgerIDs() async throws {
+        let coordinatorID = UUID()
+        let service = makeService(coordinatorIDs: [coordinatorID], selectedID: coordinatorID)
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "decisions": .array([
+                    .object([
+                        "id": .string(UUID().uuidString),
+                        "decision_class": .string("advance"),
+                        "actor": .string("user"),
+                        "label": .string("should be app-owned")
+                    ])
+                ])
+            ])
+            XCTFail("Expected user-actor decision to be rejected.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("User decisions are recorded by the app/MCP submit path"))
+        }
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "decisions": .array([
+                    .object([
+                        "decision_class": .string("advance"),
+                        "actor": .string("director"),
+                        "label": .string("missing id")
+                    ])
+                ])
+            ])
+            XCTFail("Expected missing decision id to be rejected.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("decisions[].id is required"))
+        }
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "evidence": .array([
+                    .object([
+                        "verdict": .string("meets"),
+                        "summary": .string("missing id")
+                    ])
+                ])
+            ])
+            XCTFail("Expected missing evidence id to be rejected.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("evidence[].id is required"))
+        }
+    }
+
     func testMissionPlanSubsetUpdatePreservesExistingDagEntries() async throws {
         let coordinatorID = UUID()
         let discoveryWorkstreamID = UUID()
@@ -1028,6 +1239,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let proceed = try XCTUnwrap(actions.first { $0["label"]?.stringValue == "Proceed" })
         XCTAssertEqual(proceed["submit_op"]?.stringValue, "submit")
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("Approved to proceed") == true)
+        XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("actor:\"director\"") == true)
+        XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("Do not record user decisions") == true)
+        XCTAssertTrue(proceed["mission_plan_append_guidance"]?.stringValue?.contains("actor:\"director\"") == true)
     }
 
     func testMissionStatusCompactFlagsFreshSessionDriftAfterPrimaryExists() async throws {
@@ -1165,6 +1379,52 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(object["changed"]?.boolValue, false)
         XCTAssertEqual(object["timed_out"]?.boolValue, true)
         XCTAssertEqual(status["fingerprint"]?.stringValue, fingerprint)
+    }
+
+    func testWaitForUpdateAdvancesAfterDecisionAndEvidenceAppendWithoutRevisionChange() async throws {
+        let coordinatorID = UUID()
+        var plan = CoordinatorMissionPlan(
+            revision: 7,
+            objective: "Watch ledger appends",
+            status: .running,
+            approvalState: .approved
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+        let initial = try await service.execute(args: [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ])
+        let fingerprint = try XCTUnwrap(initial.objectValue?["mission_status"]?.objectValue?["fingerprint"]?.stringValue)
+
+        plan.decisions.append(CoordinatorMissionDecisionRecord(
+            decisionClass: CoordinatorMissionDecisionClass.advance.rawValue,
+            actor: .director,
+            label: "continued after evidence met bar",
+            timestamp: Date(timeIntervalSince1970: 10)
+        ))
+        plan.evidence.append(CoordinatorMissionEvidenceRecord(
+            verdict: .meets,
+            summary: "Focused validation passed.",
+            timestamp: Date(timeIntervalSince1970: 11)
+        ))
+
+        let response = try await service.execute(args: [
+            "op": .string("wait_for_update"),
+            "since_fingerprint": .string(fingerprint),
+            "timeout_seconds": .int(0)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+        let status = try XCTUnwrap(object["mission_status"]?.objectValue)
+
+        XCTAssertEqual(object["changed"]?.boolValue, true)
+        XCTAssertEqual(object["timed_out"]?.boolValue, false)
+        XCTAssertNotEqual(status["fingerprint"]?.stringValue, fingerprint)
+        XCTAssertEqual(status["decision_counts_by_actor"]?.objectValue?["director"]?.intValue, 1)
+        XCTAssertEqual(status["evidence_counts"]?.objectValue?["meets"]?.intValue, 1)
     }
 
     func testCompactMissionStatusFingerprintChangesForGrandchildFleetMotion() async throws {

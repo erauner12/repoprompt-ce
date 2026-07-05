@@ -40,7 +40,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         let result = await viewModel.submitCoordinatorDirective("start scoped work")
 
         XCTAssertEqual(result, .accepted)
-        XCTAssertEqual(submissions.first?.text, "start scoped work")
+        XCTAssertTrue(submissions.first?.text.hasPrefix("start scoped work\n\n---\nMission Policy (provider-only)") == true)
+        XCTAssertTrue(submissions.first?.text.contains("Standing guidance: Keep every boundary visible while trust is earned.") == true)
         XCTAssertNil(submissions.first?.sessionID)
         XCTAssertEqual(submissions.first?.forceNewRuntime, true)
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
@@ -74,7 +75,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
 
         XCTAssertEqual(result, .accepted)
         XCTAssertTrue(submissions.first?.text.contains("Run this as a scoped Coordinator change.") == true)
-        XCTAssertTrue(submissions.first?.text.hasSuffix("fix flaky docs tests") == true)
+        XCTAssertTrue(submissions.first?.text.contains("fix flaky docs tests") == true)
+        XCTAssertTrue(submissions.first?.text.contains("Mission Policy (provider-only)") == true)
         XCTAssertNil(submissions.first?.sessionID)
         XCTAssertEqual(submissions.first?.forceNewRuntime, true)
         XCTAssertEqual(submissions.first?.template, CoordinatorMissionTemplateSummary(.scopedChange))
@@ -127,11 +129,84 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(freshResult, .accepted)
         XCTAssertEqual(followUpResult, .accepted)
         XCTAssertEqual(submissions.map(\.visibleText), ["start mission", "follow up"])
-        XCTAssertEqual(submissions.map(\.providerText), ["CUSTOM WRAP\nstart mission", "follow up"])
+        XCTAssertTrue(submissions.first?.providerText.hasPrefix("CUSTOM WRAP\nstart mission\n\n---\nMission Policy (provider-only)") == true)
+        XCTAssertEqual(submissions.last?.providerText, "follow up")
         XCTAssertEqual(submissions.first?.missionTemplate, CoordinatorMissionTemplateSummary(customTemplate))
         XCTAssertNil(submissions.last?.missionTemplate)
         XCTAssertNil(viewModel.selectedMissionTemplate)
         XCTAssertEqual(viewModel.railTranscriptEntries.filter { $0.role == .user }.map(\.text), ["start mission", "follow up"])
+    }
+
+    func testFreshMissionPolicyInjectsProviderTextAndCapturesSnapshot() async throws {
+        let coordinatorID = uuid(1)
+        var liveSessions: [CoordinatorModeSnapshotProjector.LiveSession] = []
+        var demoCoordinatorIDs: Set<UUID> = []
+        var state = CoordinatorFollowThroughState()
+        var submissions: [CoordinatorDirectiveSubmission] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: liveSessions,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    autoSelectDemoCoordinator: false,
+                    sort: sortMode,
+                    demoCoordinatorIDs: demoCoordinatorIDs
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { submission in
+                submissions.append(submission)
+                liveSessions = [
+                    self.live(
+                        id: coordinatorID,
+                        tab: self.uuid(101),
+                        title: "Director",
+                        updatedAt: self.date(30),
+                        state: .idle,
+                        isMCP: true,
+                        coordinatorRuntime: true,
+                        missionPlan: state.missionPlan
+                    )
+                ]
+                demoCoordinatorIDs.insert(coordinatorID)
+                return .accepted
+            },
+            missionPlanUpdater: { sessionID, update in
+                XCTAssertEqual(sessionID, coordinatorID)
+                state.updateMissionPlan(update)
+                liveSessions = [
+                    self.live(
+                        id: coordinatorID,
+                        tab: self.uuid(101),
+                        title: "Director",
+                        updatedAt: self.date(31),
+                        state: .idle,
+                        isMCP: true,
+                        coordinatorRuntime: true,
+                        missionPlan: state.missionPlan
+                    )
+                ]
+            }
+        )
+        viewModel.selectedMissionPolicy = .readOnly
+        viewModel.refresh()
+
+        let result = await viewModel.submitCoordinatorDirective("Audit risky scripts")
+
+        XCTAssertEqual(result, .accepted)
+        let submission = try XCTUnwrap(submissions.first)
+        XCTAssertEqual(submission.visibleText, "Audit risky scripts")
+        XCTAssertTrue(submission.providerText.hasPrefix("Audit risky scripts\n\n---\nMission Policy (provider-only)"))
+        XCTAssertTrue(submission.providerText.contains("Policy: Read-only [read-only]"))
+        XCTAssertTrue(submission.providerText.contains("Definition of Done: A written report of the findings. No code changes."))
+        XCTAssertTrue(submission.providerText.contains("Standing guidance: Keep the Mission read-only and report findings clearly."))
+        XCTAssertEqual(submission.missionPolicySnapshot, .readOnly)
+        XCTAssertEqual(state.missionPlan?.objective, "Audit risky scripts")
+        XCTAssertEqual(state.missionPlan?.policySnapshot, .readOnly)
+        XCTAssertEqual(state.missionPlan?.autonomy, CoordinatorMissionPolicySnapshot.readOnly.autonomy)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.missionSummary?.policy?.name, "Read-only")
+        XCTAssertEqual(viewModel.railTranscriptEntries.first?.text, "Audit risky scripts")
+        XCTAssertEqual(viewModel.selectedMissionPolicy, .defaultPolicy)
     }
 
     func testMissionPlanUpdaterRefreshesSelectedCoordinatorSnapshot() throws {
@@ -311,10 +386,189 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             Set(stoppedPlan.routingDecisions.suffix(1).compactMap(\.sessionID)),
             Set([coordinatorID])
         )
+        XCTAssertEqual(stoppedPlan.decisions.map(\.label), ["stopped the Mission"])
+        XCTAssertEqual(stoppedPlan.decisions.first?.checkpointID, "mission-stop")
+        XCTAssertEqual(stoppedPlan.decisions.first?.checkpointInstanceID, "mission-stop:\(coordinatorID.uuidString):r1")
         XCTAssertTrue(viewModel.railTranscriptEntries.contains { entry in
             entry.role == .event
                 && entry.text == "Mission stopped. Requested cancellation for 1 active session; skipped 3 inactive or unavailable linked sessions."
         })
+    }
+
+    func testPlanCheckpointUserDecisionsAppendThroughMissionUpdaterAndRefresh() async throws {
+        let coordinatorID = uuid(1)
+        let workstreamID = uuid(20)
+        let nodeID = uuid(30)
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 3,
+            objective: "Ship the plan",
+            approvalState: .awaitingApproval,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Implement safely",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree
+                )
+            ]
+        ))
+        var submissions: [CoordinatorDirectiveSubmission] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            coordinatorRuntime: true,
+                            missionPlan: state.missionPlan
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { submission in
+                submissions.append(submission)
+                return .accepted
+            },
+            missionPlanUpdater: { _, update in
+                state.updateMissionPlan(update)
+            }
+        )
+        viewModel.selectCoordinator(sessionID: coordinatorID)
+
+        XCTAssertTrue(viewModel.queuePlanRevisionDecisionAfterAcceptedDirective())
+        XCTAssertTrue(state.missionPlan?.decisions.isEmpty == true)
+        let revisionResult = await viewModel.submitCoordinatorDirective("Revise the plan: keep this read-only first.")
+        let result = await viewModel.submitCoordinatorContinuation(.proceed)
+
+        XCTAssertEqual(revisionResult, .accepted)
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(submissions.count, 2)
+        let decisions = try XCTUnwrap(state.missionPlan?.decisions)
+        XCTAssertEqual(decisions.map(\.label), ["requested plan revision", "approved the Mission plan"])
+        XCTAssertEqual(decisions.map(\.checkpointID), ["plan-approval", "plan-approval"])
+        XCTAssertEqual(decisions.first?.checkpointInstanceID, "coordinator:\(coordinatorID.uuidString):plan-approval:r3")
+        XCTAssertEqual(decisions.last?.checkpointInstanceID, "coordinator:\(coordinatorID.uuidString):plan-approval:r4")
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.missionSummary?.decisions.userCount, 2)
+    }
+
+    func testFollowThroughAndChildAnswersRecordUserDecisionsButCoordinatorOwnedPendingInteractionsDoNot() async throws {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let interactionID = uuid(900)
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Supervise child questions",
+            approvalState: .approved
+        ))
+        let childQuestion = pendingQuestionInteraction(
+            id: interactionID,
+            title: "Child checkpoint",
+            prompt: "Should the child continue?"
+        )
+        var childSubmissions = 0
+        var coordinatorSubmissions = 0
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(40),
+                            state: .idle,
+                            coordinatorRuntime: true,
+                            missionPlan: state.missionPlan
+                        ),
+                        self.live(
+                            id: childID,
+                            tab: self.uuid(102),
+                            title: "Child",
+                            updatedAt: self.date(30),
+                            state: .waitingForQuestion,
+                            parent: coordinatorID
+                        )
+                    ],
+                    mcpSnapshots: [
+                        childID: self.mcpSnapshot(
+                            sessionID: childID,
+                            tabID: self.uuid(102),
+                            sessionName: "Child",
+                            status: .waitingForInput,
+                            statusText: "Waiting",
+                            assistantPreview: nil,
+                            parent: coordinatorID,
+                            interaction: childQuestion
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            childInteractionResponseSubmitter: { _, _ in
+                childSubmissions += 1
+                return .accepted
+            },
+            coordinatorInteractionResponseSubmitter: { _, _, _ in
+                coordinatorSubmissions += 1
+                return .accepted
+            },
+            missionPlanUpdater: { _, update in
+                state.updateMissionPlan(update)
+            },
+            followThroughEventSubmitter: { _ in
+                .accepted
+            }
+        )
+        viewModel.selectCoordinator(sessionID: coordinatorID)
+        let event = CoordinatorFollowThroughEvent(
+            id: "event-continue-1",
+            kind: .childTerminal,
+            coordinatorSessionID: coordinatorID,
+            childSessionID: childID,
+            childTitle: "Child",
+            gate: nil,
+            phase: .done,
+            detail: "Child completed."
+        )
+
+        let followThroughResult = await viewModel.submitPendingFollowThroughEvent(event)
+        let row = try XCTUnwrap(viewModel.activePendingChildInteractionRow())
+        let childResult = await viewModel.submitPendingChildInteractionResponse("Continue with the safe option.", to: row)
+        let coordinatorPending = CoordinatorModePendingInteractionSummary(
+            id: uuid(901),
+            sessionID: coordinatorID,
+            kind: .question,
+            responseType: .text,
+            title: "Generic Coordinator question",
+            prompt: "This is not a typed app checkpoint.",
+            context: nil,
+            options: [],
+            fields: [],
+            details: [],
+            openAgentChatRoute: nil
+        )
+        let coordinatorResult = await viewModel.submitCoordinatorPendingInteractionResponse(.text("Answer"), pending: coordinatorPending)
+
+        XCTAssertEqual(followThroughResult, .accepted)
+        XCTAssertEqual(childResult, .accepted)
+        XCTAssertEqual(coordinatorResult, .accepted)
+        XCTAssertEqual(childSubmissions, 1)
+        XCTAssertEqual(coordinatorSubmissions, 1)
+        let decisions = try XCTUnwrap(state.missionPlan?.decisions)
+        XCTAssertEqual(decisions.map(\.label), ["continued past a step check-in", "answered a child question"])
+        XCTAssertEqual(decisions.first?.checkpointInstanceID, "follow-through:event-continue-1")
+        XCTAssertEqual(decisions.last?.checkpointInstanceID, "child-interaction:\(interactionID.uuidString)")
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.missionSummary?.decisions.userCount, 2)
     }
 
     func testRejectedDraftSendPreservesTemplateSelection() async {
@@ -1368,7 +1622,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         let result = await viewModel.submitCoordinatorDirective("start fresh")
 
         XCTAssertEqual(result, .accepted)
-        XCTAssertEqual(submissions.first?.text, "start fresh")
+        XCTAssertTrue(submissions.first?.text.hasPrefix("start fresh\n\n---\nMission Policy (provider-only)") == true)
         XCTAssertNil(submissions.first?.sessionID)
         XCTAssertEqual(submissions.first?.forceNewRuntime, true)
         XCTAssertTrue(viewModel.isFreshCoordinatorRunPending)

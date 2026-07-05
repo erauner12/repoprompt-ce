@@ -334,6 +334,18 @@ struct CoordinatorChatMCPToolService {
         let predecessorUpdate = try parseMissionPredecessorUpdate(args)
         let status = try parseOptionalMissionPlanStatus(args["status"])
         let approvalState = try parseOptionalMissionPlanApprovalState(args["approval_state"] ?? args["approvalState"])
+        let hasShapeSummary = args.keys.contains("shape_summary") || args.keys.contains("shapeSummary")
+        let shapeSummary = try hasShapeSummary
+            ? parseMissionShapeSummary(args["shape_summary"] ?? args["shapeSummary"])
+            : nil
+        let hasPolicySnapshot = args.keys.contains("policy_snapshot") || args.keys.contains("policySnapshot")
+        let policySnapshot = try hasPolicySnapshot
+            ? parseMissionPolicySnapshot(args["policy_snapshot"] ?? args["policySnapshot"])
+            : nil
+        let hasAutonomy = args.keys.contains("autonomy") || args.keys.contains("autonomy_map") || args.keys.contains("autonomyMap")
+        let autonomy = try hasAutonomy
+            ? parseMissionAutonomyMap(args["autonomy"] ?? args["autonomy_map"] ?? args["autonomyMap"], name: "autonomy")
+            : nil
         let replaceWorkstreams = AgentMCPToolHelpers.parseBool(args["replace_workstreams"] ?? args["replaceWorkstreams"]) ?? false
         let replaceNodes = AgentMCPToolHelpers.parseBool(args["replace_nodes"] ?? args["replaceNodes"]) ?? false
         let workstreams = try args.keys.contains("workstreams")
@@ -348,18 +360,31 @@ struct CoordinatorChatMCPToolService {
         let routingDecisions = try hasRoutingDecisions
             ? parseMissionRoutingDecisions(args["routing_decisions"] ?? args["routingDecisions"], nodes: effectiveNodes, workstreams: effectiveWorkstreams)
             : nil
+        let hasDecisions = args.keys.contains("decisions") || args.keys.contains("decision_ledger") || args.keys.contains("decisionLedger")
+        let decisions = try hasDecisions
+            ? parseMissionDecisionRecords(args["decisions"] ?? args["decision_ledger"] ?? args["decisionLedger"], nodes: effectiveNodes, workstreams: effectiveWorkstreams)
+            : nil
+        let hasEvidence = args.keys.contains("evidence") || args.keys.contains("evidence_ledger") || args.keys.contains("evidenceLedger")
+        let evidence = try hasEvidence
+            ? parseMissionEvidenceRecords(args["evidence"] ?? args["evidence_ledger"] ?? args["evidenceLedger"], nodes: effectiveNodes, workstreams: effectiveWorkstreams)
+            : nil
         let events = try parseMissionPlanEvents(args["events"], nodes: effectiveNodes)
         if missionKey == nil,
            objective == nil,
            !predecessorUpdate.hasPredecessorContext,
            status == nil,
            approvalState == nil,
+           shapeSummary == nil,
+           policySnapshot == nil,
+           autonomy == nil,
            workstreams == nil,
            nodes == nil,
            routingDecisions == nil,
+           decisions == nil,
+           evidence == nil,
            events.isEmpty
         {
-            throw MCPError.invalidParams("mission_plan requires at least one of mission_key, objective, predecessor context, status, approval_state, workstreams, nodes, routing_decisions, or events.")
+            throw MCPError.invalidParams("mission_plan requires at least one of mission_key, objective, predecessor context, status, approval_state, shape_summary, policy_snapshot, autonomy, workstreams, nodes, routing_decisions, decisions, evidence, or events.")
         }
         return try CoordinatorMissionPlanUpdate(
             objective: objective,
@@ -369,11 +394,16 @@ struct CoordinatorChatMCPToolService {
             predecessorSummary: predecessorUpdate.update.predecessorSummary,
             status: status,
             approvalState: approvalState,
+            shapeSummary: shapeSummary,
+            policySnapshot: policySnapshot,
+            autonomy: autonomy,
             workstreams: workstreams,
             nodes: nodes,
             replaceWorkstreams: replaceWorkstreams,
             replaceNodes: replaceNodes,
             routingDecisions: routingDecisions,
+            decisions: decisions,
+            evidence: evidence,
             events: events,
             updatedAt: parseOptionalDate(args["updated_at"] ?? args["updatedAt"], name: "updated_at") ?? Date()
         )
@@ -403,6 +433,58 @@ struct CoordinatorChatMCPToolService {
                 predecessorSummary: predecessorSummary
             )
         )
+    }
+
+    private func parseMissionShapeSummary(_ value: Value?) throws -> CoordinatorMissionShapeSummary? {
+        guard let value, value != .null else { return nil }
+        guard let object = value.objectValue else {
+            throw MCPError.invalidParams("shape_summary must be an object.")
+        }
+        return try CoordinatorMissionShapeSummary(
+            id: AgentMCPToolHelpers.requireNonEmptyString(object["id"], name: "shape_summary.id"),
+            displayName: AgentMCPToolHelpers.requireNonEmptyString(object["display_name"] ?? object["displayName"], name: "shape_summary.display_name"),
+            reason: normalizedString(object["reason"]),
+            namedClose: normalizedString(object["named_close"] ?? object["namedClose"])
+        )
+    }
+
+    private func parseMissionPolicySnapshot(_ value: Value?) throws -> CoordinatorMissionPolicySnapshot? {
+        guard let value, value != .null else { return nil }
+        guard let object = value.objectValue else {
+            throw MCPError.invalidParams("policy_snapshot must be an object.")
+        }
+        let paceRaw = try AgentMCPToolHelpers.requireNonEmptyString(object["default_pace"] ?? object["defaultPace"], name: "policy_snapshot.default_pace")
+        guard let pace = CoordinatorMissionPolicyPace(rawValue: paceRaw) else {
+            throw MCPError.invalidParams("policy_snapshot.default_pace must be one of: \(CoordinatorMissionPolicyPace.allCases.map(\.rawValue).joined(separator: ", ")).")
+        }
+        let autonomy = try object.keys.contains("autonomy")
+            ? parseMissionAutonomyMap(object["autonomy"], name: "policy_snapshot.autonomy")
+            : CoordinatorMissionPolicySnapshot.defaultAutonomy
+        return try CoordinatorMissionPolicySnapshot(
+            id: AgentMCPToolHelpers.requireNonEmptyString(object["id"], name: "policy_snapshot.id"),
+            name: AgentMCPToolHelpers.requireNonEmptyString(object["name"], name: "policy_snapshot.name"),
+            defaultPace: pace,
+            autonomy: autonomy,
+            definitionOfDone: normalizedString(object["definition_of_done"] ?? object["definitionOfDone"]),
+            standingGuidance: normalizedString(object["standing_guidance"] ?? object["standingGuidance"]),
+            pinnedSkillIDs: parseOptionalStringArray(object["pinned_skill_ids"] ?? object["pinnedSkillIDs"], name: "policy_snapshot.pinned_skill_ids") ?? [],
+            pinnedContextIDs: parseOptionalStringArray(object["pinned_context_ids"] ?? object["pinnedContextIDs"], name: "policy_snapshot.pinned_context_ids") ?? []
+        )
+    }
+
+    private func parseMissionAutonomyMap(_ value: Value?, name: String) throws -> [String: CoordinatorMissionAutonomyMode] {
+        guard let object = value?.objectValue else {
+            throw MCPError.invalidParams("\(name) must be an object mapping decision class strings to ask/auto.")
+        }
+        var autonomy: [String: CoordinatorMissionAutonomyMode] = [:]
+        for key in object.keys.sorted() {
+            let rawMode = try AgentMCPToolHelpers.requireNonEmptyString(object[key], name: "\(name).\(key)")
+            guard let mode = CoordinatorMissionAutonomyMode(rawValue: rawMode) else {
+                throw MCPError.invalidParams("\(name).\(key) must be one of: \(CoordinatorMissionAutonomyMode.allCases.map(\.rawValue).joined(separator: ", ")).")
+            }
+            autonomy[key] = mode
+        }
+        return autonomy
     }
 
     private func parseMissionWorkstreams(
@@ -602,6 +684,7 @@ struct CoordinatorChatMCPToolService {
                 detail: object.keys.contains("detail") ? normalizedString(object["detail"]) : existingNode?.detail,
                 workflowHint: parseMissionPlanNodeWorkflowHint(object, existing: existingNode?.workflowHint),
                 completionEvidence: parseMissionPlanNodeCompletionEvidence(object, existing: existingNode?.completionEvidence),
+                doneCriteria: parseMissionPlanNodeDoneCriteria(object, existing: existingNode?.doneCriteria),
                 workstreamID: workstreamID,
                 dependsOn: parseMissionPlanNodeDependencies(object, existing: existingNode),
                 role: object.keys.contains("role") ? normalizedString(object["role"]) : existingNode?.role,
@@ -708,6 +791,15 @@ struct CoordinatorChatMCPToolService {
         return normalizedString(object["completion_evidence"] ?? object["completionEvidence"])
     }
 
+    private func parseMissionPlanNodeDoneCriteria(
+        _ object: [String: Value],
+        existing: String?
+    ) -> String? {
+        let hasDoneCriteriaField = object.keys.contains("done_criteria") || object.keys.contains("doneCriteria")
+        guard hasDoneCriteriaField else { return existing }
+        return normalizedString(object["done_criteria"] ?? object["doneCriteria"])
+    }
+
     private func parseMissionPlanNodeWorkstreamID(
         _ object: [String: Value],
         workstreams: [CoordinatorMissionWorkstreamSummary],
@@ -726,6 +818,108 @@ struct CoordinatorChatMCPToolService {
             return workstreamID
         }
         throw MCPError.invalidParams("nodes[].workstream_id or nodes[].workstream_title is required for new nodes.")
+    }
+
+    private func parseMissionDecisionRecords(
+        _ value: Value?,
+        nodes: [CoordinatorMissionPlanNode],
+        workstreams: [CoordinatorMissionWorkstreamSummary]
+    ) throws -> [CoordinatorMissionDecisionRecord] {
+        guard let array = value?.arrayValue else {
+            throw MCPError.invalidParams("decisions must be an array.")
+        }
+        return try array.map { element in
+            guard let object = element.objectValue else {
+                throw MCPError.invalidParams("Each decisions entry must be an object.")
+            }
+            let actorRaw = try AgentMCPToolHelpers.requireNonEmptyString(object["actor"], name: "decisions[].actor")
+            guard let actor = CoordinatorMissionDecisionActor(rawValue: actorRaw) else {
+                throw MCPError.invalidParams("decisions[].actor must be one of: \(CoordinatorMissionDecisionActor.allCases.map(\.rawValue).joined(separator: ", ")).")
+            }
+            guard actor == .director else {
+                throw MCPError.invalidParams("mission_plan decisions must use actor \"director\". User decisions are recorded by the app/MCP submit path.")
+            }
+            guard let id = try optionalUUID(object["id"], name: "decisions[].id") else {
+                throw MCPError.invalidParams("decisions[].id is required so retries dedupe by ID.")
+            }
+            return try CoordinatorMissionDecisionRecord(
+                id: id,
+                decisionClass: AgentMCPToolHelpers.requireNonEmptyString(object["decision_class"] ?? object["decisionClass"], name: "decisions[].decision_class"),
+                actor: actor,
+                label: AgentMCPToolHelpers.requireNonEmptyString(object["label"], name: "decisions[].label"),
+                reason: normalizedString(object["reason"]),
+                timestamp: parseOptionalDate(object["timestamp"], name: "decisions[].timestamp") ?? Date(),
+                nodeID: parseLedgerNodeID(object, nodes: nodes, fieldPrefix: "decisions[]"),
+                workstreamID: parseLedgerWorkstreamID(object, workstreams: workstreams, fieldPrefix: "decisions[]"),
+                sessionID: optionalUUID(object["session_id"] ?? object["sessionID"], name: "decisions[].session_id"),
+                interactionID: optionalUUID(object["interaction_id"] ?? object["interactionID"], name: "decisions[].interaction_id"),
+                checkpointID: normalizedString(object["checkpoint_id"] ?? object["checkpointID"]),
+                checkpointInstanceID: normalizedString(object["checkpoint_instance_id"] ?? object["checkpointInstanceID"])
+            )
+        }
+    }
+
+    private func parseMissionEvidenceRecords(
+        _ value: Value?,
+        nodes: [CoordinatorMissionPlanNode],
+        workstreams: [CoordinatorMissionWorkstreamSummary]
+    ) throws -> [CoordinatorMissionEvidenceRecord] {
+        guard let array = value?.arrayValue else {
+            throw MCPError.invalidParams("evidence must be an array.")
+        }
+        return try array.map { element in
+            guard let object = element.objectValue else {
+                throw MCPError.invalidParams("Each evidence entry must be an object.")
+            }
+            let verdictRaw = try AgentMCPToolHelpers.requireNonEmptyString(object["verdict"], name: "evidence[].verdict")
+            guard let verdict = CoordinatorMissionEvidenceVerdict(rawValue: verdictRaw) else {
+                throw MCPError.invalidParams("evidence[].verdict must be one of: \(CoordinatorMissionEvidenceVerdict.allCases.map(\.rawValue).joined(separator: ", ")).")
+            }
+            guard let id = try optionalUUID(object["id"], name: "evidence[].id") else {
+                throw MCPError.invalidParams("evidence[].id is required so retries dedupe by ID.")
+            }
+            return try CoordinatorMissionEvidenceRecord(
+                id: id,
+                verdict: verdict,
+                summary: AgentMCPToolHelpers.requireNonEmptyString(object["summary"], name: "evidence[].summary"),
+                timestamp: parseOptionalDate(object["timestamp"], name: "evidence[].timestamp") ?? Date(),
+                nodeID: parseLedgerNodeID(object, nodes: nodes, fieldPrefix: "evidence[]"),
+                workstreamID: parseLedgerWorkstreamID(object, workstreams: workstreams, fieldPrefix: "evidence[]"),
+                sessionID: optionalUUID(object["session_id"] ?? object["sessionID"], name: "evidence[].session_id"),
+                interactionID: optionalUUID(object["interaction_id"] ?? object["interactionID"], name: "evidence[].interaction_id"),
+                decisionID: optionalUUID(object["decision_id"] ?? object["decisionID"], name: "evidence[].decision_id")
+            )
+        }
+    }
+
+    private func parseLedgerNodeID(
+        _ object: [String: Value],
+        nodes: [CoordinatorMissionPlanNode],
+        fieldPrefix: String
+    ) throws -> UUID? {
+        if let nodeID = try optionalUUID(object["node_id"] ?? object["nodeID"], name: "\(fieldPrefix).node_id") {
+            return nodeID
+        }
+        guard let title = normalizedString(object["node_title"] ?? object["nodeTitle"]) else { return nil }
+        guard let node = nodes.first(where: { $0.title.normalizedMissionPlanKey == title.normalizedMissionPlanKey }) else {
+            throw MCPError.invalidParams("\(fieldPrefix).node_title must match a declared node title.")
+        }
+        return node.id
+    }
+
+    private func parseLedgerWorkstreamID(
+        _ object: [String: Value],
+        workstreams: [CoordinatorMissionWorkstreamSummary],
+        fieldPrefix: String
+    ) throws -> UUID? {
+        if let workstreamID = try optionalUUID(object["workstream_id"] ?? object["workstreamID"], name: "\(fieldPrefix).workstream_id") {
+            return workstreamID
+        }
+        guard let title = normalizedString(object["workstream_title"] ?? object["workstreamTitle"]) else { return nil }
+        guard let workstream = workstreams.first(where: { $0.title.normalizedMissionPlanKey == title.normalizedMissionPlanKey }) else {
+            throw MCPError.invalidParams("\(fieldPrefix).workstream_title must match a declared workstream title.")
+        }
+        return workstream.id
     }
 
     private func parseMissionPlanEvents(
@@ -891,6 +1085,16 @@ struct CoordinatorChatMCPToolService {
                 throw MCPError.invalidParams("\(name) must contain only UUID strings.")
             }
             return uuid
+        }
+    }
+
+    private func parseOptionalStringArray(_ value: Value?, name: String) throws -> [String]? {
+        guard let value else { return nil }
+        guard let array = value.arrayValue else {
+            throw MCPError.invalidParams("\(name) must be an array of strings.")
+        }
+        return try array.map { element in
+            try AgentMCPToolHelpers.requireNonEmptyString(element, name: name)
         }
     }
 
@@ -1110,6 +1314,13 @@ struct CoordinatorChatMCPToolService {
             "has_plan": .bool(true),
             "debug_summary": .string(debugSummary),
             "plan": missionPlanValue(plan),
+            "shape_summary": missionShapeSummaryValue(plan.shapeSummary),
+            "policy_snapshot": missionPolicySnapshotValue(plan.policySnapshot),
+            "autonomy_summary": missionAutonomySummaryValue(plan.autonomy),
+            "decision_counts_by_actor": missionDecisionCountsByActorValue(plan.decisions),
+            "evidence_counts": missionEvidenceCountsValue(plan.evidence),
+            "recent_ledger_entries": missionRecentLedgerEntriesValue(plan: plan, limit: 20),
+            "receipt_ready_summary": missionReceiptReadySummaryValue(plan),
             "node_counts": missionPlanNodeCountsValue(nodeCounts),
             "workstreams": .array(plan.workstreams.map { workstream in
                 missionStatusWorkstreamValue(workstream, rowsBySessionID: rowsBySessionID)
@@ -1204,8 +1415,15 @@ struct CoordinatorChatMCPToolService {
                 "predecessor_title": AgentMCPToolHelpers.stringOrNull(plan.predecessorTitle),
                 "predecessor_summary": AgentMCPToolHelpers.stringOrNull(plan.predecessorSummary),
                 "status": .string(plan.status.rawValue),
-                "approval_state": .string(plan.approvalState.rawValue)
+                "approval_state": .string(plan.approvalState.rawValue),
+                "shape_summary": missionShapeSummaryValue(plan.shapeSummary),
+                "policy_snapshot": missionPolicySnapshotSummaryValue(plan.policySnapshot),
+                "autonomy_summary": missionAutonomySummaryValue(plan.autonomy)
             ]),
+            "decision_counts_by_actor": missionDecisionCountsByActorValue(plan.decisions),
+            "evidence_counts": missionEvidenceCountsValue(plan.evidence),
+            "recent_ledger_entries": missionRecentLedgerEntriesValue(plan: plan, limit: 5),
+            "receipt_ready_summary": missionReceiptReadySummaryValue(plan),
             "node_counts": missionPlanNodeCountsValue(nodeCounts),
             "workstreams": .array(plan.workstreams.map { workstream in
                 compactMissionStatusWorkstreamValue(workstream, plan: plan, rowsBySessionID: rowsBySessionID)
@@ -1314,18 +1532,37 @@ struct CoordinatorChatMCPToolService {
             return stableFingerprint(parts)
         }
 
-        parts.append(contentsOf: [
-            "plan",
-            "\(plan.revision)",
-            plan.status.rawValue,
-            plan.approvalState.rawValue,
-            "\(plan.nodes.count)",
-            "\(plan.workstreams.count)",
-            plan.missionKey ?? "mission_key:nil",
-            plan.predecessorMissionID?.uuidString ?? "predecessor:nil",
-            plan.predecessorTitle ?? "predecessor_title:nil",
-            plan.predecessorSummary ?? "predecessor_summary:nil"
-        ])
+        parts.append("plan")
+        parts.append(String(plan.revision))
+        parts.append(plan.status.rawValue)
+        parts.append(plan.approvalState.rawValue)
+        parts.append(String(plan.nodes.count))
+        parts.append(String(plan.workstreams.count))
+        parts.append(String(plan.decisions.count))
+        parts.append(String(plan.evidence.count))
+        parts.append(plan.missionKey ?? "mission_key:nil")
+        parts.append(plan.predecessorMissionID?.uuidString ?? "predecessor:nil")
+        parts.append(plan.predecessorTitle ?? "predecessor_title:nil")
+        parts.append(plan.predecessorSummary ?? "predecessor_summary:nil")
+        parts.append(plan.shapeSummary?.id ?? "shape:nil")
+        parts.append(plan.shapeSummary?.displayName ?? "shape_display:nil")
+        parts.append(plan.shapeSummary?.reason ?? "shape_reason:nil")
+        parts.append(plan.shapeSummary?.namedClose ?? "shape_named_close:nil")
+        parts.append(plan.policySnapshot?.id ?? "policy:nil")
+        parts.append(plan.policySnapshot?.name ?? "policy_name:nil")
+        parts.append(plan.policySnapshot?.defaultPace.rawValue ?? "policy_pace:nil")
+        parts.append(plan.policySnapshot?.definitionOfDone ?? "policy_dod:nil")
+        parts.append(plan.policySnapshot?.standingGuidance ?? "policy_guidance:nil")
+        for (key, mode) in plan.autonomy.sorted(by: { $0.key < $1.key }) {
+            parts.append(contentsOf: ["autonomy", key, mode.rawValue])
+        }
+        if let policySnapshot = plan.policySnapshot {
+            for (key, mode) in policySnapshot.autonomy.sorted(by: { $0.key < $1.key }) {
+                parts.append(contentsOf: ["policy_autonomy", key, mode.rawValue])
+            }
+            parts.append(policySnapshot.pinnedSkillIDs.sorted().joined(separator: ","))
+            parts.append(policySnapshot.pinnedContextIDs.sorted().joined(separator: ","))
+        }
         for workstream in plan.workstreams {
             parts.append(contentsOf: [
                 "workstream",
@@ -1340,8 +1577,41 @@ struct CoordinatorChatMCPToolService {
                 node.id.uuidString,
                 node.status.rawValue,
                 node.executionPolicy.rawValue,
+                node.completionEvidence ?? "completion_evidence:nil",
+                node.doneCriteria ?? "done_criteria:nil",
                 node.boundSessionID?.uuidString ?? "bound_session:nil",
                 node.boundInteractionID?.uuidString ?? "bound_interaction:nil"
+            ])
+        }
+        for decision in plan.decisions {
+            parts.append(contentsOf: [
+                "decision",
+                decision.id.uuidString,
+                decision.decisionClass,
+                decision.actor.rawValue,
+                decision.label,
+                decision.reason ?? "reason:nil",
+                AgentMCPToolHelpers.timestamp(decision.timestamp),
+                decision.nodeID?.uuidString ?? "node:nil",
+                decision.workstreamID?.uuidString ?? "workstream:nil",
+                decision.sessionID?.uuidString ?? "session:nil",
+                decision.interactionID?.uuidString ?? "interaction:nil",
+                decision.checkpointID ?? "checkpoint:nil",
+                decision.checkpointInstanceID ?? "checkpoint_instance:nil"
+            ])
+        }
+        for evidence in plan.evidence {
+            parts.append(contentsOf: [
+                "evidence",
+                evidence.id.uuidString,
+                evidence.verdict.rawValue,
+                evidence.summary,
+                AgentMCPToolHelpers.timestamp(evidence.timestamp),
+                evidence.nodeID?.uuidString ?? "node:nil",
+                evidence.workstreamID?.uuidString ?? "workstream:nil",
+                evidence.sessionID?.uuidString ?? "session:nil",
+                evidence.interactionID?.uuidString ?? "interaction:nil",
+                evidence.decisionID?.uuidString ?? "decision:nil"
             ])
         }
         let childRows = compactMissionDescendantRows(option: option, rows: rows)
@@ -1485,10 +1755,13 @@ struct CoordinatorChatMCPToolService {
     }
 
     private func compactMissionCheckpointAction(label: String, message: String) -> Value {
-        .object([
+        let guidance = CoordinatorModeViewModel.ContinuationAction.runtimeLedgerInstruction
+        let submitMessage = message.contains(guidance) ? message : "\(message)\n\n\(guidance)"
+        return .object([
             "label": .string(label),
             "submit_op": .string("submit"),
-            "submit_message": .string(message)
+            "submit_message": .string(submitMessage),
+            "mission_plan_append_guidance": .string(guidance)
         ])
     }
 
@@ -1678,6 +1951,128 @@ struct CoordinatorChatMCPToolService {
         ])
     }
 
+    private func missionShapeSummaryValue(_ shape: CoordinatorMissionShapeSummary?) -> Value {
+        guard let shape else { return .null }
+        return .object([
+            "id": .string(shape.id),
+            "display_name": .string(shape.displayName),
+            "reason": AgentMCPToolHelpers.stringOrNull(shape.reason),
+            "named_close": AgentMCPToolHelpers.stringOrNull(shape.namedClose)
+        ])
+    }
+
+    private func missionPolicySnapshotSummaryValue(_ policy: CoordinatorMissionPolicySnapshot?) -> Value {
+        guard let policy else { return .null }
+        return .object([
+            "id": .string(policy.id),
+            "name": .string(policy.name),
+            "default_pace": .string(policy.defaultPace.rawValue),
+            "definition_of_done": AgentMCPToolHelpers.stringOrNull(policy.definitionOfDone)
+        ])
+    }
+
+    private func missionPolicySnapshotValue(_ policy: CoordinatorMissionPolicySnapshot?) -> Value {
+        guard let policy else { return .null }
+        var payload = missionPolicySnapshotSummaryValue(policy).objectValue ?? [:]
+        payload["autonomy"] = missionAutonomyMapValue(policy.autonomy)
+        payload["standing_guidance"] = AgentMCPToolHelpers.stringOrNull(policy.standingGuidance)
+        payload["pinned_skill_ids"] = .array(policy.pinnedSkillIDs.map(Value.string))
+        payload["pinned_context_ids"] = .array(policy.pinnedContextIDs.map(Value.string))
+        return .object(payload)
+    }
+
+    private func missionAutonomyMapValue(_ autonomy: [String: CoordinatorMissionAutonomyMode]) -> Value {
+        .object(Dictionary(uniqueKeysWithValues: autonomy.sorted(by: { $0.key < $1.key }).map { key, mode in
+            (key, Value.string(mode.rawValue))
+        }))
+    }
+
+    private func missionAutonomySummaryValue(_ autonomy: [String: CoordinatorMissionAutonomyMode]) -> Value {
+        let decisionClasses = Set(autonomy.keys).union(CoordinatorMissionDecisionClass.allCases.map(\.rawValue))
+        let effectiveModes = decisionClasses.map { decisionClass in
+            (
+                decisionClass,
+                CoordinatorMissionPolicySnapshot.resolveAutonomy(autonomy[decisionClass], for: decisionClass)
+            )
+        }
+        let askClasses = effectiveModes
+            .filter { $0.1 == .ask }
+            .map(\.0)
+            .sorted()
+        let autoClasses = effectiveModes
+            .filter { $0.1 == .auto }
+            .map(\.0)
+            .sorted()
+        return .object([
+            "ask": .array(askClasses.map(Value.string)),
+            "auto": .array(autoClasses.map(Value.string)),
+            "unknown_class_default": .string(CoordinatorMissionAutonomyMode.ask.rawValue),
+            "irreversible_default": .string(CoordinatorMissionAutonomyMode.ask.rawValue)
+        ])
+    }
+
+    private func missionDecisionCountsByActorValue(_ decisions: [CoordinatorMissionDecisionRecord]) -> Value {
+        let grouped = Dictionary(grouping: decisions, by: \.actor).mapValues(\.count)
+        return .object(Dictionary(uniqueKeysWithValues: CoordinatorMissionDecisionActor.allCases.map { actor in
+            (actor.rawValue, Value.int(grouped[actor] ?? 0))
+        }))
+    }
+
+    private func missionEvidenceCountsValue(_ evidence: [CoordinatorMissionEvidenceRecord]) -> Value {
+        let grouped = Dictionary(grouping: evidence, by: \.verdict).mapValues(\.count)
+        var payload = Dictionary(uniqueKeysWithValues: CoordinatorMissionEvidenceVerdict.allCases.map { verdict in
+            (verdict.rawValue, Value.int(grouped[verdict] ?? 0))
+        })
+        payload["total"] = .int(evidence.count)
+        return .object(payload)
+    }
+
+    private func missionRecentLedgerEntriesValue(plan: CoordinatorMissionPlan, limit: Int) -> Value {
+        let decisionEntries = plan.decisions.map { decision in
+            (
+                timestamp: decision.timestamp,
+                id: decision.id.uuidString,
+                value: Value.object([
+                    "kind": .string("decision"),
+                    "timestamp": .string(AgentMCPToolHelpers.timestamp(decision.timestamp)),
+                    "record": missionDecisionRecordValue(decision)
+                ])
+            )
+        }
+        let evidenceEntries = plan.evidence.map { evidence in
+            (
+                timestamp: evidence.timestamp,
+                id: evidence.id.uuidString,
+                value: Value.object([
+                    "kind": .string("evidence"),
+                    "timestamp": .string(AgentMCPToolHelpers.timestamp(evidence.timestamp)),
+                    "record": missionEvidenceRecordValue(evidence)
+                ])
+            )
+        }
+        let entries = (decisionEntries + evidenceEntries)
+            .sorted { lhs, rhs in
+                if lhs.timestamp == rhs.timestamp { return lhs.id < rhs.id }
+                return lhs.timestamp > rhs.timestamp
+            }
+            .prefix(limit)
+            .map(\.value)
+        return .array(entries)
+    }
+
+    private func missionReceiptReadySummaryValue(_ plan: CoordinatorMissionPlan) -> Value {
+        guard plan.status == .completed else { return .null }
+        return .object([
+            "ready": .bool(true),
+            "objective": AgentMCPToolHelpers.stringOrNull(plan.objective),
+            "shape": missionShapeSummaryValue(plan.shapeSummary),
+            "policy": missionPolicySnapshotSummaryValue(plan.policySnapshot),
+            "decision_counts_by_actor": missionDecisionCountsByActorValue(plan.decisions),
+            "evidence_counts": missionEvidenceCountsValue(plan.evidence),
+            "updated_at": .string(AgentMCPToolHelpers.timestamp(plan.updatedAt))
+        ])
+    }
+
     private func missionPlanValue(_ plan: CoordinatorMissionPlan?) -> Value {
         guard let plan else { return .null }
         return .object([
@@ -1690,10 +2085,15 @@ struct CoordinatorChatMCPToolService {
             "predecessor_summary": AgentMCPToolHelpers.stringOrNull(plan.predecessorSummary),
             "status": .string(plan.status.rawValue),
             "approval_state": .string(plan.approvalState.rawValue),
+            "shape_summary": missionShapeSummaryValue(plan.shapeSummary),
+            "policy_snapshot": missionPolicySnapshotValue(plan.policySnapshot),
+            "autonomy": missionAutonomyMapValue(plan.autonomy),
             "updated_at": .string(AgentMCPToolHelpers.timestamp(plan.updatedAt)),
             "workstreams": .array(plan.workstreams.map(missionWorkstreamValue)),
             "nodes": .array(plan.nodes.map(missionPlanNodeValue)),
             "routing_decisions": .array(plan.routingDecisions.map(missionRoutingDecisionValue)),
+            "decisions": .array(plan.decisions.map(missionDecisionRecordValue)),
+            "evidence": .array(plan.evidence.map(missionEvidenceRecordValue)),
             "events": .array(plan.events.map(missionPlanEventValue))
         ])
     }
@@ -1729,6 +2129,7 @@ struct CoordinatorChatMCPToolService {
             "workflow_id": AgentMCPToolHelpers.stringOrNull(node.workflowHint?.id),
             "workflow_name": AgentMCPToolHelpers.stringOrNull(node.workflowHint?.name),
             "completion_evidence": AgentMCPToolHelpers.stringOrNull(node.completionEvidence),
+            "done_criteria": AgentMCPToolHelpers.stringOrNull(node.doneCriteria),
             "workstream_id": .string(node.workstreamID.uuidString),
             "depends_on": .array(node.dependsOn.map { .string($0.uuidString) }),
             "role": AgentMCPToolHelpers.stringOrNull(node.role),
@@ -1758,6 +2159,38 @@ struct CoordinatorChatMCPToolService {
             "interaction_id": AgentMCPToolHelpers.stringOrNull(event.interactionID?.uuidString),
             "timestamp": .string(AgentMCPToolHelpers.timestamp(event.timestamp)),
             "summary": AgentMCPToolHelpers.stringOrNull(event.summary)
+        ])
+    }
+
+    private func missionDecisionRecordValue(_ decision: CoordinatorMissionDecisionRecord) -> Value {
+        .object([
+            "id": .string(decision.id.uuidString),
+            "decision_class": .string(decision.decisionClass),
+            "resolved_autonomy_class": AgentMCPToolHelpers.stringOrNull(decision.resolvedAutonomyClass?.rawValue),
+            "actor": .string(decision.actor.rawValue),
+            "label": .string(decision.label),
+            "reason": AgentMCPToolHelpers.stringOrNull(decision.reason),
+            "timestamp": .string(AgentMCPToolHelpers.timestamp(decision.timestamp)),
+            "node_id": AgentMCPToolHelpers.stringOrNull(decision.nodeID?.uuidString),
+            "workstream_id": AgentMCPToolHelpers.stringOrNull(decision.workstreamID?.uuidString),
+            "session_id": AgentMCPToolHelpers.stringOrNull(decision.sessionID?.uuidString),
+            "interaction_id": AgentMCPToolHelpers.stringOrNull(decision.interactionID?.uuidString),
+            "checkpoint_id": AgentMCPToolHelpers.stringOrNull(decision.checkpointID),
+            "checkpoint_instance_id": AgentMCPToolHelpers.stringOrNull(decision.checkpointInstanceID)
+        ])
+    }
+
+    private func missionEvidenceRecordValue(_ evidence: CoordinatorMissionEvidenceRecord) -> Value {
+        .object([
+            "id": .string(evidence.id.uuidString),
+            "verdict": .string(evidence.verdict.rawValue),
+            "summary": .string(evidence.summary),
+            "timestamp": .string(AgentMCPToolHelpers.timestamp(evidence.timestamp)),
+            "node_id": AgentMCPToolHelpers.stringOrNull(evidence.nodeID?.uuidString),
+            "workstream_id": AgentMCPToolHelpers.stringOrNull(evidence.workstreamID?.uuidString),
+            "session_id": AgentMCPToolHelpers.stringOrNull(evidence.sessionID?.uuidString),
+            "interaction_id": AgentMCPToolHelpers.stringOrNull(evidence.interactionID?.uuidString),
+            "decision_id": AgentMCPToolHelpers.stringOrNull(evidence.decisionID?.uuidString)
         ])
     }
 

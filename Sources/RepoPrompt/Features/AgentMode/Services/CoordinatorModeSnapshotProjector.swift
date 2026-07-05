@@ -947,6 +947,7 @@ struct CoordinatorModeSnapshotProjector {
                     childCounts: childCounts(for: seed.id, ownerIDs: ownerIDs, rowsByID: rowsByID),
                     missionTemplate: seed.coordinatorMissionTemplate,
                     missionPlan: seed.coordinatorMissionPlan,
+                    missionSummary: missionSummary(from: seed.coordinatorMissionPlan),
                     runState: row?.runState,
                     updatedAt: row?.updatedAt ?? seed.updatedAt,
                     lastActivityAt: row?.updatedAt ?? seed.updatedAt
@@ -975,6 +976,7 @@ struct CoordinatorModeSnapshotProjector {
                     childCounts: .empty,
                     missionTemplate: nil,
                     missionPlan: nil,
+                    missionSummary: nil,
                     pendingInteraction: nil,
                     openAgentChatRoute: nil,
                     statusReport: nil,
@@ -1000,6 +1002,7 @@ struct CoordinatorModeSnapshotProjector {
                 childCounts: .empty,
                 missionTemplate: nil,
                 missionPlan: nil,
+                missionSummary: nil,
                 pendingInteraction: nil,
                 openAgentChatRoute: nil,
                 statusReport: nil,
@@ -1021,11 +1024,55 @@ struct CoordinatorModeSnapshotProjector {
             childCounts: selectedOption.childCounts,
             missionTemplate: selectedOption.missionTemplate,
             missionPlan: selectedOption.missionPlan,
+            missionSummary: selectedOption.missionSummary,
             pendingInteraction: row.pendingInteraction,
             openAgentChatRoute: nil,
             statusReport: row.statusReport,
             isComposerEnabled: isLiveInCurrentWindow,
             isComposerSendEnabled: isLiveInCurrentWindow && !row.runState.isActive
+        )
+    }
+
+    private func missionSummary(from plan: CoordinatorMissionPlan?) -> CoordinatorModeMissionSummary? {
+        guard let plan else { return nil }
+        let shape = plan.shapeSummary.map {
+            CoordinatorModeMissionSummary.Shape(
+                id: $0.id,
+                displayName: $0.displayName,
+                reason: $0.reason,
+                namedClose: $0.namedClose
+            )
+        }
+        let policy = plan.policySnapshot.map {
+            CoordinatorModeMissionSummary.Policy(
+                id: $0.id,
+                name: $0.name,
+                defaultPace: $0.defaultPace
+            )
+        }
+        let askAutonomyClasses = plan.autonomy.keys
+            .filter { plan.resolvedAutonomy(for: $0) == .ask }
+            .sorted()
+        let recentDecisionLabels = plan.decisions
+            .suffix(3)
+            .map(\.label)
+        let recentEvidenceSummaries = plan.evidence
+            .suffix(3)
+            .map(\.summary)
+        return CoordinatorModeMissionSummary(
+            shape: shape,
+            policy: policy,
+            askAutonomyClasses: askAutonomyClasses,
+            decisions: CoordinatorModeMissionSummary.Decisions(
+                userCount: plan.decisions.count(where: { $0.actor == .user }),
+                directorCount: plan.decisions.count(where: { $0.actor == .director }),
+                recentLabels: recentDecisionLabels
+            ),
+            evidence: CoordinatorModeMissionSummary.Evidence(
+                meetsCount: plan.evidence.count(where: { $0.verdict == .meets }),
+                shortCount: plan.evidence.count(where: { $0.verdict == .short }),
+                recentSummaries: recentEvidenceSummaries
+            )
         )
     }
 

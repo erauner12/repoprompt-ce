@@ -393,6 +393,7 @@ struct CoordinatorModeCoordinatorRail: Equatable {
         childCounts: .empty,
         missionTemplate: nil,
         missionPlan: nil,
+        missionSummary: nil,
         pendingInteraction: nil,
         openAgentChatRoute: nil,
         statusReport: nil,
@@ -424,6 +425,7 @@ struct CoordinatorModeCoordinatorRail: Equatable {
     let childCounts: CoordinatorModeCoordinatorChildCounts
     let missionTemplate: CoordinatorMissionTemplateSummary?
     let missionPlan: CoordinatorMissionPlan?
+    let missionSummary: CoordinatorModeMissionSummary?
     let pendingInteraction: CoordinatorModePendingInteractionSummary?
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
     let statusReport: CoordinatorModeSessionStatusReport?
@@ -443,6 +445,7 @@ struct CoordinatorModeCoordinatorRail: Equatable {
         childCounts: CoordinatorModeCoordinatorChildCounts,
         missionTemplate: CoordinatorMissionTemplateSummary? = nil,
         missionPlan: CoordinatorMissionPlan? = nil,
+        missionSummary: CoordinatorModeMissionSummary? = nil,
         pendingInteraction: CoordinatorModePendingInteractionSummary? = nil,
         openAgentChatRoute: AgentSessionDeepLinkRoute?,
         statusReport: CoordinatorModeSessionStatusReport?,
@@ -461,12 +464,46 @@ struct CoordinatorModeCoordinatorRail: Equatable {
         self.childCounts = childCounts
         self.missionTemplate = missionTemplate
         self.missionPlan = missionPlan
+        self.missionSummary = missionSummary
         self.pendingInteraction = pendingInteraction
         self.openAgentChatRoute = openAgentChatRoute
         self.statusReport = statusReport
         self.isComposerEnabled = isComposerEnabled
         self.isComposerSendEnabled = isComposerSendEnabled
     }
+}
+
+struct CoordinatorModeMissionSummary: Equatable {
+    struct Shape: Equatable {
+        let id: String
+        let displayName: String
+        let reason: String?
+        let namedClose: String?
+    }
+
+    struct Policy: Equatable {
+        let id: String
+        let name: String
+        let defaultPace: CoordinatorMissionPolicyPace
+    }
+
+    struct Decisions: Equatable {
+        let userCount: Int
+        let directorCount: Int
+        let recentLabels: [String]
+    }
+
+    struct Evidence: Equatable {
+        let meetsCount: Int
+        let shortCount: Int
+        let recentSummaries: [String]
+    }
+
+    let shape: Shape?
+    let policy: Policy?
+    let askAutonomyClasses: [String]
+    let decisions: Decisions
+    let evidence: Evidence
 }
 
 struct CoordinatorModeCoordinatorChildCounts: Equatable {
@@ -497,6 +534,7 @@ struct CoordinatorModeCoordinatorOption: Identifiable, Equatable {
     let childCounts: CoordinatorModeCoordinatorChildCounts
     let missionTemplate: CoordinatorMissionTemplateSummary?
     let missionPlan: CoordinatorMissionPlan?
+    let missionSummary: CoordinatorModeMissionSummary?
     let runState: AgentSessionRunState?
     let updatedAt: Date
     let lastActivityAt: Date
@@ -514,6 +552,7 @@ struct CoordinatorModeCoordinatorOption: Identifiable, Equatable {
         childCounts: CoordinatorModeCoordinatorChildCounts,
         missionTemplate: CoordinatorMissionTemplateSummary? = nil,
         missionPlan: CoordinatorMissionPlan? = nil,
+        missionSummary: CoordinatorModeMissionSummary? = nil,
         runState: AgentSessionRunState?,
         updatedAt: Date,
         lastActivityAt: Date
@@ -530,6 +569,7 @@ struct CoordinatorModeCoordinatorOption: Identifiable, Equatable {
         self.childCounts = childCounts
         self.missionTemplate = missionTemplate
         self.missionPlan = missionPlan
+        self.missionSummary = missionSummary
         self.runState = runState
         self.updatedAt = updatedAt
         self.lastActivityAt = lastActivityAt

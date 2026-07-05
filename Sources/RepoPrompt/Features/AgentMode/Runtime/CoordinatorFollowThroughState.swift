@@ -884,7 +884,7 @@ private enum CoordinatorMissionStableIdentity {
     }
 
     private static func bytes(from value: UInt64) -> [UInt8] {
-        (0..<8).map { shift in
+        (0 ..< 8).map { shift in
             UInt8((value >> UInt64((7 - shift) * 8)) & 0xFF)
         }
     }

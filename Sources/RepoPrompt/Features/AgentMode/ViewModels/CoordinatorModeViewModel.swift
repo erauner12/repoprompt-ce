@@ -6,6 +6,7 @@ struct CoordinatorDirectiveSubmission: Equatable {
     let visibleText: String
     let providerText: String
     let missionTemplate: CoordinatorMissionTemplateSummary?
+    let missionPolicySnapshot: CoordinatorMissionPolicySnapshot?
     let coordinatorSessionID: UUID?
     let forceNewRuntime: Bool
 }
@@ -36,10 +37,12 @@ final class CoordinatorModeViewModel: ObservableObject {
         case startSmaller
         case stopHere
 
+        static let runtimeLedgerInstruction = "Runtime ledger rule: append only Director-owned decisions (actor:\"director\") and evidence records through coordinator_chat op=mission_plan. Do not record user decisions; the app/MCP submit path owns user-actor checkpoint decisions."
+
         var directiveText: String {
             switch self {
             case .proceed:
-                "Approved to proceed with the current Mission Plan phase you proposed. Proceed advances the next planned phase, not necessarily implementation. If the current phase is evidence gathering or planning, run only that phase and ask again after updating the Mission Plan. If the current phase is mutable implementation, update the Mission Plan to approval_state:\"approved\" before launching implementation. If this mission is investigation-only or issue-drafting-only, do not invent an implementation phase. Do not merge, apply, commit, push, create a PR, or perform irreversible actions unless I explicitly request that next."
+                "Approved to proceed with the current Mission Plan phase you proposed. Proceed advances the next planned phase, not necessarily implementation. If the current phase is evidence gathering or planning, run only that phase and ask again after updating the Mission Plan. If the current phase is mutable implementation, update the Mission Plan to approval_state:\"approved\" before launching implementation. If this mission is investigation-only or issue-drafting-only, do not invent an implementation phase. Do not merge, apply, commit, push, create a PR, or perform irreversible actions unless I explicitly request that next.\n\n\(Self.runtimeLedgerInstruction)"
             case .runLightweightDiscovery:
                 """
                 Gather evidence before approval using visible Mission Plan nodes.
@@ -53,6 +56,8 @@ final class CoordinatorModeViewModel: ObservableObject {
                 Launch each formal investigation node with agent_run.start using workflow_name:"Investigate", mission_node_id set to the planned node ID, worktree_create:true, detach:true, and worktree_base_ref from the planned/default base when available.
 
                 After the evidence returns, fold findings into the Mission Plan, keep approval_state:"awaiting_approval", and ask again with the phase-aware checkpoint.
+
+                \(Self.runtimeLedgerInstruction)
                 """
             case .runDeepPlan:
                 """
@@ -65,6 +70,8 @@ final class CoordinatorModeViewModel: ObservableObject {
                 Launch the planning pass with agent_run.start using workflow_name:"Deep Plan", mission_node_id set to that planning node ID, worktree_create:true, detach:true, a session_name like "Deep Plan: <mission>", and worktree_base_ref from the planned/default base when available.
 
                 Treat the Deep Plan output as evidence for the Mission Plan, not as a replacement source of truth. After it returns, revise the Mission Plan, keep approval_state:"awaiting_approval", and ask again with the phase-aware checkpoint.
+
+                \(Self.runtimeLedgerInstruction)
                 """
             case .runDesignCritique:
                 """
@@ -84,6 +91,8 @@ final class CoordinatorModeViewModel: ObservableObject {
                 Return blockers before approval, recommended revisions, open questions, and a safe-to-approve verdict.
 
                 After the design critique returns, fold actionable findings into the Mission Plan, keep approval_state:"awaiting_approval", and ask again with the phase-aware checkpoint.
+
+                \(Self.runtimeLedgerInstruction)
                 """
             case .startSmaller:
                 """
@@ -92,9 +101,11 @@ final class CoordinatorModeViewModel: ObservableObject {
                 First call coordinator_chat op=mission_status and inspect the current Mission Plan. Keep approval_state:"awaiting_approval".
 
                 Revise the Mission Plan to the smallest useful first phase. Prefer one or two narrow evidence-gathering/planning nodes over broad implementation. Do not launch mutable implementation. Ask again with the smaller phase-aware plan.
+
+                \(Self.runtimeLedgerInstruction)
                 """
             case .stopHere:
-                "Stop here. Do not continue this objective unless I ask again."
+                "Stop here. Do not continue this objective unless I ask again.\n\n\(Self.runtimeLedgerInstruction)"
             }
         }
     }
@@ -167,6 +178,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     @Published private(set) var executionPace: CoordinatorExecutionPace
     @Published private(set) var pendingFollowThroughEvent: CoordinatorFollowThroughEvent?
     @Published var selectedMissionTemplate: CoordinatorMissionTemplate?
+    @Published var selectedMissionPolicy: CoordinatorMissionPolicySnapshot = .defaultPolicy
     @Published var sortMode: CoordinatorModeSortMode = .lastUpdated {
         didSet {
             guard sortMode != oldValue else { return }
@@ -204,7 +216,13 @@ final class CoordinatorModeViewModel: ObservableObject {
     private var displayedTranscriptCoordinatorSessionID: UUID?
     private var lastDurableRailStatusEntryKey: String?
     private var displayedDelegateActionTargetIDs: Set<UUID> = []
+    private var pendingAcceptedDirectiveDecision: PendingMissionUserDecision?
     private(set) var isVisible = false
+
+    private struct PendingMissionUserDecision {
+        let coordinatorSessionID: UUID
+        let record: CoordinatorMissionDecisionRecord
+    }
 
     init(
         inputProvider: @escaping InputProvider,
@@ -300,6 +318,75 @@ final class CoordinatorModeViewModel: ObservableObject {
         refresh()
     }
 
+    private func recordFreshMissionPolicySnapshotIfNeeded(
+        _ policySnapshot: CoordinatorMissionPolicySnapshot?,
+        objective: String,
+        previousCoordinatorIDs: Set<UUID>
+    ) {
+        guard let policySnapshot else { return }
+        guard let coordinatorSessionID = freshCoordinatorSessionID(previousCoordinatorIDs: previousCoordinatorIDs) else {
+            composerNotice = "Mission started, but the policy snapshot could not be recorded because the new runtime is not visible yet."
+            return
+        }
+        do {
+            try missionPlanUpdater(
+                coordinatorSessionID,
+                CoordinatorMissionPlanUpdate(
+                    objective: objective,
+                    policySnapshot: policySnapshot,
+                    autonomy: policySnapshot.autonomy,
+                    updatedAt: Date()
+                )
+            )
+            refresh()
+        } catch {
+            composerNotice = "Mission started, but the policy snapshot could not be recorded: \(error.localizedDescription)"
+        }
+    }
+
+    private func freshCoordinatorSessionID(previousCoordinatorIDs: Set<UUID>) -> UUID? {
+        let input = inputProvider(sortMode, nil)
+        let newCoordinatorIDs = coordinatorSessionIDs(in: input).subtracting(previousCoordinatorIDs)
+        if let newestCoordinatorID = newestCoordinatorID(in: newCoordinatorIDs, input: input) {
+            return newestCoordinatorID
+        }
+        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID,
+              !previousCoordinatorIDs.contains(coordinatorSessionID)
+        else { return nil }
+        return coordinatorSessionID
+    }
+
+    private static func providerText(
+        _ baseText: String,
+        policySnapshot: CoordinatorMissionPolicySnapshot?
+    ) -> String {
+        guard let policySnapshot else { return baseText }
+        let policyLines = policyProviderLines(for: policySnapshot)
+        guard !policyLines.isEmpty else { return baseText }
+        return ([baseText, "", "---", "Mission Policy (provider-only)"] + policyLines).joined(separator: "\n")
+    }
+
+    private static func policyProviderLines(for policySnapshot: CoordinatorMissionPolicySnapshot) -> [String] {
+        var lines = [
+            "Policy: \(policySnapshot.name) [\(policySnapshot.id)]",
+            "Default pace: \(policySnapshot.defaultPace.rawValue)",
+            "Autonomy: \(policySnapshot.autonomy.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value.rawValue)" }.joined(separator: ", "))"
+        ]
+        if let definitionOfDone = policySnapshot.definitionOfDone {
+            lines.append("Definition of Done: \(definitionOfDone)")
+        }
+        if let standingGuidance = policySnapshot.standingGuidance {
+            lines.append("Standing guidance: \(standingGuidance)")
+        }
+        if !policySnapshot.pinnedSkillIDs.isEmpty {
+            lines.append("Pinned skills: \(policySnapshot.pinnedSkillIDs.joined(separator: ", "))")
+        }
+        if !policySnapshot.pinnedContextIDs.isEmpty {
+            lines.append("Pinned context: \(policySnapshot.pinnedContextIDs.joined(separator: ", "))")
+        }
+        return lines
+    }
+
     var canStopSelectedCoordinatorMission: Bool {
         guard snapshot.coordinatorRail.state == .selected,
               snapshot.coordinatorRail.isLiveInCurrentWindow,
@@ -331,13 +418,20 @@ final class CoordinatorModeViewModel: ObservableObject {
         appendCoordinatorEventTranscriptEntry(message)
 
         if var plan = snapshot.coordinatorRail.missionPlan {
-            plan.stopMission(cancelledSessionIDs: Set(result.cancelledSessionIDs))
+            let stoppedAt = Date()
+            let decision = stoppedMissionDecision(
+                coordinatorSessionID: coordinatorSessionID,
+                plan: plan,
+                timestamp: stoppedAt
+            )
+            plan.stopMission(cancelledSessionIDs: Set(result.cancelledSessionIDs), at: stoppedAt)
             try? missionPlanUpdater(
                 coordinatorSessionID,
                 CoordinatorMissionPlanUpdate(
                     status: plan.status,
                     nodes: plan.nodes,
                     routingDecisions: plan.routingDecisions,
+                    decisions: [decision],
                     events: [
                         CoordinatorMissionPlanEvent(
                             kind: .revised,
@@ -469,10 +563,13 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
 
         let missionTemplate = forceNewRuntime ? selectedMissionTemplate : nil
+        let missionPolicySnapshot = forceNewRuntime ? selectedMissionPolicy : nil
+        let templatedProviderText = missionTemplate.map { $0.wrap(trimmed) } ?? trimmed
         let submission = CoordinatorDirectiveSubmission(
             visibleText: trimmed,
-            providerText: missionTemplate.map { $0.wrap(trimmed) } ?? trimmed,
+            providerText: Self.providerText(templatedProviderText, policySnapshot: missionPolicySnapshot),
             missionTemplate: missionTemplate.map(CoordinatorMissionTemplateSummary.init),
+            missionPolicySnapshot: missionPolicySnapshot,
             coordinatorSessionID: coordinatorSessionID,
             forceNewRuntime: forceNewRuntime
         )
@@ -487,8 +584,19 @@ final class CoordinatorModeViewModel: ObservableObject {
                     previousCoordinatorIDs: previousCoordinatorIDs,
                     workspaceID: submissionWorkspaceID
                 )
+                recordFreshMissionPolicySnapshotIfNeeded(
+                    submission.missionPolicySnapshot,
+                    objective: submission.visibleText,
+                    previousCoordinatorIDs: previousCoordinatorIDs
+                )
+                selectedMissionPolicy = .defaultPolicy
             }
+            let acceptedDirectiveDecision = pendingAcceptedDirectiveDecision
+            pendingAcceptedDirectiveDecision = nil
             refresh()
+            if let acceptedDirectiveDecision {
+                appendMissionUserDecision(acceptedDirectiveDecision)
+            }
             appendUserTranscriptEntryIfMissing(submission.visibleText)
         case let .rejected(message):
             composerNotice = message.isEmpty ? nil : message
@@ -498,7 +606,35 @@ final class CoordinatorModeViewModel: ObservableObject {
 
     @discardableResult
     func submitCoordinatorContinuation(_ action: ContinuationAction) async -> DirectiveSubmissionResult {
-        await submitCoordinatorDirective(action.directiveText)
+        let pendingDecision = missionUserDecisionRecord(for: action)
+        pendingAcceptedDirectiveDecision = nil
+        let result = await submitCoordinatorDirective(action.directiveText)
+        if case .accepted = result, let pendingDecision {
+            appendMissionUserDecision(pendingDecision)
+        }
+        return result
+    }
+
+    @discardableResult
+    func queuePlanRevisionDecisionAfterAcceptedDirective() -> Bool {
+        guard let pendingDecision = planApprovalDecision(
+            label: .requestedPlanRevision,
+            timestamp: Date()
+        ) else { return false }
+        pendingAcceptedDirectiveDecision = pendingDecision
+        return true
+    }
+
+    @discardableResult
+    func queueFollowThroughRevisionDecisionAfterAcceptedDirective(_ event: CoordinatorFollowThroughEvent) -> Bool {
+        pendingAcceptedDirectiveDecision = followThroughDecision(
+            event: event,
+            label: .requestedPlanRevision,
+            decisionClass: .advance,
+            checkpointID: Self.stepCheckInCheckpointID,
+            timestamp: Date()
+        )
+        return true
     }
 
     func activePendingFollowThroughEvent() -> CoordinatorFollowThroughEvent? {
@@ -508,10 +644,18 @@ final class CoordinatorModeViewModel: ObservableObject {
 
     @discardableResult
     func submitPendingFollowThroughEvent(_ event: CoordinatorFollowThroughEvent) async -> DirectiveSubmissionResult {
+        let pendingDecision = followThroughDecision(
+            event: event,
+            label: .continuedPastStepCheckIn,
+            decisionClass: .advance,
+            checkpointID: Self.stepCheckInCheckpointID,
+            timestamp: Date()
+        )
         let result = await followThroughEventSubmitter(event)
         switch result {
         case .accepted:
             composerNotice = nil
+            appendMissionUserDecision(pendingDecision)
         case let .rejected(message):
             composerNotice = message.isEmpty ? nil : message
         }
@@ -522,6 +666,134 @@ final class CoordinatorModeViewModel: ObservableObject {
     func resolvePendingFollowThroughEvent(_ event: CoordinatorFollowThroughEvent) async {
         await followThroughEventResolver(event)
         refresh()
+    }
+
+    private static let planApprovalCheckpointID = "plan-approval"
+    private static let stepCheckInCheckpointID = "step-check-in"
+    private static let childQuestionCheckpointID = "child-question"
+    private static let missionStopCheckpointID = "mission-stop"
+
+    private func missionUserDecisionRecord(for action: ContinuationAction) -> PendingMissionUserDecision? {
+        switch action {
+        case .proceed:
+            return planApprovalDecision(label: .approvedMissionPlan, timestamp: Date())
+        case .startSmaller:
+            return planApprovalDecision(label: .requestedPlanRevision, timestamp: Date())
+        case .stopHere:
+            guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID,
+                  let plan = snapshot.coordinatorRail.missionPlan
+            else { return nil }
+            return PendingMissionUserDecision(
+                coordinatorSessionID: coordinatorSessionID,
+                record: stoppedMissionDecision(
+                    coordinatorSessionID: coordinatorSessionID,
+                    plan: plan,
+                    timestamp: Date()
+                )
+            )
+        case .runLightweightDiscovery, .runDeepPlan, .runDesignCritique:
+            return nil
+        }
+    }
+
+    private func planApprovalDecision(
+        label: CoordinatorMissionUserDecisionLabel,
+        timestamp: Date
+    ) -> PendingMissionUserDecision? {
+        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID,
+              let plan = snapshot.coordinatorRail.missionPlan,
+              plan.approvalState == .awaitingApproval
+        else { return nil }
+        return PendingMissionUserDecision(
+            coordinatorSessionID: coordinatorSessionID,
+            record: CoordinatorMissionDecisionRecord(
+                userDecision: label,
+                decisionClass: .plan,
+                checkpointInstanceID: planApprovalCheckpointInstanceID(
+                    coordinatorSessionID: coordinatorSessionID,
+                    revision: plan.revision
+                ),
+                timestamp: timestamp,
+                checkpointID: Self.planApprovalCheckpointID
+            )
+        )
+    }
+
+    private func followThroughDecision(
+        event: CoordinatorFollowThroughEvent,
+        label: CoordinatorMissionUserDecisionLabel,
+        decisionClass: CoordinatorMissionDecisionClass,
+        checkpointID: String,
+        timestamp: Date
+    ) -> PendingMissionUserDecision {
+        PendingMissionUserDecision(
+            coordinatorSessionID: event.coordinatorSessionID,
+            record: CoordinatorMissionDecisionRecord(
+                userDecision: label,
+                decisionClass: decisionClass,
+                checkpointInstanceID: "follow-through:\(event.id)",
+                timestamp: timestamp,
+                sessionID: event.childSessionID ?? event.coordinatorSessionID,
+                checkpointID: checkpointID
+            )
+        )
+    }
+
+    private func childInteractionDecision(
+        row: CoordinatorModeRow,
+        timestamp: Date
+    ) -> PendingMissionUserDecision? {
+        guard let coordinatorSessionID = row.parentCoordinator?.sessionID ?? snapshot.coordinatorRail.coordinatorSessionID,
+              let interactionID = row.pendingInteraction?.id
+        else { return nil }
+        return PendingMissionUserDecision(
+            coordinatorSessionID: coordinatorSessionID,
+            record: CoordinatorMissionDecisionRecord(
+                userDecision: .answeredChildQuestion,
+                decisionClass: .childAsk,
+                checkpointInstanceID: "child-interaction:\(interactionID.uuidString)",
+                timestamp: timestamp,
+                sessionID: row.sessionID,
+                interactionID: interactionID,
+                checkpointID: Self.childQuestionCheckpointID
+            )
+        )
+    }
+
+    private func stoppedMissionDecision(
+        coordinatorSessionID: UUID,
+        plan: CoordinatorMissionPlan,
+        timestamp: Date
+    ) -> CoordinatorMissionDecisionRecord {
+        CoordinatorMissionDecisionRecord(
+            userDecision: .stoppedMission,
+            decisionClass: .irreversible,
+            checkpointInstanceID: "mission-stop:\(coordinatorSessionID.uuidString):r\(plan.revision)",
+            timestamp: timestamp,
+            sessionID: coordinatorSessionID,
+            checkpointID: Self.missionStopCheckpointID
+        )
+    }
+
+    @discardableResult
+    private func appendMissionUserDecision(_ pendingDecision: PendingMissionUserDecision) -> Bool {
+        do {
+            try missionPlanUpdater(
+                pendingDecision.coordinatorSessionID,
+                CoordinatorMissionPlanUpdate(
+                    decisions: [pendingDecision.record],
+                    updatedAt: pendingDecision.record.timestamp
+                )
+            )
+            refresh()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func planApprovalCheckpointInstanceID(coordinatorSessionID: UUID, revision: Int) -> String {
+        "coordinator:\(coordinatorSessionID.uuidString):plan-approval:r\(revision)"
     }
 
     private func selectFreshCoordinatorRuntimeIfAvailable(
@@ -586,6 +858,7 @@ final class CoordinatorModeViewModel: ObservableObject {
                 childCounts: option.childCounts,
                 missionTemplate: option.missionTemplate,
                 missionPlan: option.missionPlan,
+                missionSummary: option.missionSummary,
                 runState: option.runState,
                 updatedAt: option.updatedAt,
                 lastActivityAt: option.lastActivityAt
@@ -604,6 +877,7 @@ final class CoordinatorModeViewModel: ObservableObject {
             childCounts: .empty,
             missionTemplate: nil,
             missionPlan: nil,
+            missionSummary: nil,
             pendingInteraction: nil,
             openAgentChatRoute: nil,
             statusReport: nil,
@@ -681,10 +955,14 @@ final class CoordinatorModeViewModel: ObservableObject {
             composerNotice = message
             return .rejected(message: message)
         }
+        let pendingDecision = childInteractionDecision(row: row, timestamp: Date())
         let result = await childInteractionResponseSubmitter(submission, row)
         switch result {
         case .accepted:
             composerNotice = nil
+            if let pendingDecision {
+                appendMissionUserDecision(pendingDecision)
+            }
             childInteractionResponseRecorder(displayText, row)
             appendChildInteractionResponseTranscriptEntry(row: row, text: displayText)
         case let .rejected(message):
@@ -708,6 +986,8 @@ final class CoordinatorModeViewModel: ObservableObject {
         let result = await coordinatorInteractionResponseSubmitter(submission, coordinatorSessionID, pending.id)
         switch result {
         case .accepted:
+            // Generic Coordinator-owned pending interactions are intentionally excluded from
+            // v2.3 user-decision accounting; explicit app checkpoints record their own labels.
             composerNotice = nil
         case let .rejected(message):
             composerNotice = message.isEmpty ? nil : message
@@ -1230,6 +1510,7 @@ extension AgentModeViewModel {
                 visibleText: text.trimmingCharacters(in: .whitespacesAndNewlines),
                 providerText: text.trimmingCharacters(in: .whitespacesAndNewlines),
                 missionTemplate: nil,
+                missionPolicySnapshot: nil,
                 coordinatorSessionID: coordinatorSessionID,
                 forceNewRuntime: forceNewRuntime
             )
