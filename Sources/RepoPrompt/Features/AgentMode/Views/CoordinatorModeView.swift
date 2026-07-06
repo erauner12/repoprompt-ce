@@ -70,6 +70,11 @@ struct CoordinatorModeView: View {
         }
     }
 
+    private struct DecisionQueueTag: Hashable {
+        let title: String
+        let systemImage: String
+    }
+
     private enum MissionPlanDependencyBandKind: String, CaseIterable {
         case running
         case ready
@@ -333,7 +338,7 @@ struct CoordinatorModeView: View {
                     metrics: metrics
                 )
             case .decisions:
-                coordinatorDecisionsPlaceholder(snapshot: snapshot, metrics: metrics)
+                coordinatorDecisionsPanel(snapshot: snapshot, sections: sections, metrics: metrics)
             }
         }
     }
@@ -476,8 +481,9 @@ struct CoordinatorModeView: View {
         .background(CoordinatorTheme.Palette.windowBackground)
     }
 
-    private func coordinatorDecisionsPlaceholder(
+    private func coordinatorDecisionsPanel(
         snapshot: CoordinatorModeSnapshot,
+        sections: [CoordinatorModeStatusSection],
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         let pendingDecisionAttentionCount = coordinatorPendingDecisionAttentionCount(snapshot)
@@ -504,23 +510,194 @@ struct CoordinatorModeView: View {
                     .frame(height: 0.5)
             }
 
-            VStack(spacing: metrics.cardInnerSpacing) {
-                Image(systemName: "checklist")
-                    .font(.system(size: metrics.emptyStateIconSize, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Text("Decisions queue coming next")
-                    .font(metrics.inspectorTitle)
-                    .foregroundStyle(.primary)
-                Text("This destination is wired so the next pass can project pending Director decisions here. For now, answer open checkpoints from the selected Mission.")
-                    .font(metrics.body)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 420)
+            Group {
+                if snapshot.decisionQueue.isEmpty {
+                    coordinatorDecisionsEmptyState(metrics: metrics)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: metrics.listRowSpacing) {
+                            ForEach(snapshot.decisionQueue) { item in
+                                coordinatorDecisionQueueCard(
+                                    item,
+                                    snapshot: snapshot,
+                                    sections: sections,
+                                    metrics: metrics
+                                )
+                            }
+                        }
+                        .padding(metrics.outerPadding)
+                        .frame(maxWidth: 760, alignment: .topLeading)
+                        .frame(maxWidth: .infinity, alignment: .top)
+                    }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(metrics.outerPadding)
         }
         .background(CoordinatorTheme.Palette.windowBackground)
+    }
+
+    private func coordinatorDecisionsEmptyState(metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(spacing: metrics.cardInnerSpacing) {
+            Image(systemName: "checkmark.seal")
+                .font(.system(size: metrics.emptyStateIconSize, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text("No decisions waiting")
+                .font(metrics.inspectorTitle)
+                .foregroundStyle(.primary)
+            Text("When a Mission checkpoint or Agent session needs you, it will appear here.")
+                .font(metrics.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(metrics.outerPadding)
+    }
+
+    private func coordinatorDecisionQueueCard(
+        _ item: CoordinatorModeDecisionQueueItem,
+        snapshot: CoordinatorModeSnapshot,
+        sections: [CoordinatorModeStatusSection],
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let tags = coordinatorDecisionTags(for: item, snapshot: snapshot, sections: sections)
+        return Button {
+            openDecisionQueueItem(item)
+        } label: {
+            HStack(alignment: .center, spacing: metrics.controlSpacing) {
+                VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+                    HStack(spacing: metrics.smallSpacing) {
+                        statusChip(item.source.displayLabel, color: item.source.tint, metrics: metrics)
+                        Spacer(minLength: 0)
+                    }
+
+                    Text(item.title)
+                        .font(metrics.cardTitle)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    Text(coordinatorDecisionDetailText(for: item))
+                        .font(metrics.body)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    if !tags.isEmpty {
+                        HStack(spacing: metrics.smallSpacing) {
+                            ForEach(tags, id: \.self) { tag in
+                                coordinatorDecisionTag(tag, metrics: metrics)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: metrics.microIconSize, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
+            }
+            .padding(metrics.sessionCardPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Decision: \(item.title)")
+    }
+
+    private func coordinatorDecisionTag(_ tag: DecisionQueueTag, metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.miniPillIconSpacing) {
+            Image(systemName: tag.systemImage)
+                .font(.system(size: metrics.microIconSize, weight: .semibold))
+            Text(tag.title)
+                .font(metrics.microMedium)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, metrics.miniPillHorizontalPadding)
+        .padding(.vertical, metrics.miniPillVerticalPadding)
+        .background(Capsule().fill(Color.secondary.opacity(0.08)))
+        .overlay(Capsule().stroke(Color.secondary.opacity(0.16), lineWidth: 0.5))
+    }
+
+    private func coordinatorDecisionTags(
+        for item: CoordinatorModeDecisionQueueItem,
+        snapshot: CoordinatorModeSnapshot,
+        sections: [CoordinatorModeStatusSection]
+    ) -> [DecisionQueueTag] {
+        var tags: [DecisionQueueTag] = []
+        if let coordinatorSessionID = item.coordinatorSessionID,
+           let title = coordinatorTitle(for: coordinatorSessionID, snapshot: snapshot)
+        {
+            tags.append(DecisionQueueTag(title: title, systemImage: "rectangle.3.group.bubble"))
+        }
+        if let sessionID = item.sessionID,
+           sessionID != item.coordinatorSessionID,
+           let title = coordinatorRowTitle(for: sessionID, sections: sections)
+        {
+            tags.append(DecisionQueueTag(title: title, systemImage: "person.crop.circle"))
+        }
+        return tags
+    }
+
+    private func coordinatorDecisionDetailText(for item: CoordinatorModeDecisionQueueItem) -> String {
+        let detail = item.detail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !detail.isEmpty { return detail }
+        switch item.source {
+        case .planApproval:
+            return "Review the Mission checkpoint before work continues."
+        case .followThroughBoundary:
+            return "A held Mission step is waiting for your checkpoint."
+        case .interaction:
+            return "An Agent session is waiting for your reply."
+        case .review:
+            return "Review output is ready to inspect."
+        case .blockedUserAction:
+            return "A blocked Mission node needs your decision."
+        }
+    }
+
+    private func coordinatorTitle(for sessionID: UUID, snapshot: CoordinatorModeSnapshot) -> String? {
+        if snapshot.coordinatorRail.coordinatorSessionID == sessionID,
+           let title = snapshot.coordinatorRail.title
+        {
+            return title
+        }
+        return snapshot.coordinatorRail.availableCoordinators.first { $0.sessionID == sessionID }?.title
+    }
+
+    private func coordinatorRowTitle(for sessionID: UUID, sections: [CoordinatorModeStatusSection]) -> String? {
+        sections.flatMap(\.rows).first { $0.sessionID == sessionID }?.title
+    }
+
+    private func openDecisionQueueItem(_ item: CoordinatorModeDecisionQueueItem) {
+        switch item.source {
+        case .planApproval, .followThroughBoundary, .blockedUserAction:
+            openDecisionMissionTarget(item)
+        case .interaction, .review:
+            if item.sessionID == item.coordinatorSessionID {
+                openDecisionMissionTarget(item)
+            } else if let route = item.openAgentChatRoute {
+                onOpenAgentChat(route)
+            } else {
+                openDecisionMissionTarget(item)
+            }
+        }
+    }
+
+    private func openDecisionMissionTarget(_ item: CoordinatorModeDecisionQueueItem) {
+        guard let coordinatorSessionID = item.coordinatorSessionID else {
+            if let route = item.openAgentChatRoute {
+                onOpenAgentChat(route)
+            }
+            return
+        }
+        selectedPlanNodeID = item.nodeID
+        isMissionPlanPaneVisible = true
+        viewModel.selectCoordinator(sessionID: coordinatorSessionID)
     }
 
     private func boardControls(
@@ -7507,6 +7684,36 @@ private extension View {
                 .stroke(Color.accentColor.opacity(isSelected ? 0.72 : 0), lineWidth: 1.6)
         )
         .shadow(color: Color.accentColor.opacity(isSelected ? 0.28 : 0), radius: isSelected ? 8 : 0)
+    }
+}
+
+private extension CoordinatorModeDecisionQueueItem.Source {
+    var displayLabel: String {
+        switch self {
+        case .planApproval:
+            "Plan"
+        case .followThroughBoundary:
+            "Checkpoint"
+        case .interaction:
+            "Ask"
+        case .review:
+            "Review"
+        case .blockedUserAction:
+            "Blocked"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .planApproval:
+            Color.accentColor
+        case .followThroughBoundary, .interaction:
+            .orange
+        case .review:
+            .purple
+        case .blockedUserAction:
+            .red
+        }
     }
 }
 
