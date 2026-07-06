@@ -185,6 +185,7 @@ struct CoordinatorModeView: View {
     @State private var hoveredPlanNodeID: UUID?
     @State private var filterText = ""
     @State private var coordinatorDirectiveDraft = ""
+    @State private var missionPlanRevisionDraft = ""
     @State private var coordinatorCheckpointDrafts: [UUID: [String: AgentAskUserDraft]] = [:]
     @State private var coordinatorCheckpointQuestionIndex: [UUID: Int] = [:]
     @State private var coordinatorOwnedCheckpointDrafts: [String: [String: AgentAskUserDraft]] = [:]
@@ -197,6 +198,10 @@ struct CoordinatorModeView: View {
     @State private var coordinatorTextFieldResetTrigger = false
     @State private var coordinatorTextFieldHeight = ResizableTextField.height(forPresetIndex: 0, preset: .normal)
     @State private var coordinatorComposerChromeOcclusion: CGFloat = 0
+    @State private var missionPlanComposerChromeOcclusion: CGFloat = 0
+    @State private var missionPlanComposerTextFieldResetTrigger = false
+    @State private var missionPlanComposerTextFieldHeight = ResizableTextField.height(forPresetIndex: 0, preset: .normal)
+    @State private var isSubmittingMissionPlanRevision = false
     @State private var isCoordinatorToolsPopoverPresented = false
     @State private var coordinatorToolsRevision = 0
     @State private var isChildComposerExpanded = false
@@ -209,6 +214,7 @@ struct CoordinatorModeView: View {
     @State private var isMissionTemplatePopoverPresented = false
     @State private var isMissionTemplateConfigureSheetPresented = false
     @FocusState private var isCoordinatorComposerFocused: Bool
+    @FocusState private var isMissionPlanComposerFocused: Bool
     @FocusState private var isChildComposerFocused: Bool
     @ObservedObject private var fontScale = FontScaleManager.shared
     @ObservedObject private var globalSettings = GlobalSettingsStore.shared
@@ -357,6 +363,13 @@ struct CoordinatorModeView: View {
                 metrics: metrics
             )
             .frame(maxHeight: inspectorTarget == nil || !isInspectorVisible ? .infinity : metrics.rightBoardHeight)
+
+            if snapshot.coordinatorRail.missionPlan != nil {
+                Divider()
+                    .opacity(0.28)
+                missionPlanFooterComposer(rail: snapshot.coordinatorRail, metrics: metrics)
+                    .padding(metrics.outerPadding)
+            }
 
             if let inspectorTarget, isInspectorVisible {
                 Divider()
@@ -1577,6 +1590,130 @@ struct CoordinatorModeView: View {
                 .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
             }
             .background(CoordinatorTheme.Palette.windowBackground)
+        }
+    }
+
+    private func missionPlanFooterComposer(
+        rail: CoordinatorModeCoordinatorRail,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let placeholder = missionPlanFooterComposerPlaceholder(rail)
+        let canEdit = canEditMissionPlanRevision(rail)
+        let canSubmit = canSubmitMissionPlanRevision(rail)
+
+        return VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            HStack(spacing: metrics.tightSpacing) {
+                Image(systemName: "pencil.line")
+                    .font(.system(size: metrics.microIconSize, weight: .semibold))
+                Text("✎ PLAN")
+                    .font(metrics.microMedium)
+                    .tracking(0.4)
+            }
+            .foregroundStyle(canEdit ? Color.accentColor : .secondary)
+
+            ComposerChrome(
+                bottomOcclusion: $missionPlanComposerChromeOcclusion,
+                mainContentHeight: max(missionPlanComposerTextFieldHeight, metrics.composerTextMinHeight),
+                highlightColor: canSubmit ? Color.accentColor : nil,
+                bubbleVerticalPaddingOverride: metrics.coordinatorComposerChromeVerticalPadding,
+                bubbleInnerSpacingOverride: metrics.coordinatorComposerChromeInnerSpacing,
+                controlStripHeightOverride: metrics.composerControlStripHeight,
+                main: {
+                    ResizableTextField(
+                        text: $missionPlanRevisionDraft,
+                        placeholder: placeholder,
+                        onReturn: submitMissionPlanRevision,
+                        resetTrigger: $missionPlanComposerTextFieldResetTrigger,
+                        features: coordinatorComposerFeatures(),
+                        onHeightChange: { newHeight in
+                            missionPlanComposerTextFieldHeight = newHeight
+                        }
+                    )
+                    .frame(height: max(missionPlanComposerTextFieldHeight, metrics.composerTextMinHeight))
+                    .disabled(!canEdit)
+                    .focused($isMissionPlanComposerFocused)
+                    .overlay(
+                        Text(placeholder)
+                            .font(metrics.body)
+                            .foregroundStyle(.secondary)
+                            .opacity(missionPlanRevisionDraft.isEmpty ? 1 : 0)
+                            .padding(.leading, 5)
+                            .padding(.top, 8)
+                            .allowsHitTesting(false),
+                        alignment: .topLeading
+                    )
+                },
+                strip: {
+                    HStack(spacing: metrics.smallSpacing) {
+                        Text("Plan revision")
+                            .font(metrics.microMedium)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+
+                        Spacer(minLength: metrics.smallSpacing)
+
+                        Button {
+                            submitMissionPlanRevision()
+                        } label: {
+                            Image(systemName: isSubmittingMissionPlanRevision ? "hourglass" : "paperplane.fill")
+                                .font(.system(size: metrics.composerSendIconSize, weight: .semibold))
+                                .frame(width: metrics.sendButtonSize, height: metrics.sendButtonSize)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(canSubmit ? Color.accentColor : Color.secondary.opacity(0.55))
+                        .disabled(!canSubmit)
+                        .hoverTooltip(isSubmittingMissionPlanRevision ? "Sending" : "Revise plan")
+                    }
+                    .frame(height: metrics.composerControlStripHeight)
+                    .padding(.horizontal, metrics.composerControlHorizontalPadding)
+                }
+            )
+        }
+    }
+
+    private func missionPlanFooterComposerPlaceholder(_ rail: CoordinatorModeCoordinatorRail) -> String {
+        guard let plan = rail.missionPlan else {
+            return "Approve the plan first to revise it…"
+        }
+        if plan.approvalState == .awaitingApproval {
+            return "Approve the plan first to revise it…"
+        }
+        return "Revise the plan — add, remove, or change a pending step…"
+    }
+
+    private func canEditMissionPlanRevision(_ rail: CoordinatorModeCoordinatorRail) -> Bool {
+        guard rail.state == .selected,
+              let plan = rail.missionPlan,
+              rail.isComposerEnabled,
+              rail.isComposerSendEnabled,
+              plan.approvalState != .awaitingApproval
+        else { return false }
+        return !isSubmittingMissionPlanRevision
+    }
+
+    private func canSubmitMissionPlanRevision(_ rail: CoordinatorModeCoordinatorRail) -> Bool {
+        canEditMissionPlanRevision(rail)
+            && !missionPlanRevisionDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func submitMissionPlanRevision() {
+        let rail = viewModel.snapshot.coordinatorRail
+        let draft = missionPlanRevisionDraft
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              canSubmitMissionPlanRevision(rail),
+              viewModel.queuePlanRevisionDecisionAfterAcceptedDirective()
+        else { return }
+
+        isSubmittingMissionPlanRevision = true
+        isMissionPlanComposerFocused = true
+        Task { @MainActor in
+            let result = await viewModel.submitCoordinatorDirective(draft)
+            if result == .accepted {
+                missionPlanRevisionDraft = ""
+            }
+            isSubmittingMissionPlanRevision = false
+            isMissionPlanComposerFocused = true
         }
     }
 
@@ -3968,6 +4105,17 @@ struct CoordinatorModeView: View {
     private func reviseCoordinatorPlanApprovalCheckpoint() {
         coordinatorOwnedCheckpointDrafts[Self.planApprovalCheckpointDraftKey] = nil
         coordinatorOwnedCheckpointQuestionIndex[Self.planApprovalCheckpointDraftKey] = nil
+        let rail = viewModel.snapshot.coordinatorRail
+        if isMissionPlanPaneVisible,
+           rail.missionPlan != nil,
+           canEditMissionPlanRevision(rail)
+        {
+            if missionPlanRevisionDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                missionPlanRevisionDraft = "Revise the plan: "
+            }
+            isMissionPlanComposerFocused = true
+            return
+        }
         viewModel.queuePlanRevisionDecisionAfterAcceptedDirective()
         if coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             coordinatorDirectiveDraft = "Revise the plan: "
