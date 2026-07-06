@@ -141,7 +141,7 @@ struct CoordinatorModeView: View {
         var title: String {
             switch self {
             case .openToReply:
-                "Open to reply"
+                "Open Agent"
             case .ready, .blocked:
                 "Reply to this session"
             }
@@ -152,7 +152,7 @@ struct CoordinatorModeView: View {
             case .ready:
                 "Send a follow-up to \(row.title)"
             case .openToReply:
-                "Open this session in Agent Mode to send a follow-up."
+                "Open this session in Agent Mode."
             case let .blocked(_, notice):
                 notice
             }
@@ -498,8 +498,6 @@ struct CoordinatorModeView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            boardFilterBar(metrics: metrics)
         }
         .background(CoordinatorTheme.Palette.windowBackground)
     }
@@ -745,17 +743,6 @@ struct CoordinatorModeView: View {
                 mcpAwarenessChip(mcpAwareness, metrics: metrics)
             }
         }
-    }
-
-    private func boardFilterBar(metrics: CoordinatorVisualMetrics) -> some View {
-        HStack(spacing: metrics.controlSpacing) {
-            filterSearchBox(metrics: metrics)
-                .frame(minWidth: metrics.searchWidth, maxWidth: metrics.bottomSearchMaxWidth)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, metrics.outerPadding)
-        .padding(.vertical, metrics.footerVerticalPadding)
-        .background(.regularMaterial)
     }
 
     private func shouldShowMCPAwarenessChip(_ awareness: CoordinatorModeMCPAwareness) -> Bool {
@@ -1109,12 +1096,7 @@ struct CoordinatorModeView: View {
             )
         }
         .buttonStyle(.plain)
-        .coordinatorCardBackground(
-            cornerRadius: metrics.pendingCornerRadius,
-            isSelected: isSelected,
-            fillOpacity: 0.12,
-            strokeOpacity: 0.10
-        )
+        .coordinatorSidebarRowBackground(cornerRadius: metrics.sidebarRowCornerRadius, isSelected: isSelected)
         .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -1349,12 +1331,7 @@ struct CoordinatorModeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
-        .coordinatorCardBackground(
-            cornerRadius: metrics.pendingCornerRadius,
-            isSelected: rail.state == .chooseCoordinator,
-            fillOpacity: 0.14,
-            strokeOpacity: 0.10
-        )
+        .coordinatorSidebarRowBackground(cornerRadius: metrics.sidebarRowCornerRadius, isSelected: rail.state == .chooseCoordinator)
         .hoverTooltip("Prepare a fresh mission")
         .accessibilityAction {
             viewModel.startNewCoordinatorRun()
@@ -1409,12 +1386,7 @@ struct CoordinatorModeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
-        .coordinatorCardBackground(
-            cornerRadius: metrics.pendingCornerRadius,
-            isSelected: option.isSelected,
-            fillOpacity: 0.12,
-            strokeOpacity: 0.10
-        )
+        .coordinatorSidebarRowBackground(cornerRadius: metrics.sidebarRowCornerRadius, isSelected: option.isSelected)
         .contextMenu {
             Button(option.isPinned ? "Unpin" : "Pin") {
                 viewModel.togglePinnedCoordinator(option)
@@ -5991,15 +5963,21 @@ struct CoordinatorModeView: View {
         let availability = childDirectiveAvailability(for: row)
         let isExpanded = isChildComposerExpanded || isSubmittingChildDirective || !childDirectiveDraft.isEmpty
 
-        return VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-            if isExpanded, let notice = childDirectiveNotice ?? availability.notice(for: row), !notice.isEmpty {
-                coordinatorComposerNotice(notice, metrics: metrics)
-            }
-
-            if isExpanded {
-                inspectorExpandedChildComposer(row: row, availability: availability, metrics: metrics)
+        return Group {
+            if case .openToReply = availability {
+                EmptyView()
             } else {
-                inspectorCollapsedChildComposer(row: row, availability: availability, metrics: metrics)
+                VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+                    if isExpanded, let notice = childDirectiveNotice ?? availability.notice(for: row), !notice.isEmpty {
+                        coordinatorComposerNotice(notice, metrics: metrics)
+                    }
+
+                    if isExpanded {
+                        inspectorExpandedChildComposer(row: row, availability: availability, metrics: metrics)
+                    } else {
+                        inspectorCollapsedChildComposer(row: row, availability: availability, metrics: metrics)
+                    }
+                }
             }
         }
     }
@@ -7805,6 +7783,10 @@ private struct CoordinatorVisualMetrics {
         fontPreset.scaledClamped(8, max: 12)
     }
 
+    var sidebarRowCornerRadius: CGFloat {
+        fontPreset.scaledClamped(16, max: 20)
+    }
+
     var searchCornerRadius: CGFloat {
         fontPreset.scaledClamped(16, max: 20)
     }
@@ -8056,6 +8038,17 @@ private extension View {
         .overlay(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .stroke(resolvedStroke, lineWidth: 1)
+        )
+    }
+
+    func coordinatorSidebarRowBackground(cornerRadius: CGFloat, isSelected: Bool) -> some View {
+        background(
+            Group {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.15))
+                }
+            }
         )
     }
 
