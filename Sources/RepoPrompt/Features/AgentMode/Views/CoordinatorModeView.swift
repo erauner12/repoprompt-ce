@@ -213,6 +213,7 @@ struct CoordinatorModeView: View {
     @State private var isMissionPolicyPopoverPresented = false
     @State private var isMissionTemplatePopoverPresented = false
     @State private var isMissionTemplateConfigureSheetPresented = false
+    @State private var copiedMissionReceiptPlanID: UUID?
     @FocusState private var isCoordinatorComposerFocused: Bool
     @FocusState private var isMissionPlanComposerFocused: Bool
     @FocusState private var isChildComposerFocused: Bool
@@ -3949,44 +3950,15 @@ struct CoordinatorModeView: View {
         _ plan: CoordinatorMissionPlan,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        let completedNodeCount = plan.nodes.count(where: { $0.status == .completed })
-        let userDecisionCount = plan.decisions.count(where: { $0.actor == .user })
-        let directorDecisionCount = plan.decisions.count(where: { $0.actor == .director })
-        let meetsCount = plan.evidence.count(where: { $0.verdict == .meets })
-        let closeName = plan.shapeSummary?.namedClose ?? "Mission"
+        let projection = CoordinatorMissionReceiptProjection(plan: plan)
 
         return VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-            HStack(spacing: metrics.smallSpacing) {
-                Label("Completed Mission receipt", systemImage: "checkmark.seal.fill")
-                    .font(metrics.microMedium)
-                    .foregroundStyle(.green)
-                Spacer(minLength: metrics.smallSpacing)
-                statusChip(closeName, color: .green, metrics: metrics)
-            }
-            HStack(spacing: metrics.smallSpacing) {
-                statusChip("\(completedNodeCount)/\(plan.nodes.count) nodes", color: .green, metrics: metrics)
-                statusChip("\(userDecisionCount) user", color: .green, metrics: metrics)
-                statusChip("\(directorDecisionCount) Director", color: .secondary, metrics: metrics)
-                if plan.evidence.isEmpty {
-                    statusChip("No evidence", color: .secondary, metrics: metrics)
-                } else {
-                    statusChip("\(meetsCount)/\(plan.evidence.count) evidence", color: meetsCount == plan.evidence.count ? .green : .orange, metrics: metrics)
-                }
-            }
-            if let policySnapshot = plan.policySnapshot {
-                Text("Policy: \(policySnapshot.name)")
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
-            }
-            if let latestEvidence = plan.evidence.sorted(by: { $0.timestamp > $1.timestamp }).first {
-                Text(latestEvidence.summary)
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                if let judgmentBundle = latestEvidence.judgmentBundle {
-                    judgmentBundleDisclosure(judgmentBundle, metrics: metrics)
-                }
-            }
+            completedMissionReceiptHeader(projection: projection, planID: plan.id, metrics: metrics)
+            completedMissionReceiptOverview(projection, metrics: metrics)
+            completedMissionReceiptPolicy(projection.policy, metrics: metrics)
+            completedMissionReceiptDecisions(projection.decisionCounts, metrics: metrics)
+            completedMissionReceiptEvidence(projection.evidence, metrics: metrics)
+            completedMissionReceiptSpend(metrics: metrics)
         }
         .padding(metrics.tightSpacing)
         .background(
@@ -3997,6 +3969,184 @@ struct CoordinatorModeView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.green.opacity(0.18), lineWidth: 0.75)
         )
+    }
+
+    private func completedMissionReceiptHeader(
+        projection: CoordinatorMissionReceiptProjection,
+        planID: UUID,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let isCopied = copiedMissionReceiptPlanID == planID
+        let tint = isCopied ? Color.green : Color.accentColor
+
+        return HStack(spacing: metrics.smallSpacing) {
+            Label("Completed Mission receipt", systemImage: "checkmark.seal.fill")
+                .font(metrics.microMedium)
+                .foregroundStyle(.green)
+            Spacer(minLength: metrics.smallSpacing)
+            Button {
+                copyCompletedMissionReceiptMarkdown(projection.markdown, planID: planID)
+            } label: {
+                Label(isCopied ? "Copied" : "Copy Markdown", systemImage: isCopied ? "checkmark" : "doc.on.clipboard")
+                    .font(metrics.microMedium)
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(tint)
+            .padding(.horizontal, metrics.miniPillHorizontalPadding)
+            .padding(.vertical, metrics.miniPillVerticalPadding)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(tint.opacity(0.10))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(tint.opacity(0.24), lineWidth: 0.8)
+            )
+            .hoverTooltip("Copy Mission receipt as Markdown")
+        }
+    }
+
+    @ViewBuilder
+    private func completedMissionReceiptOverview(
+        _ projection: CoordinatorMissionReceiptProjection,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        Text(projection.title)
+            .font(metrics.cardTitle)
+            .foregroundStyle(.primary)
+            .lineLimit(2)
+
+        if let objective = projection.objective {
+            Text(objective)
+                .font(metrics.micro)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+        }
+
+        if let summary = projection.summary {
+            Text(summary)
+                .font(metrics.micro)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+        }
+    }
+
+    @ViewBuilder
+    private func completedMissionReceiptPolicy(
+        _ policy: CoordinatorMissionReceiptProjection.PolicySummary?,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        if let policy {
+            VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+                Text("Policy")
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: metrics.smallSpacing) {
+                    statusChip(policy.name, color: .secondary, metrics: metrics)
+                    statusChip(policy.pace, color: .secondary, metrics: metrics)
+                    statusChip("Max \(policy.maxConcurrent)", color: .secondary, metrics: metrics)
+                }
+                if !policy.askClasses.isEmpty {
+                    Text("Asks: \(policy.askClasses.joined(separator: ", "))")
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                if let definitionOfDone = policy.definitionOfDone {
+                    Text("Done: \(definitionOfDone)")
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                if let standingGuidance = policy.standingGuidance {
+                    Text("Guidance: \(standingGuidance)")
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+        }
+    }
+
+    private func completedMissionReceiptDecisions(
+        _ decisionCounts: CoordinatorMissionReceiptProjection.DecisionCounts,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            Text("Decisions")
+                .font(metrics.microMedium)
+                .foregroundStyle(.secondary)
+            HStack(spacing: metrics.smallSpacing) {
+                statusChip("\(decisionCounts.total) total", color: .green, metrics: metrics)
+                statusChip("\(decisionCounts.user) user", color: .green, metrics: metrics)
+                statusChip("\(decisionCounts.director) Director", color: .secondary, metrics: metrics)
+            }
+            if !decisionCounts.byClass.isEmpty {
+                Text(decisionCounts.byClass.map { "\($0.name) \($0.count)" }.joined(separator: " · "))
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private func completedMissionReceiptEvidence(
+        _ evidenceSummaries: [CoordinatorMissionReceiptProjection.EvidenceSummary],
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            Text("Evidence")
+                .font(metrics.microMedium)
+                .foregroundStyle(.secondary)
+            if evidenceSummaries.isEmpty {
+                Text("No evidence recorded for this Mission.")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(evidenceSummaries.enumerated()), id: \.offset) { _, evidence in
+                    completedMissionReceiptEvidenceRow(evidence, metrics: metrics)
+                }
+            }
+        }
+    }
+
+    private func completedMissionReceiptEvidenceRow(
+        _ evidence: CoordinatorMissionReceiptProjection.EvidenceSummary,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+            statusChip(evidence.verdict, color: evidence.verdict == "meets" ? .green : .orange, metrics: metrics)
+            Text(evidence.summary)
+                .font(metrics.micro)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+    }
+
+    private func completedMissionReceiptSpend(metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            Text("Spend")
+                .font(metrics.microMedium)
+                .foregroundStyle(.secondary)
+            Text(CoordinatorMissionReceiptProjection.spendReserveCopy)
+                .font(metrics.micro)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+    }
+
+    private func copyCompletedMissionReceiptMarkdown(_ markdown: String, planID: UUID) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(markdown, forType: .string)
+        copiedMissionReceiptPlanID = planID
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            await MainActor.run {
+                guard copiedMissionReceiptPlanID == planID else { return }
+                copiedMissionReceiptPlanID = nil
+            }
+        }
     }
 
     private func coordinatorMissionTemplateBadge(
