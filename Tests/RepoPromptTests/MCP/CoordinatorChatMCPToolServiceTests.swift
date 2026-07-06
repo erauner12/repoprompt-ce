@@ -1239,6 +1239,255 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertTrue(warnings.contains("running_delegated_nodes_without_bound_sessions"))
     }
 
+    func testMissionStatusCompactIncludesDepsSatisfiedAndReadyNodeIDs() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let firstID = UUID()
+        let secondID = UUID()
+        let thirdID = UUID()
+        let fourthID = UUID()
+        let blockedID = UUID()
+        let plan = CoordinatorMissionPlan(
+            objective: "Run canonical DAG",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Runtime",
+                    purpose: "Exercise ready nodes.",
+                    defaultPolicy: .freshWorktree,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: firstID,
+                    title: "First independent node",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .completed
+                ),
+                CoordinatorMissionPlanNode(
+                    id: secondID,
+                    title: "Second independent node",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .pending
+                ),
+                CoordinatorMissionPlanNode(
+                    id: thirdID,
+                    title: "Depends on first",
+                    workstreamID: workstreamID,
+                    dependsOn: [firstID],
+                    executionPolicy: .freshWorktree,
+                    status: .pending
+                ),
+                CoordinatorMissionPlanNode(
+                    id: fourthID,
+                    title: "Depends on second and third",
+                    workstreamID: workstreamID,
+                    dependsOn: [secondID, thirdID],
+                    executionPolicy: .freshWorktree,
+                    status: .pending
+                ),
+                CoordinatorMissionPlanNode(
+                    id: blockedID,
+                    title: "Blocked active node",
+                    workstreamID: workstreamID,
+                    dependsOn: [firstID],
+                    executionPolicy: .freshWorktree,
+                    status: .blocked
+                )
+            ]
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ])
+        let status = try XCTUnwrap(response.objectValue?["mission_status"]?.objectValue)
+        let readyNodeIDs = try XCTUnwrap(status["ready_node_ids"]?.arrayValue?.compactMap(\.stringValue))
+        let activeNodes = try XCTUnwrap(status["active_nodes"]?.arrayValue?.compactMap(\.objectValue))
+        let blockedNode = try XCTUnwrap(activeNodes.first { $0["id"]?.stringValue == blockedID.uuidString })
+
+        XCTAssertEqual(readyNodeIDs, [secondID.uuidString, thirdID.uuidString])
+        XCTAssertFalse(readyNodeIDs.contains(fourthID.uuidString))
+        XCTAssertEqual(blockedNode["deps_satisfied"]?.boolValue, true)
+    }
+
+    func testCompactMissionStatusFingerprintMovesForReadySetDeltaAndEdgeOnlyRevision() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let parentID = UUID()
+        let childID = UUID()
+        let baseNodes = [
+            CoordinatorMissionPlanNode(
+                id: parentID,
+                title: "Parent",
+                workstreamID: workstreamID,
+                executionPolicy: .freshWorktree,
+                status: .pending
+            ),
+            CoordinatorMissionPlanNode(
+                id: childID,
+                title: "Child",
+                workstreamID: workstreamID,
+                dependsOn: [parentID],
+                executionPolicy: .freshWorktree,
+                status: .pending
+            )
+        ]
+        let basePlan = CoordinatorMissionPlan(
+            revision: 4,
+            objective: "Watch ready set",
+            status: .running,
+            approvalState: .approved,
+            nodes: baseNodes
+        )
+        let completedParentPlan = CoordinatorMissionPlan(
+            revision: 5,
+            objective: "Watch ready set",
+            status: .running,
+            approvalState: .approved,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: parentID,
+                    title: "Parent",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .completed
+                ),
+                baseNodes[1]
+            ]
+        )
+        let noEdgePlan = CoordinatorMissionPlan(
+            revision: 6,
+            objective: "Watch edge-only revision",
+            status: .running,
+            approvalState: .approved,
+            nodes: [
+                baseNodes[0],
+                CoordinatorMissionPlanNode(
+                    id: childID,
+                    title: "Child",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .pending
+                )
+            ]
+        )
+        let edgeOnlyPlan = CoordinatorMissionPlan(
+            revision: 6,
+            objective: "Watch edge-only revision",
+            status: .running,
+            approvalState: .approved,
+            nodes: baseNodes
+        )
+        let args: [String: Value] = [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ]
+
+        let baseFingerprint = try await compactFingerprint(
+            service: makeService(coordinatorIDs: [coordinatorID], selectedID: coordinatorID, missionPlans: { [coordinatorID: basePlan] }),
+            args: args
+        )
+        let completedFingerprint = try await compactFingerprint(
+            service: makeService(coordinatorIDs: [coordinatorID], selectedID: coordinatorID, missionPlans: { [coordinatorID: completedParentPlan] }),
+            args: args
+        )
+        let noEdgeFingerprint = try await compactFingerprint(
+            service: makeService(coordinatorIDs: [coordinatorID], selectedID: coordinatorID, missionPlans: { [coordinatorID: noEdgePlan] }),
+            args: args
+        )
+        let edgeOnlyFingerprint = try await compactFingerprint(
+            service: makeService(coordinatorIDs: [coordinatorID], selectedID: coordinatorID, missionPlans: { [coordinatorID: edgeOnlyPlan] }),
+            args: args
+        )
+
+        XCTAssertNotEqual(baseFingerprint, completedFingerprint)
+        XCTAssertNotEqual(noEdgeFingerprint, edgeOnlyFingerprint)
+    }
+
+    func testMissionStatusCompactEligibleNodesIdleWarningMatrix() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let readyPlan = CoordinatorMissionPlan(
+            objective: "Ready idle work",
+            status: .running,
+            approvalState: .approved,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    title: "Ready node",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .pending
+                )
+            ]
+        )
+        let runningPlan = CoordinatorMissionPlan(
+            objective: "Running work",
+            status: .running,
+            approvalState: .approved,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    title: "Running node",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .running
+                ),
+                CoordinatorMissionPlanNode(
+                    title: "Ready later node",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .pending
+                )
+            ]
+        )
+        let args: [String: Value] = [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ]
+
+        let idleWarnings = try await compactWarnings(
+            service: makeService(
+                coordinatorIDs: [coordinatorID],
+                selectedID: coordinatorID,
+                coordinatorRunState: .completed,
+                missionPlans: { [coordinatorID: readyPlan] }
+            ),
+            args: args
+        )
+        let runningNodeWarnings = try await compactWarnings(
+            service: makeService(
+                coordinatorIDs: [coordinatorID],
+                selectedID: coordinatorID,
+                coordinatorRunState: .completed,
+                missionPlans: { [coordinatorID: runningPlan] }
+            ),
+            args: args
+        )
+        let checkpointActiveWarnings = try await compactWarnings(
+            service: makeService(
+                coordinatorIDs: [coordinatorID],
+                selectedID: coordinatorID,
+                coordinatorRunState: .waitingForApproval,
+                missionPlans: { [coordinatorID: readyPlan] }
+            ),
+            args: args
+        )
+
+        XCTAssertTrue(idleWarnings.contains("eligible_nodes_idle"))
+        XCTAssertFalse(runningNodeWarnings.contains("eligible_nodes_idle"))
+        XCTAssertFalse(checkpointActiveWarnings.contains("eligible_nodes_idle"))
+    }
+
     func testMissionStatusCompactIncludesPlanApprovalCheckpointActions() async throws {
         let coordinatorID = UUID()
         let workstreamID = UUID()
@@ -2012,6 +2261,22 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             taskLabelKind: .pair,
             allowsAgentExternalControlTools: true
         ))
+    }
+
+    private func compactFingerprint(
+        service: CoordinatorChatMCPToolService,
+        args: [String: Value]
+    ) async throws -> String {
+        let response = try await service.execute(args: args)
+        return try XCTUnwrap(response.objectValue?["mission_status"]?.objectValue?["fingerprint"]?.stringValue)
+    }
+
+    private func compactWarnings(
+        service: CoordinatorChatMCPToolService,
+        args: [String: Value]
+    ) async throws -> [String] {
+        let response = try await service.execute(args: args)
+        return try XCTUnwrap(response.objectValue?["mission_status"]?.objectValue?["liveness_warnings"]?.arrayValue?.compactMap(\.stringValue))
     }
 
     private func makeService(

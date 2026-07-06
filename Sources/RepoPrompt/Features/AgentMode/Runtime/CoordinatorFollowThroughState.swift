@@ -1554,6 +1554,7 @@ struct CoordinatorFollowThroughEvent: Codable, Equatable, Identifiable {
             "",
             "Continue the original objective only if this clears a safe boundary.",
             "An action-approval gate permits only the explicitly approved action and does not approve any later action.",
+            "If this event completed or unblocked Mission work, consult `coordinator_chat op=mission_status` with `compact:true`: any pending node whose dependencies are now all completed is eligible. Launch eligible nodes per their execution policies and the Mission policy `max_concurrent` cap, in parallel where worktree strategies permit. Never start a node that is already running or has a bound session.",
             "Respect any remaining permission, approval, blocked, or needs-user boundary. If the next safe step is unclear, ask one concise question and stop.",
             "</coordinator_follow_through_resume>"
         ])

@@ -1488,6 +1488,12 @@ struct CoordinatorChatMCPToolService {
             rows.map { ($0.sessionID, $0) },
             uniquingKeysWith: { first, _ in first }
         )
+        let nodesByID = Dictionary(uniqueKeysWithValues: plan.nodes.map { ($0.id, $0) })
+        let dependencySatisfactionByNodeID = missionPlanDependencySatisfactionByNodeID(plan, nodesByID: nodesByID)
+        let readyNodeIDs = missionPlanReadyNodeIDs(
+            plan,
+            dependencySatisfactionByNodeID: dependencySatisfactionByNodeID
+        )
         let nodeCounts = Dictionary(grouping: plan.nodes, by: \.status).mapValues(\.count)
         let terminalCount = (nodeCounts[.completed] ?? 0) + (nodeCounts[.skipped] ?? 0) + (nodeCounts[.cancelled] ?? 0)
         let activeNodes = plan.nodes.filter { $0.status == .running || $0.status == .blocked }
@@ -1504,14 +1510,22 @@ struct CoordinatorChatMCPToolService {
             plan: plan,
             activeNodes: activeNodes,
             runningDelegatedNodesWithoutBoundSessions: runningDelegatedNodesWithoutBoundSessions,
-            missingBoundRows: missingBoundRows
+            missingBoundRows: missingBoundRows,
+            readyNodeIDs: readyNodeIDs
         ) + routingWarnings
         let runStateSummary = option.runState?.rawValue ?? "unknown"
         let debugSummary = "\(option.title): \(plan.status.rawValue), \(runStateSummary), r\(plan.revision), \(terminalCount)/\(plan.nodes.count) terminal nodes, \(activeNodes.count) active/blocking."
 
         return .object([
             "compact": .bool(true),
-            "fingerprint": .string(compactMissionStatusFingerprint(option: option, plan: plan, rows: rows, counts: snapshot.counts)),
+            "fingerprint": .string(compactMissionStatusFingerprint(
+                option: option,
+                plan: plan,
+                rows: rows,
+                counts: snapshot.counts,
+                readyNodeIDs: readyNodeIDs,
+                dependencySatisfactionByNodeID: dependencySatisfactionByNodeID
+            )),
             "coordinator_session_id": .string(option.sessionID.uuidString),
             "title": .string(option.title),
             "selected": .bool(option.isSelected),
@@ -1539,11 +1553,30 @@ struct CoordinatorChatMCPToolService {
             "workstreams": .array(plan.workstreams.map { workstream in
                 compactMissionStatusWorkstreamValue(workstream, plan: plan, rowsBySessionID: rowsBySessionID)
             }),
-            "active_nodes": .array(activeNodes.map { compactMissionStatusNodeValue($0, rowsBySessionID: rowsBySessionID) }),
+            "ready_node_ids": .array(readyNodeIDs.map { .string($0.uuidString) }),
+            "active_nodes": .array(activeNodes.map {
+                compactMissionStatusNodeValue(
+                    $0,
+                    rowsBySessionID: rowsBySessionID,
+                    depsSatisfied: dependencySatisfactionByNodeID[$0.id] == true
+                )
+            }),
             "running_delegated_nodes_without_bound_sessions": .array(
-                runningDelegatedNodesWithoutBoundSessions.map { compactMissionStatusNodeValue($0, rowsBySessionID: rowsBySessionID) }
+                runningDelegatedNodesWithoutBoundSessions.map {
+                    compactMissionStatusNodeValue(
+                        $0,
+                        rowsBySessionID: rowsBySessionID,
+                        depsSatisfied: dependencySatisfactionByNodeID[$0.id] == true
+                    )
+                }
             ),
-            "missing_bound_rows": .array(missingBoundRows.map { compactMissionStatusNodeValue($0, rowsBySessionID: rowsBySessionID) }),
+            "missing_bound_rows": .array(missingBoundRows.map {
+                compactMissionStatusNodeValue(
+                    $0,
+                    rowsBySessionID: rowsBySessionID,
+                    depsSatisfied: dependencySatisfactionByNodeID[$0.id] == true
+                )
+            }),
             "liveness_warnings": .array(warnings.map(Value.string)),
             "checkpoint": compactMissionCheckpointValue(plan),
             "recent_events": .array(
@@ -1589,6 +1622,42 @@ struct CoordinatorChatMCPToolService {
         ])
     }
 
+    private func missionPlanReadyNodeIDs(_ plan: CoordinatorMissionPlan) -> [UUID] {
+        let nodesByID = Dictionary(uniqueKeysWithValues: plan.nodes.map { ($0.id, $0) })
+        let dependencySatisfactionByNodeID = missionPlanDependencySatisfactionByNodeID(plan, nodesByID: nodesByID)
+        return missionPlanReadyNodeIDs(plan, dependencySatisfactionByNodeID: dependencySatisfactionByNodeID)
+    }
+
+    private func missionPlanReadyNodeIDs(
+        _ plan: CoordinatorMissionPlan,
+        dependencySatisfactionByNodeID: [UUID: Bool]
+    ) -> [UUID] {
+        plan.nodes.compactMap { node in
+            guard node.status == .pending,
+                  dependencySatisfactionByNodeID[node.id] == true
+            else { return nil }
+            return node.id
+        }
+    }
+
+    private func missionPlanDependencySatisfactionByNodeID(
+        _ plan: CoordinatorMissionPlan,
+        nodesByID: [UUID: CoordinatorMissionPlanNode]
+    ) -> [UUID: Bool] {
+        Dictionary(uniqueKeysWithValues: plan.nodes.map { node in
+            (node.id, missionPlanDependenciesSatisfied(node, nodesByID: nodesByID))
+        })
+    }
+
+    private func missionPlanDependenciesSatisfied(
+        _ node: CoordinatorMissionPlanNode,
+        nodesByID: [UUID: CoordinatorMissionPlanNode]
+    ) -> Bool {
+        node.dependsOn.allSatisfy { dependencyID in
+            nodesByID[dependencyID]?.status == .completed
+        }
+    }
+
     private func compactMissionNextRecommendedRoute(
         workstream: CoordinatorMissionWorkstreamSummary,
         plan: CoordinatorMissionPlan
@@ -1622,7 +1691,9 @@ struct CoordinatorChatMCPToolService {
         option: CoordinatorModeCoordinatorOption,
         plan: CoordinatorMissionPlan?,
         rows: [CoordinatorModeRow],
-        counts: CoordinatorModeCounts
+        counts: CoordinatorModeCounts,
+        readyNodeIDs: [UUID] = [],
+        dependencySatisfactionByNodeID: [UUID: Bool] = [:]
     ) -> String {
         var parts = [
             "coordinator",
@@ -1690,12 +1761,17 @@ struct CoordinatorChatMCPToolService {
                 node.id.uuidString,
                 node.status.rawValue,
                 node.executionPolicy.rawValue,
+                dependencySatisfactionByNodeID[node.id] == true ? "deps_satisfied:true" : "deps_satisfied:false",
                 node.completionEvidence ?? "completion_evidence:nil",
                 node.doneCriteria ?? "done_criteria:nil",
                 node.boundSessionID?.uuidString ?? "bound_session:nil",
                 node.boundInteractionID?.uuidString ?? "bound_interaction:nil"
             ])
         }
+        parts.append(contentsOf: [
+            "ready_node_ids",
+            readyNodeIDs.map(\.uuidString).joined(separator: ",")
+        ])
         for decision in plan.decisions {
             let decisionParts: [String] = [
                 "decision",
@@ -1947,12 +2023,17 @@ struct CoordinatorChatMCPToolService {
         ])
     }
 
+    /// Builds compact liveness warnings for runtime telemetry.
+    ///
+    /// `eligible_nodes_idle` can fire transiently between a child-terminal event and the
+    /// follow-through resume turn that starts newly ready work; it is telemetry, not an error.
     private func compactMissionStatusWarnings(
         option: CoordinatorModeCoordinatorOption,
         plan: CoordinatorMissionPlan,
         activeNodes: [CoordinatorMissionPlanNode],
         runningDelegatedNodesWithoutBoundSessions: [CoordinatorMissionPlanNode],
-        missingBoundRows: [CoordinatorMissionPlanNode]
+        missingBoundRows: [CoordinatorMissionPlanNode],
+        readyNodeIDs: [UUID]
     ) -> [String] {
         var warnings: [String] = []
         if option.runState?.isActive != true, !activeNodes.isEmpty {
@@ -1960,6 +2041,13 @@ struct CoordinatorChatMCPToolService {
         }
         if plan.status == .running, option.runState?.isActive != true {
             warnings.append("plan_is_running_but_coordinator_run_state_is_not_active")
+        }
+        if plan.status == .running,
+           !plan.nodes.contains(where: { $0.status == .running }),
+           !readyNodeIDs.isEmpty,
+           option.runState?.isActive != true
+        {
+            warnings.append("eligible_nodes_idle")
         }
         if !runningDelegatedNodesWithoutBoundSessions.isEmpty {
             warnings.append("running_delegated_nodes_without_bound_sessions")
@@ -1972,13 +2060,15 @@ struct CoordinatorChatMCPToolService {
 
     private func compactMissionStatusNodeValue(
         _ node: CoordinatorMissionPlanNode,
-        rowsBySessionID: [UUID: CoordinatorModeRow]
+        rowsBySessionID: [UUID: CoordinatorModeRow],
+        depsSatisfied: Bool
     ) -> Value {
         let boundRow = node.boundSessionID.flatMap { rowsBySessionID[$0] }
         return .object([
             "id": .string(node.id.uuidString),
             "title": .string(node.title),
             "status": .string(node.status.rawValue),
+            "deps_satisfied": .bool(depsSatisfied),
             "execution_policy": .string(node.executionPolicy.rawValue),
             "workflow_name": AgentMCPToolHelpers.stringOrNull(node.workflowHint?.name),
             "bound_session_id": AgentMCPToolHelpers.stringOrNull(node.boundSessionID?.uuidString),
@@ -2011,12 +2101,10 @@ struct CoordinatorChatMCPToolService {
                 "id": .string(dependencyID.uuidString),
                 "title": AgentMCPToolHelpers.stringOrNull(dependency?.title),
                 "status": AgentMCPToolHelpers.stringOrNull(dependency?.status.rawValue),
-                "satisfied": .bool(dependency?.status.isMissionStatusSatisfied == true)
+                "satisfied": .bool(dependency?.status == .completed)
             ])
         }
-        let dependenciesSatisfied = dependencyStates.allSatisfy { value in
-            value.objectValue?["satisfied"]?.boolValue == true
-        }
+        let dependenciesSatisfied = missionPlanDependenciesSatisfied(node, nodesByID: nodesByID)
         let workstream = plan.workstreams.first { $0.id == node.workstreamID }
         payload["workstream_title"] = AgentMCPToolHelpers.stringOrNull(workstream?.title)
         payload["dependencies"] = .array(dependencyStates)
@@ -2479,16 +2567,5 @@ struct CoordinatorChatMCPToolService {
 private extension String {
     var normalizedMissionPlanKey: String {
         trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-}
-
-private extension CoordinatorMissionPlanNodeStatus {
-    var isMissionStatusSatisfied: Bool {
-        switch self {
-        case .completed, .skipped:
-            true
-        case .pending, .running, .blocked, .cancelled:
-            false
-        }
     }
 }

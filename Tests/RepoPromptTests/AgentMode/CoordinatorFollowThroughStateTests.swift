@@ -62,6 +62,27 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(state.missionPlan, plan)
     }
 
+    func testResumeDirectiveContainsMissionEligibilityCapAndIdempotencyClauses() {
+        let event = CoordinatorFollowThroughEvent(
+            id: "resume-1",
+            kind: .childTerminal,
+            coordinatorSessionID: UUID(),
+            childSessionID: UUID(),
+            childTitle: "Implementation child",
+            gate: nil,
+            phase: nil,
+            detail: "Child completed node A."
+        )
+
+        let directive = event.resumeDirective
+
+        XCTAssertTrue(directive.contains("coordinator_chat op=mission_status"))
+        XCTAssertTrue(directive.contains("compact:true"))
+        XCTAssertTrue(directive.contains("pending node whose dependencies are now all completed is eligible"))
+        XCTAssertTrue(directive.contains("Mission policy `max_concurrent` cap"))
+        XCTAssertTrue(directive.contains("Never start a node that is already running or has a bound session"))
+    }
+
     func testMissionPlanNodeWorkflowHintAndEvidenceCodableRoundTrip() throws {
         let workstreamID = UUID()
         let predecessorID = UUID()

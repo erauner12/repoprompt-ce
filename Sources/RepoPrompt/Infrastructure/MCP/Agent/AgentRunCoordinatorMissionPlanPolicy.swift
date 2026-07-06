@@ -4,6 +4,7 @@ enum AgentRunCoordinatorMissionPlanPolicy {
     enum Decision: Equatable {
         case allow
         case requireApprovedMissionPlan(String)
+        case denyFlightCapReached(String)
     }
 
     enum Operation: Equatable {
@@ -31,6 +32,11 @@ enum AgentRunCoordinatorMissionPlanPolicy {
         }
         guard !missionPlan.nodes.isEmpty else {
             return .requireApprovedMissionPlan(approvedMissionPlanRequiredMessage)
+        }
+        let runningNodeCount = missionPlan.nodes.count { $0.status == .running }
+        let maxConcurrent = missionPlan.policySnapshot?.maxConcurrent ?? CoordinatorMissionPolicySnapshot.defaultMaxConcurrent
+        if runningNodeCount >= maxConcurrent {
+            return .denyFlightCapReached(flightCapReachedMessage(cap: maxConcurrent, runningCount: runningNodeCount))
         }
         if missionPlan.approvalState == .awaitingApproval,
            allowsPreApprovalPlanningAction(
@@ -91,6 +97,10 @@ enum AgentRunCoordinatorMissionPlanPolicy {
             }
             return true
         }
+    }
+
+    private static func flightCapReachedMessage(cap: Int, runningCount: Int) -> String {
+        "Coordinator Mission flight cap reached: max_concurrent is \(cap), and \(runningCount) Mission node(s) are already running. Wait for capacity with coordinator_chat op=wait_for_update before starting another node."
     }
 
     private static func preApprovalWorkflowID(for normalizedName: String) -> String? {

@@ -219,6 +219,9 @@ struct AgentExploreMCPToolService {
         if case let .requireApprovedMissionPlan(reason) = coordinatorMissionPlanDecision {
             throw MCPError.invalidParams(reason)
         }
+        if case let .denyFlightCapReached(reason) = coordinatorMissionPlanDecision {
+            throw MCPError.invalidParams(reason)
+        }
 
         let selection = try AgentMCPSelectionResolver.resolve(
             modelID: nil,

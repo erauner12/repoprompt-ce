@@ -298,6 +298,90 @@ final class AgentRunCoordinatorMissionPlanPolicyTests: XCTestCase {
         )
     }
 
+    func testCoordinatorAllowsStartUnderFlightCap() {
+        XCTAssertEqual(
+            decision(missionPlan: plan(
+                approvalState: .approved,
+                policySnapshot: CoordinatorMissionPolicySnapshot(
+                    id: "cap-two",
+                    name: "Cap two",
+                    defaultPace: .auto,
+                    maxConcurrent: 2
+                ),
+                nodes: [
+                    node(status: .running),
+                    node(status: .pending)
+                ]
+            )),
+            .allow
+        )
+    }
+
+    func testCoordinatorDeniesStartAtExactFlightCapForRunAndExplore() {
+        let cappedPlan = plan(
+            approvalState: .approved,
+            policySnapshot: CoordinatorMissionPolicySnapshot(
+                id: "cap-two",
+                name: "Cap two",
+                defaultPace: .auto,
+                maxConcurrent: 2
+            ),
+            nodes: [
+                node(status: .running),
+                node(status: .running),
+                node(status: .pending)
+            ]
+        )
+
+        XCTAssertFlightCapReached(decision(missionPlan: cappedPlan), cap: 2, runningCount: 2)
+        XCTAssertFlightCapReached(
+            decision(missionPlan: cappedPlan, operation: .agentExploreStart),
+            cap: 2,
+            runningCount: 2
+        )
+    }
+
+    func testCoordinatorUsesDefaultFlightCapWhenPolicyIsAbsent() {
+        XCTAssertEqual(
+            decision(missionPlan: plan(approvalState: .approved, nodes: [
+                node(status: .running),
+                node(status: .running),
+                node(status: .pending)
+            ])),
+            .allow
+        )
+        XCTAssertFlightCapReached(
+            decision(missionPlan: plan(approvalState: .approved, nodes: [
+                node(status: .running),
+                node(status: .running),
+                node(status: .running),
+                node(status: .pending)
+            ])),
+            cap: CoordinatorMissionPolicySnapshot.defaultMaxConcurrent,
+            runningCount: 3
+        )
+    }
+
+    func testCoordinatorFlightCapCountsRunningNodesNotBoundSessions() {
+        XCTAssertEqual(
+            decision(missionPlan: plan(
+                approvalState: .approved,
+                policySnapshot: CoordinatorMissionPolicySnapshot(
+                    id: "cap-two",
+                    name: "Cap two",
+                    defaultPace: .auto,
+                    maxConcurrent: 2
+                ),
+                nodes: [
+                    node(status: .running, boundSessionID: uuid(21)),
+                    node(status: .pending, boundSessionID: uuid(22)),
+                    node(status: .pending, boundSessionID: uuid(23))
+                ]
+            )),
+            .allow
+        )
+    }
+
     private func decision(
         isCoordinatorParent: Bool = true,
         missionPlan: CoordinatorMissionPlan?,
@@ -322,11 +406,13 @@ final class AgentRunCoordinatorMissionPlanPolicyTests: XCTestCase {
 
     private func plan(
         approvalState: CoordinatorMissionPlanApprovalState,
+        policySnapshot: CoordinatorMissionPolicySnapshot? = nil,
         nodes: [CoordinatorMissionPlanNode]
     ) -> CoordinatorMissionPlan {
         CoordinatorMissionPlan(
             objective: "Add CSV export to orders table",
             approvalState: approvalState,
+            policySnapshot: policySnapshot,
             workstreams: [
                 CoordinatorMissionWorkstreamSummary(
                     id: workstreamID,
@@ -344,7 +430,9 @@ final class AgentRunCoordinatorMissionPlanPolicyTests: XCTestCase {
         id: UUID = UUID(),
         workflowHint: CoordinatorMissionPlanNodeWorkflowHint? = nil,
         executionPolicy: CoordinatorMissionExecutionPolicy = .freshWorktree,
-        role: String? = nil
+        role: String? = nil,
+        status: CoordinatorMissionPlanNodeStatus = .pending,
+        boundSessionID: UUID? = nil
     ) -> CoordinatorMissionPlanNode {
         CoordinatorMissionPlanNode(
             id: id,
@@ -352,7 +440,9 @@ final class AgentRunCoordinatorMissionPlanPolicyTests: XCTestCase {
             workflowHint: workflowHint,
             workstreamID: workstreamID,
             role: role,
-            executionPolicy: executionPolicy
+            executionPolicy: executionPolicy,
+            status: status,
+            boundSessionID: boundSessionID
         )
     }
 
@@ -362,6 +452,23 @@ final class AgentRunCoordinatorMissionPlanPolicyTests: XCTestCase {
 
     private func uuid(_ suffix: UInt8) -> UUID {
         UUID(uuid: (0x9A, 0x2B, 0x55, 0x55, 0x00, 0x00, 0x40, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, suffix))
+    }
+
+    private func XCTAssertFlightCapReached(
+        _ decision: AgentRunCoordinatorMissionPlanPolicy.Decision,
+        cap: Int,
+        runningCount: Int,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard case let .denyFlightCapReached(reason) = decision else {
+            XCTFail("Expected flight-cap denial, got \(decision)", file: file, line: line)
+            return
+        }
+        XCTAssertTrue(reason.contains("max_concurrent"), file: file, line: line)
+        XCTAssertTrue(reason.contains("\(cap)"), file: file, line: line)
+        XCTAssertTrue(reason.contains("\(runningCount) Mission node"), file: file, line: line)
+        XCTAssertTrue(reason.contains("wait_for_update"), file: file, line: line)
     }
 
     private func XCTAssertRequiresApprovedMissionPlan(
