@@ -7,13 +7,106 @@ struct CoordinatorModeView: View {
         case planNode(CoordinatorMissionPlanNode, CoordinatorMissionWorkstreamSummary?, CoordinatorMissionPlan, CoordinatorModeRow?)
     }
 
-    private struct MissionPlanExecutionLane: Identifiable {
-        let id: String
-        let title: String
-        let subtitle: String
-        let systemImage: String
-        let policy: CoordinatorMissionExecutionPolicy
+    private struct MissionPlanReadinessProjection {
+        let nodesByID: [UUID: CoordinatorMissionPlanNode]
+        let dependencySatisfactionByNodeID: [UUID: Bool]
+        let readyNodeIDs: Set<UUID>
+        let runningNodeCount: Int
+        let maxConcurrent: Int
+
+        init(plan: CoordinatorMissionPlan) {
+            let indexedNodes = Dictionary(uniqueKeysWithValues: plan.nodes.map { ($0.id, $0) })
+            let dependencySatisfaction = Dictionary(uniqueKeysWithValues: plan.nodes.map { node in
+                (node.id, node.dependsOn.allSatisfy { indexedNodes[$0]?.status == .completed })
+            })
+            nodesByID = indexedNodes
+            dependencySatisfactionByNodeID = dependencySatisfaction
+            readyNodeIDs = Set(plan.nodes.compactMap { node in
+                guard node.status == .pending,
+                      dependencySatisfaction[node.id] == true
+                else { return nil }
+                return node.id
+            })
+            runningNodeCount = plan.nodes.count { $0.status == .running }
+            maxConcurrent = plan.policySnapshot?.maxConcurrent ?? CoordinatorMissionPolicySnapshot.defaultMaxConcurrent
+        }
+
+        var capacityAvailable: Bool {
+            runningNodeCount < maxConcurrent
+        }
+
+        var readyCount: Int {
+            readyNodeIDs.count
+        }
+
+        var waitingCount: Int {
+            dependencySatisfactionByNodeID.count { nodeID, dependenciesSatisfied in
+                nodesByID[nodeID]?.status == .pending && !dependenciesSatisfied
+            }
+        }
+
+        var completedCount: Int {
+            nodesByID.values.count { $0.status == .completed }
+        }
+
+        func dependenciesSatisfied(for node: CoordinatorMissionPlanNode) -> Bool {
+            dependencySatisfactionByNodeID[node.id] == true
+        }
+
+        func isReady(_ node: CoordinatorMissionPlanNode) -> Bool {
+            readyNodeIDs.contains(node.id)
+        }
+
+        func isHeldByCap(_ node: CoordinatorMissionPlanNode) -> Bool {
+            isReady(node) && node.executionPolicy.usesStartCapacity && !capacityAvailable
+        }
+    }
+
+    private struct MissionPlanDependencyBand: Identifiable {
+        let kind: MissionPlanDependencyBandKind
         var nodes: [CoordinatorMissionPlanNode]
+
+        var id: String {
+            kind.rawValue
+        }
+    }
+
+    private enum MissionPlanDependencyBandKind: String, CaseIterable {
+        case running
+        case ready
+        case waiting
+        case blocked
+        case done
+
+        var title: String {
+            switch self {
+            case .running: "Running now"
+            case .ready: "Ready next"
+            case .waiting: "Waiting on dependencies"
+            case .blocked: "Blocked"
+            case .done: "Done"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .running: "circle.dotted"
+            case .ready: "play.circle.fill"
+            case .waiting: "hourglass"
+            case .blocked: "exclamationmark.triangle.fill"
+            case .done: "checkmark.circle.fill"
+            }
+        }
+
+        var tint: Color {
+            switch self {
+            case .running: .blue
+            case .ready: .green
+            case .waiting: .secondary
+            case .blocked: .red
+            case .done: .green
+            }
+        }
     }
 
     private enum ChildDirectiveAvailability {
@@ -1267,8 +1360,13 @@ struct CoordinatorModeView: View {
                                 metrics: metrics
                             )
                         } else if plan.nodes.isEmpty {
-                            ForEach(plan.workstreams) { workstream in
-                                missionPlanWorkstreamOutline(workstream, metrics: metrics)
+                            ForEach(Array(plan.workstreams.enumerated()), id: \.element.id) { offset, workstream in
+                                missionPlanWorkstreamOutline(
+                                    workstream,
+                                    partIndex: offset + 1,
+                                    partTotal: plan.workstreams.count,
+                                    metrics: metrics
+                                )
                             }
                         } else {
                             missionPlanNodeOutline(plan, metrics: metrics)
@@ -1566,6 +1664,8 @@ struct CoordinatorModeView: View {
             missionStatusStrip(plan, childCounts: childCounts, metrics: metrics)
                 .padding(.top, metrics.tightSpacing)
 
+            missionIdleReadyLine(plan, metrics: metrics)
+
             missionShapePolicyDisclosure(plan, metrics: metrics)
 
             if plan.predecessorMissionID != nil || plan.predecessorTitle != nil || plan.predecessorSummary != nil {
@@ -1607,23 +1707,11 @@ struct CoordinatorModeView: View {
 
     private func missionStatusStrip(
         _ plan: CoordinatorMissionPlan,
-        childCounts: CoordinatorModeCoordinatorChildCounts? = nil,
+        childCounts _: CoordinatorModeCoordinatorChildCounts? = nil,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        let completedNodeCount = plan.nodes.count(where: { node in
-            if case .completed = node.status {
-                return true
-            }
-            return false
-        })
-        let activeNodeCount = plan.nodes.count(where: { node in
-            switch node.status {
-            case .running, .blocked:
-                true
-            default:
-                false
-            }
-        })
+        let projection = MissionPlanReadinessProjection(plan: plan)
+        let blockedNodeCount = plan.nodes.count { $0.status == .blocked }
 
         return HStack(spacing: metrics.smallSpacing) {
             Label("Mission status", systemImage: "waveform.path.ecg")
@@ -1632,9 +1720,15 @@ struct CoordinatorModeView: View {
             statusChip(plan.status.displayName, color: plan.status.tint, metrics: metrics)
             statusChip(plan.approvalState.displayName, color: plan.approvalState.tint, metrics: metrics)
             if !plan.nodes.isEmpty {
-                statusChip("\(completedNodeCount)/\(plan.nodes.count) nodes done", color: completedNodeCount == plan.nodes.count ? .green : .blue, metrics: metrics)
-                if activeNodeCount > 0 {
-                    statusChip("\(activeNodeCount) active", color: .orange, metrics: metrics)
+                statusChip("\(projection.completedCount)/\(plan.nodes.count) nodes done", color: projection.completedCount == plan.nodes.count ? .green : .blue, metrics: metrics)
+                if projection.readyCount > 0 {
+                    statusChip("\(projection.readyCount) ready", color: .green, metrics: metrics)
+                }
+                if projection.waitingCount > 0 {
+                    statusChip("\(projection.waitingCount) waiting", color: .secondary, metrics: metrics)
+                }
+                if blockedNodeCount > 0 {
+                    statusChip("\(blockedNodeCount) blocked", color: .red, metrics: metrics)
                 }
             }
             if !plan.workstreams.isEmpty {
@@ -1644,10 +1738,9 @@ struct CoordinatorModeView: View {
                 statusChip("Shape · \(shapeSummary.displayName)", color: Color.accentColor, metrics: metrics)
             }
             if let policySnapshot = plan.policySnapshot {
-                let runningChildCount = childCounts?.working ?? activeNodeCount
                 statusChip(
-                    "running \(runningChildCount)/\(policySnapshot.maxConcurrent)",
-                    color: runningChildCount > policySnapshot.maxConcurrent ? .red : .blue,
+                    "running \(projection.runningNodeCount)/\(policySnapshot.maxConcurrent)",
+                    color: projection.runningNodeCount > policySnapshot.maxConcurrent ? .red : .blue,
                     metrics: metrics
                 )
                 statusChip("Policy · \(policySnapshot.name)", color: .purple, metrics: metrics)
@@ -1672,6 +1765,20 @@ struct CoordinatorModeView: View {
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
                 .stroke(Color.accentColor.opacity(0.12), lineWidth: 0.75)
         )
+    }
+
+    @ViewBuilder
+    private func missionIdleReadyLine(_ plan: CoordinatorMissionPlan, metrics: CoordinatorVisualMetrics) -> some View {
+        let projection = MissionPlanReadinessProjection(plan: plan)
+        if plan.status == .running,
+           projection.runningNodeCount == 0,
+           projection.readyCount > 0
+        {
+            Label("Idle with \(projection.readyCount) ready node\(projection.readyCount == 1 ? "" : "s") — next launch is eligible unless the Director is paused elsewhere.", systemImage: "pause.circle")
+                .font(metrics.micro)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     @ViewBuilder
@@ -1728,16 +1835,21 @@ struct CoordinatorModeView: View {
     }
 
     private func missionPlanNodeOutline(_ plan: CoordinatorMissionPlan, metrics: CoordinatorVisualMetrics) -> some View {
+        let projection = MissionPlanReadinessProjection(plan: plan)
         let nodesByWorkstream = Dictionary(grouping: plan.nodes, by: \.workstreamID)
         let knownWorkstreamIDs = Set(plan.workstreams.map(\.id))
         let orphanNodes = plan.nodes.filter { !knownWorkstreamIDs.contains($0.workstreamID) }
+        let partTotal = plan.workstreams.count + (orphanNodes.isEmpty ? 0 : 1)
 
         return VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
-            ForEach(plan.workstreams) { workstream in
+            ForEach(Array(plan.workstreams.enumerated()), id: \.element.id) { offset, workstream in
                 missionPlanWorkstreamSection(
                     workstream: workstream,
                     nodes: nodesByWorkstream[workstream.id] ?? [],
                     plan: plan,
+                    projection: projection,
+                    partIndex: offset + 1,
+                    partTotal: partTotal,
                     metrics: metrics
                 )
             }
@@ -1747,6 +1859,9 @@ struct CoordinatorModeView: View {
                     workstream: nil,
                     nodes: orphanNodes,
                     plan: plan,
+                    projection: projection,
+                    partIndex: partTotal,
+                    partTotal: partTotal,
                     metrics: metrics
                 )
             }
@@ -1755,10 +1870,18 @@ struct CoordinatorModeView: View {
 
     private func missionPlanWorkstreamOutline(
         _ workstream: CoordinatorMissionWorkstreamSummary,
+        partIndex: Int,
+        partTotal: Int,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-            missionPlanWorkstreamHeader(workstream: workstream, metrics: metrics)
+            missionPlanWorkstreamHeader(
+                workstream: workstream,
+                nodes: [],
+                partIndex: partIndex,
+                partTotal: partTotal,
+                metrics: metrics
+            )
             Text("No nodes recorded yet.")
                 .font(metrics.body)
                 .foregroundStyle(.tertiary)
@@ -1772,22 +1895,27 @@ struct CoordinatorModeView: View {
         workstream: CoordinatorMissionWorkstreamSummary?,
         nodes: [CoordinatorMissionPlanNode],
         plan: CoordinatorMissionPlan,
+        projection: MissionPlanReadinessProjection,
+        partIndex: Int,
+        partTotal: Int,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.smallSpacing) {
             if let workstream {
-                missionPlanWorkstreamHeader(workstream: workstream, metrics: metrics)
+                missionPlanWorkstreamHeader(
+                    workstream: workstream,
+                    nodes: nodes,
+                    partIndex: partIndex,
+                    partTotal: partTotal,
+                    metrics: metrics
+                )
             } else {
-                Label("Unassigned nodes", systemImage: "questionmark.square.dashed")
-                    .font(metrics.bodySemibold)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let workstream, !workstream.purpose.isEmpty {
-                Text(workstream.purpose)
-                    .font(metrics.body)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                missionPlanUnassignedHeader(
+                    nodes: nodes,
+                    partIndex: partIndex,
+                    partTotal: partTotal,
+                    metrics: metrics
+                )
             }
 
             if nodes.isEmpty {
@@ -1796,8 +1924,14 @@ struct CoordinatorModeView: View {
                     .foregroundStyle(.tertiary)
                     .padding(.vertical, metrics.tightSpacing)
             } else {
-                ForEach(missionPlanExecutionLanes(workstream: workstream, nodes: nodes)) { lane in
-                    missionPlanExecutionLaneSection(lane, workstream: workstream, plan: plan, metrics: metrics)
+                ForEach(missionPlanDependencyBands(nodes: nodes, projection: projection)) { band in
+                    missionPlanDependencyBandSection(
+                        band,
+                        workstream: workstream,
+                        plan: plan,
+                        projection: projection,
+                        metrics: metrics
+                    )
                 }
             }
         }
@@ -1806,139 +1940,76 @@ struct CoordinatorModeView: View {
         .coordinatorCardBackground(cornerRadius: metrics.cardCornerRadius)
     }
 
-    private func missionPlanExecutionLanes(
-        workstream: CoordinatorMissionWorkstreamSummary?,
-        nodes: [CoordinatorMissionPlanNode]
-    ) -> [MissionPlanExecutionLane] {
-        var lanes: [MissionPlanExecutionLane] = []
-        var indicesByID: [String: Int] = [:]
-
+    private func missionPlanDependencyBands(
+        nodes: [CoordinatorMissionPlanNode],
+        projection: MissionPlanReadinessProjection
+    ) -> [MissionPlanDependencyBand] {
+        var nodesByKind: [MissionPlanDependencyBandKind: [CoordinatorMissionPlanNode]] = [:]
         for node in nodes {
-            var lane = missionPlanExecutionLane(for: node, workstream: workstream)
-            if let index = indicesByID[lane.id] {
-                lanes[index].nodes.append(node)
-            } else {
-                lane.nodes = [node]
-                indicesByID[lane.id] = lanes.count
-                lanes.append(lane)
-            }
+            nodesByKind[missionPlanDependencyBandKind(for: node, projection: projection), default: []].append(node)
         }
-
-        return lanes
+        return MissionPlanDependencyBandKind.allCases.compactMap { kind in
+            guard let bandNodes = nodesByKind[kind], !bandNodes.isEmpty else { return nil }
+            return MissionPlanDependencyBand(kind: kind, nodes: bandNodes)
+        }
     }
 
-    private func missionPlanExecutionLane(
+    private func missionPlanDependencyBandKind(
         for node: CoordinatorMissionPlanNode,
-        workstream: CoordinatorMissionWorkstreamSummary?
-    ) -> MissionPlanExecutionLane {
-        if let boundSessionID = node.boundSessionID {
-            let isPrimarySession = boundSessionID == workstream?.primarySessionID
-            return MissionPlanExecutionLane(
-                id: "session-\(boundSessionID.uuidString)",
-                title: isPrimarySession ? "Primary session" : "Bound session",
-                subtitle: "\(isPrimarySession ? "Reusing primary" : "Session") \(boundSessionID.uuidString.prefix(8))",
-                systemImage: isPrimarySession ? "arrowshape.turn.up.right.fill" : "person.text.rectangle",
-                policy: node.executionPolicy,
-                nodes: []
-            )
-        }
-
-        let workstreamKey = workstream?.id.uuidString ?? node.workstreamID.uuidString
-        switch node.executionPolicy {
-        case .coordinatorOnly:
-            return MissionPlanExecutionLane(
-                id: "\(workstreamKey)-coordinator",
-                title: "Director lane",
-                subtitle: "Director-owned work",
-                systemImage: "sparkles",
-                policy: node.executionPolicy,
-                nodes: []
-            )
-        case .freshReadOnlyChild:
-            return MissionPlanExecutionLane(
-                id: "\(workstreamKey)-readonly-fanout",
-                title: "Read-only fanout",
-                subtitle: "Delegated discovery without a worktree",
-                systemImage: "magnifyingglass",
-                policy: node.executionPolicy,
-                nodes: []
-            )
-        case .freshWorktree:
-            return MissionPlanExecutionLane(
-                id: "\(workstreamKey)-primary-worktree",
-                title: "Primary implementation lane",
-                subtitle: missionPlanWorktreeStrategySubtitle(workstream?.worktreeStrategy, fallback: "Fresh isolated worktree"),
-                systemImage: "arrow.triangle.branch",
-                policy: node.executionPolicy,
-                nodes: []
-            )
-        case .steerPrimary:
-            return MissionPlanExecutionLane(
-                id: "\(workstreamKey)-primary-session",
-                title: "Primary session",
-                subtitle: "Continue the workstream's active child",
-                systemImage: "arrowshape.turn.up.right",
-                policy: node.executionPolicy,
-                nodes: []
-            )
-        case .freshSiblingOnSameWorktree:
-            return MissionPlanExecutionLane(
-                id: "\(workstreamKey)-same-worktree-sibling",
-                title: "Fresh sibling lane",
-                subtitle: "Separate session on the same worktree",
-                systemImage: "rectangle.split.2x1",
-                policy: node.executionPolicy,
-                nodes: []
-            )
-        case .planCritique:
-            return MissionPlanExecutionLane(
-                id: "\(workstreamKey)-plan-critique",
-                title: "Plan critique lane",
-                subtitle: "Pre-approval design review",
-                systemImage: "text.magnifyingglass",
-                policy: node.executionPolicy,
-                nodes: []
-            )
-        case .askUser:
-            return MissionPlanExecutionLane(
-                id: "\(workstreamKey)-ask-user",
-                title: "User decision lane",
-                subtitle: "Paused for a Director-owned choice",
-                systemImage: "questionmark.bubble",
-                policy: node.executionPolicy,
-                nodes: []
-            )
+        projection: MissionPlanReadinessProjection
+    ) -> MissionPlanDependencyBandKind {
+        switch node.status {
+        case .running:
+            .running
+        case .completed, .skipped, .cancelled:
+            .done
+        case .blocked:
+            .blocked
+        case .pending:
+            projection.isReady(node) ? .ready : .waiting
         }
     }
 
-    private func missionPlanExecutionLaneSection(
-        _ lane: MissionPlanExecutionLane,
+    private func missionPlanDependencyBandSection(
+        _ band: MissionPlanDependencyBand,
         workstream: CoordinatorMissionWorkstreamSummary?,
         plan: CoordinatorMissionPlan,
+        projection: MissionPlanReadinessProjection,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.tightSpacing) {
             HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
-                Label(lane.title, systemImage: lane.systemImage)
+                Label(band.kind.title, systemImage: band.kind.systemImage)
                     .font(metrics.microMedium)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(band.kind.tint)
                     .lineLimit(1)
-                Text(lane.subtitle)
+                Text("\(band.nodes.count) node\(band.nodes.count == 1 ? "" : "s")")
                     .font(metrics.micro)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                 Spacer(minLength: metrics.controlSpacing)
-                statusChip(lane.policy.displayName, color: Color.accentColor, metrics: metrics)
+                if band.kind == .ready,
+                   !projection.capacityAvailable,
+                   band.nodes.contains(where: \.executionPolicy.usesStartCapacity)
+                {
+                    statusChip("held by cap", color: .orange, metrics: metrics)
+                }
             }
 
             HStack(alignment: .top, spacing: metrics.smallSpacing) {
                 Rectangle()
-                    .fill(Color.secondary.opacity(0.16))
+                    .fill(band.kind.tint.opacity(0.20))
                     .frame(width: 2)
                     .padding(.vertical, metrics.tightSpacing)
                 VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                    ForEach(lane.nodes) { node in
-                        missionPlanNodeRow(node, workstream: workstream, plan: plan, metrics: metrics)
+                    ForEach(band.nodes) { node in
+                        missionPlanNodeRow(
+                            node,
+                            workstream: workstream,
+                            plan: plan,
+                            projection: projection,
+                            metrics: metrics
+                        )
                     }
                 }
             }
@@ -1947,47 +2018,74 @@ struct CoordinatorModeView: View {
 
     private func missionPlanWorkstreamHeader(
         workstream: CoordinatorMissionWorkstreamSummary,
+        nodes: [CoordinatorMissionPlanNode],
+        partIndex: Int,
+        partTotal: Int,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
-            Text(workstream.title)
-                .font(metrics.bodySemibold)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .layoutPriority(1)
-            if let role = workstream.role {
-                Text(role)
-                    .font(metrics.microMedium)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                Text("Part \(partIndex) · \(workstream.title)")
+                    .font(metrics.bodySemibold)
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
+                    .layoutPriority(1)
+                if let role = workstream.role {
+                    Text(role)
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: metrics.controlSpacing)
+                statusChip("\(missionPlanCompletedNodeCount(nodes))/\(nodes.count) done", color: missionPlanCompletedNodeCount(nodes) == nodes.count && !nodes.isEmpty ? .green : .secondary, metrics: metrics)
+                statusChip("\(partIndex)/\(partTotal)", color: .secondary, metrics: metrics)
+                statusChip(workstream.defaultPolicy.displayName, color: Color.accentColor, metrics: metrics)
+                statusChip(workstream.worktreeStrategy.mode.displayName, color: .secondary, metrics: metrics)
             }
-            Spacer(minLength: metrics.controlSpacing)
-            if let primarySessionID = workstream.primarySessionID {
-                statusChip("Primary \(primarySessionID.uuidString.prefix(8))", color: .green, metrics: metrics)
-            }
-            statusChip(workstream.defaultPolicy.displayName, color: Color.accentColor, metrics: metrics)
-            statusChip(workstream.worktreeStrategy.mode.displayName, color: .secondary, metrics: metrics)
-            if let baseRef = workstream.worktreeStrategy.baseRef {
-                statusChip("Base \(baseRef)", color: .secondary, metrics: metrics)
+
+            HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                if let primarySessionID = workstream.primarySessionID {
+                    statusChip("Primary \(primarySessionID.uuidString.prefix(8))", color: .green, metrics: metrics)
+                }
+                if let baseRef = workstream.worktreeStrategy.baseRef {
+                    statusChip("Base \(baseRef)", color: .secondary, metrics: metrics)
+                }
+                if !workstream.purpose.isEmpty {
+                    Text(workstream.purpose)
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
 
-    private func missionPlanWorktreeStrategySubtitle(
-        _ strategy: CoordinatorMissionWorktreeStrategy?,
-        fallback: String
-    ) -> String {
-        guard let strategy else { return fallback }
-        if let baseRef = strategy.baseRef {
-            return "\(strategy.mode.displayName) from \(baseRef)"
+    private func missionPlanUnassignedHeader(
+        nodes: [CoordinatorMissionPlanNode],
+        partIndex: Int,
+        partTotal: Int,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+            Label("Part \(partIndex) · Unassigned nodes", systemImage: "questionmark.square.dashed")
+                .font(metrics.bodySemibold)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: metrics.controlSpacing)
+            statusChip("\(missionPlanCompletedNodeCount(nodes))/\(nodes.count) done", color: missionPlanCompletedNodeCount(nodes) == nodes.count && !nodes.isEmpty ? .green : .secondary, metrics: metrics)
+            statusChip("\(partIndex)/\(partTotal)", color: .secondary, metrics: metrics)
         }
-        return strategy.mode.displayName
+    }
+
+    private func missionPlanCompletedNodeCount(_ nodes: [CoordinatorMissionPlanNode]) -> Int {
+        nodes.count { $0.status == .completed }
     }
 
     private func missionPlanNodeRow(
         _ node: CoordinatorMissionPlanNode,
         workstream: CoordinatorMissionWorkstreamSummary?,
-        plan _: CoordinatorMissionPlan,
+        plan: CoordinatorMissionPlan,
+        projection: MissionPlanReadinessProjection,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.tightSpacing) {
@@ -2002,23 +2100,26 @@ struct CoordinatorModeView: View {
                     .lineLimit(1)
                     .layoutPriority(1)
                 Spacer(minLength: metrics.controlSpacing)
-                statusChip(node.status.displayName, color: node.status.tint, metrics: metrics)
+                statusChip(
+                    missionPlanNodeEligibilityText(node, plan: plan, projection: projection),
+                    color: missionPlanNodeEligibilityTint(node, projection: projection),
+                    metrics: metrics
+                )
             }
+
+            missionPlanNodeEligibilityLine(node, plan: plan, projection: projection, metrics: metrics)
 
             HStack(spacing: metrics.smallSpacing) {
                 if let workflowHint = node.workflowHint {
                     workflowBadge(workflowHint, metrics: metrics)
                 }
                 statusChip(missionPlanNodeRouteLabel(node, workstream: workstream), color: missionPlanNodeRouteTint(node, workstream: workstream), metrics: metrics)
-                statusChip(node.executionPolicy.displayName, color: Color.accentColor, metrics: metrics)
+                statusChip(node.executionPolicy.displayName, color: Color.accentColor.opacity(0.82), metrics: metrics)
                 if let role = node.role {
                     statusChip(role, color: .secondary, metrics: metrics)
                 }
-                if !node.dependsOn.isEmpty {
-                    statusChip("\(node.dependsOn.count) dependencies", color: .secondary, metrics: metrics)
-                }
-                if node.boundSessionID != nil {
-                    statusChip("Bound session", color: .green, metrics: metrics)
+                if let boundSessionID = node.boundSessionID {
+                    statusChip("Bound \(shortID(boundSessionID))", color: .green, metrics: metrics)
                 }
                 if node.boundInteractionID != nil {
                     statusChip("Interaction", color: .orange, metrics: metrics)
@@ -2040,9 +2141,9 @@ struct CoordinatorModeView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let completionEvidence = node.completionEvidence {
-                Label(completionEvidence, systemImage: "doc.text.magnifyingglass")
+                Label("Evidence: \(completionEvidence)", systemImage: "doc.text.magnifyingglass")
                     .font(metrics.micro)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(node.status == .completed ? .green : .secondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -2067,6 +2168,112 @@ struct CoordinatorModeView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Plan node \(node.title)")
+    }
+
+    private func missionPlanNodeEligibilityText(
+        _ node: CoordinatorMissionPlanNode,
+        plan: CoordinatorMissionPlan,
+        projection: MissionPlanReadinessProjection
+    ) -> String {
+        switch node.status {
+        case .completed:
+            return "Done"
+        case .running:
+            return "Running"
+        case .blocked:
+            return "Blocked"
+        case .skipped:
+            return "Skipped"
+        case .cancelled:
+            return "Cancelled"
+        case .pending:
+            if projection.isHeldByCap(node) {
+                return "Ready · held by cap"
+            }
+            if projection.isReady(node) {
+                return "Ready"
+            }
+            return missionPlanDependencySummary(node, plan: plan, projection: projection)
+        }
+    }
+
+    private func missionPlanNodeEligibilityTint(
+        _ node: CoordinatorMissionPlanNode,
+        projection: MissionPlanReadinessProjection
+    ) -> Color {
+        switch node.status {
+        case .completed:
+            return .green
+        case .running:
+            return .blue
+        case .blocked, .cancelled:
+            return .red
+        case .skipped:
+            return .orange
+        case .pending:
+            if projection.isHeldByCap(node) { return .orange }
+            return projection.isReady(node) ? .green : .secondary
+        }
+    }
+
+    private func missionPlanNodeEligibilityLine(
+        _ node: CoordinatorMissionPlanNode,
+        plan: CoordinatorMissionPlan,
+        projection: MissionPlanReadinessProjection,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        Label(
+            missionPlanNodeEligibilityDetail(node, plan: plan, projection: projection),
+            systemImage: projection.isHeldByCap(node) ? "pause.circle" : node.status.systemImage
+        )
+        .font(metrics.micro)
+        .foregroundStyle(missionPlanNodeEligibilityTint(node, projection: projection))
+        .lineLimit(2)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func missionPlanNodeEligibilityDetail(
+        _ node: CoordinatorMissionPlanNode,
+        plan: CoordinatorMissionPlan,
+        projection: MissionPlanReadinessProjection
+    ) -> String {
+        switch node.status {
+        case .completed:
+            return "Done"
+        case .running:
+            return "Running"
+        case .blocked:
+            return projection.dependenciesSatisfied(for: node) ? "Blocked · dependencies clear" : missionPlanDependencySummary(node, plan: plan, projection: projection)
+        case .skipped:
+            return "Skipped"
+        case .cancelled:
+            return "Cancelled"
+        case .pending:
+            if projection.isHeldByCap(node) {
+                return "Ready · held by cap (running \(projection.runningNodeCount)/\(projection.maxConcurrent))"
+            }
+            if projection.isReady(node) {
+                return "Ready"
+            }
+            return missionPlanDependencySummary(node, plan: plan, projection: projection)
+        }
+    }
+
+    private func missionPlanDependencySummary(
+        _ node: CoordinatorMissionPlanNode,
+        plan: CoordinatorMissionPlan,
+        projection: MissionPlanReadinessProjection
+    ) -> String {
+        guard !node.dependsOn.isEmpty else {
+            return projection.dependenciesSatisfied(for: node) ? "Ready" : "Waiting"
+        }
+        let parts = node.dependsOn.prefix(3).map { dependencyID in
+            let title = dependencyTitle(dependencyID, in: plan)
+            let marker = projection.nodesByID[dependencyID]?.status == .completed ? "✓" : "…"
+            return "\(title) \(marker)"
+        }
+        let suffix = node.dependsOn.count > parts.count ? " · +\(node.dependsOn.count - parts.count)" : ""
+        return "Waiting on \(parts.joined(separator: " · "))\(suffix)"
     }
 
     private func missionPlanNodeRouteLabel(
@@ -7531,6 +7738,17 @@ private extension CoordinatorMissionPlanApprovalState {
         case .awaitingApproval: .orange
         case .approved: .green
         case .revisionRequested: .purple
+        }
+    }
+}
+
+private extension CoordinatorMissionExecutionPolicy {
+    var usesStartCapacity: Bool {
+        switch self {
+        case .freshReadOnlyChild, .freshWorktree, .freshSiblingOnSameWorktree, .planCritique:
+            true
+        case .coordinatorOnly, .steerPrimary, .askUser:
+            false
         }
     }
 }
