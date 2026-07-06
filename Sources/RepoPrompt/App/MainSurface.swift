@@ -23,6 +23,13 @@ enum MainSurface: String, CaseIterable, Identifiable {
         case .coordinatorMode: "rectangle.3.group"
         }
     }
+
+    var shortcutHint: String {
+        switch self {
+        case .agentMode: "⌘1"
+        case .coordinatorMode: "⌘2"
+        }
+    }
 }
 
 struct MainSurfaceSegmentedSwitcher: View {
@@ -69,7 +76,7 @@ struct MainSurfaceSegmentedSwitcher: View {
                     guard isAvailable else { return }
                     selection = surface
                 } label: {
-                    Text(surface.displayName)
+                    Text("\(surface.displayName) \(surface.shortcutHint)")
                         .font(labelFont)
                         .lineLimit(1)
                         .minimumScaleFactor(0.9)
@@ -134,11 +141,11 @@ struct MainSurfaceCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .toolbar) {
-            Toggle("Director", isOn: selectedBinding(for: .coordinatorMode))
+            Toggle("Agent Mode", isOn: selectedBinding(for: .agentMode))
                 .keyboardShortcut("1", modifiers: .command)
                 .disabled(!canSwitch)
 
-            Toggle("Agent Mode", isOn: selectedBinding(for: .agentMode))
+            Toggle("Director", isOn: selectedBinding(for: .coordinatorMode))
                 .keyboardShortcut("2", modifiers: .command)
                 .disabled(!canSwitch)
         }

@@ -45,7 +45,7 @@ For the production-feeling demo, the selected/detected Coordinator may still be 
 
 The Command Center cutline uses Director for visible product copy: rail/conversation labels, Mission Policy, decision/evidence summaries, and receipt surfaces should read as the user talking to and auditing a Director. Coordinator remains the technical contract name in this change because Swift symbols, MCP operation names such as `coordinator_chat`, persisted Codable keys, and existing fixtures are already shipped through multiple seams. A full symbol/API/key rename is intentionally deferred to a separate no-behavior migration so product vocabulary can move without destabilizing runtime and persistence contracts.
 
-This also means the shortcut flip is deferred. User-facing Director wording should not silently change current main-surface ordering or keyboard behavior; if the product decides Director should become `Command-1`, that requires an explicit follow-up OpenSpec/UI pass.
+The main-surface switcher order is now locked to the mock vocabulary: `Agent` on the left with `Command-1`, `Director` on the right with `Command-2`. User-facing wording stays Director while Swift symbols, MCP operation names, Codable keys, and existing debug payloads remain Coordinator-named until a separate no-behavior rename pass.
 
 ### 0B. Mission Policy and autonomy are Mission-owned trust guidance
 
@@ -79,7 +79,7 @@ Ledger-visible fields also need to move the Coordinator/Director snapshot when p
 
 ### 0F. V1 Command Center deferrals
 
-The v1 cutline deliberately defers broader Command Center reshaping: full symbol/API/key rename, shared Agent Board/direct-Agent expansion, a dedicated Decisions rail, Plan-is-board layout, and shortcut flip. The current selected-Mission board plus read-only Plan presentation remains the layout boundary until a later OpenSpec changes it. Direct Agent sessions stay in Agent Mode unless structurally owned by a Coordinator/Director Mission; preserving `CoordinatorModeRowOrigin.directAgent` is for a later shared-board/filter relaxation, not this pass.
+The v1 cutline deliberately defers broader Command Center reshaping: full symbol/API/key rename, shared Agent Board/direct-Agent expansion, a dedicated Decisions rail, and Plan-is-board layout. The current selected-Mission board plus read-only Plan presentation remains the layout boundary until a later OpenSpec changes it. Direct Agent sessions stay in Agent Mode unless structurally owned by a Coordinator/Director Mission; preserving `CoordinatorModeRowOrigin.directAgent` is for a later shared-board/filter relaxation, not this pass.
 
 Larger runtime doctrine is also recorded but not implemented in this wave: failure retry and the Blocked-lane unblock flow, budget-breach checkpoints, restart/resume reattachment semantics, hub freeze after slice chains start, a fresh-eyes final-review policy knob, and queue-aging/starvation behavior. These need explicit follow-up tasks/spec work before Swift expands into those areas.
 
@@ -101,7 +101,7 @@ PRD Slices is a first-class mission shape for the Careful-writes/community demo 
 
 ### 1. Coordinator mode lives inside `.main`
 
-`ContentViewModel.AppRootRoute` remains the binary workspace-entry gate (`.workspaceEntry` vs `.main`). The Coordinator view needs new window-scoped main-surface selection inside `.main`, and `ContentRootShellView.routedContent` should switch between existing Agent Mode and Coordinator mode within the `.main` branch. Once a real workspace is active, the user reaches Coordinator mode through a persistent peer surface switcher for Agent Mode ↔ Coordinator mode; the switcher does not appear in or bypass workspace-entry/onboarding. Because the canonical source-list slot is already occupied by the Agent sidebar or Coordinator chat rail, the switcher should live as a single window-toolbar affordance backed by View-menu commands, not inside either surface's sidebar or rail. It should be a macOS-native peer-surface control, such as a toolbar segmented control or equivalent adaptive switcher, never an iOS-style tab bar. When rendered as the toolbar segment, Coordinator should appear on the left and map to `Command-1`; Agent should appear on the right and map to `Command-2`.
+`ContentViewModel.AppRootRoute` remains the binary workspace-entry gate (`.workspaceEntry` vs `.main`). The Coordinator view needs new window-scoped main-surface selection inside `.main`, and `ContentRootShellView.routedContent` should switch between existing Agent Mode and Coordinator mode within the `.main` branch. Once a real workspace is active, the user reaches Coordinator mode through a persistent peer surface switcher for Agent Mode ↔ Coordinator mode; the switcher does not appear in or bypass workspace-entry/onboarding. Because the canonical source-list slot is already occupied by the Agent sidebar or Coordinator chat rail, the switcher should live as a single window-toolbar affordance backed by View-menu commands, not inside either surface's sidebar or rail. It should be a macOS-native peer-surface control, such as a toolbar segmented control or equivalent adaptive switcher, never an iOS-style tab bar. When rendered as the toolbar segment, Agent should appear on the left and map to `Command-1`; Director/Coordinator should appear on the right and map to `Command-2`.
 
 Alternatives considered:
 

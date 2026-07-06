@@ -1,22 +1,6 @@
 import AppKit
 import SwiftUI
 
-private struct CoordinatorSidebarMaterialView: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.blendingMode = .withinWindow
-        view.state = .active
-        view.material = .sidebar
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.blendingMode = .withinWindow
-        nsView.state = .active
-        nsView.material = .sidebar
-    }
-}
-
 struct CoordinatorModeView: View {
     enum PresentationMode: String, CaseIterable, Identifiable {
         case board
@@ -171,7 +155,7 @@ struct CoordinatorModeView: View {
                 metrics: metrics
             )
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(CoordinatorTheme.Palette.windowBackground)
         .onAppear {
             viewModel.setVisible(true)
         }
@@ -218,7 +202,7 @@ struct CoordinatorModeView: View {
                         coordinatorConversation(snapshot.coordinatorRail, metrics: metrics)
                             .padding(metrics.outerPadding)
                             .frame(minWidth: metrics.centerChatMinWidth, maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color(nsColor: .windowBackgroundColor))
+                            .background(CoordinatorTheme.Palette.windowBackground)
                     }
 
                     if isAllAgentsBoard {
@@ -356,7 +340,7 @@ struct CoordinatorModeView: View {
             }
             .padding(.horizontal, metrics.outerPadding)
             .padding(.vertical, metrics.headerPadding)
-            .background(.regularMaterial)
+            .background(CoordinatorTheme.Palette.elevatedPanelBackground)
 
             Group {
                 if presentationMode == .plan {
@@ -442,15 +426,18 @@ struct CoordinatorModeView: View {
 
     private func mcpAwarenessChip(_ awareness: CoordinatorModeMCPAwareness, metrics: CoordinatorVisualMetrics) -> some View {
         let statusText = compactMCPStatusText(for: awareness)
-        return Label(statusText, systemImage: awareness.state.systemImage)
-            .font(metrics.bodyMedium)
-            .foregroundStyle(awareness.state == .active ? Color.accentColor : Color.secondary)
-            .lineLimit(1)
-            .padding(.horizontal, metrics.headerControlHorizontalPadding)
-            .frame(height: metrics.headerControlHeight)
-            .coordinatorHeaderControlBackground()
-            .hoverTooltip(mcpAwarenessTooltip(for: awareness))
-            .accessibilityLabel(mcpAwarenessTooltip(for: awareness))
+        return CoordinatorStatusPlate(
+            title: statusText,
+            tint: awareness.state.statusTint,
+            font: metrics.bodyMedium,
+            dotSize: metrics.composerStatusDotSize,
+            horizontalPadding: metrics.headerControlHorizontalPadding,
+            verticalPadding: 0,
+            systemImage: awareness.state.systemImage
+        )
+        .frame(height: metrics.headerControlHeight)
+        .hoverTooltip(mcpAwarenessTooltip(for: awareness))
+        .accessibilityLabel(mcpAwarenessTooltip(for: awareness))
     }
 
     private func compactMCPStatusText(for awareness: CoordinatorModeMCPAwareness) -> String {
@@ -5517,15 +5504,13 @@ struct CoordinatorModeView: View {
     }
 
     private func statusChip(_ text: String, color: Color, metrics: CoordinatorVisualMetrics) -> some View {
-        Text(text)
-            .font(metrics.chip)
-            .padding(.horizontal, metrics.miniPillHorizontalPadding)
-            .padding(.vertical, metrics.miniPillVerticalPadding)
-            .background(Capsule().fill(color.opacity(CoordinatorStyle.statusChipFillOpacity)))
-            .overlay(
-                Capsule().stroke(color.opacity(CoordinatorStyle.statusChipStrokeOpacity), lineWidth: 0.5)
-            )
-            .foregroundStyle(.secondary)
+        CoordinatorPill(
+            title: text,
+            tint: color,
+            font: metrics.chip,
+            horizontalPadding: metrics.miniPillHorizontalPadding,
+            verticalPadding: metrics.miniPillVerticalPadding
+        )
     }
 
     private func inspectorGroup(
@@ -6732,43 +6717,41 @@ private struct CoordinatorVisualMetrics {
 }
 
 private enum CoordinatorStyle {
-    static let cardFillOpacity = 0.35
-    static let groupedFillOpacity = 0.18
-    static let railCardFillOpacity = 0.16
-    static let emptyColumnFillOpacity = 0.12
-    static let statusChipFillOpacity = 0.04
-    static let statusChipStrokeOpacity = 0.07
-    static let listRowFillOpacity = 0.10
+    static let cardFillOpacity = CoordinatorTheme.Opacity.cardFill
+    static let groupedFillOpacity = CoordinatorTheme.Opacity.groupedFill
+    static let railCardFillOpacity = CoordinatorTheme.Opacity.railCardFill
+    static let emptyColumnFillOpacity = CoordinatorTheme.Opacity.emptyColumnFill
+    static let listRowFillOpacity = CoordinatorTheme.Opacity.listRowFill
 
     static var hairline: Color {
-        Color.secondary.opacity(0.15)
+        CoordinatorTheme.Palette.hairline
     }
 
     static var panelSeam: Color {
-        Color.secondary.opacity(0.10)
+        CoordinatorTheme.Palette.seam
     }
 
     static var floatingPanelStroke: Color {
-        Color.secondary.opacity(0.18)
+        CoordinatorTheme.Palette.strongHairline
     }
 
     static var floatingPanelShadow: Color {
-        Color.black.opacity(0.18)
+        CoordinatorTheme.Palette.shadow
     }
 
-    static let floatingPanelCornerRadius: CGFloat = 18
+    static let floatingPanelCornerRadius: CGFloat = CoordinatorTheme.Radius.panel
     static let floatingPanelInset: CGFloat = 8
 
     static var selectedFill: Color {
-        Color.accentColor.opacity(0.15)
+        CoordinatorTheme.Palette.selectedFill()
     }
 
     static var selectedBorder: Color {
-        Color.accentColor.opacity(0.25)
+        CoordinatorTheme.Palette.selectedStroke()
     }
 
     static var hoverBorder: Color {
-        Color.secondary.opacity(0.28)
+        CoordinatorTheme.Palette.hoverStroke()
     }
 }
 
@@ -6793,7 +6776,7 @@ private extension View {
 
         return padding(CoordinatorStyle.floatingPanelInset)
             .background(
-                CoordinatorSidebarMaterialView()
+                CoordinatorTheme.Palette.panelBackground
                     .clipShape(shape)
             )
             .overlay {
@@ -6815,7 +6798,7 @@ private extension View {
             .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.10))
+                    .fill(CoordinatorTheme.Palette.elevatedPanelBackground.opacity(0.72))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -6830,7 +6813,7 @@ private extension View {
         )
         .overlay(
             Capsule(style: .continuous)
-                .stroke(Color.secondary.opacity(0.20), lineWidth: 0.75)
+                .stroke(CoordinatorTheme.Palette.strongHairline, lineWidth: CoordinatorTheme.Stroke.hairline)
         )
         .clipShape(Capsule(style: .continuous))
     }
@@ -6843,11 +6826,11 @@ private extension View {
         strokeOpacity: Double = 0.15
     ) -> some View {
         let neutralFill = fillOpacity > 0
-            ? Color(nsColor: .controlBackgroundColor).opacity(fillOpacity)
+            ? CoordinatorTheme.Palette.panelBackground.opacity(fillOpacity)
             : Color.clear
         let resolvedFill = isSelected
             ? CoordinatorStyle.selectedFill
-            : (isHovered ? Color(nsColor: .controlBackgroundColor).opacity(0.18) : neutralFill)
+            : (isHovered ? CoordinatorTheme.Palette.elevatedPanelBackground.opacity(0.86) : neutralFill)
         let neutralStroke = fillOpacity > 0 && strokeOpacity > 0
             ? Color.secondary.opacity(strokeOpacity)
             : Color.clear
@@ -7188,6 +7171,14 @@ private extension CoordinatorModeStatusGroup {
 }
 
 private extension CoordinatorModeMCPAwareness.State {
+    var statusTint: Color {
+        switch self {
+        case .off, .empty: CoordinatorTheme.Semantic.neutral.tint
+        case .idle: CoordinatorTheme.Semantic.info.tint
+        case .active: CoordinatorTheme.Semantic.success.tint
+        }
+    }
+
     var displayName: String {
         switch self {
         case .off: "MCP off"

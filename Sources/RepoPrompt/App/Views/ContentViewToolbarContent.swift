@@ -16,9 +16,9 @@ struct ContentViewToolbarContent: ToolbarContent {
                 MainSurfaceSegmentedSwitcher(
                     selection: $mainSurfaceSelection,
                     isAvailable: isMainSurfaceSwitchingAvailable,
-                    surfaces: [.coordinatorMode, .agentMode]
+                    surfaces: [.agentMode, .coordinatorMode]
                 )
-                .frame(width: 232)
+                .frame(width: 260)
             }
         }
 
