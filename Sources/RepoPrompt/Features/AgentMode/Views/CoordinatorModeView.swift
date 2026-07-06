@@ -92,6 +92,10 @@ struct CoordinatorModeView: View {
     let promptManager: PromptViewModel?
     let workspaceSearchService: WorkspaceSearchService?
     let selectionCoordinator: WorkspaceSelectionCoordinator?
+    let rootsStore: AgentWorkspaceRootsSidebarStore?
+    let apiSettingsVM: APISettingsViewModel?
+    let currentTabID: UUID?
+    let onManageWorkspaces: (() -> Void)?
     let onOpenAgentChat: (AgentSessionDeepLinkRoute) -> Void
 
     @State private var presentationMode: PresentationMode = .plan
@@ -203,6 +207,7 @@ struct CoordinatorModeView: View {
                         coordinatorConversation(snapshot.coordinatorRail, metrics: metrics)
                             .frame(minWidth: metrics.centerChatMinWidth, maxWidth: .infinity, maxHeight: .infinity)
                             .background(CoordinatorTheme.Palette.windowBackground)
+                            .clipped()
                     }
 
                     if isAllAgentsBoard {
@@ -230,6 +235,7 @@ struct CoordinatorModeView: View {
                         )
                         .frame(width: metrics.rightWorkPanelWidth)
                         .frame(maxHeight: .infinity)
+                        .background(CoordinatorTheme.Palette.windowBackground)
                     }
                 }
             } else {
@@ -278,6 +284,7 @@ struct CoordinatorModeView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(CoordinatorTheme.Palette.windowBackground)
     }
 
     private func rightWorkPanel(
@@ -313,6 +320,7 @@ struct CoordinatorModeView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .background(CoordinatorTheme.Palette.windowBackground)
         .animation(.easeInOut(duration: 0.22), value: isInspectorVisible)
         .coordinatorFlushRegion(edge: .leading)
     }
@@ -350,7 +358,7 @@ struct CoordinatorModeView: View {
             Group {
                 if presentationMode == .plan {
                     missionPlanView(
-                        plan: snapshot.coordinatorRail.missionPlan,
+                        rail: snapshot.coordinatorRail,
                         childCounts: snapshot.coordinatorRail.childCounts,
                         metrics: metrics
                     )
@@ -372,6 +380,7 @@ struct CoordinatorModeView: View {
                 boardFilterBar(metrics: metrics)
             }
         }
+        .background(CoordinatorTheme.Palette.windowBackground)
     }
 
     private func boardControls(
@@ -402,7 +411,9 @@ struct CoordinatorModeView: View {
 
             Spacer(minLength: 0)
 
-            mcpAwarenessChip(mcpAwareness, metrics: metrics)
+            if shouldShowMCPAwarenessChip(mcpAwareness) {
+                mcpAwarenessChip(mcpAwareness, metrics: metrics)
+            }
 
             if showInspectorToggle {
                 CoordinatorRailToggleButton(
@@ -427,6 +438,19 @@ struct CoordinatorModeView: View {
         .padding(.horizontal, metrics.outerPadding)
         .padding(.vertical, metrics.footerVerticalPadding)
         .background(.regularMaterial)
+    }
+
+    private func shouldShowMCPAwarenessChip(_ awareness: CoordinatorModeMCPAwareness) -> Bool {
+        if presentationMode == .plan,
+           awareness.state == .empty,
+           awareness.connectedClientCount == 0,
+           awareness.activeClientCount == 0,
+           awareness.idleClientCount == 0,
+           awareness.inFlightToolCallCount == 0
+        {
+            return false
+        }
+        return true
     }
 
     private func mcpAwarenessChip(_ awareness: CoordinatorModeMCPAwareness, metrics: CoordinatorVisualMetrics) -> some View {
@@ -778,16 +802,7 @@ struct CoordinatorModeView: View {
         let pendingDecisionAttentionCount = coordinatorPendingDecisionAttentionCount(snapshot)
         return VStack(alignment: .leading, spacing: metrics.tightSpacing) {
             coordinatorNavigationButton(
-                title: "Director Chat",
-                subtitle: "Selected Mission and linked work",
-                systemImage: "bubble.left.and.bubble.right",
-                badgeCount: nil,
-                scope: .coordinatorFleet,
-                metrics: metrics
-            )
-
-            coordinatorNavigationButton(
-                title: "All Agents Board",
+                title: "Board",
                 subtitle: "Active work across Director Missions",
                 systemImage: "rectangle.3.group.bubble",
                 badgeCount: snapshot.counts.liveRows,
@@ -929,8 +944,50 @@ struct CoordinatorModeView: View {
     private func coordinatorRailFooter(snapshot: CoordinatorModeSnapshot, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(alignment: .leading, spacing: metrics.smallSpacing) {
             coordinatorRailStatusReport(snapshot.coordinatorRail.statusReport, metrics: metrics)
+            coordinatorWorkspaceFooter(metrics: metrics)
         }
         .padding(.top, metrics.sidebarVerticalPadding)
+    }
+
+    @ViewBuilder
+    private func coordinatorWorkspaceFooter(metrics _: CoordinatorVisualMetrics) -> some View {
+        if let rootsStore,
+           let promptManager,
+           let apiSettingsVM,
+           let agentModeVM,
+           let onManageWorkspaces
+        {
+            AgentWorkspaceRootsSectionView(
+                rootsStore: rootsStore,
+                promptManager: promptManager,
+                apiSettingsVM: apiSettingsVM,
+                onManageWorkspaces: onManageWorkspaces,
+                worktreeIndicatorsByLogicalRootPath: currentTabID.map { agentModeVM.worktreeIndicatorsByLogicalRootPath(forTabID: $0) } ?? [:],
+                worktreeMergeAttentionsByLogicalRootPath: currentTabID.map { agentModeVM.worktreeMergeAttentionsByLogicalRootPath(forTabID: $0) } ?? [:],
+                branchSwitchActions: AgentWorkspaceBranchSwitchActions(
+                    loadOptions: { row in
+                        try await promptManager.gitViewModel.loadGitBranchSwitchOptions(forRootPath: row.fullPath)
+                    },
+                    preflight: { row, branchName in
+                        try await promptManager.gitViewModel.preflightGitBranchSwitch(
+                            branchName: branchName,
+                            forRootPath: row.fullPath
+                        )
+                    },
+                    switchBranch: { row, preflight in
+                        try await agentModeVM.switchGitBranchFromWorkspaceRoot(
+                            row,
+                            preflight: preflight,
+                            gitViewModel: promptManager.gitViewModel,
+                            currentTabID: currentTabID
+                        )
+                    },
+                    isAgentRunActive: {
+                        agentModeVM.isAgentRunActive(tabID: currentTabID)
+                    }
+                )
+            )
+        }
     }
 
     private func coordinatorMissionsPanel(
@@ -1040,6 +1097,7 @@ struct CoordinatorModeView: View {
     ) -> some View {
         Button {
             viewModel.startNewCoordinatorRun()
+            viewModel.boardScope = .coordinatorFleet
         } label: {
             HStack(alignment: .center, spacing: metrics.smallSpacing) {
                 Image(systemName: rail.state == .chooseCoordinator ? "plus.circle.fill" : "plus.bubble")
@@ -1076,6 +1134,7 @@ struct CoordinatorModeView: View {
         .hoverTooltip("Prepare a fresh mission")
         .accessibilityAction {
             viewModel.startNewCoordinatorRun()
+            viewModel.boardScope = .coordinatorFleet
         }
     }
 
@@ -1087,6 +1146,7 @@ struct CoordinatorModeView: View {
 
         return Button {
             viewModel.selectCoordinator(sessionID: option.sessionID)
+            viewModel.boardScope = .coordinatorFleet
         } label: {
             HStack(alignment: .center, spacing: metrics.smallSpacing) {
                 Image(systemName: option.isSelected ? "checkmark.circle.fill" : "bubble.left.and.bubble.right")
@@ -1274,14 +1334,14 @@ struct CoordinatorModeView: View {
     }
 
     private func missionPlanView(
-        plan: CoordinatorMissionPlan?,
+        rail: CoordinatorModeCoordinatorRail,
         childCounts: CoordinatorModeCoordinatorChildCounts,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         GeometryReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
-                    if let plan {
+                    if let plan = rail.missionPlan {
                         missionPlanSummary(plan, childCounts: childCounts, metrics: metrics)
 
                         if plan.workstreams.isEmpty, plan.nodes.isEmpty {
@@ -1297,6 +1357,9 @@ struct CoordinatorModeView: View {
                         } else {
                             missionPlanNodeOutline(plan, metrics: metrics)
                         }
+                    } else if rail.state == .chooseCoordinator {
+                        coordinatorMissionDraftSurface(metrics: metrics)
+                            .frame(maxWidth: .infinity, minHeight: proxy.size.height - metrics.outerPadding * 2, alignment: .topLeading)
                     } else {
                         missionPlanEmptyState(
                             title: "No Mission Plan yet",
@@ -1309,6 +1372,207 @@ struct CoordinatorModeView: View {
                 .padding(metrics.outerPadding)
                 .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
             }
+            .background(CoordinatorTheme.Palette.windowBackground)
+        }
+    }
+
+    private func coordinatorMissionDraftSurface(metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
+            VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+                Label("New Mission", systemImage: "plus.bubble.fill")
+                    .font(metrics.sectionTitle)
+                    .foregroundStyle(Color.accentColor)
+                Text("Draft a new Mission")
+                    .font(metrics.inspectorTitle)
+                    .foregroundStyle(.primary)
+                Text("Describe the mission in the composer. The Director will infer shape, record a Mission Plan, and apply the policy captured here when you send.")
+                    .font(metrics.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(metrics.pendingPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .coordinatorCardBackground(cornerRadius: metrics.pendingCornerRadius, isSelected: true, fillOpacity: 0.10, strokeOpacity: 0.12)
+
+            coordinatorDraftNoPlanStrip(metrics: metrics)
+
+            VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+                HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                    Label("Mission Policy", systemImage: "shield.lefthalf.filled")
+                        .font(metrics.sectionTitle)
+                    Spacer(minLength: metrics.controlSpacing)
+                    coordinatorMissionPolicyPicker(metrics: metrics, isEditable: true)
+                }
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: metrics.smallSpacing), count: 2), spacing: metrics.smallSpacing) {
+                    ForEach(CoordinatorMissionPolicySnapshot.builtInPolicies.prefix(4)) { policy in
+                        coordinatorDraftPolicyCard(policy, metrics: metrics)
+                    }
+                }
+
+                coordinatorDraftPolicySummary(viewModel.selectedMissionPolicy, metrics: metrics)
+            }
+            .padding(metrics.pendingPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .coordinatorCardBackground(cornerRadius: metrics.pendingCornerRadius)
+
+            HStack(alignment: .top, spacing: metrics.sectionSpacing) {
+                VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+                    Label("Pace", systemImage: "speedometer")
+                        .font(metrics.sectionTitle)
+                    automationModePicker(metrics: metrics)
+                    Text(viewModel.usesAutoMode ? "Auto lets the Director continue through safe steps under the selected policy." : "Step pauses at Director checkpoints so you can approve the next move.")
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(metrics.pendingPadding)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .coordinatorCardBackground(cornerRadius: metrics.pendingCornerRadius)
+
+                VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+                    Label("Shape inference", systemImage: "square.stack.3d.up")
+                        .font(metrics.sectionTitle)
+                    Text("No shape has been inferred yet.")
+                        .font(metrics.bodySemibold)
+                    Text("On submit, the Director classifies the Mission shape and records why it chose the route. That explainer will appear with the Mission Plan before delegated work proceeds.")
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(metrics.pendingPadding)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .coordinatorCardBackground(cornerRadius: metrics.pendingCornerRadius)
+            }
+
+            HStack(spacing: metrics.smallSpacing) {
+                coordinatorMissionTemplatePicker(metrics: metrics)
+                Spacer(minLength: metrics.controlSpacing)
+                Text("Policy: \(viewModel.selectedMissionPolicy.name) · \(viewModel.selectedMissionPolicy.defaultPace.rawValue) · cap \(viewModel.selectedMissionPolicy.maxConcurrent)")
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .padding(.horizontal, metrics.pendingPadding)
+        }
+    }
+
+    private func coordinatorDraftNoPlanStrip(metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(alignment: .center, spacing: metrics.smallSpacing) {
+            Image(systemName: "list.clipboard")
+                .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                Text("No Mission Plan yet")
+                    .font(metrics.bodySemibold)
+                Text("Send the first directive to create the draft plan surface.")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: metrics.controlSpacing)
+            statusChip("Draft", color: Color.accentColor, metrics: metrics)
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(Color.accentColor.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.14), lineWidth: 0.75)
+        )
+    }
+
+    private func coordinatorDraftPolicyCard(_ policy: CoordinatorMissionPolicySnapshot, metrics: CoordinatorVisualMetrics) -> some View {
+        let isSelected = viewModel.selectedMissionPolicy.id == policy.id
+        return Button {
+            viewModel.selectedMissionPolicy = policy
+        } label: {
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                HStack(spacing: metrics.smallSpacing) {
+                    Image(systemName: coordinatorPolicyIcon(policy))
+                        .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                    Text(policy.name)
+                        .font(metrics.bodySemibold)
+                        .lineLimit(1)
+                    Spacer(minLength: metrics.smallSpacing)
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                    }
+                }
+                HStack(spacing: metrics.smallSpacing) {
+                    statusChip(policy.defaultPace.rawValue, color: Color.accentColor, metrics: metrics)
+                    statusChip("cap \(policy.maxConcurrent)", color: .purple, metrics: metrics)
+                }
+                Text(coordinatorPolicyAskSummary(policy))
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if let standingGuidance = policy.standingGuidance {
+                    Text(standingGuidance)
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(metrics.pendingPadding)
+            .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                    .fill(isSelected ? Color.purple.opacity(0.14) : Color(nsColor: .controlBackgroundColor).opacity(0.16))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                    .stroke(isSelected ? Color.purple.opacity(0.32) : CoordinatorTheme.Palette.hairline.opacity(0.65), lineWidth: 0.75)
+            )
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? Color.purple : Color.primary.opacity(0.88))
+        .hoverTooltip(policy.standingGuidance ?? policy.name)
+    }
+
+    private func coordinatorDraftPolicySummary(_ policy: CoordinatorMissionPolicySnapshot, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            Label("Captured policy echo", systemImage: "quote.bubble")
+                .font(metrics.microMedium)
+                .foregroundStyle(.secondary)
+            Text("\(policy.name) will be sent as provider-only Mission Policy metadata. Visible prompt text remains only what you type in the composer.")
+                .font(metrics.micro)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let definitionOfDone = policy.definitionOfDone {
+                Label("Done: \(definitionOfDone)", systemImage: "checkmark.seal")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.14))
+        )
+    }
+
+    private func coordinatorPolicyAskSummary(_ policy: CoordinatorMissionPolicySnapshot) -> String {
+        let askClasses = CoordinatorMissionDecisionClass.allCases
+            .filter { policy.resolvedAutonomy(for: $0) == .ask }
+            .map(\.rawValue)
+        guard !askClasses.isEmpty else { return "Asks: none" }
+        return "Asks: \(askClasses.joined(separator: " · "))"
+    }
+
+    private func coordinatorPolicyIcon(_ policy: CoordinatorMissionPolicySnapshot) -> String {
+        switch policy.id {
+        case "hands-off": "forward.end.fill"
+        case "careful-writes": "pencil.and.outline"
+        case "read-only": "lock.doc"
+        default: "shield.lefthalf.filled"
         }
     }
 
@@ -2686,23 +2950,26 @@ struct CoordinatorModeView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: metrics.controlSpacing)
-                Button {
-                    stopCoordinatorMission()
-                } label: {
-                    Label("Stop", systemImage: "stop.circle.fill")
-                        .labelStyle(.titleAndIcon)
+                if viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission {
+                    Button {
+                        stopCoordinatorMission()
+                    } label: {
+                        Label("Stop", systemImage: "stop.circle.fill")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.link)
+                    .font(metrics.microMedium)
+                    .foregroundStyle(Color.red.opacity(viewModel.canStopSelectedCoordinatorMission ? 0.95 : 0.45))
+                    .disabled(!viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission)
+                    .hoverTooltip("Stop the selected Mission and cancel its live linked sessions without archiving or deleting them.")
                 }
-                .buttonStyle(.link)
-                .font(metrics.microMedium)
-                .foregroundStyle(Color.red.opacity(viewModel.canStopSelectedCoordinatorMission ? 0.95 : 0.45))
-                .disabled(!viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission)
-                .hoverTooltip("Stop the selected Mission and cancel its live linked sessions without archiving or deleting them.")
-                Button("Clear") {
-                    viewModel.clearCoordinatorRailTranscript()
+                if !viewModel.railTranscriptEntries.isEmpty {
+                    Button("Clear") {
+                        viewModel.clearCoordinatorRailTranscript()
+                    }
+                    .buttonStyle(.link)
+                    .font(metrics.microMedium)
                 }
-                .buttonStyle(.link)
-                .font(metrics.microMedium)
-                .disabled(viewModel.railTranscriptEntries.isEmpty)
             }
             .padding(.horizontal, metrics.outerPadding)
             .padding(.vertical, metrics.headerPadding)
@@ -2744,7 +3011,7 @@ struct CoordinatorModeView: View {
 
             coordinatorComposer(rail, metrics: metrics)
                 .padding(metrics.cardPadding)
-                .background(CoordinatorTheme.Palette.panelBackground.opacity(0.72))
+                .background(CoordinatorTheme.Palette.panelBackground)
         }
         .background(CoordinatorTheme.Palette.windowBackground)
     }
@@ -4463,7 +4730,7 @@ struct CoordinatorModeView: View {
                 .layoutPriority(1)
 
             HStack(spacing: metrics.tightSpacing) {
-                if !isChildReply {
+                if !isChildReply, viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission {
                     coordinatorComposerStopButton(metrics: metrics)
                 }
 
@@ -7051,8 +7318,8 @@ private extension CoordinatorModeSortMode {
 private extension CoordinatorModeBoardScope {
     var displayName: String {
         switch self {
-        case .coordinatorFleet: "Director Chat"
-        case .allAgents: "All Agents Board"
+        case .coordinatorFleet: "Missions"
+        case .allAgents: "Board"
         }
     }
 
@@ -7447,6 +7714,10 @@ private extension CoordinatorFollowThroughChildPhase {
                 promptManager: nil,
                 workspaceSearchService: nil,
                 selectionCoordinator: nil,
+                rootsStore: nil,
+                apiSettingsVM: nil,
+                currentTabID: nil,
+                onManageWorkspaces: nil,
                 onOpenAgentChat: { _ in }
             )
             .onAppear {
