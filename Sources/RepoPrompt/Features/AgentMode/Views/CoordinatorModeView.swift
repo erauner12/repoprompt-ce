@@ -3765,18 +3765,16 @@ struct CoordinatorModeView: View {
         _ decision: CoordinatorMissionDecisionRecord,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
             HStack(spacing: metrics.smallSpacing) {
-                statusChip(decision.actor == .user ? "You" : "Director", color: decision.actor == .user ? .green : .secondary, metrics: metrics)
-                Text(decision.label)
-                    .font(metrics.microMedium)
-                    .foregroundStyle(.primary.opacity(0.9))
-                    .lineLimit(1)
-                Spacer(minLength: metrics.smallSpacing)
-                Text(decision.timestamp.formatted(date: .omitted, time: .shortened))
-                    .font(metrics.micro)
-                    .foregroundStyle(.tertiary)
+                statusChip(decision.actor == .user ? "Actor · you" : "Actor · Director", color: decision.actor == .user ? .green : .secondary, metrics: metrics)
+                statusChip("Kind · \(decision.decisionClass)", color: .secondary, metrics: metrics)
+                statusChip(decision.overruledDecisionID == nil ? "Status · recorded" : "Status · correction", color: decision.overruledDecisionID == nil ? .secondary : .orange, metrics: metrics)
             }
+            Text(decision.label)
+                .font(metrics.bodySemibold)
+                .foregroundStyle(.primary.opacity(0.92))
+                .lineLimit(2)
             if let reason = decision.reason {
                 Text(reason)
                     .font(metrics.micro)
@@ -3800,11 +3798,6 @@ struct CoordinatorModeView: View {
                 }
             }
         }
-        .padding(metrics.tightSpacing)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.12))
-        )
     }
 
     private func evidenceLedgerRow(
@@ -3812,26 +3805,26 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-            HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
-                statusChip(evidence.verdict.rawValue, color: evidence.verdict == .meets ? .green : .orange, metrics: metrics)
-                Text(evidence.summary)
+            HStack(spacing: metrics.smallSpacing) {
+                statusChip("Verdict · \(evidence.verdict.rawValue)", color: evidence.verdict == .meets ? .green : .orange, metrics: metrics)
+                if let source = evidenceSourceSummary(evidence.source) {
+                    statusChip("Source · \(source)", color: .secondary, metrics: metrics)
+                }
+            }
+            Text(evidence.summary)
+                .font(metrics.bodySemibold)
+                .foregroundStyle(.primary.opacity(0.92))
+                .lineLimit(2)
+            if let judgedOn = evidenceJudgedOnSummary(evidence) {
+                Text(judgedOn)
                     .font(metrics.micro)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
-                Spacer(minLength: metrics.smallSpacing)
-                Text(evidence.timestamp.formatted(date: .omitted, time: .shortened))
-                    .font(metrics.micro)
-                    .foregroundStyle(.tertiary)
             }
             if let judgmentBundle = evidence.judgmentBundle {
                 judgmentBundleDisclosure(judgmentBundle, metrics: metrics)
             }
         }
-        .padding(metrics.tightSpacing)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.12))
-        )
     }
 
     private func judgmentBundleDisclosure(
@@ -3918,6 +3911,38 @@ struct CoordinatorModeView: View {
         case (nil, nil):
             return nil
         }
+    }
+
+    private func evidenceSourceSummary(_ source: CoordinatorMissionEvidenceSource?) -> String? {
+        guard let source else { return nil }
+        if let summary = source.summary {
+            return summary
+        }
+        if let operation = source.operation {
+            return operation.displayName
+        }
+        return source.kind
+    }
+
+    private func evidenceJudgedOnSummary(_ evidence: CoordinatorMissionEvidenceRecord) -> String? {
+        if let structuredEvidence = evidence.judgmentBundle?.structuredEvidence {
+            return "Judged on: \(structuredEvidence)"
+        }
+        if let doneCriteria = evidence.judgmentBundle?.doneCriteria {
+            return "Judged on: \(doneCriteria)"
+        }
+        return evidence.source?.summary.map { "Judged on: \($0)" }
+    }
+
+    private func coordinatorGroundingPinnedSummary(_ policy: CoordinatorMissionPolicySnapshot) -> String {
+        var parts: [String] = []
+        if !policy.pinnedSkillIDs.isEmpty {
+            parts.append("skills: \(policy.pinnedSkillIDs.joined(separator: ", "))")
+        }
+        if !policy.pinnedContextIDs.isEmpty {
+            parts.append("context: \(policy.pinnedContextIDs.joined(separator: ", "))")
+        }
+        return "Pinned " + parts.joined(separator: " · ")
     }
 
     private func completedMissionReceipt(
@@ -4304,7 +4329,7 @@ struct CoordinatorModeView: View {
         switch payload {
         case let .evidence(evidence):
             coordinatorLedgerCard(
-                title: "Evidence judged",
+                title: "Evidence",
                 systemImage: evidence.verdict == .meets ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
                 tint: evidence.verdict == .meets ? .green : .orange,
                 createdAt: createdAt,
@@ -4314,7 +4339,7 @@ struct CoordinatorModeView: View {
             }
         case let .decision(decision):
             coordinatorLedgerCard(
-                title: decision.actor == .director ? "Director decided" : "Decision recorded",
+                title: "Decision",
                 systemImage: decision.actor == .director ? "gearshape.fill" : "person.crop.circle.badge.checkmark",
                 tint: decision.actor == .director ? .secondary : .green,
                 createdAt: createdAt,
@@ -4341,27 +4366,53 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics,
         @ViewBuilder content: () -> some View
     ) -> some View {
-        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-            HStack(spacing: metrics.smallSpacing) {
-                Label(title, systemImage: systemImage)
-                    .font(metrics.microMedium)
-                    .foregroundStyle(tint)
-                Spacer(minLength: metrics.smallSpacing)
-                Text(createdAt.formatted(date: .omitted, time: .shortened))
-                    .font(metrics.micro)
-                    .foregroundStyle(.tertiary)
+        coordinatorControlPlaneCard(
+            title: title,
+            systemImage: systemImage,
+            tint: tint,
+            trailingText: createdAt.formatted(date: .omitted, time: .shortened),
+            metrics: metrics,
+            content: content
+        )
+    }
+
+    private func coordinatorControlPlaneCard(
+        title: String,
+        systemImage: String,
+        tint: Color,
+        trailingText: String?,
+        metrics: CoordinatorVisualMetrics,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        HStack(alignment: .top, spacing: metrics.smallSpacing) {
+            Capsule(style: .continuous)
+                .fill(tint.opacity(0.5))
+                .frame(width: 3)
+
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                    Label(title, systemImage: systemImage)
+                        .font(metrics.microMedium)
+                        .foregroundStyle(tint)
+                    Spacer(minLength: metrics.smallSpacing)
+                    if let trailingText {
+                        Text(trailingText)
+                            .font(metrics.micro)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                content()
             }
-            content()
         }
-        .padding(metrics.pendingPadding)
+        .padding(metrics.smallSpacing)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(Color(nsColor: .windowBackgroundColor).opacity(0.74))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .stroke(tint.opacity(0.16), lineWidth: 0.75)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(tint.opacity(0.18), lineWidth: 0.75)
         )
     }
 
@@ -4370,45 +4421,45 @@ struct CoordinatorModeView: View {
         createdAt: Date,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        HStack(alignment: .top, spacing: metrics.smallSpacing) {
-            Image(systemName: "arrow.triangle.branch")
-                .font(.system(size: metrics.microIconSize, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: metrics.titlebarIconSize, height: metrics.titlebarIconSize)
+        let targetRow = decision.sessionID.flatMap { coordinatorRow(for: $0) }
+        let workflowName = targetRow?.workflow?.displayName ?? decision.workflowName
+        let worktreeName = targetRow?.workstream?.branch ?? targetRow?.workstream?.label ?? decision.worktreeID
+
+        return coordinatorControlPlaneCard(
+            title: "Delegated session",
+            systemImage: "arrow.triangle.branch",
+            tint: .secondary,
+            trailingText: createdAt.formatted(date: .omitted, time: .shortened),
+            metrics: metrics
+        ) {
             VStack(alignment: .leading, spacing: metrics.tightSpacing) {
                 HStack(spacing: metrics.smallSpacing) {
-                    Text("Delegating \(decision.decision.displayName.lowercased())")
-                        .font(metrics.microMedium)
-                        .foregroundStyle(.secondary)
+                    statusChip("Route · \(decision.decision.displayName)", color: .secondary, metrics: metrics)
                     statusChip(decision.operation.displayName, color: .secondary, metrics: metrics)
-                    Spacer(minLength: metrics.smallSpacing)
-                    Text(createdAt.formatted(date: .omitted, time: .shortened))
-                        .font(metrics.micro)
-                        .foregroundStyle(.tertiary)
+                    if let workflowName {
+                        statusChip("Workflow · \(workflowName)", color: .secondary, metrics: metrics)
+                    }
+                    if let worktreeName {
+                        statusChip("Worktree · \(worktreeName)", color: .secondary, metrics: metrics)
+                    }
                 }
                 Text(decision.reason)
-                    .font(metrics.body)
-                    .foregroundStyle(.secondary)
+                    .font(metrics.bodySemibold)
+                    .foregroundStyle(.primary.opacity(0.92))
                     .fixedSize(horizontal: false, vertical: true)
                 if let contextSummary = decision.contextSummary {
                     Text(contextSummary)
                         .font(metrics.micro)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
-        .padding(.horizontal, metrics.pendingPadding)
-        .padding(.vertical, metrics.pendingPadding * 0.82)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.24))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .stroke(CoordinatorTheme.Palette.hairline, lineWidth: 0.8)
-        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectDelegatedActionTarget(targetRow)
+        }
+        .hoverTooltip(targetRow == nil ? "Delegated session is no longer visible on the board" : "Show delegated session in inspector")
     }
 
     private func coordinatorPlanEventMarker(
@@ -4459,57 +4510,48 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         coordinatorLedgerCard(
-            title: "Mission grounding",
+            title: "Mission context",
             systemImage: "pin.fill",
             tint: .secondary,
             createdAt: createdAt,
             metrics: metrics
         ) {
             VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                if let shape {
-                    Label("Shape · \(shape.displayName)", systemImage: "square.stack.3d.up")
-                        .font(metrics.microMedium)
-                        .foregroundStyle(.secondary)
-                    if let reason = shape.reason {
-                        Text(reason)
-                            .font(metrics.micro)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: metrics.smallSpacing) {
+                    if let shape {
+                        statusChip("Shape · \(shape.displayName)", color: .secondary, metrics: metrics)
                     }
-                    if let namedClose = shape.namedClose {
-                        Text("Close as: \(namedClose)")
-                            .font(metrics.micro)
-                            .foregroundStyle(.secondary)
+                    if let namedClose = shape?.namedClose {
+                        statusChip("Close · \(namedClose)", color: .secondary, metrics: metrics)
+                    }
+                    if let policy {
+                        statusChip("Policy · \(policy.name)", color: .secondary, metrics: metrics)
+                        statusChip("Cap · \(policy.maxConcurrent)", color: .secondary, metrics: metrics)
+                        statusChip("Pace · \(policy.defaultPace.rawValue)", color: .secondary, metrics: metrics)
                     }
                 }
-                if let policy {
-                    HStack(spacing: metrics.smallSpacing) {
-                        statusChip("Policy · \(policy.name)", color: .secondary, metrics: metrics)
-                        statusChip("cap \(policy.maxConcurrent)", color: .secondary, metrics: metrics)
-                        statusChip(policy.defaultPace.rawValue, color: .secondary, metrics: metrics)
-                    }
-                    if let definitionOfDone = policy.definitionOfDone {
-                        Label("Done: \(definitionOfDone)", systemImage: "checkmark.seal")
-                            .font(metrics.micro)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if let standingGuidance = policy.standingGuidance {
-                        Label(standingGuidance, systemImage: "quote.bubble")
-                            .font(metrics.micro)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if !policy.pinnedSkillIDs.isEmpty {
-                        Text("Pinned skills: \(policy.pinnedSkillIDs.joined(separator: ", "))")
-                            .font(metrics.micro)
-                            .foregroundStyle(.tertiary)
-                    }
-                    if !policy.pinnedContextIDs.isEmpty {
-                        Text("Pinned context: \(policy.pinnedContextIDs.joined(separator: ", "))")
-                            .font(metrics.micro)
-                            .foregroundStyle(.tertiary)
-                    }
+                if let reason = shape?.reason {
+                    Text(reason)
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let definitionOfDone = policy?.definitionOfDone {
+                    Label("Done: \(definitionOfDone)", systemImage: "checkmark.seal")
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let standingGuidance = policy?.standingGuidance {
+                    Label(standingGuidance, systemImage: "quote.bubble")
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let policy, !policy.pinnedSkillIDs.isEmpty || !policy.pinnedContextIDs.isEmpty {
+                    Text(coordinatorGroundingPinnedSummary(policy))
+                        .font(metrics.micro)
+                        .foregroundStyle(.tertiary)
                 }
             }
         }
@@ -4522,22 +4564,22 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         coordinatorLedgerCard(
-            title: "Mission wrap-up",
+            title: "Mission receipt",
             systemImage: "checkmark.seal.fill",
             tint: .green,
             createdAt: createdAt,
             metrics: metrics
         ) {
             HStack(spacing: metrics.smallSpacing) {
-                statusChip("Needed you \(userCount)×", color: .green, metrics: metrics)
-                statusChip("Decided itself \(directorCount)×", color: .secondary, metrics: metrics)
+                statusChip("Needed you · \(userCount)", color: .green, metrics: metrics)
+                statusChip("Decided itself · \(directorCount)", color: .secondary, metrics: metrics)
                 Spacer(minLength: metrics.smallSpacing)
                 Button {
                     viewModel.showMissionDestination()
                     isMissionPlanPaneVisible = true
                     selectedPlanNodeID = nil
                 } label: {
-                    Text("Receipt →")
+                    Label("Receipt", systemImage: "doc.text.magnifyingglass")
                         .font(metrics.microMedium)
                 }
                 .buttonStyle(.plain)
@@ -4874,7 +4916,8 @@ struct CoordinatorModeView: View {
                         Button("Skip all") {
                             onSkipAll()
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                         .foregroundStyle(.secondary)
 
                         if let question = currentQuestion {
@@ -4889,7 +4932,8 @@ struct CoordinatorModeView: View {
                                 }
                                 onUserActivity()
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                         }
                     }
 
@@ -4899,6 +4943,8 @@ struct CoordinatorModeView: View {
                         onQuestionIndexChange(currentIndex - 1)
                         onUserActivity()
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                     .disabled(currentIndex <= 0)
 
                     if currentIndex >= questionCount - 1 {
@@ -4926,7 +4972,7 @@ struct CoordinatorModeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.16))
+                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.74))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
