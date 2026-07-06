@@ -1911,7 +1911,7 @@ struct CoordinatorModeView: View {
 
     private func coordinatorDraftPolicySummary(_ policy: CoordinatorMissionPolicySnapshot, metrics: CoordinatorVisualMetrics) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
-            Text("\(coordinatorPolicyPaceText(policy)) · questions: me · close: per drafted shape · always asks: \(coordinatorPolicyAlwaysAsksText(policy))")
+            Text("\(coordinatorPolicyPaceText(policy)) · questions: \(coordinatorPolicyQuestionsText(policy)) · close: per drafted shape · always asks: \(coordinatorPolicyAlwaysAsksText(policy))")
                 .font(metrics.microMedium)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -1955,6 +1955,13 @@ struct CoordinatorModeView: View {
         switch policy.id {
         case "careful-writes", "read-only": "plan, writes, merges"
         default: "plan, merges"
+        }
+    }
+
+    private func coordinatorPolicyQuestionsText(_ policy: CoordinatorMissionPolicySnapshot) -> String {
+        switch policy.resolvedAutonomy(for: .childAsk) {
+        case .ask: "me"
+        case .auto: "director"
         }
     }
 
