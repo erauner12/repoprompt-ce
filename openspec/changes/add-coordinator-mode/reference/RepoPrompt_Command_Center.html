@@ -920,6 +920,18 @@
        <=640px PHONE: app frame, drawer rail, lane pager, pinned composer. */
     .mobile-rail-toggle { display: none; }
     .mobile-new { display: none; }
+    /* ===== (v3.25) Scheduling-loop legibility — ready/waiting/capped on node cards, strip rollup, stall warning ===== */
+    .node-sched { font-size: 11px; line-height: 1.45; color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: baseline; }
+    .node-sched.ready { color: var(--green); }
+    .node-sched.capped { color: var(--amber); }
+    .node-sched .dep { color: var(--faint); }
+    .node-sched .dep.ok { color: var(--muted); }
+    .node-sched .dep-sep { color: var(--faint); }
+    .strip-sched { color: var(--faint); font-weight: 600; font-size: 11px; }
+    .sched-idle-note { color: var(--amber); font-weight: 600; }
+    .selftest-badge { position: fixed; right: 8px; bottom: 6px; z-index: 95; font-size: 10px; font-weight: 700; border-radius: 6px; padding: 2px 8px; border: 1px solid var(--line); background: rgba(10,12,16,.9); }
+    .selftest-badge.pass { color: var(--green); }
+    .selftest-badge.fail { color: var(--red); }
     .build-stamp { display: none; }
     .lane-tabs { display: none; }
 
@@ -1729,7 +1741,7 @@
               <button class="${state.surface==='director'?'active':''}" data-action="surface-director" title="${dq ? dq + " decision" + (dq>1?"s":"") + " waiting" : "Director"}">Director<span class="kbd">⌘2</span>${dq ? `<span class="nav-badge">${dq}</span>` : ""}</button>
             </div>
             <button class="mobile-new" data-action="${state.surface === 'agent' ? 'mobile-new-session' : 'new-mission'}">＋ New</button>
-            <span class="build-stamp">v3.20</span>
+            <span class="build-stamp">v3.26</span>
             ${pill("MCP active","green")}
           </div>
         </div>`;
@@ -1834,7 +1846,7 @@
       return `
         <button class="row-button mission-row ${isActive?'active':''}" data-action="select-mission" data-id="${item.id}">
           ${statusPlate(plateStateForMission(item), 'mission')}
-          <span class="row-copy"><span class="row-title">${escapeHtml(item.title)}${item.pinned?'<span class="mission-pin">★</span>':''}</span><span class="row-sub">${escapeHtml(item.subtitle)} · ${escapeHtml(item.revision)}</span></span>
+          <span class="row-copy"><span class="row-title">${escapeHtml(item.title)}${item.pinned?'<span class="mission-pin">★</span>':''}</span><span class="row-sub">${eligibleNodesIdle(item) ? `<span class="sched-idle-note">⚠ ready steps idle — open to resume</span>` : `${escapeHtml(item.subtitle)} · ${escapeHtml(item.revision)}`}</span></span>
           <span class="row-actions">${item.archived
             ? `<span class="row-act" data-action="unarchive-mission" data-id="${item.id}" title="Unarchive — back to the live list">⤒</span>`
             : `<span class="row-act" data-action="pin-mission" data-id="${item.id}" title="${item.pinned ? "Unpin" : "Pin to top"}">${item.pinned ? "★" : "☆"}</span><span class="row-act" data-action="archive-mission" data-id="${item.id}" title="${item.status === "Running" ? "Stop & archive — shelve this mission (reversible; the stop is yours)" : "Archive — out of the way; the receipt and every link stay live"}">⤓</span>`}</span>
@@ -1913,6 +1925,11 @@
       const done = nodes.filter(x => x.node.status==="Completed").length;
       const cur = currentMissionNode(m);
       const decCount = decisions().filter(d => d.missionId === m.id).length;
+      // (v3.25/26) Scheduler rollup — the ready set at a glance, phrased running N/cap to mirror the app's status chip.
+      const roll = (nodes.length && m.status === "Running") ? schedRollup(m) : null;
+      const rollTxt = roll
+        ? `<span class="strip-sched">running ${roll.running}/${roll.cap}${roll.capped ? " · cap full" : ""} · ${roll.ready + roll.capped} ready · ${roll.waiting} waiting on deps</span>`
+        : "";
       return `
         <div class="mission-status-strip">
           <div class="mission-status-head">
@@ -1924,7 +1941,9 @@
                 ${nodes.length ? pill(`${done}/${nodes.length} done`, done===nodes.length?"green":"blue") : (m.gathering ? pill("Gathering evidence…","blue") : pill("Not drafted",""))}
                 ${(m.status==="Completed" && m.userDecisions && m.userDecisions.length) ? pill(`needed you ${m.userDecisions.length}×`,"green") : ""}
                 ${(m.status==="Completed" && ((m.autoDecisions&&m.autoDecisions.length)||m._autoAdvances)) ? pill(`decided itself ${(m.autoDecisions?m.autoDecisions.length:0)+(m._autoAdvances?1:0)}×`,"") : ""}
+                ${eligibleNodesIdle(m) ? pill("⚠ ready steps idle","amber") : ""}
                 ${decCount>0 ? `<button class="dec-chip" data-action="director-view-decisions">${decCount} decision${decCount>1?'s':''} →</button>` : ""}
+                ${rollTxt}
               </div>
               <div class="mission-status-copy">${nodes.length ? `Current: ${escapeHtml(cur ? cur.title : "—")}` : (m.gathering ? "Running read-only probes before drafting the plan." : "Plan will be drafted at the first checkpoint.")}</div>
             </div>
@@ -1951,7 +1970,7 @@
           // A waiting Step check-in BLOCKS the mission — it belongs in the queue (low urgency, but real).
           // We already count "step check-in" in the decision ledger when advanced; the queue and the ledger
           // must agree on what a decision is. Auto-pace transients never surface here.
-          out.push({ id:"step-"+m.id, kind:"Continue", title:"Step check-in — continue?", color:"blue", urgency:1, missionId:m.id, missionTitle:m.title, sessionId:null, context:"Paused at a step boundary (Step pace) — continue to the next step, revise the plan, or stop." });
+          out.push({ id:"step-"+m.id, kind:"Continue", title:"Step check-in — continue?", color:"blue", urgency:1, missionId:m.id, missionTitle:m.title, sessionId:null, context:"Paused at a step boundary (Step pace) — continue to launch the ready step(s), revise the plan, or stop." });
         }
       });
       // Standalone sessions that are WAITING ON YOU are decisions too — the queue covers every input
@@ -2187,27 +2206,33 @@
       }
       const sNodes = missionNodeList(m);
       const total = sNodes.length;
-      const next = sNodes.find(x => x.node.status === "Pending");
+      // (v3.25) The boundary describes the READY set — what Continue actually launches. The old first-
+      // Pending-in-list-order pick could name a dep-blocked node while Continue batch-launched others.
+      const ready = readyPending(m);
+      const next = ready[0] || sNodes.find(x => x.node.status === "Pending");
       const doneList = sNodes.filter(x => x.node.status === "Completed");
       const lastDone = doneList[doneList.length-1];
-      const gatedNext = !!next && !!next.node.gate;
+      const gatedNext = ready.some(x => !!x.node.gate) || (!ready.length && !!next && !!next.node.gate);
       const atGate = gatedNext && (m.pace === "Auto" || state.gateArmed);   // amber gate beat: in Auto it shows directly; in Step only after you continue past the step (the only gate now is the optional before-first-edit one)
       let head, sub;
       if (!next) {
         head = `All steps complete`;
         sub = `Nothing left to run.`;
       } else if (atGate) {
+        const gnode = (ready.find(x => !!x.node.gate) || next).node;
         head = `Before the first mutable write`;
-        sub = `Your "before first mutable write" checkpoint — ${escapeHtml(next.node.title)} is about to make the first edits in the worktree. Approve to begin implementation, or revise the plan first.`;
+        sub = `Your "before first mutable write" checkpoint — ${escapeHtml(gnode.title)} is about to make the first edits in the worktree. Approve to begin implementation, or revise the plan first.`;
       } else if (!lastDone) {
         head = `Plan ready · ${total} step${total>1?'s':''}`;
-        sub = `Continue to start step 1: ${escapeHtml(next.node.title)}.` + (m._heldCheckpoint ? " Pace is now Auto — answer this held check-in and I won't pause at steps after it." : "");
+        sub = (ready.length > 1
+          ? `Continue to launch ${ready.length} independent steps in parallel — ${escapeHtml(ready.map(e => e.node.title).join("  +  "))}.`
+          : `Continue to start step 1: ${escapeHtml(next.node.title)}.`) + (m._heldCheckpoint ? " Pace is now Auto — answer this held check-in and I won't pause at steps after it." : "");
       } else {
         head = `Step ${sNodes.indexOf(lastDone)+1} of ${total} done · ${escapeHtml(lastDone.node.title)}`;
         if (m._heldCheckpoint) head += " · held";
         sub = gatedNext
           ? `Continue to move on — ${escapeHtml(next.node.title)} makes the first edits and will pause for your approval first — or send feedback to refine this step.`
-          : `Continue to start the next step — ${escapeHtml(next.node.title)} — or send feedback to refine this step.`;
+          : escapeHtml(readySetLine(m));
       }
       const cpTitle = atGate ? "Required checkpoint" : "Step checkpoint";
       const cpTag = atGate ? "Always stops" : `${escapeHtml(m.pace)} pace`;
@@ -2597,6 +2622,86 @@
     function nodeDepIds(m, id){ const n = m.nodes[id]; if (!n) return []; if (n.after) return n.after; const list = missionNodeList(m); const i = list.findIndex(x => x.id === id); return i > 0 ? [list[i-1].id] : []; }
     function nodeReady(m, id){ return nodeDepIds(m, id).every(d => m.nodes[d] && m.nodes[d].status === "Completed"); }
     function readyPending(m){ return missionNodeList(m).filter(x => x.node.status === "Pending" && nodeReady(m, x.id)); }
+    /* ===== (v3.25) SCHEDULING LOOP — the DAG's last mile (task-queuing review, 2026-07-05) =====
+       The ready set was always computed (nodeReady/readyPending) but never SHOWN, and the boundary card
+       described the first Pending node in LIST order — which on parallel shapes is not what Continue
+       actually launches. This pass makes the scheduler legible everywhere it acts, mirroring the app-side
+       contract: the resume directive consults eligibility and schedules; compact mission_status carries
+       per-node deps_satisfied + ready_node_ids (and its fingerprint moves when the ready set changes); a
+       stall is a VISIBLE liveness warning (eligible_nodes_idle), never a silent idle.
+       Recorded cutline — deferrals, not holes:
+       — ONE dependency edge type: `after` is blocking; soft/informational deps live in node `detail` text.
+       — NO node priority field: ordering INSIDE the ready set is the Director's judgment in v1.
+       — NO mission backlog tiers (Immediate/Queued/Backlog): the queuing unit here is nodes WITHIN a
+         mission; queuing MISSIONS is out of scope (mission_key/ensure_mission is the future hook).
+       — NO `failed` node status: the app's status enum is closed for decode-compat — a failure stays
+         Blocked/Cancelled + the bound session's failureReason + event detail. Do not add a case here. */
+    function nodeDepInfo(m, id){
+      return nodeDepIds(m, id).map(d => ({ id: d, title: (m.nodes[d] && m.nodes[d].title) || d, done: !!(m.nodes[d] && m.nodes[d].status === "Completed") }));
+    }
+    function depsDoneLabel(m, id){
+      return nodeDepInfo(m, id).filter(d => d.done).map(d => d.title + " ✓").join(" + ");
+    }
+    // One place decides how a Pending node reads: waiting (on WHOM), ready, or ready-but-held-by-cap.
+    function nodeSchedState(m, id){
+      const n = m.nodes[id]; if (!n) return null;
+      if (n.status !== "Pending") return { k: n.status === "Running" ? "running" : "other" };
+      const deps = nodeDepInfo(m, id);
+      if (deps.some(d => !d.done)) return { k: "waiting", deps };
+      const cap = m.maxConcurrent || 3;
+      const inFlight = missionNodeList(m).filter(x => x.node.status === "Running").length;
+      if (inFlight >= cap) return { k: "capped", deps, cap, inFlight };
+      return { k: "ready", deps };
+    }
+    function schedRollup(m){
+      const out = { running: 0, ready: 0, capped: 0, waiting: 0, cap: m.maxConcurrent || 3 };
+      missionNodeList(m).forEach(x => {
+        const s = nodeSchedState(m, x.id); if (!s) return;
+        if (s.k === "running") out.running++; else if (s.k === "ready") out.ready++;
+        else if (s.k === "capped") out.capped++; else if (s.k === "waiting") out.waiting++;
+      });
+      return out;
+    }
+    // The boundary line the step checkpoint shows — built from the REAL launch set (readyPending), never
+    // list order. Extracted so the self-test can assert it. (App mirror: the amended resumeDirective —
+    // "consult mission_status; launch every pending node whose deps are all terminal-successful, per its
+    // execution policy, in parallel where worktree strategies permit; never start a node that is already
+    // running or bound.")
+    function readySetLine(m){
+      const ready = readyPending(m);
+      if (ready.length > 1) {
+        const cap = m.maxConcurrent || 3;
+        const inFlight = missionNodeList(m).filter(x => x.node.status === "Running").length;
+        const room = Math.max(1, cap - inFlight);
+        const clamp = ready.length > room ? ` (flight cap ${cap} — ${room} now, the rest as slots free)` : "";
+        return `Continue to launch ${ready.length} ready steps in parallel — ${ready.map(e => e.node.title).join("  +  ")}${clamp} — or send feedback to refine.`;
+      }
+      if (ready.length === 1) {
+        const e = ready[0];
+        const unb = nodeDepIds(m, e.id).length ? depsDoneLabel(m, e.id) : "";
+        return `Continue to start the next step — ${e.node.title}${unb ? ` — now eligible (${unb})` : ""} — or send feedback to refine this step.`;
+      }
+      return `Nothing is eligible yet — every remaining step is waiting on a dependency.`;
+    }
+    /* eligible_nodes_idle — the queuing failure mode, instrumented: an Auto mission that is Running with
+       ready steps Pending, nothing in flight, and no checkpoint that stops for YOU. The demo runner only
+       drives the SELECTED mission, so a backgrounded Auto mission genuinely reaches this state — the
+       warning is a real detector over real state, not theater: the rail names the stall, and opening the
+       mission resumes it. Deliberately NOT a Decisions-queue item — the queue is asks (things waiting on
+       you); a stall is scheduler telemetry (app mirror: a `liveness_warnings` entry in mission_status). */
+    function eligibleNodesIdle(m){
+      if (!m || m.status !== "Running" || m.pace !== "Auto") return false;
+      if (m.example || m.gathering || m.landPhase || m._heldCheckpoint) return false;
+      if (!m.workstreams || !m.workstreams.length) return false;
+      if (m.checkpoint && m.checkpoint !== "step") return false;   // childAsk / merge / pickwinner… = waiting on you
+      if (missionAtGate(m)) return false;                          // the amber gate is yours to cross
+      const list = missionNodeList(m);
+      if (list.some(x => x.node.status === "Running")) return false;
+      const ready = readyPending(m);
+      if (!ready.length || ready.some(e => e.node.gate)) return false;   // Auto still stops at a required gate
+      if (m.id === state.selectedMission && state.surface === "director" && runTimer) return false;   // the runner is about to cross this boundary itself
+      return true;
+    }
     // Start ONE node (kickoff / steer / land). No checkpoint here — the caller posts a batch-aware checkpoint.
     function startNodeEntry(m, next){
       const node = next.node;
@@ -2676,9 +2781,11 @@
       const toStart = (nonLand.length ? nonLand : [ready[0]]).slice(0, Math.max(1, room));   // never batch the land step alongside others; never batch past the flight cap
       toStart.forEach(e => startNodeEntry(m, e));
       const nodes = missionNodeList(m);
+      // (v3.25) A convergence launch names WHY it unblocked — the transcript-legible resumeDirective.
+      const conv = toStart.length === 1 && nodeDepIds(m, toStart[0].id).length > 1 ? ` · converged — ${depsDoneLabel(m, toStart[0].id)}` : "";
       const label = toStart.length > 1
         ? `${toStart.length} steps in parallel · ${toStart.map(e => e.node.title).join("  +  ")}`
-        : `Step ${nodes.findIndex(x => x.id === toStart[0].id) + 1} of ${nodes.length} · ${toStart[0].node.title}`;
+        : `Step ${nodes.findIndex(x => x.id === toStart[0].id) + 1} of ${nodes.length} · ${toStart[0].node.title}${conv}`;
       m.messages.push({ role:"checkpoint", auto:!!auto, gate: toStart.some(e => e.node.gate), title: label });
       m.checkpoint = "step";
       return toStart[0];
@@ -2799,6 +2906,7 @@
         needed: { total: st.total, parts: st.parts },
         decided: { total: st.autoTotal, parts: st.autoParts, reasons: autoReasons },
         evidence: (m.evidence || []).map(r => ({ node: r.node, text: r.text })),
+        spend: null,   // (v3.25) reserved — in the app this is a pure PROJECTION aggregating per-session usage (tokens · cost) across the mission's sessions; reserving the slot now means the receipt shape never changes
         close, closes
       };
     }
@@ -2825,6 +2933,9 @@
       lines.push("");
       lines.push("## Evidence");
       r.evidence.forEach(e => lines.push("- **" + e.node + "** — " + e.text));
+      lines.push("");
+      lines.push("## Spend");
+      lines.push("- Not tracked in v1 — reserved (a projection over per-session usage across the mission's sessions).");
       lines.push("");
       lines.push("## Close");
       r.closes.forEach(c => lines.push(c));
@@ -3017,7 +3128,9 @@
         state.checkpointChoice = null; return;
       }
       // Step Continue: paused at a boundary (last step Done, next Pending, nothing running).
-      const nx = missionNodeList(m).find(x => x.node.status === "Pending");
+      // (v3.25) The gate probe keys off the READY set — on parallel shapes the first Pending in list order can be dep-blocked.
+      const nxReady = readyPending(m);
+      const nx = nxReady[0] || missionNodeList(m).find(x => x.node.status === "Pending");
       if (nx && nx.node.gate && m.pace === "Step" && !state.gateArmed) {
         state.gateArmed = true;        // first Continue past the step surfaces the gate's required checkpoint; the next Continue starts it
         recordDecision(m, "step check-in");   // that click resolved the step boundary (the gate it surfaced is a separate decision)
@@ -3510,6 +3623,8 @@
               ${r.decided.reasons.map(x => `<div class="receipt-line dim">⚙ ${escapeHtml(x.label)} — ${escapeHtml(x.reason)}</div>`).join("")}</div>
             <div class="receipt-sec"><div class="receipt-tag">Evidence</div>
               ${r.evidence.length ? r.evidence.map(e => `<div class="receipt-line"><strong>${escapeHtml(e.node)}</strong> — ${escapeHtml(e.text)}</div>`).join("") : `<div class="receipt-line dim">—</div>`}</div>
+            <div class="receipt-sec"><div class="receipt-tag">Spend</div>
+              <div class="receipt-line dim">Not tracked in v1 — reserved. Where did the mission spend tokens? In the app this fills in as a projection over per-session usage, aggregated across the mission's sessions — the receipt shape is fixed now so it never migrates.</div></div>
             <div class="receipt-sec"><div class="receipt-tag">Close</div>
               ${r.closes.map(c => `<div class="receipt-line">${escapeHtml(c)}</div>`).join("")}</div>
           </div></div></div>
@@ -3657,16 +3772,21 @@
       });
       return groups.map(g => {
         if (g.items.length > 1) {
-          return `<div class="node-parallel"><div class="node-parallel-tag">⇉ ${g.items.length} steps run in parallel</div>${g.items.map(it => renderNodeCard(it.node, it.id)).join("")}</div>`;
+          return `<div class="node-parallel"><div class="node-parallel-tag">⇉ ${g.items.length} steps run in parallel</div>${g.items.map(it => renderNodeCard(it.node, it.id, m)).join("")}</div>`;
         }
         const it = g.items[0];
         const conv = (it.node.after && it.node.after.length > 1) ? `<div class="node-converge">↳ converges ${it.node.after.length} branches</div>` : "";
-        return conv + renderNodeCard(it.node, it.id);
+        return conv + renderNodeCard(it.node, it.id, m);
       }).join("");
     }
 
-    function renderNodeCard(node, id){
+    function renderNodeCard(node, id, m){
       if (!node) return "";
+      m = m || mission(state.selectedMission);
+      // (v3.25) Eligibility is part of the card's compact state — a Pending node always says WHY it isn't
+      // running: waiting (on whom, with per-dep ✓/…), ready, or ready-but-held-by-the-flight-cap.
+      // (App mirror: per-node deps_satisfied in compact mission_status.)
+      const sched = (m && node.status === "Pending") ? nodeSchedState(m, id) : null;
       const sel = state.selectedNode===id;
       const fm = mission(state.selectedMission);   // follow-along pulse: cards render within the selected mission's plan
       const de = nodeDoneEvidence(node);
@@ -3688,6 +3808,9 @@
           <div class="chips">${sel ? chipsFull : chipsCompact}</div>
           ${sel ? `<div class="node-why">↳ ${escapeHtml(policyRationale(node))}</div>` : ""}
           <div class="node-wt">⌥ <span class="node-wt-label">${escapeHtml(wt.label)}</span>${sel && wt.note ? ` · ${escapeHtml(wt.note)}` : ''}</div>
+          ${sched && sched.k === "ready" ? `<div class="node-sched ready">▸ Ready${sched.deps.length ? ` — ${escapeHtml(depsDoneLabel(m, id))}` : " — launches next"}</div>` : ""}
+          ${sched && sched.k === "capped" ? `<div class="node-sched capped">▸ Ready · held by the flight cap — ${sched.inFlight}/${sched.cap} in flight</div>` : ""}
+          ${sched && sched.k === "waiting" ? `<div class="node-sched wait">◇ Waiting on ${sched.deps.map(d => `<span class="dep ${d.done ? "ok" : ""}">${escapeHtml(d.title)} ${d.done ? "✓" : "…"}</span>`).join(`<span class="dep-sep">·</span>`)}</div>` : ""}
           ${node.loop ? `<div class="node-loop ${node.loop.kind==='batch'?'batch':''}">${node.loop.kind==='batch' ? `▦ verified batch · ${node.loop.trail.length} planned steps (revert red)` : `⟳ iterative · stop: ${escapeHtml(node.loop.stop)}`}</div>` : ''}
           <div class="node-dod"><span class="node-dod-k">Done when</span> ${escapeHtml(de.done)}</div>
           ${node.status==='Completed' ? `<div class="node-ev"><span class="ev-ic">✓</span> ${escapeHtml(de.evidence)}</div>` : ''}
@@ -4608,6 +4731,57 @@
       autoDecisions:[], autoAdvances:4 });
 
     render();
+
+    /* ===== (v3.25) Scheduler self-test — open with ?selftest=1 ===================================
+       Pure helpers only (no sessions created, no demo state touched): builds the canonical DAG from
+       the task-queuing review — two independent slices, #3 blocked by #1, #4 blocked by #2 AND #3 —
+       and asserts eligibility, convergence gating, the idempotency guard, flight-cap holds, the
+       boundary line, the rollup, and the stall detector. Mirror these cases in harness.js. */
+    function runSchedulerSelfTest(){
+      const t = [];
+      const eq = (name, got, want) => t.push({ name, pass: JSON.stringify(got) === JSON.stringify(want), got, want });
+      const ok = (name, cond) => t.push({ name, pass: !!cond, got: cond, want: true });
+      const mk = () => ({ id:"selftest", status:"Running", pace:"Auto", maxConcurrent:3, checkpoint:"step", messages:[],
+        workstreams:[{ id:"w", title:"t", strategy:"", purpose:"", nodes:["s1","s2","s3","s4"] }],
+        nodes: {
+          s1:{ title:"Slice 1", status:"Pending", workflow:"Orchestrate", after:[] },
+          s2:{ title:"Slice 2", status:"Pending", workflow:"Orchestrate", after:[] },
+          s3:{ title:"Slice 3", status:"Pending", workflow:"Orchestrate", after:["s1"] },
+          s4:{ title:"Slice 4", status:"Pending", workflow:"Review",      after:["s2","s3"] } } });
+      let m = mk();
+      eq("independent slices form the initial ready set", readyPending(m).map(x=>x.id), ["s1","s2"]);
+      eq("s3 waits on s1", nodeSchedState(m,"s3").k, "waiting");
+      eq("s4 waits on BOTH parents", nodeSchedState(m,"s4").deps.map(d=>d.done), [false,false]);
+      ok("stall detector fires (Auto · ready · nothing in flight)", eligibleNodesIdle(m));
+      ok("boundary line names the REAL launch set", readySetLine(m).includes("2 ready steps in parallel") && readySetLine(m).includes("Slice 1") && readySetLine(m).includes("Slice 2"));
+      m.nodes.s1.status = "Running";
+      eq("a Running node leaves the ready set (idempotency guard)", readyPending(m).map(x=>x.id), ["s2"]);
+      ok("stall clears while something is in flight", !eligibleNodesIdle(m));
+      m.nodes.s1.status = "Completed";
+      eq("completing s1 makes s3 eligible", readyPending(m).map(x=>x.id), ["s2","s3"]);
+      eq("s4 still waits — one parent short", nodeSchedState(m,"s4").k, "waiting");
+      m.nodes.s2.status = "Completed"; m.nodes.s3.status = "Completed";
+      eq("convergence: s4 eligible only after BOTH parents", readyPending(m).map(x=>x.id), ["s4"]);
+      ok("single-eligible line carries the unblock rationale", readySetLine(m).includes("now eligible") && readySetLine(m).includes("Slice 2 ✓") && readySetLine(m).includes("Slice 3 ✓"));
+      m = mk(); m.maxConcurrent = 1; m.nodes.s1.status = "Running";
+      eq("ready-but-capped reads as capped", nodeSchedState(m,"s2").k, "capped");
+      eq("rollup counts running/ready/capped/waiting", (r => [r.running, r.ready, r.capped, r.waiting])(schedRollup(m)), [1,0,1,2]);
+      m = mk(); m.pace = "Step";
+      ok("Step pace is a boundary for YOU, never a stall", !eligibleNodesIdle(m));
+      m = mk(); m.checkpoint = "childAsk";
+      ok("a checkpoint that waits on you is not a stall", !eligibleNodesIdle(m));
+      const fails = t.filter(x => !x.pass);
+      console.table(t.map(x => ({ test: x.name, result: x.pass ? "✓" : "✗ got " + JSON.stringify(x.got) + " want " + JSON.stringify(x.want) })));
+      const badge = document.createElement("div");
+      badge.className = "selftest-badge " + (fails.length ? "fail" : "pass");
+      badge.textContent = fails.length ? `scheduler selftest ✗ ${fails.length} of ${t.length} failed` : `scheduler selftest ✓ ${t.length}/${t.length}`;
+      document.body.appendChild(badge);
+      return fails.length === 0;
+    }
+    if (typeof location !== "undefined" && /[?&]selftest=1/.test(location.search)) {
+      try { runSchedulerSelfTest(); }
+      catch (e) { console.error("selftest crashed", e); const b = document.createElement("div"); b.className = "selftest-badge fail"; b.textContent = "scheduler selftest crashed — see console"; document.body.appendChild(b); }
+    }
   </script>
 </body>
 </html>

@@ -104,6 +104,19 @@ Six layers, each ≤3 minutes, each building on the last. Video 1 starts where R
 
 ---
 
+## Video 5B — The Scheduler You Can Read *(the DAG's last mile — mock v3.26)*
+
+1. **PRD Slices on Auto** (Careful-writes → PRD directive → approve). The strip now reads **`running 2/3 · 1 ready · 6 waiting on deps`** — the ready set at a glance.
+   > "Two independent slices launch together — the boundary card *named both* before I clicked. It never says 'next step' and then quietly launches three."
+2. **Point at the dependent slice's card while A and B run**: `◇ Waiting on Review slice A ✓ · Review slice B …` — deps tick to ✓ live.
+   > "Blocked work tells you *whom* it's waiting on. When the last ✓ lands, it launches itself — the transcript logs `converged — A ✓ + B ✓`."
+3. **The stall you can't miss**: mid-run, switch to another mission. The rail row flips amber: **⚠ ready steps idle — open to resume**. Open it — it resumes.
+   > "If the scheduler ever sits on ready work, you see it. In the app this is a `liveness_warnings` entry in mission_status — a stall is telemetry, never a silent idle. And it's *not* in the Decisions queue, because the queue is things waiting on *you*."
+4. **Flight cap** (crib): a fourth ready step shows `▸ Ready · held by the flight cap — 3/3 in flight` — queued, not blocked, not failed.
+5. *(Optional, technical audiences)*: reload with `?selftest=1` — the corner badge is 15 green assertions on the canonical DAG (two independent, #3←#1, #4←#2+#3).
+
+---
+
 ## Video 6 — The Long Game *(continuity & lifecycle)*
 
 1. **Done extends.** Open a Completed mission, type *"now make the teardown path faster"* → Enter. A **new** mission: shape = Measured (the new words spoke), **◇ Follows** in grounding, plan opens **"Builds on …"** with delta-scoped discovery.
