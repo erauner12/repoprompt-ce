@@ -243,6 +243,40 @@ anatomy (no key-value debug rows) in a later polish pass.
 
 **Focus order:** K3(expanded) → K7 → K2 → K4 → K5.
 
+**K3/K7 — ACCEPTED (2026-07-06, live-verified).** Signal Shape System formalized as a
+typed mapping in `CoordinatorMissionPresentationPolicy` (`SignalFactClass → SignalShape`);
+mission-pane inspector evicted; Board inspector collapses to a side rail. Carried flag →
+**K7b:** the Board inspector's *inner* anatomy is still key-value debug rows; give it the
+calm treatment in a later pass.
+
+**K8 — State-conditional calm (from the 2026-07-06 computer-use audit): controls and
+emphasis must respond to mission state.** Extend `CoordinatorMissionPresentationPolicy`
+with pure, tested functions (`composerMode(for:)`, `paneEmphasis(for:)`,
+`boardColumnEmphasis(for:)`, `railRowSignal(for:)`):
+- **K8a — Terminal composer.** Completed/stopped missions never show the full composer
+  (dials, policy echo, stop are live-mission controls and contradict finality). Replace
+  with ONE quiet action — "Start a follow-up Mission →" — which reveals the full composer
+  only on explicit intent. **Absorbs K5.**
+- **K8b — Right-pane emphasis.** Exactly one status capsule, in the pane header. Plan
+  body neutral; evidence on Done nodes collapses to an expandable "Evidence ✓" line;
+  green exists only as the state capsule, never as tinted text blocks.
+- **K8c — Board de-rainbow.** Columns become neutral containers; color lives only in the
+  header dot + count. Empty columns dim (reduced opacity, header retained) but keep their
+  positions — no layout jumping.
+- **K8d — Rail signal.** Terminal mission rows use muted-text status, no filled capsule;
+  rail capsules are reserved for live / needs-you rows so current work is visually
+  distinct from history by form, not just position.
+
+**Audit finding #4 (policy grid before intent) — DEFERRED.** It would reverse the
+accepted, mock-locked C3 draft surface, whose grid is the demo's teaching surface ("your
+words choose the shape; policy chooses stops"). Captured kernel for later: *progressive
+familiarity* — after the user's first few missions, the grid may default-collapse to the
+summary row with the four-card chooser on demand. Revisit post-demo.
+
+**Focus order (updated):** K8 → K2 (event coalescing — matters for *running* missions,
+which K1's completed-state folding doesn't touch) → K4 remainder (unboxed Director prose,
+checkpoint dimming) → K7b (calm inspector anatomy).
+
 ## 7. Open deferrals (recorded, not holes)
 - Custom policy CRUD — designed and staged; see §3 "Policy library roadmap" ("Save as
   policy" primary, "Edit a copy" secondary, minimal editor, post-parity timing).
