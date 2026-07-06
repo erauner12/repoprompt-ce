@@ -197,7 +197,6 @@ final class CoordinatorModeViewModel: ObservableObject {
     @Published private(set) var executionPace: CoordinatorExecutionPace
     @Published private(set) var pendingFollowThroughEvent: CoordinatorFollowThroughEvent?
     @Published private(set) var railDestination: RailDestination = .mission
-    @Published var selectedMissionTemplate: CoordinatorMissionTemplate?
     @Published var selectedMissionPolicy: CoordinatorMissionPolicySnapshot = .defaultPolicy
     @Published var sortMode: CoordinatorModeSortMode = .lastUpdated {
         didSet {
@@ -611,13 +610,11 @@ final class CoordinatorModeViewModel: ObservableObject {
             }
         }
 
-        let missionTemplate = forceNewRuntime ? selectedMissionTemplate : nil
         let missionPolicySnapshot = forceNewRuntime ? selectedMissionPolicy : nil
-        let templatedProviderText = missionTemplate.map { $0.wrap(trimmed) } ?? trimmed
         let submission = CoordinatorDirectiveSubmission(
             visibleText: trimmed,
-            providerText: Self.providerText(templatedProviderText, policySnapshot: missionPolicySnapshot),
-            missionTemplate: missionTemplate.map(CoordinatorMissionTemplateSummary.init),
+            providerText: Self.providerText(trimmed, policySnapshot: missionPolicySnapshot),
+            missionTemplate: nil,
             missionPolicySnapshot: missionPolicySnapshot,
             coordinatorSessionID: coordinatorSessionID,
             forceNewRuntime: forceNewRuntime
@@ -626,7 +623,6 @@ final class CoordinatorModeViewModel: ObservableObject {
         switch result {
         case .accepted:
             isFreshCoordinatorRunPending = false
-            selectedMissionTemplate = nil
             composerNotice = nil
             if forceNewRuntime {
                 selectFreshCoordinatorRuntimeIfAvailable(

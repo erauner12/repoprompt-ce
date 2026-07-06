@@ -142,7 +142,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.state, .chooseCoordinator)
     }
 
-    func testScopedChangeTemplateWrapsInitialCoordinatorDirectiveOnly() async {
+    func testInitialCoordinatorDirectiveUsesRawTextWithoutMissionTemplate() async {
         var submissions: [(text: String, sessionID: UUID?, forceNewRuntime: Bool, template: CoordinatorMissionTemplateSummary?)] = []
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in
@@ -163,35 +163,23 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 return .accepted
             }
         )
-        viewModel.selectedMissionTemplate = .scopedChange
         viewModel.refresh()
 
         let result = await viewModel.submitCoordinatorDirective("fix flaky docs tests")
 
         XCTAssertEqual(result, .accepted)
-        XCTAssertTrue(submissions.first?.text.contains("Run this as a scoped Coordinator change.") == true)
-        XCTAssertTrue(submissions.first?.text.contains("fix flaky docs tests") == true)
+        XCTAssertTrue(submissions.first?.text.hasPrefix("fix flaky docs tests") == true)
         XCTAssertTrue(submissions.first?.text.contains("Mission Policy (provider-only)") == true)
         XCTAssertNil(submissions.first?.sessionID)
         XCTAssertEqual(submissions.first?.forceNewRuntime, true)
-        XCTAssertEqual(submissions.first?.template, CoordinatorMissionTemplateSummary(.scopedChange))
-        XCTAssertNil(viewModel.selectedMissionTemplate)
+        XCTAssertNil(submissions.first?.template)
         XCTAssertEqual(viewModel.railTranscriptEntries.first?.text, "fix flaky docs tests")
     }
 
-    func testCustomMissionTemplateWrapsFreshMissionOnlyAndFollowUpStaysRaw() async {
+    func testFreshMissionAndFollowUpStayRawWithoutMissionTemplate() async {
         let coordinatorID = uuid(1)
         var liveSessions: [CoordinatorModeSnapshotProjector.LiveSession] = []
         var demoCoordinatorIDs: Set<UUID> = []
-        let customTemplate = CoordinatorMissionTemplate(
-            source: .custom(uuid(700)),
-            displayName: "Custom Mission",
-            iconName: "wand.and.stars",
-            accentColorHex: "#FF00AA",
-            tooltipText: nil,
-            descriptionText: nil,
-            template: "CUSTOM WRAP\n$ARGUMENTS"
-        )
         var submissions: [CoordinatorDirectiveSubmission] = []
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in
@@ -215,7 +203,6 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 return .accepted
             }
         )
-        viewModel.selectedMissionTemplate = customTemplate
         viewModel.refresh()
 
         let freshResult = await viewModel.submitCoordinatorDirective("  start mission  ")
@@ -224,11 +211,10 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(freshResult, .accepted)
         XCTAssertEqual(followUpResult, .accepted)
         XCTAssertEqual(submissions.map(\.visibleText), ["start mission", "follow up"])
-        XCTAssertTrue(submissions.first?.providerText.hasPrefix("CUSTOM WRAP\nstart mission\n\n---\nMission Policy (provider-only)") == true)
+        XCTAssertTrue(submissions.first?.providerText.hasPrefix("start mission\n\n---\nMission Policy (provider-only)") == true)
         XCTAssertEqual(submissions.last?.providerText, "follow up")
-        XCTAssertEqual(submissions.first?.missionTemplate, CoordinatorMissionTemplateSummary(customTemplate))
+        XCTAssertNil(submissions.first?.missionTemplate)
         XCTAssertNil(submissions.last?.missionTemplate)
-        XCTAssertNil(viewModel.selectedMissionTemplate)
         XCTAssertEqual(viewModel.railTranscriptEntries.filter { $0.role == .user }.map(\.text), ["start mission", "follow up"])
     }
 
@@ -666,7 +652,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.missionSummary?.decisions.userCount, 2)
     }
 
-    func testRejectedDraftSendPreservesTemplateSelection() async {
+    func testRejectedDraftSendKeepsComposerNotice() async {
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in
                 self.input(
@@ -678,13 +664,11 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             dashboardVisibilityHandler: { _ in },
             directiveSubmitter: { _ in .rejected(message: "Nope") }
         )
-        viewModel.selectedMissionTemplate = .scopedChange
         viewModel.refresh()
 
         let result = await viewModel.submitCoordinatorDirective("try this")
 
         XCTAssertEqual(result, .rejected(message: "Nope"))
-        XCTAssertEqual(viewModel.selectedMissionTemplate, .scopedChange)
         XCTAssertEqual(viewModel.composerNotice, "Nope")
     }
 
