@@ -319,7 +319,8 @@ struct CoordinatorModeView: View {
             ScrollView {
                 coordinatorMissionDraftSurface(metrics: metrics)
                     .padding(metrics.outerPadding)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: metrics.draftSurfaceMaxWidth, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, alignment: .top)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -1316,7 +1317,7 @@ struct CoordinatorModeView: View {
                     coordinatorMissionPolicyPicker(metrics: metrics, isEditable: true)
                 }
 
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: metrics.smallSpacing), count: 2), spacing: metrics.smallSpacing) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: metrics.controlSpacing), count: 2), spacing: metrics.controlSpacing) {
                     ForEach(CoordinatorMissionPolicySnapshot.builtInPolicies.prefix(4)) { policy in
                         coordinatorDraftPolicyCard(policy, metrics: metrics)
                     }
@@ -1394,23 +1395,36 @@ struct CoordinatorModeView: View {
 
     private func coordinatorDraftPolicyCard(_ policy: CoordinatorMissionPolicySnapshot, metrics: CoordinatorVisualMetrics) -> some View {
         let isSelected = viewModel.selectedMissionPolicy.id == policy.id
-        return VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-            HStack(spacing: metrics.smallSpacing) {
+        let tint = coordinatorPolicyTint(policy)
+        let shape = RoundedRectangle(cornerRadius: CoordinatorTheme.Radius.card, style: .continuous)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
                 Image(systemName: coordinatorPolicyIcon(policy))
                     .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 26, height: 26)
+                    .background(tint.opacity(0.13))
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
                 Text(policy.name)
                     .font(metrics.bodySemibold)
+                    .foregroundStyle(.primary.opacity(0.9))
                     .lineLimit(1)
-                Spacer(minLength: metrics.smallSpacing)
+
+                Spacer(minLength: 0)
+
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
                 }
             }
 
             Text(coordinatorPolicyHumanSentence(policy))
                 .font(metrics.micro)
                 .foregroundStyle(.secondary)
+                .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
 
             Button {
@@ -1418,26 +1432,39 @@ struct CoordinatorModeView: View {
                 coordinatorDirectiveDraft = coordinatorPolicyTryText(policy)
                 isCoordinatorComposerFocused = true
             } label: {
-                Text("▸ Try: \(coordinatorPolicyTryText(policy))")
-                    .font(metrics.microMedium)
-                    .foregroundStyle(Color.accentColor)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: metrics.microIconSize, weight: .semibold))
+                        .foregroundStyle(Color.accentColor.opacity(0.72))
+                    Text("Try: \(coordinatorPolicyTryText(policy))")
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .buttonStyle(.plain)
         }
-        .padding(metrics.pendingPadding)
-        .frame(maxWidth: .infinity, minHeight: 118, alignment: .topLeading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
         .background(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .fill(isSelected ? Color.purple.opacity(0.14) : Color(nsColor: .controlBackgroundColor).opacity(0.16))
+            shape.fill(
+                isSelected
+                    ? CoordinatorTheme.Palette.panelBackground.opacity(0.82)
+                    : CoordinatorTheme.Palette.panelBackground.opacity(0.58)
+            )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .stroke(isSelected ? Color.purple.opacity(0.32) : CoordinatorTheme.Palette.hairline.opacity(0.65), lineWidth: 0.75)
+            shape.stroke(
+                isSelected
+                    ? Color.accentColor.opacity(0.62)
+                    : CoordinatorTheme.Palette.hairline.opacity(0.72),
+                lineWidth: isSelected ? 1.2 : 0.75
+            )
         )
-        .foregroundStyle(isSelected ? Color.purple : Color.primary.opacity(0.88))
-        .contentShape(Rectangle())
+        .contentShape(shape)
         .onTapGesture {
             viewModel.selectedMissionPolicy = policy
         }
@@ -1502,6 +1529,15 @@ struct CoordinatorModeView: View {
         case "careful-writes": "pencil.and.outline"
         case "read-only": "lock.doc"
         default: "shield.lefthalf.filled"
+        }
+    }
+
+    private func coordinatorPolicyTint(_ policy: CoordinatorMissionPolicySnapshot) -> Color {
+        switch policy.id {
+        case "hands-off": CoordinatorTheme.Semantic.info.tint
+        case "careful-writes": CoordinatorTheme.Semantic.warning.tint
+        case "read-only": CoordinatorTheme.Semantic.neutral.tint
+        default: Color.accentColor
         }
     }
 
@@ -6727,6 +6763,10 @@ private struct CoordinatorVisualMetrics {
 
     var rightWorkPanelWidth: CGFloat {
         fontPreset.scaledClamped(600, min: 560, max: 720)
+    }
+
+    var draftSurfaceMaxWidth: CGFloat {
+        fontPreset.scaledClamped(880, min: 780, max: 960)
     }
 
     var rightBoardHeight: CGFloat {
