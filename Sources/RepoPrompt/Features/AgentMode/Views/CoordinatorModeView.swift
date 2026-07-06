@@ -1290,21 +1290,21 @@ struct CoordinatorModeView: View {
 
     private func coordinatorMissionDraftSurface(metrics: CoordinatorVisualMetrics) -> some View {
         VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
-            VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-                Label("New Mission", systemImage: "plus.bubble.fill")
-                    .font(metrics.sectionTitle)
-                    .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
                 Text("Draft a new Mission")
                     .font(metrics.inspectorTitle)
                     .foregroundStyle(.primary)
-                Text("Describe the mission in the composer. The Director will infer shape, record a Mission Plan, and apply the policy captured here when you send.")
+                Text("Choose how closely the Director should stop, then describe the work in your own words.")
                     .font(metrics.body)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(metrics.pendingPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .coordinatorCardBackground(cornerRadius: metrics.pendingCornerRadius, isSelected: true, fillOpacity: 0.10, strokeOpacity: 0.12)
+
+            Text("Describe the mission below — your words choose the plan’s shape; the Director announces what it read, and you approve before anything runs.")
+                .font(metrics.body)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             coordinatorDraftNoPlanStrip(metrics: metrics)
 
@@ -1328,43 +1328,14 @@ struct CoordinatorModeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .coordinatorCardBackground(cornerRadius: metrics.pendingCornerRadius)
 
-            HStack(alignment: .top, spacing: metrics.sectionSpacing) {
-                VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
-                    Label("Pace", systemImage: "speedometer")
-                        .font(metrics.sectionTitle)
-                    automationModePicker(metrics: metrics)
-                    Text(viewModel.usesAutoMode ? "Auto lets the Director continue through safe steps under the selected policy." : "Step pauses at Director checkpoints so you can approve the next move.")
-                        .font(metrics.micro)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(metrics.pendingPadding)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .coordinatorCardBackground(cornerRadius: metrics.pendingCornerRadius)
-
-                VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
-                    Label("Shape inference", systemImage: "square.stack.3d.up")
-                        .font(metrics.sectionTitle)
-                    Text("No shape has been inferred yet.")
-                        .font(metrics.bodySemibold)
-                    Text("On submit, the Director classifies the Mission shape and records why it chose the route. That explainer will appear with the Mission Plan before delegated work proceeds.")
-                        .font(metrics.micro)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(metrics.pendingPadding)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .coordinatorCardBackground(cornerRadius: metrics.pendingCornerRadius)
-            }
-
             HStack(spacing: metrics.smallSpacing) {
                 coordinatorMissionTemplatePicker(metrics: metrics)
                 Spacer(minLength: metrics.controlSpacing)
-                Text("Policy: \(viewModel.selectedMissionPolicy.name) · \(viewModel.selectedMissionPolicy.defaultPace.rawValue) · cap \(viewModel.selectedMissionPolicy.maxConcurrent)")
-                    .font(metrics.microMedium)
+                Text(coordinatorDraftFooterText(for: viewModel.selectedMissionPolicy))
+                    .font(metrics.micro)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, metrics.pendingPadding)
         }
@@ -1375,15 +1346,11 @@ struct CoordinatorModeView: View {
             Image(systemName: "list.clipboard")
                 .font(.system(size: metrics.smallIconSize, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
-            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                Text("No Mission Plan yet")
-                    .font(metrics.bodySemibold)
-                Text("Send the first directive to create the draft plan surface.")
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
-            }
+            Text("No plan yet — a plan will be drafted after your first directive.")
+                .font(metrics.bodySemibold)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: metrics.controlSpacing)
-            statusChip("Draft", color: Color.accentColor, metrics: metrics)
         }
         .padding(metrics.pendingPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1427,69 +1394,66 @@ struct CoordinatorModeView: View {
 
     private func coordinatorDraftPolicyCard(_ policy: CoordinatorMissionPolicySnapshot, metrics: CoordinatorVisualMetrics) -> some View {
         let isSelected = viewModel.selectedMissionPolicy.id == policy.id
-        return Button {
-            viewModel.selectedMissionPolicy = policy
-        } label: {
-            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                HStack(spacing: metrics.smallSpacing) {
-                    Image(systemName: coordinatorPolicyIcon(policy))
-                        .font(.system(size: metrics.smallIconSize, weight: .semibold))
-                    Text(policy.name)
-                        .font(metrics.bodySemibold)
-                        .lineLimit(1)
-                    Spacer(minLength: metrics.smallSpacing)
-                    if isSelected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: metrics.smallIconSize, weight: .semibold))
-                    }
-                }
-                HStack(spacing: metrics.smallSpacing) {
-                    statusChip(policy.defaultPace.rawValue, color: Color.accentColor, metrics: metrics)
-                    statusChip("cap \(policy.maxConcurrent)", color: .purple, metrics: metrics)
-                }
-                Text(coordinatorPolicyAskSummary(policy))
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
+        return VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            HStack(spacing: metrics.smallSpacing) {
+                Image(systemName: coordinatorPolicyIcon(policy))
+                    .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                Text(policy.name)
+                    .font(metrics.bodySemibold)
                     .lineLimit(1)
-                if let standingGuidance = policy.standingGuidance {
-                    Text(standingGuidance)
-                        .font(metrics.micro)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: metrics.smallSpacing)
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: metrics.smallIconSize, weight: .semibold))
                 }
             }
-            .padding(metrics.pendingPadding)
-            .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
-            .background(
-                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                    .fill(isSelected ? Color.purple.opacity(0.14) : Color(nsColor: .controlBackgroundColor).opacity(0.16))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                    .stroke(isSelected ? Color.purple.opacity(0.32) : CoordinatorTheme.Palette.hairline.opacity(0.65), lineWidth: 0.75)
-            )
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(isSelected ? Color.purple : Color.primary.opacity(0.88))
-        .hoverTooltip(policy.standingGuidance ?? policy.name)
-    }
 
-    private func coordinatorDraftPolicySummary(_ policy: CoordinatorMissionPolicySnapshot, metrics: CoordinatorVisualMetrics) -> some View {
-        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-            Label("Captured policy echo", systemImage: "quote.bubble")
-                .font(metrics.microMedium)
-                .foregroundStyle(.secondary)
-            Text("\(policy.name) will be sent as provider-only Mission Policy metadata. Visible prompt text remains only what you type in the composer.")
+            Text(coordinatorPolicyHumanSentence(policy))
                 .font(metrics.micro)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if let definitionOfDone = policy.definitionOfDone {
-                Label("Done: \(definitionOfDone)", systemImage: "checkmark.seal")
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
+
+            Button {
+                viewModel.selectedMissionPolicy = policy
+                coordinatorDirectiveDraft = coordinatorPolicyTryText(policy)
+                isCoordinatorComposerFocused = true
+            } label: {
+                Text("▸ Try: \(coordinatorPolicyTryText(policy))")
+                    .font(metrics.microMedium)
+                    .foregroundStyle(Color.accentColor)
+                    .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .buttonStyle(.plain)
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, minHeight: 118, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(isSelected ? Color.purple.opacity(0.14) : Color(nsColor: .controlBackgroundColor).opacity(0.16))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(isSelected ? Color.purple.opacity(0.32) : CoordinatorTheme.Palette.hairline.opacity(0.65), lineWidth: 0.75)
+        )
+        .foregroundStyle(isSelected ? Color.purple : Color.primary.opacity(0.88))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            viewModel.selectedMissionPolicy = policy
+        }
+    }
+
+    private func coordinatorDraftPolicySummary(_ policy: CoordinatorMissionPolicySnapshot, metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+            Text("\(coordinatorPolicyPaceText(policy)) · questions: me · close: per drafted shape · always asks: \(coordinatorPolicyAlwaysAsksText(policy))")
+                .font(metrics.microMedium)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: metrics.controlSpacing)
+            Text("Edit a copy")
+                .font(metrics.microMedium)
+                .foregroundStyle(.tertiary)
         }
         .padding(metrics.pendingPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1499,12 +1463,37 @@ struct CoordinatorModeView: View {
         )
     }
 
-    private func coordinatorPolicyAskSummary(_ policy: CoordinatorMissionPolicySnapshot) -> String {
-        let askClasses = CoordinatorMissionDecisionClass.allCases
-            .filter { policy.resolvedAutonomy(for: $0) == .ask }
-            .map(\.rawValue)
-        guard !askClasses.isEmpty else { return "Asks: none" }
-        return "Asks: \(askClasses.joined(separator: " · "))"
+    private func coordinatorPolicyHumanSentence(_ policy: CoordinatorMissionPolicySnapshot) -> String {
+        switch policy.id {
+        case "hands-off": "Approve once; it decides, logged."
+        case "careful-writes": "Every step and every write stops for you."
+        case "read-only": "Can’t write, so it can run — closes with a report."
+        default: "Pauses at every step; decisions come to you."
+        }
+    }
+
+    private func coordinatorPolicyTryText(_ policy: CoordinatorMissionPolicySnapshot) -> String {
+        switch policy.id {
+        case "hands-off": "overnight perf hunt — it decides, you read the receipt"
+        case "careful-writes": "a PRD in slices — parallel chains, then a dependent slice after they consolidate"
+        case "read-only": "investigation — and the directive names an issue, so watch the close-conflict note"
+        default: "full supervision on a cross-repo change (2 PRs)"
+        }
+    }
+
+    private func coordinatorPolicyPaceText(_ policy: CoordinatorMissionPolicySnapshot) -> String {
+        policy.defaultPace == .auto ? "Auto" : "Step"
+    }
+
+    private func coordinatorPolicyAlwaysAsksText(_ policy: CoordinatorMissionPolicySnapshot) -> String {
+        switch policy.id {
+        case "careful-writes", "read-only": "plan, writes, merges"
+        default: "plan, merges"
+        }
+    }
+
+    private func coordinatorDraftFooterText(for policy: CoordinatorMissionPolicySnapshot) -> String {
+        "Shape examples: a quick investigation can close with a report; a sliced build can fan out and return for review. \(policy.name) stops the Director at \(coordinatorPolicyAlwaysAsksText(policy)) in plain checkpoints before work continues."
     }
 
     private func coordinatorPolicyIcon(_ policy: CoordinatorMissionPolicySnapshot) -> String {
@@ -4645,7 +4634,7 @@ struct CoordinatorModeView: View {
         }
         switch rail.state {
         case .chooseCoordinator:
-            return "Tell the Director the Mission..."
+            return "Describe the Mission, then press Enter…"
         case .selected:
             if let plan = rail.missionPlan {
                 switch plan.status {
@@ -4741,10 +4730,11 @@ struct CoordinatorModeView: View {
     }
 
     private func coordinatorComposerPolicyEchoText(_ rail: CoordinatorModeCoordinatorRail) -> String {
-        if let policyName = rail.missionSummary?.policy?.name ?? rail.missionPlan?.policySnapshot?.name {
-            return "Policy: \(policyName)"
-        }
-        return "Policy: \(viewModel.selectedMissionPolicy.name)"
+        let policyName = rail.missionSummary?.policy?.name ?? rail.missionPlan?.policySnapshot?.name
+        let policy = policyName.flatMap { name in
+            CoordinatorMissionPolicySnapshot.builtInPolicies.first { $0.name == name }
+        } ?? viewModel.selectedMissionPolicy
+        return "Policy · \(policy.name) · always asks: \(coordinatorPolicyAlwaysAsksText(policy).replacingOccurrences(of: ", ", with: " · "))"
     }
 
     private func coordinatorComposerStopButton(metrics: CoordinatorVisualMetrics) -> some View {
@@ -5324,6 +5314,7 @@ struct CoordinatorModeView: View {
             .font(metrics.micro)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func trimmedNonEmpty(_ value: String?) -> String? {

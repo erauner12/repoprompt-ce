@@ -1858,7 +1858,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.availableCoordinators.map(\.isSelected), [false])
         XCTAssertTrue(viewModel.railTranscriptEntries.isEmpty)
         XCTAssertTrue(viewModel.isFreshCoordinatorRunPending)
-        XCTAssertEqual(viewModel.composerNotice, "Next directive will start another Coordinator runtime.")
+        XCTAssertNil(viewModel.composerNotice)
 
         let result = await viewModel.submitCoordinatorDirective("start fresh")
 

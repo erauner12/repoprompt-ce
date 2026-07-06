@@ -499,7 +499,7 @@ final class CoordinatorModeViewModel: ObservableObject {
             coordinatorSelectionByWorkspaceID[workspaceID] = .newDraft
         }
         refresh()
-        composerNotice = "Next directive will start another Coordinator runtime."
+        composerNotice = nil
     }
 
     func togglePinnedCoordinator(_ option: CoordinatorModeCoordinatorOption) {
