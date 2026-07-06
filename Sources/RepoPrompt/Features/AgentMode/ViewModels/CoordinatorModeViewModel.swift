@@ -1102,26 +1102,6 @@ final class CoordinatorModeViewModel: ObservableObject {
         )
     }
 
-    @discardableResult
-    func submitChildDirective(_ text: String, to row: CoordinatorModeRow) async -> DirectiveSubmissionResult {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return .rejected(message: "")
-        }
-        guard row.tabID != nil, !row.isPersistedOnly else {
-            return .rejected(message: "This session is not live in the current window.")
-        }
-        guard row.runState != .running else {
-            return .rejected(message: "This session is mid-run. Reply when it reaches a turn boundary.")
-        }
-
-        let result = await childDirectiveSubmitter(trimmed, row)
-        if result == .accepted {
-            refresh()
-        }
-        return result
-    }
-
     func activePendingChildInteractionRow() -> CoordinatorModeRow? {
         guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID else { return nil }
         return snapshot.groups

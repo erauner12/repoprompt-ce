@@ -113,61 +113,6 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private enum ChildDirectiveAvailability {
-        case ready(status: String)
-        case openToReply(AgentSessionDeepLinkRoute)
-        case blocked(status: String, notice: String)
-
-        var canEdit: Bool {
-            if case .ready = self { true } else { false }
-        }
-
-        var canAct: Bool {
-            switch self {
-            case .ready, .openToReply: true
-            case .blocked: false
-            }
-        }
-
-        var status: String {
-            switch self {
-            case let .ready(status), let .blocked(status, _):
-                status
-            case .openToReply:
-                "Open"
-            }
-        }
-
-        var title: String {
-            switch self {
-            case .openToReply:
-                "Open Agent"
-            case .ready, .blocked:
-                "Reply to this session"
-            }
-        }
-
-        func notice(for row: CoordinatorModeRow) -> String? {
-            switch self {
-            case .ready:
-                "Send a follow-up to \(row.title)"
-            case .openToReply:
-                "Open this session in Agent Mode."
-            case let .blocked(_, notice):
-                notice
-            }
-        }
-
-        var iconName: String {
-            switch self {
-            case .openToReply:
-                "arrow.up.forward.app"
-            case .ready, .blocked:
-                "arrowshape.turn.up.left.fill"
-            }
-        }
-    }
-
     @ObservedObject var viewModel: CoordinatorModeViewModel
     let agentModeVM: AgentModeViewModel?
     let promptManager: PromptViewModel?
@@ -190,10 +135,7 @@ struct CoordinatorModeView: View {
     @State private var coordinatorCheckpointQuestionIndex: [UUID: Int] = [:]
     @State private var coordinatorOwnedCheckpointDrafts: [String: [String: AgentAskUserDraft]] = [:]
     @State private var coordinatorOwnedCheckpointQuestionIndex: [String: Int] = [:]
-    @State private var childDirectiveDraft = ""
-    @State private var childDirectiveNotice: String?
     @State private var isSubmittingCoordinatorDirective = false
-    @State private var isSubmittingChildDirective = false
     @State private var isStoppingCoordinatorMission = false
     @State private var coordinatorTextFieldResetTrigger = false
     @State private var coordinatorTextFieldHeight = ResizableTextField.height(forPresetIndex: 0, preset: .normal)
@@ -204,7 +146,6 @@ struct CoordinatorModeView: View {
     @State private var isSubmittingMissionPlanRevision = false
     @State private var isCoordinatorToolsPopoverPresented = false
     @State private var coordinatorToolsRevision = 0
-    @State private var isChildComposerExpanded = false
     @State private var isCoordinatorRailVisible = true
     @State private var isInspectorVisible = true
     @State private var isMissionPlanPaneVisible = true
@@ -214,7 +155,6 @@ struct CoordinatorModeView: View {
     @State private var coordinatorColumnVisibility: NavigationSplitViewVisibility = .all
     @FocusState private var isCoordinatorComposerFocused: Bool
     @FocusState private var isMissionPlanComposerFocused: Bool
-    @FocusState private var isChildComposerFocused: Bool
     @ObservedObject private var fontScale = FontScaleManager.shared
     @ObservedObject private var globalSettings = GlobalSettingsStore.shared
 
@@ -255,9 +195,6 @@ struct CoordinatorModeView: View {
         .onChange(of: viewModel.snapshot) { _, _ in
             reconcileSelection()
             reconcilePlanSelection()
-        }
-        .onChange(of: selectedRowID) { _, _ in
-            resetChildDirectiveComposer()
         }
     }
 
@@ -3136,12 +3073,6 @@ struct CoordinatorModeView: View {
                 .padding(metrics.outerPadding)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            Divider()
-                .opacity(0.28)
-
-            inspectorChildComposer(row: row, metrics: metrics)
-                .padding(metrics.outerPadding)
         }
     }
 
@@ -6140,168 +6071,6 @@ struct CoordinatorModeView: View {
         return "Director working"
     }
 
-    private func inspectorChildComposer(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
-        let availability = childDirectiveAvailability(for: row)
-        let isExpanded = isChildComposerExpanded || isSubmittingChildDirective || !childDirectiveDraft.isEmpty
-
-        return Group {
-            if case .openToReply = availability {
-                EmptyView()
-            } else {
-                VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-                    if isExpanded, let notice = childDirectiveNotice ?? availability.notice(for: row), !notice.isEmpty {
-                        coordinatorComposerNotice(notice, metrics: metrics)
-                    }
-
-                    if isExpanded {
-                        inspectorExpandedChildComposer(row: row, availability: availability, metrics: metrics)
-                    } else {
-                        inspectorCollapsedChildComposer(row: row, availability: availability, metrics: metrics)
-                    }
-                }
-            }
-        }
-    }
-
-    private func inspectorCollapsedChildComposer(
-        row: CoordinatorModeRow,
-        availability: ChildDirectiveAvailability,
-        metrics: CoordinatorVisualMetrics
-    ) -> some View {
-        Button {
-            switch availability {
-            case .ready:
-                isChildComposerExpanded = true
-                isChildComposerFocused = true
-            case let .openToReply(route):
-                onOpenAgentChat(route)
-            case .blocked:
-                return
-            }
-        } label: {
-            HStack(spacing: metrics.controlSpacing) {
-                Image(systemName: availability.iconName)
-                    .font(.system(size: metrics.smallIconSize, weight: .semibold))
-                    .foregroundStyle(availability.canAct ? Color.accentColor : Color.secondary.opacity(0.7))
-
-                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                    Text(availability.title)
-                        .font(metrics.bodyMedium)
-                        .foregroundStyle(availability.canAct ? .primary : .secondary)
-                    Text(availability.notice(for: row) ?? "")
-                        .font(metrics.micro)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-
-                Spacer(minLength: metrics.controlSpacing)
-
-                HStack(spacing: metrics.miniPillIconSpacing) {
-                    Circle()
-                        .fill(availability.canAct ? Color.green.opacity(0.82) : Color.secondary.opacity(0.55))
-                        .frame(width: metrics.composerStatusDotSize, height: metrics.composerStatusDotSize)
-                    Text(availability.status)
-                        .font(metrics.microMedium)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-            .padding(.horizontal, metrics.composerHorizontalPadding)
-            .padding(.vertical, metrics.childComposerCollapsedVerticalPadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .buttonStyle(.plain)
-        .disabled(!availability.canAct)
-        .background(
-            RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.58))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
-                .stroke(CoordinatorStyle.hairline.opacity(1.08), lineWidth: 1)
-        )
-        .hoverTooltip(availability.notice(for: row) ?? "Reply to \(row.title)")
-    }
-
-    private func inspectorExpandedChildComposer(
-        row: CoordinatorModeRow,
-        availability: ChildDirectiveAvailability,
-        metrics: CoordinatorVisualMetrics
-    ) -> some View {
-        HStack(alignment: .bottom, spacing: metrics.smallSpacing) {
-            Image(systemName: "arrowshape.turn.up.left.fill")
-                .font(.system(size: metrics.smallIconSize, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
-                .frame(height: metrics.childComposerTextMinHeight)
-
-            TextField("Reply to \(row.title)...", text: $childDirectiveDraft, axis: .vertical)
-                .lineLimit(1 ... 3)
-                .textFieldStyle(.plain)
-                .font(metrics.body)
-                .disabled(!availability.canEdit)
-                .focused($isChildComposerFocused)
-                .onSubmit {
-                    submitChildDirective(to: row)
-                }
-                .frame(minHeight: metrics.childComposerTextMinHeight, alignment: .center)
-
-            if childDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !isSubmittingChildDirective {
-                Button {
-                    isChildComposerExpanded = false
-                    isChildComposerFocused = false
-                    childDirectiveNotice = nil
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: metrics.microIconSize, weight: .semibold))
-                        .frame(width: metrics.sendButtonSize, height: metrics.sendButtonSize)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary.opacity(0.68))
-                .hoverTooltip("Collapse")
-            }
-
-            Button {
-                submitChildDirective(to: row)
-            } label: {
-                Image(systemName: isSubmittingChildDirective ? "hourglass" : "paperplane.fill")
-                    .font(.system(size: metrics.composerSendIconSize, weight: .semibold))
-                    .frame(width: metrics.sendButtonSize, height: metrics.sendButtonSize)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(canSubmitChildDirective(to: row) ? Color.accentColor : Color.secondary.opacity(0.55))
-            .disabled(!canSubmitChildDirective(to: row))
-            .hoverTooltip(isSubmittingChildDirective ? "Sending" : "Reply")
-        }
-        .padding(.horizontal, metrics.composerHorizontalPadding)
-        .padding(.vertical, metrics.childComposerExpandedVerticalPadding)
-        .background(
-            RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.72))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
-                .stroke(canSubmitChildDirective(to: row) ? Color.accentColor.opacity(0.48) : CoordinatorStyle.hairline.opacity(1.2), lineWidth: 1)
-        )
-        .onAppear {
-            guard availability.canEdit else { return }
-            isChildComposerFocused = true
-        }
-    }
-
-    private func childDirectiveAvailability(for row: CoordinatorModeRow) -> ChildDirectiveAvailability {
-        guard row.tabID != nil, !row.isPersistedOnly else {
-            if let route = row.openAgentChatRoute {
-                return .openToReply(route)
-            }
-            return .blocked(status: "Unavailable", notice: "This session is not live in the current window.")
-        }
-        guard row.runState != .running else {
-            return .blocked(status: "Working", notice: "Waiting for this session to reach a turn boundary.")
-        }
-        return .ready(status: row.runState.displayName)
-    }
-
     private func coordinatorComposerNotice(_ text: String, metrics: CoordinatorVisualMetrics) -> some View {
         Text(text)
             .font(metrics.micro)
@@ -6328,12 +6097,6 @@ struct CoordinatorModeView: View {
 
     private func canEditCoordinatorDirective(_ rail: CoordinatorModeCoordinatorRail) -> Bool {
         viewModel.activePendingChildInteractionRow() != nil || rail.state == .chooseCoordinator || rail.isComposerEnabled
-    }
-
-    private func canSubmitChildDirective(to row: CoordinatorModeRow) -> Bool {
-        childDirectiveAvailability(for: row).canEdit
-            && !isSubmittingChildDirective
-            && !childDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func submitCoordinatorDirective() {
@@ -6433,36 +6196,6 @@ struct CoordinatorModeView: View {
             isStoppingCoordinatorMission = false
             isCoordinatorComposerFocused = true
         }
-    }
-
-    private func submitChildDirective(to row: CoordinatorModeRow) {
-        let draft = childDirectiveDraft
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
-              canSubmitChildDirective(to: row)
-        else { return }
-        childDirectiveDraft = ""
-        childDirectiveNotice = nil
-        isSubmittingChildDirective = true
-        isChildComposerFocused = true
-        Task { @MainActor in
-            let result = await viewModel.submitChildDirective(draft, to: row)
-            if result != .accepted, childDirectiveDraft.isEmpty {
-                childDirectiveDraft = draft
-            }
-            if case let .rejected(message) = result {
-                childDirectiveNotice = message.isEmpty ? nil : message
-            }
-            isSubmittingChildDirective = false
-            isChildComposerFocused = true
-        }
-    }
-
-    private func resetChildDirectiveComposer() {
-        childDirectiveDraft = ""
-        childDirectiveNotice = nil
-        isSubmittingChildDirective = false
-        isChildComposerExpanded = false
     }
 
     private func selectDelegatedActionTarget(_ row: CoordinatorModeRow?) {
@@ -7479,10 +7212,6 @@ private struct CoordinatorVisualMetrics {
         fontPreset.scaledClamped(28, min: 24, max: 32)
     }
 
-    var childComposerTextMinHeight: CGFloat {
-        fontPreset.scaledClamped(30, min: 30, max: 38)
-    }
-
     var coordinatorComposerChromeVerticalPadding: CGFloat {
         fontPreset.scaledClamped(8, max: 8)
     }
@@ -7497,14 +7226,6 @@ private struct CoordinatorVisualMetrics {
 
     var composerVerticalPadding: CGFloat {
         fontPreset.scaledClamped(10, max: 14)
-    }
-
-    var childComposerCollapsedVerticalPadding: CGFloat {
-        fontPreset.scaledClamped(10, max: 13)
-    }
-
-    var childComposerExpandedVerticalPadding: CGFloat {
-        fontPreset.scaledClamped(8, max: 11)
     }
 
     var composerControlHorizontalPadding: CGFloat {
