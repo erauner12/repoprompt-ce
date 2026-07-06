@@ -658,7 +658,7 @@ struct CoordinatorModeView: View {
                 .foregroundColor(Color(NSColor.labelColor).opacity(0.6))
                 .font(.system(size: metrics.searchIconSize))
 
-            TextField("Filter sessions", text: $filterText)
+            TextField("Search missions and agents", text: $filterText)
                 .textFieldStyle(PlainTextFieldStyle())
                 .font(metrics.searchFont)
                 .foregroundColor(Color(NSColor.labelColor))
@@ -775,13 +775,13 @@ struct CoordinatorModeView: View {
         snapshot: CoordinatorModeSnapshot,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        let decisionsCount = snapshot.coordinatorRail.missionPlan?.decisions.count ?? 0
+        let pendingDecisionAttentionCount = coordinatorPendingDecisionAttentionCount(snapshot)
         return VStack(alignment: .leading, spacing: metrics.tightSpacing) {
             coordinatorNavigationButton(
                 title: "Director Chat",
                 subtitle: "Selected Mission and linked work",
                 systemImage: "bubble.left.and.bubble.right",
-                badgeCount: snapshot.coordinatorRail.availableCoordinators.count,
+                badgeCount: nil,
                 scope: .coordinatorFleet,
                 metrics: metrics
             )
@@ -790,27 +790,40 @@ struct CoordinatorModeView: View {
                 title: "All Agents Board",
                 subtitle: "Active work across Director Missions",
                 systemImage: "rectangle.3.group.bubble",
-                badgeCount: snapshot.counts.totalRows,
+                badgeCount: snapshot.counts.liveRows,
                 scope: .allAgents,
                 metrics: metrics
             )
 
             coordinatorDisabledNavigationButton(
                 title: "Decisions",
-                subtitle: "\(decisionsCount) recorded · queue pending",
+                subtitle: pendingDecisionAttentionCount == 0 ? "No pending attention" : "\(pendingDecisionAttentionCount) pending attention",
                 systemImage: "checklist.checked",
-                badgeCount: decisionsCount,
+                badgeCount: pendingDecisionAttentionCount == 0 ? nil : pendingDecisionAttentionCount,
                 metrics: metrics
             )
         }
         .accessibilityLabel("Director navigation")
     }
 
+    private func coordinatorPendingDecisionAttentionCount(_ snapshot: CoordinatorModeSnapshot) -> Int {
+        var count = snapshot.pendingInteractions.count
+        if let missionPlan = snapshot.coordinatorRail.missionPlan,
+           shouldShowPlanApprovalCheckpoint(missionPlan)
+        {
+            count += 1
+        }
+        if viewModel.activePendingFollowThroughEvent() != nil {
+            count += 1
+        }
+        return count
+    }
+
     private func coordinatorNavigationButton(
         title: String,
         subtitle: String,
         systemImage: String,
-        badgeCount: Int,
+        badgeCount: Int?,
         scope: CoordinatorModeBoardScope,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
@@ -843,7 +856,7 @@ struct CoordinatorModeView: View {
         title: String,
         subtitle: String,
         systemImage: String,
-        badgeCount: Int,
+        badgeCount: Int?,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         coordinatorSidebarNavigationRow(
@@ -869,7 +882,7 @@ struct CoordinatorModeView: View {
         subtitle: String,
         systemImage: String,
         tint: Color,
-        badgeCount: Int,
+        badgeCount: Int?,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         HStack(spacing: metrics.smallSpacing) {
@@ -891,7 +904,9 @@ struct CoordinatorModeView: View {
 
             Spacer(minLength: 0)
 
-            coordinatorNavigationCountBadge(badgeCount, tint: tint, metrics: metrics)
+            if let badgeCount {
+                coordinatorNavigationCountBadge(badgeCount, tint: tint, metrics: metrics)
+            }
         }
         .contentShape(Rectangle())
         .padding(.horizontal, metrics.pendingPadding)
@@ -1033,10 +1048,10 @@ struct CoordinatorModeView: View {
                     .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
 
                 VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                    Text("New Mission")
+                    Text("Draft a new Mission")
                         .font(metrics.bodySemibold)
                         .lineLimit(1)
-                    Text("Start a blank Director Mission")
+                    Text("Start from a blank prompt")
                         .font(metrics.micro)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -1272,7 +1287,7 @@ struct CoordinatorModeView: View {
                         if plan.workstreams.isEmpty, plan.nodes.isEmpty {
                             missionPlanEmptyState(
                                 title: "No workstreams yet",
-                                subtitle: "The Director can record lanes with coordinator_chat op=mission_plan.",
+                                subtitle: "Workstreams appear once a Mission Plan is recorded.",
                                 metrics: metrics
                             )
                         } else if plan.nodes.isEmpty {
@@ -1285,7 +1300,7 @@ struct CoordinatorModeView: View {
                     } else {
                         missionPlanEmptyState(
                             title: "No Mission Plan yet",
-                            subtitle: "When the Director records a plan, workstreams and task steps appear here.",
+                            subtitle: "When a Mission Plan is recorded, workstreams and task steps appear here.",
                             metrics: metrics
                         )
                         .frame(maxWidth: .infinity, minHeight: proxy.size.height - metrics.outerPadding * 2, alignment: .center)
@@ -4427,102 +4442,100 @@ struct CoordinatorModeView: View {
 
     private func coordinatorComposerControlStrip(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
         let pendingChildRow = viewModel.activePendingChildInteractionRow()
+        let isChildReply = pendingChildRow != nil
 
         return HStack(spacing: metrics.smallSpacing) {
-            HStack(spacing: metrics.miniPillIconSpacing) {
-                Image(systemName: pendingChildRow == nil ? "sparkles" : "questionmark.bubble.fill")
-                    .font(.system(size: metrics.microIconSize, weight: .medium))
-                    .foregroundStyle(pendingChildRow == nil ? Color.accentColor : CoordinatorModeStatusGroup.needsYou.accentColor)
-                Text(pendingChildRow == nil ? "Director" : "Child reply")
-                    .font(metrics.microMedium)
-                    .foregroundStyle(.primary.opacity(0.82))
-            }
-            .padding(.horizontal, metrics.miniPillHorizontalPadding)
-            .padding(.vertical, metrics.miniPillVerticalPadding)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.32))
-            )
-
-            HStack(spacing: metrics.miniPillIconSpacing) {
-                if isSubmittingCoordinatorDirective || viewModel.currentRailActivityText != nil {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .scaleEffect(0.58)
-                } else {
-                    Circle()
-                        .fill(rail.isLiveInCurrentWindow ? Color.green.opacity(0.82) : Color.secondary.opacity(0.55))
-                        .frame(width: metrics.composerStatusDotSize, height: metrics.composerStatusDotSize)
-                }
-                Text(pendingChildRow == nil ? coordinatorComposerStatusText(rail) : "Needs you")
-                    .font(metrics.microMedium)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, metrics.miniPillHorizontalPadding)
-            .padding(.vertical, metrics.miniPillVerticalPadding)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.22))
-            )
-
-            if pendingChildRow == nil {
+            if !isChildReply {
                 coordinatorComposerAutomationModeToggle(metrics: metrics)
-
                 coordinatorComposerToolsButton(metrics: metrics)
-
-                if rail.state == .chooseCoordinator {
-                    coordinatorMissionPolicyPicker(metrics: metrics)
-                    coordinatorMissionTemplatePicker(metrics: metrics)
-                }
+                coordinatorMissionPolicyPicker(metrics: metrics, isEditable: rail.state == .chooseCoordinator)
             }
 
             Spacer(minLength: metrics.smallSpacing)
 
-            Button {
-                submitCoordinatorDirective()
-            } label: {
-                Image(systemName: isSubmittingCoordinatorDirective ? "hourglass" : "paperplane.fill")
-                    .font(.system(size: metrics.composerSendIconSize, weight: .semibold))
-                    .frame(width: metrics.sendButtonSize, height: metrics.sendButtonSize)
+            Text(isChildReply ? "Child needs your reply" : coordinatorComposerPolicyEchoText(rail))
+                .font(metrics.microMedium)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .multilineTextAlignment(.trailing)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .layoutPriority(1)
+
+            HStack(spacing: metrics.tightSpacing) {
+                if !isChildReply {
+                    coordinatorComposerStopButton(metrics: metrics)
+                }
+
+                Button {
+                    submitCoordinatorDirective()
+                } label: {
+                    Image(systemName: isSubmittingCoordinatorDirective ? "hourglass" : "paperplane.fill")
+                        .font(.system(size: metrics.composerSendIconSize, weight: .semibold))
+                        .frame(width: metrics.sendButtonSize, height: metrics.sendButtonSize)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(canSubmitCoordinatorDirective ? Color.accentColor : Color.secondary.opacity(0.55))
+                .disabled(!canSubmitCoordinatorDirective)
+                .hoverTooltip(isSubmittingCoordinatorDirective ? "Sending" : (isChildReply ? "Answer child" : "Send"))
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(canSubmitCoordinatorDirective ? Color.accentColor : Color.secondary.opacity(0.55))
-            .disabled(!canSubmitCoordinatorDirective)
-            .hoverTooltip(isSubmittingCoordinatorDirective ? "Sending" : (pendingChildRow == nil ? "Send" : "Answer child"))
+            .fixedSize(horizontal: true, vertical: false)
         }
         .frame(height: metrics.composerControlStripHeight)
         .padding(.horizontal, metrics.composerControlHorizontalPadding)
     }
 
-    private func coordinatorMissionPolicyPicker(metrics: CoordinatorVisualMetrics) -> some View {
-        let policy = viewModel.selectedMissionPolicy
-        return Button {
+    private func coordinatorMissionPolicyPicker(metrics: CoordinatorVisualMetrics, isEditable: Bool) -> some View {
+        Button {
+            guard isEditable else { return }
             isMissionPolicyPopoverPresented.toggle()
         } label: {
             HStack(spacing: metrics.miniPillIconSpacing) {
                 Image(systemName: "shield.lefthalf.filled")
                     .font(.system(size: metrics.microIconSize, weight: .medium))
-                Text("Policy · \(policy.name)")
+                Text("Permissions")
                     .font(metrics.microMedium)
                     .lineLimit(1)
             }
             .padding(.horizontal, metrics.miniPillHorizontalPadding)
             .padding(.vertical, metrics.miniPillVerticalPadding)
+            .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(Color.purple)
+        .foregroundStyle(Color.purple.opacity(isEditable ? 1 : 0.55))
         .background(
             Capsule(style: .continuous)
-                .fill(Color.purple.opacity(0.14))
+                .fill(Color.purple.opacity(isEditable ? 0.14 : 0.08))
         )
+        .disabled(!isEditable)
         .popover(isPresented: $isMissionPolicyPopoverPresented, arrowEdge: .bottom) {
             CoordinatorMissionPolicyPopoverView(
                 selectedPolicy: $viewModel.selectedMissionPolicy,
                 isPresented: $isMissionPolicyPopoverPresented
             )
         }
-        .hoverTooltip("Choose the Mission Policy captured with the fresh Mission")
+        .hoverTooltip(isEditable ? "Choose the permissions captured with the fresh Mission" : "Permissions were captured when this Mission started")
+    }
+
+    private func coordinatorComposerPolicyEchoText(_ rail: CoordinatorModeCoordinatorRail) -> String {
+        if let policyName = rail.missionSummary?.policy?.name ?? rail.missionPlan?.policySnapshot?.name {
+            return "Policy: \(policyName)"
+        }
+        return "Policy: \(viewModel.selectedMissionPolicy.name)"
+    }
+
+    private func coordinatorComposerStopButton(metrics: CoordinatorVisualMetrics) -> some View {
+        Button {
+            stopCoordinatorMission()
+        } label: {
+            Image(systemName: isStoppingCoordinatorMission ? "hourglass" : "stop.circle.fill")
+                .font(.system(size: metrics.composerSendIconSize, weight: .semibold))
+                .frame(width: metrics.sendButtonSize, height: metrics.sendButtonSize)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.red.opacity(viewModel.canStopSelectedCoordinatorMission ? 0.95 : 0.45))
+        .disabled(!viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission)
+        .hoverTooltip("Stop the selected Mission and cancel its live linked sessions without archiving or deleting them.")
     }
 
     private func coordinatorMissionTemplatePicker(metrics: CoordinatorVisualMetrics) -> some View {
@@ -4599,36 +4612,37 @@ struct CoordinatorModeView: View {
         )
     }
 
-    @ViewBuilder
     private func coordinatorComposerToolsButton(metrics: CoordinatorVisualMetrics) -> some View {
-        if let props = agentModeVM?.makeComposerProps(),
-           props.hasAvailableAgentProviders,
-           props.selectedAgent == .codexExec || props.selectedAgent.usesClaudeTooling
-        {
-            Button {
-                isCoordinatorToolsPopoverPresented.toggle()
-            } label: {
-                HStack(spacing: metrics.miniPillIconSpacing) {
-                    Image(systemName: "server.rack")
-                        .font(.system(size: metrics.microIconSize, weight: .medium))
-                    Text("MCP / Tools")
-                        .font(metrics.microMedium)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, metrics.miniPillHorizontalPadding)
-                .padding(.vertical, metrics.miniPillVerticalPadding)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(isCoordinatorToolsPopoverPresented ? Color.accentColor.opacity(0.16) : Color(nsColor: .controlBackgroundColor).opacity(0.22))
-                )
+        let props = agentModeVM?.makeComposerProps()
+        let isAvailable = props?.hasAvailableAgentProviders == true
+            && (props?.selectedAgent == .codexExec || props?.selectedAgent.usesClaudeTooling == true)
+
+        return Button {
+            guard isAvailable else { return }
+            isCoordinatorToolsPopoverPresented.toggle()
+        } label: {
+            HStack(spacing: metrics.miniPillIconSpacing) {
+                Image(systemName: "server.rack")
+                    .font(.system(size: metrics.microIconSize, weight: .medium))
+                Text("MCP/Tools")
+                    .font(metrics.microMedium)
+                    .lineLimit(1)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(isCoordinatorToolsPopoverPresented ? Color.accentColor : Color.secondary)
-            .hoverTooltip("Configure MCP and tool settings for Director Missions. Type / to insert a skill.")
-            .popover(isPresented: $isCoordinatorToolsPopoverPresented, arrowEdge: .bottom) {
-                coordinatorComposerToolsPopover(metrics: metrics)
-                    .id(coordinatorToolsRevision)
-            }
+            .padding(.horizontal, metrics.miniPillHorizontalPadding)
+            .padding(.vertical, metrics.miniPillVerticalPadding)
+            .fixedSize(horizontal: true, vertical: false)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(isCoordinatorToolsPopoverPresented ? Color.accentColor.opacity(0.16) : Color(nsColor: .controlBackgroundColor).opacity(0.22))
+            )
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isAvailable ? (isCoordinatorToolsPopoverPresented ? Color.accentColor : Color.secondary) : Color.secondary.opacity(0.55))
+        .disabled(!isAvailable)
+        .hoverTooltip(isAvailable ? "Configure MCP and tool settings for Missions. Type / to insert a skill." : "MCP and tool settings are unavailable for this agent.")
+        .popover(isPresented: $isCoordinatorToolsPopoverPresented, arrowEdge: .bottom) {
+            coordinatorComposerToolsPopover(metrics: metrics)
+                .id(coordinatorToolsRevision)
         }
     }
 
