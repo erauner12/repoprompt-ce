@@ -15,23 +15,10 @@ final class AgentTranscriptWindowedProjectionTests: XCTestCase {
 
         XCTAssertEqual(windowed.workingBlocks.first?.kind, .collapsedHistoryRange)
         XCTAssertEqual(windowed.workingBlocks.first?.collapsedHistoryRange?.hiddenTurnCount, 5)
+        XCTAssertEqual(windowed.workingBlocks.first?.id, "collapsed-range:\(transcript.turns[0].id.uuidString)")
         XCTAssertEqual(windowed.workingBlocks.count(where: { $0.kind != .collapsedHistoryRange }), 80)
         XCTAssertEqual(windowed.workingRows.count, 80)
         XCTAssertEqual(orderedUniqueTurnIDs(windowed.workingBlocks.filter { $0.kind != .collapsedHistoryRange }.map(\.turnID)), transcript.turns.suffix(40).map(\.id))
-    }
-
-    func testWindowedBlockOrderKeepsCollapsedRangeBeforeTail() {
-        let transcript = makeTranscript(turnCount: 43)
-        let projection = AgentTranscriptProjectionBuilder.build(from: transcript)
-        let windowed = AgentTranscriptProjectionBuilder.tailWindowedProjection(
-            from: AgentTranscriptProjectionBuilder.workingProjection(from: projection),
-            transcript: transcript,
-            isExpanded: false
-        )
-
-        let expectedTurnIDs = [transcript.turns[0].id] + transcript.turns.suffix(40).map(\.id)
-        XCTAssertEqual(orderedUniqueTurnIDs(windowed.workingBlocks.map(\.turnID)), expectedTurnIDs)
-        XCTAssertEqual(windowed.workingBlocks.first?.id, "collapsed-range:\(transcript.turns[0].id.uuidString)")
     }
 
     func testOpenTurnRemainsVisibleEvenWhenOlderThanTail() {

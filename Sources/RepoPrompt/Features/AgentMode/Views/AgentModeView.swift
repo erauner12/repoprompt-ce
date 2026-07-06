@@ -1533,10 +1533,6 @@ struct AgentModeChatDetailView: View {
         transcriptPresentation.isCompressedHistoryRevealed && canRevealCompressedHistory
     }
 
-    private var canExpandTranscriptWindow: Bool {
-        transcriptPresentation.isTranscriptTailWindowActive && !transcriptPresentation.isTranscriptWindowExpanded
-    }
-
     private var hasTranscriptContent: Bool {
         !transcriptPresentation.visibleRows.isEmpty || transcriptPresentation.archivedHistoryState.hasArchivedHistory
     }
@@ -3326,10 +3322,9 @@ struct AgentModeChatDetailView: View {
     private func collapsedHistoryRangeRow(for block: AgentTranscriptRenderBlock) -> some View {
         let range = block.collapsedHistoryRange
         let hiddenTurnCount = range?.hiddenTurnCount ?? 0
-        let hiddenBlockCount = range?.hiddenBlockCount ?? 0
-        let hiddenRowCount = range?.hiddenRowCount ?? 0
+        let turnLabel = hiddenTurnCount == 1 ? "earlier turn" : "earlier turns"
         return Button {
-            expandTranscriptWindowIfNeeded(userInitiated: true)
+            expandTranscriptWindowIfNeeded()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "rectangle.stack.badge.plus")
@@ -3339,7 +3334,7 @@ struct AgentModeChatDetailView: View {
                     Text("Earlier transcript turns are hidden")
                         .font(fontPreset.swiftUIFont(sizeAtNormal: 12, weight: .semibold))
                         .foregroundStyle(.primary)
-                    Text("Show \(hiddenTurnCount) earlier turns (\(hiddenBlockCount) blocks, \(hiddenRowCount) rows).")
+                    Text("Show \(hiddenTurnCount) \(turnLabel).")
                         .font(fontPreset.swiftUIFont(sizeAtNormal: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -3361,7 +3356,6 @@ struct AgentModeChatDetailView: View {
             )
         }
         .buttonStyle(.plain)
-        .disabled(!canExpandTranscriptWindow)
     }
 
     private func shouldAbortPinnedMaintenanceScrollExecution(_ intent: AgentTranscriptScrollIntent) -> Bool {
@@ -3645,9 +3639,8 @@ struct AgentModeChatDetailView: View {
         }
     }
 
-    private func expandTranscriptWindowIfNeeded(userInitiated: Bool = false) {
-        guard userInitiated else { return }
-        guard canExpandTranscriptWindow else { return }
+    private func expandTranscriptWindowIfNeeded() {
+        guard !isTranscriptWindowExpanded else { return }
         prepareCompressionTransition(targetShowCompressedHistory: showCompressedHistory)
         isTranscriptWindowExpanded = true
         if let currentTabID {

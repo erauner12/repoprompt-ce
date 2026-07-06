@@ -7233,8 +7233,6 @@ final class AgentModeViewModel: ObservableObject {
             anchorBlockIndex: visibleProjection.anchorBlockIndex,
             archivedHistoryState: archivedHistoryState,
             isCompressedHistoryRevealed: session.isCompressedHistoryRevealed,
-            isTranscriptTailWindowActive: !session.isTranscriptWindowExpanded
-                && nextVisibleBlocks.contains(where: { $0.kind == .collapsedHistoryRange }),
             isTranscriptWindowExpanded: session.isTranscriptWindowExpanded,
             isWindowCappedWhileActive: isCapped,
             bindingsHydrated: session.authoritativeHydratedBindingTransitionGeneration != nil,
@@ -7476,7 +7474,6 @@ final class AgentModeViewModel: ObservableObject {
             anchorBlockIndex: snapshot.anchorBlockIndex,
             archivedHistoryState: snapshot.archivedHistoryState,
             isCompressedHistoryRevealed: snapshot.isCompressedHistoryRevealed,
-            isTranscriptTailWindowActive: snapshot.isTranscriptTailWindowActive,
             isTranscriptWindowExpanded: snapshot.isTranscriptWindowExpanded,
             isWindowCappedWhileActive: snapshot.isWindowCappedWhileActive,
             bindingsHydrated: value,
@@ -8715,7 +8712,6 @@ final class AgentModeViewModel: ObservableObject {
             previousProjectionProtection: session.transcriptProjectionProtection,
             projectionProtection: projectionProtection,
             isCompressedHistoryRevealed: session.isCompressedHistoryRevealed,
-            isTranscriptWindowExpanded: session.isTranscriptWindowExpanded,
             isColdLoad: reason == .coldLoad,
             trustedIncrementalFinalTurnStartSequenceIndex: trustedIncrementalFinalTurnStartSequenceIndex
         )
@@ -9143,7 +9139,6 @@ final class AgentModeViewModel: ObservableObject {
         previousProjectionProtection: AgentTranscriptProjectionProtection = .none,
         projectionProtection: AgentTranscriptProjectionProtection = .none,
         isCompressedHistoryRevealed: Bool = false,
-        isTranscriptWindowExpanded: Bool = false,
         isColdLoad: Bool = false,
         trustedIncrementalFinalTurnStartSequenceIndex: Int? = nil
     ) -> BuiltTranscriptPresentation {
@@ -9317,12 +9312,7 @@ final class AgentModeViewModel: ObservableObject {
         )
         let workingProjection = AgentTranscriptProjectionBuilder.workingProjection(from: fullProjection)
         let archivedSnapshot = AgentTranscriptProjectionBuilder.archivedSnapshot(from: fullProjection)
-        let unwindowedProjection = isCompressedHistoryRevealed ? fullProjection : workingProjection
-        let projection = AgentTranscriptProjectionBuilder.tailWindowedProjection(
-            from: unwindowedProjection,
-            transcript: sanitizedTranscript,
-            isExpanded: isTranscriptWindowExpanded
-        )
+        let projection = isCompressedHistoryRevealed ? fullProjection : workingProjection
         let projectionCounts = AgentTranscriptProjectionBuilder.projectionCounts(for: baseProjection)
         let canonicalVisibleRowCount = projectionCounts.canonicalVisibleRowCount
         #if DEBUG
@@ -9610,7 +9600,6 @@ final class AgentModeViewModel: ObservableObject {
             previousProjectionProtection: session.transcriptProjectionProtection,
             projectionProtection: projectionProtection,
             isCompressedHistoryRevealed: session.isCompressedHistoryRevealed,
-            isTranscriptWindowExpanded: session.isTranscriptWindowExpanded,
             isColdLoad: isColdLoad
         )
         applyBuiltTranscriptPresentation(

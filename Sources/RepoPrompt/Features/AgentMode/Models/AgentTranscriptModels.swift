@@ -875,17 +875,9 @@ public struct AgentTranscriptGroupedHistory: Sendable, Equatable {
 
 public struct AgentTranscriptCollapsedHistoryRange: Sendable, Equatable {
     public let hiddenTurnCount: Int
-    public let hiddenBlockCount: Int
-    public let hiddenRowCount: Int
 
-    public init(
-        hiddenTurnCount: Int,
-        hiddenBlockCount: Int,
-        hiddenRowCount: Int
-    ) {
+    public init(hiddenTurnCount: Int) {
         self.hiddenTurnCount = max(0, hiddenTurnCount)
-        self.hiddenBlockCount = max(0, hiddenBlockCount)
-        self.hiddenRowCount = max(0, hiddenRowCount)
     }
 }
 
@@ -1009,7 +1001,6 @@ struct AgentTranscriptPresentationSnapshot: Equatable {
     let anchorBlockIndex: [AgentTranscriptAnchor: String]
     let archivedHistoryState: AgentArchivedHistoryState
     let isCompressedHistoryRevealed: Bool
-    let isTranscriptTailWindowActive: Bool
     let isTranscriptWindowExpanded: Bool
     let isWindowCappedWhileActive: Bool
     let bindingsHydrated: Bool
@@ -1030,7 +1021,6 @@ struct AgentTranscriptPresentationSnapshot: Equatable {
         anchorBlockIndex: [AgentTranscriptAnchor: String] = [:],
         archivedHistoryState: AgentArchivedHistoryState = .empty,
         isCompressedHistoryRevealed: Bool = false,
-        isTranscriptTailWindowActive: Bool = false,
         isTranscriptWindowExpanded: Bool = false,
         isWindowCappedWhileActive: Bool = false,
         bindingsHydrated: Bool = true,
@@ -1050,7 +1040,6 @@ struct AgentTranscriptPresentationSnapshot: Equatable {
         self.anchorBlockIndex = anchorBlockIndex
         self.archivedHistoryState = archivedHistoryState
         self.isCompressedHistoryRevealed = isCompressedHistoryRevealed
-        self.isTranscriptTailWindowActive = isTranscriptTailWindowActive
         self.isTranscriptWindowExpanded = isTranscriptWindowExpanded
         self.isWindowCappedWhileActive = isWindowCappedWhileActive
         self.bindingsHydrated = bindingsHydrated
@@ -1071,7 +1060,6 @@ struct AgentTranscriptPresentationSnapshot: Equatable {
             && anchorBlockIndex == other.anchorBlockIndex
             && archivedHistoryState == other.archivedHistoryState
             && isCompressedHistoryRevealed == other.isCompressedHistoryRevealed
-            && isTranscriptTailWindowActive == other.isTranscriptTailWindowActive
             && isTranscriptWindowExpanded == other.isTranscriptWindowExpanded
             && isWindowCappedWhileActive == other.isWindowCappedWhileActive
             && bindingsHydrated == other.bindingsHydrated
@@ -1086,7 +1074,6 @@ struct AgentTranscriptPresentationSnapshot: Equatable {
             || visibleRows != other.visibleRows
             || archivedHistoryState != other.archivedHistoryState
             || isCompressedHistoryRevealed != other.isCompressedHistoryRevealed
-            || isTranscriptTailWindowActive != other.isTranscriptTailWindowActive
             || isTranscriptWindowExpanded != other.isTranscriptWindowExpanded
             || isWindowCappedWhileActive != other.isWindowCappedWhileActive
             || rawToolResultPayloadRenderRevision != other.rawToolResultPayloadRenderRevision

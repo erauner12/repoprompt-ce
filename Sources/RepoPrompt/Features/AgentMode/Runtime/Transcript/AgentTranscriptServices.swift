@@ -5779,7 +5779,6 @@ enum AgentTranscriptProjectionBuilder {
         guard nonArchivedTurns.count > tailTurnLimit else { return projection }
 
         let tailTurnIDs = Set(nonArchivedTurns.suffix(tailTurnLimit).map(\.id))
-        let incompleteTurnIDs = Set(nonArchivedTurns.filter { !$0.isCompleted }.map(\.id))
         let hiddenTurnIDs = Set(nonArchivedTurns.compactMap { turn -> UUID? in
             guard turn.isCompleted, !tailTurnIDs.contains(turn.id) else { return nil }
             return turn.id
@@ -5789,7 +5788,6 @@ enum AgentTranscriptProjectionBuilder {
         let hiddenBlocks = projection.workingBlocks.filter { hiddenTurnIDs.contains($0.turnID) }
         guard let firstHiddenBlock = hiddenBlocks.first else { return projection }
         let hiddenBlockIDs = Set(hiddenBlocks.map(\.id))
-        let hiddenRows = hiddenBlocks.flatMap(projectionRows(for:))
         let collapsedBlockID = "collapsed-range:\(firstHiddenBlock.turnID.uuidString)"
         let collapsedBlock = AgentTranscriptRenderBlock(
             id: collapsedBlockID,
@@ -5799,11 +5797,7 @@ enum AgentTranscriptProjectionBuilder {
             rows: [],
             isArchived: false,
             primaryAnchor: firstHiddenBlock.primaryAnchor ?? .request(turnID: firstHiddenBlock.turnID),
-            collapsedHistoryRange: .init(
-                hiddenTurnCount: hiddenTurnIDs.count,
-                hiddenBlockCount: hiddenBlocks.count,
-                hiddenRowCount: hiddenRows.count
-            ),
+            collapsedHistoryRange: .init(hiddenTurnCount: hiddenTurnIDs.count),
             defaultPresentation: .collapsed
         )
 
@@ -5818,11 +5812,8 @@ enum AgentTranscriptProjectionBuilder {
                 }
                 continue
             }
-            if tailTurnIDs.contains(block.turnID) || incompleteTurnIDs.contains(block.turnID) || block.isArchived {
-                windowedBlocks.append(block)
-            }
+            windowedBlocks.append(block)
         }
-        guard didInsertCollapsedBlock else { return projection }
 
         let visibleRowIDs = Set(windowedBlocks.flatMap(projectionRows(for:)).map(\.id))
         var anchorBlockIndex = projection.anchorBlockIndex
