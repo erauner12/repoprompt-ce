@@ -3574,7 +3574,7 @@
               ${renderSendButton(executing, isDraft ? "start-new-mission" : (executing ? undefined : "send-mission"))}
             </div>
           </div>
-          <div class="hint" style="padding:6px 2px 0">${isDraft ? `<strong>Your words choose the plan</strong> — the Director infers the mission's shape from the directive (a metric to improve → measured loop · "investigate… file an issue" → read-only root-cause · "across modules" → spec-first · "+ as a stack, one PR per module" → one PR per module · "here's the PRD, work the slices" → per-slice plan → build → review chains, you review at the end). The <em>policy</em> chooses how much stops for you on that plan. The ▸ Try chips prefill both — press Enter to send.` : (refine ? "Send feedback to refine this step before continuing — or accept it at the checkpoint above." : "This composer steers the mission. Individual runs open in Agent Mode.")}</div>
+          ${isDraft ? "" : `<div class="hint" style="padding:6px 2px 0">${refine ? "Send feedback to refine this step before continuing — or accept it at the checkpoint above." : "This composer steers the mission. Individual runs open in Agent Mode."}</div>`}
         </div>`;
     }
 

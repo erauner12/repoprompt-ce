@@ -8,7 +8,12 @@ enum AgentModeSurfaceTheme {
             }
             return .controlBackgroundColor
         })
-        static let sidebarBackground = Color(nsColor: .windowBackgroundColor)
+        static let sidebarBackground = Color(nsColor: NSColor(name: "AgentModeSidebarBackground") { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(srgbRed: 28 / 255, green: 32 / 255, blue: 34 / 255, alpha: 1)
+            }
+            return .windowBackgroundColor
+        })
         static let sidebarSeparator = Color(nsColor: .separatorColor).opacity(0.48)
 
         static let searchIcon = Color(nsColor: .labelColor).opacity(0.6)

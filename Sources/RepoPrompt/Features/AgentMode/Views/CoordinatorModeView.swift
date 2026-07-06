@@ -497,13 +497,6 @@ struct CoordinatorModeView: View {
                 coordinatorComposer(rail, metrics: metrics)
                     .padding(.horizontal, metrics.cardPadding)
                     .padding(.top, metrics.cardPadding)
-                Text(coordinatorDraftFooterText())
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, metrics.cardPadding + metrics.smallSpacing)
-                    .padding(.top, metrics.smallSpacing)
-                    .padding(.bottom, metrics.sidebarVerticalPadding)
             }
             .background(CoordinatorTheme.Palette.windowBackground)
         }
@@ -1970,10 +1963,6 @@ struct CoordinatorModeView: View {
         case "careful-writes", "read-only": "plan, writes, merges"
         default: "plan, merges"
         }
-    }
-
-    private func coordinatorDraftFooterText() -> String {
-        "Shape examples: a quick investigation can close with a report; a sliced build can fan out, return for review, and stop at approved checkpoints. The Director drafts the shape from your words; Mission Policy only decides when it must ask before continuing."
     }
 
     private func coordinatorPolicyIcon(_ policy: CoordinatorMissionPolicySnapshot) -> String {
