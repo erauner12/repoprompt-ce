@@ -4,7 +4,6 @@ import SwiftUI
 struct CoordinatorModeView: View {
     private enum InspectorTarget {
         case row(CoordinatorModeRow)
-        case planNode(CoordinatorMissionPlanNode, CoordinatorMissionWorkstreamSummary?, CoordinatorMissionPlan, CoordinatorModeRow?)
     }
 
     private struct MissionPlanReadinessProjection {
@@ -2153,7 +2152,6 @@ struct CoordinatorModeView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             selectedPlanNodeID = node.id
-            isInspectorVisible = true
         }
         .onHover { hovering in
             hoveredPlanNodeID = hovering ? node.id : (hoveredPlanNodeID == node.id ? nil : hoveredPlanNodeID)
@@ -2629,14 +2627,6 @@ struct CoordinatorModeView: View {
         switch target {
         case let .row(row):
             inspector(row: row, metrics: metrics)
-        case let .planNode(node, workstream, plan, boundRow):
-            planNodeInspector(
-                node: node,
-                workstream: workstream,
-                plan: plan,
-                boundRow: boundRow,
-                metrics: metrics
-            )
         }
     }
 
@@ -3198,62 +3188,55 @@ struct CoordinatorModeView: View {
                 .padding(.vertical, metrics.smallSpacing)
             }
         case .planApproval:
-            if let pending = coordinatorPlanApprovalCheckpointState() {
-                coordinatorCompactCheckpointCard(
-                    pending: pending,
-                    badgeTitle: "Director checkpoint",
-                    badgeSystemImage: "flag.checkered",
-                    accentColor: Color.accentColor,
-                    submitLabel: "Continue",
-                    showsSkipControls: false,
-                    metrics: metrics,
-                    onDraftChange: { questionID, draft in
-                        let key = Self.planApprovalCheckpointDraftKey
-                        var drafts = coordinatorOwnedCheckpointDrafts[key] ?? pending.interaction.emptyDrafts()
-                        drafts[questionID] = draft
-                        coordinatorOwnedCheckpointDrafts[key] = drafts
-                    },
-                    onQuestionIndexChange: { index in
-                        coordinatorOwnedCheckpointQuestionIndex[Self.planApprovalCheckpointDraftKey] = index
-                    },
-                    onSubmit: {
-                        submitCoordinatorPlanApprovalCheckpoint()
-                    },
-                    onSkipAll: {},
-                    onUserActivity: {}
-                )
-                .disabled(isSubmittingCoordinatorDirective)
-                .padding(.horizontal, metrics.cardPadding)
-                .padding(.vertical, metrics.smallSpacing)
-            }
+            coordinatorDirectorCheckpointTriadCard(
+                badgeTitle: "Director checkpoint",
+                badgeSystemImage: "flag.checkered",
+                title: "Approval required",
+                context: "Choose how the Director should continue from this checkpoint.",
+                accentColor: Color.accentColor,
+                proceedDescription: "Approve the current plan and let the Director run the next safe step.",
+                reviseDescription: "Keep the Mission paused and use the composer to add plan changes or nuance.",
+                stopDescription: "End this Mission here and record the stop decision.",
+                metrics: metrics,
+                onProceed: {
+                    submitCoordinatorContinuation(.proceed)
+                },
+                onRevise: {
+                    reviseCoordinatorPlanApprovalCheckpoint()
+                },
+                onStop: {
+                    submitCoordinatorContinuation(.stopHere)
+                }
+            )
+            .disabled(isSubmittingCoordinatorDirective)
+            .padding(.horizontal, metrics.cardPadding)
+            .padding(.vertical, metrics.smallSpacing)
         case let .stepBoundary(event):
-            if let pending = coordinatorFollowThroughCheckpointState(for: event) {
-                coordinatorCompactCheckpointCard(
-                    pending: pending,
-                    badgeTitle: "Step checkpoint",
-                    badgeSystemImage: "pause.circle.fill",
-                    accentColor: Color.accentColor,
-                    submitLabel: "Continue",
-                    showsSkipControls: false,
-                    metrics: metrics,
-                    onDraftChange: { questionID, draft in
-                        var drafts = coordinatorOwnedCheckpointDrafts[event.id] ?? pending.interaction.emptyDrafts()
-                        drafts[questionID] = draft
-                        coordinatorOwnedCheckpointDrafts[event.id] = drafts
-                    },
-                    onQuestionIndexChange: { index in
-                        coordinatorOwnedCheckpointQuestionIndex[event.id] = index
-                    },
-                    onSubmit: {
-                        submitCoordinatorFollowThroughCheckpoint(event)
-                    },
-                    onSkipAll: {},
-                    onUserActivity: {}
-                )
-                .disabled(isSubmittingCoordinatorDirective)
-                .padding(.horizontal, metrics.cardPadding)
-                .padding(.vertical, metrics.smallSpacing)
-            }
+            coordinatorDirectorCheckpointTriadCard(
+                badgeTitle: "Step checkpoint",
+                badgeSystemImage: "pause.circle.fill",
+                title: event.stepCheckpointTitle,
+                context: event.stepCheckpointContext,
+                accentColor: Color.accentColor,
+                proceedDescription: "Resume the Director with this observed boundary.",
+                reviseDescription: "Keep the boundary paused and use the composer to revise instructions first.",
+                stopDescription: "End this Mission here and record the stop decision.",
+                metrics: metrics,
+                onProceed: {
+                    submitPendingFollowThroughEvent(event)
+                },
+                onRevise: {
+                    reviseCoordinatorFollowThroughCheckpoint(event)
+                },
+                onStop: {
+                    resolvePendingFollowThroughEvent(event) {
+                        stopCoordinatorMission()
+                    }
+                }
+            )
+            .disabled(isSubmittingCoordinatorDirective)
+            .padding(.horizontal, metrics.cardPadding)
+            .padding(.vertical, metrics.smallSpacing)
         case nil:
             EmptyView()
         }
@@ -3661,38 +3644,20 @@ struct CoordinatorModeView: View {
     )
 
     private func coordinatorPlanApprovalCheckpointState() -> AgentAskUserPendingState? {
-        var options = [
+        let options = [
             AgentAskUserOption(
                 label: "Proceed",
-                description: "Run the next safe step the Director proposed."
+                description: "Approve the current plan and let the Director run the next safe step."
             ),
             AgentAskUserOption(
                 label: "Revise",
-                description: "Edit the plan or instruction before continuing."
+                description: "Keep the Mission paused and use the composer to add plan changes or nuance."
+            ),
+            AgentAskUserOption(
+                label: "Stop",
+                description: "End this Mission here and record the stop decision."
             )
         ]
-        if offersPlanApprovalPhaseDecisions() {
-            options.append(AgentAskUserOption(
-                label: "Gather evidence",
-                description: "Run narrow read-only probes before approval."
-            ))
-            options.append(AgentAskUserOption(
-                label: "Deepen plan",
-                description: "Run a visible planning pass for broad uncertainty."
-            ))
-            options.append(AgentAskUserOption(
-                label: "Get independent critique",
-                description: "Ask a separate design session to review the plan."
-            ))
-            options.append(AgentAskUserOption(
-                label: "Start smaller",
-                description: "Revise to a smaller first phase."
-            ))
-        }
-        options.append(AgentAskUserOption(
-            label: "Stop",
-            description: "End this Mission here."
-        ))
         let interaction = AgentAskUserInteraction(
             id: Self.planApprovalCheckpointID,
             title: "Approval required",
@@ -3721,7 +3686,7 @@ struct CoordinatorModeView: View {
     ) -> AgentAskUserPendingState? {
         let options = [
             AgentAskUserOption(
-                label: "Continue",
+                label: "Proceed",
                 description: "Resume the Director with this observed boundary."
             ),
             AgentAskUserOption(
@@ -3766,11 +3731,7 @@ struct CoordinatorModeView: View {
         case "Proceed":
             submitCoordinatorContinuation(.proceed)
         case "Revise":
-            viewModel.queuePlanRevisionDecisionAfterAcceptedDirective()
-            if coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                coordinatorDirectiveDraft = "Revise the plan: "
-            }
-            isCoordinatorComposerFocused = true
+            reviseCoordinatorPlanApprovalCheckpoint()
         case "Gather evidence":
             submitCoordinatorContinuation(.runLightweightDiscovery)
         case "Deepen plan":
@@ -3794,14 +3755,10 @@ struct CoordinatorModeView: View {
         coordinatorOwnedCheckpointDrafts[event.id] = nil
         coordinatorOwnedCheckpointQuestionIndex[event.id] = nil
         switch selected {
-        case "Continue":
+        case "Proceed", "Continue":
             submitPendingFollowThroughEvent(event)
         case "Revise":
-            viewModel.queueFollowThroughRevisionDecisionAfterAcceptedDirective(event)
-            if coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                coordinatorDirectiveDraft = "Revise before processing this observed boundary:\n\n\(event.stepCheckpointContext)\n\n"
-            }
-            isCoordinatorComposerFocused = true
+            reviseCoordinatorFollowThroughCheckpoint(event)
         case "Stop":
             resolvePendingFollowThroughEvent(event) {
                 stopCoordinatorMission()
@@ -3811,10 +3768,24 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func offersPlanApprovalPhaseDecisions() -> Bool {
-        guard let missionPlan = viewModel.snapshot.coordinatorRail.missionPlan
-        else { return false }
-        return shouldShowPlanApprovalCheckpoint(missionPlan)
+    private func reviseCoordinatorPlanApprovalCheckpoint() {
+        coordinatorOwnedCheckpointDrafts[Self.planApprovalCheckpointDraftKey] = nil
+        coordinatorOwnedCheckpointQuestionIndex[Self.planApprovalCheckpointDraftKey] = nil
+        viewModel.queuePlanRevisionDecisionAfterAcceptedDirective()
+        if coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            coordinatorDirectiveDraft = "Revise the plan: "
+        }
+        isCoordinatorComposerFocused = true
+    }
+
+    private func reviseCoordinatorFollowThroughCheckpoint(_ event: CoordinatorFollowThroughEvent) {
+        coordinatorOwnedCheckpointDrafts[event.id] = nil
+        coordinatorOwnedCheckpointQuestionIndex[event.id] = nil
+        viewModel.queueFollowThroughRevisionDecisionAfterAcceptedDirective(event)
+        if coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            coordinatorDirectiveDraft = "Revise before processing this observed boundary:\n\n\(event.stepCheckpointContext)\n\n"
+        }
+        isCoordinatorComposerFocused = true
     }
 
     private func coordinatorEmptyConversation(
@@ -4334,6 +4305,124 @@ struct CoordinatorModeView: View {
             onUserActivity: {}
         )
         .disabled(isSubmittingCoordinatorDirective)
+    }
+
+    private func coordinatorDirectorCheckpointTriadCard(
+        badgeTitle: String,
+        badgeSystemImage: String,
+        title: String,
+        context: String,
+        accentColor: Color,
+        proceedDescription: String,
+        reviseDescription: String,
+        stopDescription: String,
+        metrics: CoordinatorVisualMetrics,
+        onProceed: @escaping () -> Void,
+        onRevise: @escaping () -> Void,
+        onStop: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                Label(badgeTitle, systemImage: badgeSystemImage)
+                    .font(metrics.microMedium)
+                    .foregroundStyle(accentColor)
+                Spacer(minLength: metrics.smallSpacing)
+                Text("Choose next step")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(title)
+                .font(metrics.bodySemibold)
+                .foregroundStyle(.primary.opacity(0.92))
+                .lineLimit(2)
+
+            if let context = trimmedNonEmpty(context) {
+                Text(context)
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(spacing: 4) {
+                coordinatorDirectorCheckpointActionButton(
+                    label: "Proceed",
+                    systemImage: "play.fill",
+                    description: proceedDescription,
+                    accentColor: accentColor,
+                    metrics: metrics,
+                    action: onProceed
+                )
+                coordinatorDirectorCheckpointActionButton(
+                    label: "Revise",
+                    systemImage: "square.and.pencil",
+                    description: reviseDescription,
+                    accentColor: accentColor,
+                    metrics: metrics,
+                    action: onRevise
+                )
+                coordinatorDirectorCheckpointActionButton(
+                    label: "Stop",
+                    systemImage: "stop.fill",
+                    description: stopDescription,
+                    accentColor: .red,
+                    metrics: metrics,
+                    action: onStop
+                )
+            }
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(accentColor.opacity(0.075))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(accentColor.opacity(0.22), lineWidth: 0.8)
+        )
+    }
+
+    private func coordinatorDirectorCheckpointActionButton(
+        label: String,
+        systemImage: String,
+        description: String,
+        accentColor: Color,
+        metrics: CoordinatorVisualMetrics,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: metrics.smallSpacing) {
+                Image(systemName: systemImage)
+                    .font(metrics.microMedium)
+                    .foregroundStyle(accentColor)
+                    .frame(width: metrics.smallIconSize)
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(label)
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.primary.opacity(0.92))
+                    Text(description)
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: metrics.smallSpacing)
+            }
+            .padding(.horizontal, metrics.smallSpacing)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.18))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(accentColor.opacity(0.18), lineWidth: 0.8)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private func coordinatorCompactCheckpointCard(
@@ -6090,21 +6179,11 @@ struct CoordinatorModeView: View {
     }
 
     private func inspectorTarget(
-        snapshot: CoordinatorModeSnapshot,
-        sections: [CoordinatorModeStatusSection],
+        snapshot _: CoordinatorModeSnapshot,
+        sections _: [CoordinatorModeStatusSection],
         selectedRow: CoordinatorModeRow?
     ) -> InspectorTarget? {
-        if snapshot.boardScope != .allAgents,
-           let selectedPlanNode = selectedPlanNode(in: snapshot.coordinatorRail.missionPlan, sections: sections)
-        {
-            return .planNode(
-                selectedPlanNode.node,
-                selectedPlanNode.workstream,
-                selectedPlanNode.plan,
-                selectedPlanNode.boundRow
-            )
-        }
-        return selectedRow.map(InspectorTarget.row)
+        selectedRow.map(InspectorTarget.row)
     }
 
     private func selectedPlanNode(
