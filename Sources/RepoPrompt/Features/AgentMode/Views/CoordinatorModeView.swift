@@ -4416,30 +4416,39 @@ struct CoordinatorModeView: View {
         createdAt: Date,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
-            Image(systemName: "flag.checkered")
-                .font(.system(size: metrics.microIconSize, weight: .medium))
-                .foregroundStyle(.secondary)
-            Text(event.kind.displayName)
-                .font(metrics.microMedium)
-                .foregroundStyle(.secondary)
-            if let summary = event.summary {
-                Text(summary)
-                    .font(metrics.micro)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(2)
+        HStack(alignment: .top, spacing: metrics.smallSpacing) {
+            Capsule(style: .continuous)
+                .fill(Color.accentColor.opacity(0.28))
+                .frame(width: 2)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                    Label("Plan", systemImage: "flag.checkered")
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.secondary)
+                    Text(event.kind.displayName)
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: metrics.smallSpacing)
+                    Text(createdAt.formatted(date: .omitted, time: .shortened))
+                        .font(metrics.micro)
+                        .foregroundStyle(.tertiary)
+                }
+
+                if let summary = event.summary {
+                    Text(summary)
+                        .font(metrics.micro)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                }
             }
-            Spacer(minLength: metrics.smallSpacing)
-            Text(createdAt.formatted(date: .omitted, time: .shortened))
-                .font(metrics.micro)
-                .foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, metrics.pendingPadding)
-        .padding(.vertical, metrics.tightSpacing)
+        .padding(.horizontal, metrics.smallSpacing)
+        .padding(.vertical, metrics.tightSpacing * 0.65)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.16))
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.08))
         )
     }
 
@@ -4685,65 +4694,71 @@ struct CoordinatorModeView: View {
         onRevise: @escaping () -> Void,
         onStop: @escaping () -> Void
     ) -> some View {
-        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-            HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
-                Label(badgeTitle, systemImage: badgeSystemImage)
-                    .font(metrics.microMedium)
-                    .foregroundStyle(accentColor)
-                Spacer(minLength: metrics.smallSpacing)
-                Text("Choose next step")
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
-            }
+        HStack(alignment: .top, spacing: metrics.smallSpacing) {
+            Capsule(style: .continuous)
+                .fill(accentColor.opacity(0.55))
+                .frame(width: 3)
 
-            Text(title)
-                .font(metrics.bodySemibold)
-                .foregroundStyle(.primary.opacity(0.92))
-                .lineLimit(2)
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                    Label(badgeTitle, systemImage: badgeSystemImage)
+                        .font(metrics.microMedium)
+                        .foregroundStyle(accentColor)
+                    Spacer(minLength: metrics.smallSpacing)
+                    Text("Choose next step")
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                }
 
-            if let context = trimmedNonEmpty(context) {
-                Text(context)
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+                Text(title)
+                    .font(metrics.bodySemibold)
+                    .foregroundStyle(.primary.opacity(0.92))
+                    .lineLimit(2)
 
-            VStack(spacing: 4) {
-                coordinatorDirectorCheckpointActionButton(
-                    label: "Proceed",
-                    systemImage: "play.fill",
-                    description: proceedDescription,
-                    accentColor: accentColor,
-                    metrics: metrics,
-                    action: onProceed
-                )
-                coordinatorDirectorCheckpointActionButton(
-                    label: "Revise",
-                    systemImage: "square.and.pencil",
-                    description: reviseDescription,
-                    accentColor: accentColor,
-                    metrics: metrics,
-                    action: onRevise
-                )
-                coordinatorDirectorCheckpointActionButton(
-                    label: "Stop",
-                    systemImage: "stop.fill",
-                    description: stopDescription,
-                    accentColor: .red,
-                    metrics: metrics,
-                    action: onStop
-                )
+                if let context = trimmedNonEmpty(context) {
+                    Text(context)
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack(spacing: 4) {
+                    coordinatorDirectorCheckpointActionButton(
+                        label: "Proceed",
+                        systemImage: "play.fill",
+                        description: proceedDescription,
+                        accentColor: accentColor,
+                        metrics: metrics,
+                        action: onProceed
+                    )
+                    coordinatorDirectorCheckpointActionButton(
+                        label: "Revise",
+                        systemImage: "square.and.pencil",
+                        description: reviseDescription,
+                        accentColor: accentColor,
+                        metrics: metrics,
+                        action: onRevise
+                    )
+                    coordinatorDirectorCheckpointActionButton(
+                        label: "Stop",
+                        systemImage: "stop.fill",
+                        description: stopDescription,
+                        accentColor: .red,
+                        metrics: metrics,
+                        action: onStop
+                    )
+                }
             }
         }
-        .padding(metrics.pendingPadding)
+        .padding(metrics.smallSpacing)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .fill(accentColor.opacity(0.075))
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.16))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .stroke(accentColor.opacity(0.22), lineWidth: 0.8)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(accentColor.opacity(0.18), lineWidth: 0.75)
         )
     }
 
@@ -4756,34 +4771,32 @@ struct CoordinatorModeView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(alignment: .top, spacing: metrics.smallSpacing) {
-                Image(systemName: systemImage)
-                    .font(metrics.microMedium)
-                    .foregroundStyle(accentColor)
-                    .frame(width: metrics.smallIconSize)
-                    .padding(.top, 1)
-
-                VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: metrics.miniPillIconSpacing) {
+                    Image(systemName: systemImage)
+                        .font(metrics.microMedium)
+                        .foregroundStyle(accentColor)
                     Text(label)
                         .font(metrics.microMedium)
                         .foregroundStyle(.primary.opacity(0.92))
-                    Text(description)
-                        .font(metrics.micro)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                    Spacer(minLength: 0)
                 }
 
-                Spacer(minLength: metrics.smallSpacing)
+                Text(description)
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
             .padding(.horizontal, metrics.smallSpacing)
-            .padding(.vertical, 7)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, minHeight: 50, alignment: .topLeading)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(Color(nsColor: .controlBackgroundColor).opacity(0.18))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(accentColor.opacity(0.18), lineWidth: 0.8)
+                    .stroke(accentColor.opacity(0.16), lineWidth: 0.75)
             )
         }
         .buttonStyle(.plain)
@@ -4812,106 +4825,112 @@ struct CoordinatorModeView: View {
             return answer.skipped || !answer.answers.isEmpty
         } ?? false
 
-        return VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-            HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
-                Label(badgeTitle, systemImage: badgeSystemImage)
-                    .font(metrics.microMedium)
-                    .foregroundStyle(accentColor)
-                Spacer(minLength: metrics.smallSpacing)
-                Text("Question \(min(currentIndex + 1, questionCount)) of \(questionCount)")
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
-            }
+        return HStack(alignment: .top, spacing: metrics.smallSpacing) {
+            Capsule(style: .continuous)
+                .fill(accentColor.opacity(0.55))
+                .frame(width: 3)
 
-            if let title = trimmedNonEmpty(pending.interaction.title) {
-                Text(title)
-                    .font(metrics.bodySemibold)
-                    .foregroundStyle(.primary.opacity(0.92))
-                    .lineLimit(2)
-            }
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                    Label(badgeTitle, systemImage: badgeSystemImage)
+                        .font(metrics.microMedium)
+                        .foregroundStyle(accentColor)
+                    Spacer(minLength: metrics.smallSpacing)
+                    Text("Question \(min(currentIndex + 1, questionCount)) of \(questionCount)")
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                }
 
-            if let context = trimmedNonEmpty(pending.interaction.context) {
-                Text(context)
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+                if let title = trimmedNonEmpty(pending.interaction.title) {
+                    Text(title)
+                        .font(metrics.bodySemibold)
+                        .foregroundStyle(.primary.opacity(0.92))
+                        .lineLimit(2)
+                }
 
-            if let question = currentQuestion {
-                coordinatorCompactCheckpointQuestion(
-                    question,
-                    draft: currentDraft,
-                    accentColor: accentColor,
-                    metrics: metrics,
-                    onDraftChange: { draft in
-                        onDraftChange(question.id, draft)
-                        onUserActivity()
-                    },
-                    onSubmit: onSubmit
-                )
-            }
+                if let context = trimmedNonEmpty(pending.interaction.context) {
+                    Text(context)
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
-            HStack(spacing: metrics.smallSpacing) {
-                if showsSkipControls {
-                    Button("Skip all") {
-                        onSkipAll()
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-
-                    if let question = currentQuestion {
-                        Button(currentDraft.skipped ? "Answer" : "Skip") {
-                            if currentDraft.skipped {
-                                onDraftChange(question.id, AgentAskUserDraft())
-                            } else {
-                                onDraftChange(question.id, AgentAskUserDraft(skipped: true))
-                                if currentIndex < questionCount - 1 {
-                                    onQuestionIndexChange(currentIndex + 1)
-                                }
-                            }
+                if let question = currentQuestion {
+                    coordinatorCompactCheckpointQuestion(
+                        question,
+                        draft: currentDraft,
+                        accentColor: accentColor,
+                        metrics: metrics,
+                        onDraftChange: { draft in
+                            onDraftChange(question.id, draft)
                             onUserActivity()
+                        },
+                        onSubmit: onSubmit
+                    )
+                }
+
+                HStack(spacing: metrics.smallSpacing) {
+                    if showsSkipControls {
+                        Button("Skip all") {
+                            onSkipAll()
                         }
                         .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+
+                        if let question = currentQuestion {
+                            Button(currentDraft.skipped ? "Answer" : "Skip") {
+                                if currentDraft.skipped {
+                                    onDraftChange(question.id, AgentAskUserDraft())
+                                } else {
+                                    onDraftChange(question.id, AgentAskUserDraft(skipped: true))
+                                    if currentIndex < questionCount - 1 {
+                                        onQuestionIndexChange(currentIndex + 1)
+                                    }
+                                }
+                                onUserActivity()
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
-                }
 
-                Spacer(minLength: metrics.smallSpacing)
+                    Spacer(minLength: metrics.smallSpacing)
 
-                Button("Back") {
-                    onQuestionIndexChange(currentIndex - 1)
-                    onUserActivity()
-                }
-                .disabled(currentIndex <= 0)
-
-                if currentIndex >= questionCount - 1 {
-                    Button(submitLabel) {
-                        onSubmit()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(!pending.isComplete)
-                    .keyboardShortcut(.return, modifiers: .shift)
-                } else {
-                    Button("Next") {
-                        onQuestionIndexChange(currentIndex + 1)
+                    Button("Back") {
+                        onQuestionIndexChange(currentIndex - 1)
                         onUserActivity()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(!canMoveForward)
+                    .disabled(currentIndex <= 0)
+
+                    if currentIndex >= questionCount - 1 {
+                        Button(submitLabel) {
+                            onSubmit()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(!pending.isComplete)
+                        .keyboardShortcut(.return, modifiers: .shift)
+                    } else {
+                        Button("Next") {
+                            onQuestionIndexChange(currentIndex + 1)
+                            onUserActivity()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(!canMoveForward)
+                    }
                 }
+                .font(metrics.microMedium)
             }
-            .font(metrics.microMedium)
         }
-        .padding(metrics.pendingPadding)
+        .padding(metrics.smallSpacing)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .fill(accentColor.opacity(0.075))
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.16))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .stroke(accentColor.opacity(0.22), lineWidth: 0.8)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(accentColor.opacity(0.18), lineWidth: 0.75)
         )
     }
 
