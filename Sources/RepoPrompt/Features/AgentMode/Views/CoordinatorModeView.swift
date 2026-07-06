@@ -674,7 +674,7 @@ struct CoordinatorModeView: View {
     @ViewBuilder
     private func planMetadataChips(plan: CoordinatorMissionPlan?, metrics: CoordinatorVisualMetrics) -> some View {
         if let plan {
-            statusChip("r\(plan.revision)", color: Color.accentColor, metrics: metrics)
+            statusChip("r\(plan.revision)", color: .secondary, metrics: metrics)
             statusChip(plan.status.displayName, color: plan.status.tint, metrics: metrics)
             statusChip(plan.approvalState.displayName, color: plan.approvalState.tint, metrics: metrics)
         }
@@ -1530,7 +1530,7 @@ struct CoordinatorModeView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Image(systemName: "play.fill")
                         .font(.system(size: metrics.microIconSize, weight: .semibold))
-                        .foregroundStyle(Color.accentColor.opacity(0.72))
+                        .foregroundStyle(.tertiary)
                     Text("Try: \(coordinatorPolicyTryText(policy))")
                         .font(metrics.microMedium)
                         .foregroundStyle(.secondary)
@@ -1627,13 +1627,8 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func coordinatorPolicyTint(_ policy: CoordinatorMissionPolicySnapshot) -> Color {
-        switch policy.id {
-        case "hands-off": CoordinatorTheme.Semantic.info.tint
-        case "careful-writes": CoordinatorTheme.Semantic.warning.tint
-        case "read-only": CoordinatorTheme.Semantic.neutral.tint
-        default: Color.accentColor
-        }
+    private func coordinatorPolicyTint(_: CoordinatorMissionPolicySnapshot) -> Color {
+        .secondary
     }
 
     private func missionPlanSummary(
@@ -1647,7 +1642,7 @@ struct CoordinatorModeView: View {
                     .font(metrics.sectionTitle)
                     .foregroundStyle(.primary)
                 Spacer(minLength: metrics.controlSpacing)
-                statusChip("r\(plan.revision)", color: Color.accentColor, metrics: metrics)
+                statusChip("r\(plan.revision)", color: .secondary, metrics: metrics)
                 statusChip(plan.status.displayName, color: plan.status.tint, metrics: metrics)
             }
 
@@ -1717,7 +1712,7 @@ struct CoordinatorModeView: View {
             statusChip(plan.status.displayName, color: plan.status.tint, metrics: metrics)
             statusChip(plan.approvalState.displayName, color: plan.approvalState.tint, metrics: metrics)
             if !plan.nodes.isEmpty {
-                statusChip("\(projection.completedCount)/\(plan.nodes.count) nodes done", color: projection.completedCount == plan.nodes.count ? .green : .blue, metrics: metrics)
+                statusChip("\(projection.completedCount)/\(plan.nodes.count) nodes done", color: projection.completedCount == plan.nodes.count ? .green : .secondary, metrics: metrics)
                 if projection.readyCount > 0 {
                     statusChip("\(projection.readyCount) ready", color: .green, metrics: metrics)
                 }
@@ -1732,19 +1727,19 @@ struct CoordinatorModeView: View {
                 statusChip("\(plan.workstreams.count) workstreams", color: .secondary, metrics: metrics)
             }
             if let shapeSummary = plan.shapeSummary {
-                statusChip("Shape · \(shapeSummary.displayName)", color: Color.accentColor, metrics: metrics)
+                statusChip("Shape · \(shapeSummary.displayName)", color: .secondary, metrics: metrics)
             }
             if let policySnapshot = plan.policySnapshot {
                 statusChip(
                     "running \(projection.runningNodeCount)/\(policySnapshot.maxConcurrent)",
-                    color: projection.runningNodeCount > policySnapshot.maxConcurrent ? .red : .blue,
+                    color: projection.runningNodeCount > policySnapshot.maxConcurrent ? .red : (projection.runningNodeCount > 0 ? .blue : .secondary),
                     metrics: metrics
                 )
-                statusChip("Policy · \(policySnapshot.name)", color: .purple, metrics: metrics)
+                statusChip("Policy · \(policySnapshot.name)", color: .secondary, metrics: metrics)
             }
             let userDecisionCount = plan.decisions.count(where: { $0.actor == .user })
             if userDecisionCount > 0 {
-                statusChip("needed you \(userDecisionCount)×", color: .green, metrics: metrics)
+                statusChip("needed you \(userDecisionCount)×", color: .secondary, metrics: metrics)
             }
             if !plan.evidence.isEmpty {
                 let meetsCount = plan.evidence.count(where: { $0.verdict == .meets })
@@ -1789,7 +1784,7 @@ struct CoordinatorModeView: View {
                     HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
                         Label("Shape · \(shapeSummary.displayName)", systemImage: "square.stack.3d.up")
                             .font(metrics.microMedium)
-                            .foregroundStyle(Color.accentColor)
+                            .foregroundStyle(.secondary)
                         Text(shapeSummary.id)
                             .font(metrics.micro)
                             .foregroundStyle(.tertiary)
@@ -1810,9 +1805,9 @@ struct CoordinatorModeView: View {
 
                 if let policySnapshot = plan.policySnapshot {
                     HStack(spacing: metrics.smallSpacing) {
-                        statusChip("Policy · \(policySnapshot.name)", color: .purple, metrics: metrics)
-                        statusChip("cap \(policySnapshot.maxConcurrent)", color: .purple, metrics: metrics)
-                        statusChip(policySnapshot.defaultPace.rawValue, color: Color.accentColor, metrics: metrics)
+                        statusChip("Policy · \(policySnapshot.name)", color: .secondary, metrics: metrics)
+                        statusChip("cap \(policySnapshot.maxConcurrent)", color: .secondary, metrics: metrics)
+                        statusChip(policySnapshot.defaultPace.rawValue, color: .secondary, metrics: metrics)
                     }
                     if let definitionOfDone = policySnapshot.definitionOfDone {
                         Label("Done: \(definitionOfDone)", systemImage: "checkmark.seal")
@@ -2036,7 +2031,7 @@ struct CoordinatorModeView: View {
                 Spacer(minLength: metrics.controlSpacing)
                 statusChip("\(missionPlanCompletedNodeCount(nodes))/\(nodes.count) done", color: missionPlanCompletedNodeCount(nodes) == nodes.count && !nodes.isEmpty ? .green : .secondary, metrics: metrics)
                 statusChip("\(partIndex)/\(partTotal)", color: .secondary, metrics: metrics)
-                statusChip(workstream.defaultPolicy.displayName, color: Color.accentColor, metrics: metrics)
+                statusChip(workstream.defaultPolicy.displayName, color: .secondary, metrics: metrics)
                 statusChip(workstream.worktreeStrategy.mode.displayName, color: .secondary, metrics: metrics)
             }
 
@@ -2111,7 +2106,7 @@ struct CoordinatorModeView: View {
                     workflowBadge(workflowHint, metrics: metrics)
                 }
                 statusChip(missionPlanNodeRouteLabel(node, workstream: workstream), color: missionPlanNodeRouteTint(node, workstream: workstream), metrics: metrics)
-                statusChip(node.executionPolicy.displayName, color: Color.accentColor.opacity(0.82), metrics: metrics)
+                statusChip(node.executionPolicy.displayName, color: .secondary, metrics: metrics)
                 if let role = node.role {
                     statusChip(role, color: .secondary, metrics: metrics)
                 }
@@ -2308,11 +2303,7 @@ struct CoordinatorModeView: View {
         switch node.executionPolicy {
         case .steerPrimary:
             return .green
-        case .freshWorktree, .freshReadOnlyChild:
-            return .blue
-        case .freshSiblingOnSameWorktree, .planCritique:
-            return .purple
-        case .coordinatorOnly:
+        case .freshWorktree, .freshReadOnlyChild, .freshSiblingOnSameWorktree, .planCritique, .coordinatorOnly:
             return .secondary
         case .askUser:
             return .orange
@@ -2943,7 +2934,7 @@ struct CoordinatorModeView: View {
                     .foregroundStyle(.tertiary)
             }
             HStack(spacing: metrics.smallSpacing) {
-                statusChip(decision.operation.displayName, color: Color.accentColor, metrics: metrics)
+                statusChip(decision.operation.displayName, color: .secondary, metrics: metrics)
                 if let workflowName = decision.workflowName {
                     statusChip(workflowName, color: .secondary, metrics: metrics)
                 }
@@ -3025,7 +3016,7 @@ struct CoordinatorModeView: View {
                     if let workflowHint = node.workflowHint {
                         workflowBadge(workflowHint, metrics: metrics)
                     }
-                    statusChip(node.executionPolicy.displayName, color: Color.accentColor, metrics: metrics)
+                    statusChip(node.executionPolicy.displayName, color: .secondary, metrics: metrics)
                 }
             }
         }
@@ -3087,26 +3078,6 @@ struct CoordinatorModeView: View {
                     .buttonStyle(.link)
                     .font(metrics.microMedium)
                     .hoverTooltip("Show the Mission Plan pane.")
-                }
-                if viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission {
-                    Button {
-                        stopCoordinatorMission()
-                    } label: {
-                        Label("Stop", systemImage: "stop.circle.fill")
-                            .labelStyle(.titleAndIcon)
-                    }
-                    .buttonStyle(.link)
-                    .font(metrics.microMedium)
-                    .foregroundStyle(Color.red.opacity(viewModel.canStopSelectedCoordinatorMission ? 0.95 : 0.45))
-                    .disabled(!viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission)
-                    .hoverTooltip("Stop the selected Mission and cancel its live linked sessions without archiving or deleting them.")
-                }
-                if !viewModel.railTranscriptEntries.isEmpty {
-                    Button("Clear") {
-                        viewModel.clearCoordinatorRailTranscript()
-                    }
-                    .buttonStyle(.link)
-                    .font(metrics.microMedium)
                 }
             }
             .padding(.horizontal, metrics.outerPadding)
@@ -3460,7 +3431,7 @@ struct CoordinatorModeView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: metrics.smallSpacing) {
-                statusChip(decision.actor == .user ? "You" : "Director", color: decision.actor == .user ? .green : .purple, metrics: metrics)
+                statusChip(decision.actor == .user ? "You" : "Director", color: decision.actor == .user ? .green : .secondary, metrics: metrics)
                 Text(decision.label)
                     .font(metrics.microMedium)
                     .foregroundStyle(.primary.opacity(0.9))
@@ -3634,7 +3605,7 @@ struct CoordinatorModeView: View {
             HStack(spacing: metrics.smallSpacing) {
                 statusChip("\(completedNodeCount)/\(plan.nodes.count) nodes", color: .green, metrics: metrics)
                 statusChip("\(userDecisionCount) user", color: .green, metrics: metrics)
-                statusChip("\(directorDecisionCount) Director", color: .purple, metrics: metrics)
+                statusChip("\(directorDecisionCount) Director", color: .secondary, metrics: metrics)
                 if plan.evidence.isEmpty {
                     statusChip("No evidence", color: .secondary, metrics: metrics)
                 } else {
@@ -4010,7 +3981,7 @@ struct CoordinatorModeView: View {
             coordinatorLedgerCard(
                 title: decision.actor == .director ? "Director decided" : "Decision recorded",
                 systemImage: decision.actor == .director ? "gearshape.fill" : "person.crop.circle.badge.checkmark",
-                tint: decision.actor == .director ? .purple : .green,
+                tint: decision.actor == .director ? .secondary : .green,
                 createdAt: createdAt,
                 metrics: metrics
             ) {
@@ -4067,14 +4038,14 @@ struct CoordinatorModeView: View {
         HStack(alignment: .top, spacing: metrics.smallSpacing) {
             Image(systemName: "arrow.triangle.branch")
                 .font(.system(size: metrics.microIconSize, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(.secondary)
                 .frame(width: metrics.titlebarIconSize, height: metrics.titlebarIconSize)
             VStack(alignment: .leading, spacing: metrics.tightSpacing) {
                 HStack(spacing: metrics.smallSpacing) {
                     Text("Delegating \(decision.decision.displayName.lowercased())")
                         .font(metrics.microMedium)
-                        .foregroundStyle(Color.accentColor)
-                    statusChip(decision.operation.displayName, color: Color.accentColor, metrics: metrics)
+                        .foregroundStyle(.secondary)
+                    statusChip(decision.operation.displayName, color: .secondary, metrics: metrics)
                     Spacer(minLength: metrics.smallSpacing)
                     Text(createdAt.formatted(date: .omitted, time: .shortened))
                         .font(metrics.micro)
@@ -4101,7 +4072,7 @@ struct CoordinatorModeView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .stroke(Color.accentColor.opacity(0.14), lineWidth: 0.8)
+                .stroke(CoordinatorTheme.Palette.hairline, lineWidth: 0.8)
         )
     }
 
@@ -4146,7 +4117,7 @@ struct CoordinatorModeView: View {
         coordinatorLedgerCard(
             title: "Mission grounding",
             systemImage: "pin.fill",
-            tint: Color.accentColor,
+            tint: .secondary,
             createdAt: createdAt,
             metrics: metrics
         ) {
@@ -4154,7 +4125,7 @@ struct CoordinatorModeView: View {
                 if let shape {
                     Label("Shape · \(shape.displayName)", systemImage: "square.stack.3d.up")
                         .font(metrics.microMedium)
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(.secondary)
                     if let reason = shape.reason {
                         Text(reason)
                             .font(metrics.micro)
@@ -4169,9 +4140,9 @@ struct CoordinatorModeView: View {
                 }
                 if let policy {
                     HStack(spacing: metrics.smallSpacing) {
-                        statusChip("Policy · \(policy.name)", color: .purple, metrics: metrics)
-                        statusChip("cap \(policy.maxConcurrent)", color: .purple, metrics: metrics)
-                        statusChip(policy.defaultPace.rawValue, color: Color.accentColor, metrics: metrics)
+                        statusChip("Policy · \(policy.name)", color: .secondary, metrics: metrics)
+                        statusChip("cap \(policy.maxConcurrent)", color: .secondary, metrics: metrics)
+                        statusChip(policy.defaultPace.rawValue, color: .secondary, metrics: metrics)
                     }
                     if let definitionOfDone = policy.definitionOfDone {
                         Label("Done: \(definitionOfDone)", systemImage: "checkmark.seal")
@@ -4215,7 +4186,7 @@ struct CoordinatorModeView: View {
         ) {
             HStack(spacing: metrics.smallSpacing) {
                 statusChip("Needed you \(userCount)×", color: .green, metrics: metrics)
-                statusChip("Decided itself \(directorCount)×", color: .purple, metrics: metrics)
+                statusChip("Decided itself \(directorCount)×", color: .secondary, metrics: metrics)
                 Spacer(minLength: metrics.smallSpacing)
                 Button {
                     viewModel.boardScope = .coordinatorFleet
@@ -4910,10 +4881,10 @@ struct CoordinatorModeView: View {
             .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(Color.purple.opacity(isEditable ? 1 : 0.55))
+        .foregroundStyle(Color.secondary.opacity(isEditable ? 1 : 0.55))
         .background(
             Capsule(style: .continuous)
-                .fill(Color.purple.opacity(isEditable ? 0.14 : 0.08))
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(isEditable ? 0.22 : 0.12))
         )
         .disabled(!isEditable)
         .popover(isPresented: $isMissionPolicyPopoverPresented, arrowEdge: .bottom) {
@@ -5790,14 +5761,8 @@ struct CoordinatorModeView: View {
         .overlay(Capsule().stroke(tint.opacity(0.2), lineWidth: 0.5))
     }
 
-    private func workflowTint(_ workflow: CoordinatorModeWorkflowDisplaySummary) -> Color {
-        if let builtIn = AgentWorkflow.allCases.first(where: { workflow.id == "builtin-\($0.rawValue)" }) {
-            return builtIn.accentColor
-        }
-        if let hex = workflow.accentColorHex, let color = Color(hex: hex) {
-            return color
-        }
-        return .secondary
+    private func workflowTint(_: CoordinatorModeWorkflowDisplaySummary) -> Color {
+        .secondary
     }
 
     private func workflowBadge(_ workflowHint: CoordinatorMissionPlanNodeWorkflowHint, metrics: CoordinatorVisualMetrics) -> some View {
@@ -5861,14 +5826,8 @@ struct CoordinatorModeView: View {
         return builtInWorkflow(for: workflowHint)?.iconName ?? "arrow.triangle.branch"
     }
 
-    private func workflowTint(_ workflowHint: CoordinatorMissionPlanNodeWorkflowHint) -> Color {
-        if let builtIn = builtInWorkflow(for: workflowHint) {
-            return builtIn.accentColor
-        }
-        if let hex = workflowHint.accentColorHex, let color = Color(hex: hex) {
-            return color
-        }
-        return .secondary
+    private func workflowTint(_: CoordinatorMissionPlanNodeWorkflowHint) -> Color {
+        .secondary
     }
 
     private func builtInWorkflow(for workflowHint: CoordinatorMissionPlanNodeWorkflowHint) -> AgentWorkflow? {

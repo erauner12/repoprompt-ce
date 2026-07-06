@@ -5,18 +5,18 @@ import SwiftUI
 /// Shared visual language for Coordinator-backed Director surfaces.
 ///
 /// Swift symbols intentionally stay Coordinator-named while user-facing copy remains Director.
-/// The palette is anchored to the Command Center mock's dark panel language so future parity
+/// The palette is anchored to Agent Mode's restrained system-material language so future parity
 /// waves can reuse the same card, pill, and status primitives instead of restyling per view.
 enum CoordinatorTheme {
     enum Palette {
-        static let windowBackground = Color(hex: "#17191B") ?? Color(nsColor: .windowBackgroundColor)
-        static let panelBackground = Color(hex: "#202326") ?? Color(nsColor: .controlBackgroundColor)
-        static let elevatedPanelBackground = Color(hex: "#25292D") ?? Color(nsColor: .controlBackgroundColor)
-        static let recessedPanelBackground = Color(hex: "#151719") ?? Color(nsColor: .windowBackgroundColor)
-        static let hairline = Color.white.opacity(0.10)
-        static let strongHairline = Color.white.opacity(0.16)
-        static let seam = Color.white.opacity(0.08)
-        static let shadow = Color.black.opacity(0.30)
+        static let windowBackground = Color(nsColor: .windowBackgroundColor)
+        static let panelBackground = Color(nsColor: .controlBackgroundColor)
+        static let elevatedPanelBackground = Color(nsColor: .controlBackgroundColor).opacity(0.86)
+        static let recessedPanelBackground = Color(nsColor: .windowBackgroundColor).opacity(0.82)
+        static let hairline = Color.secondary.opacity(0.16)
+        static let strongHairline = Color.secondary.opacity(0.26)
+        static let seam = Color.secondary.opacity(0.12)
+        static let shadow = Color.black.opacity(0.16)
 
         static func selectedFill(_ tint: Color = .accentColor) -> Color {
             tint.opacity(0.18)
@@ -44,13 +44,13 @@ enum CoordinatorTheme {
     }
 
     enum Opacity {
-        static let cardFill = 0.76
-        static let groupedFill = 0.54
-        static let railCardFill = 0.62
-        static let emptyColumnFill = 0.34
-        static let statusChipFill = 0.15
-        static let statusChipStroke = 0.34
-        static let listRowFill = 0.40
+        static let cardFill = 0.58
+        static let groupedFill = 0.42
+        static let railCardFill = 0.46
+        static let emptyColumnFill = 0.18
+        static let statusChipFill = 0.09
+        static let statusChipStroke = 0.22
+        static let listRowFill = 0.28
     }
 
     enum Semantic {
@@ -125,10 +125,10 @@ struct CoordinatorStatusPlate: View {
         .foregroundStyle(tint.opacity(0.94))
         .padding(.horizontal, horizontalPadding)
         .padding(.vertical, verticalPadding)
-        .background(Capsule(style: .continuous).fill(tint.opacity(0.13)))
+        .background(Capsule(style: .continuous).fill(tint.opacity(0.10)))
         .overlay(
             Capsule(style: .continuous)
-                .stroke(tint.opacity(0.30), lineWidth: 0.5)
+                .stroke(tint.opacity(0.22), lineWidth: 0.5)
         )
     }
 }
@@ -137,7 +137,7 @@ extension View {
     func coordinatorThemeControlCapsule() -> some View {
         background(
             Capsule(style: .continuous)
-                .fill(CoordinatorTheme.Palette.elevatedPanelBackground.opacity(0.86))
+                .fill(CoordinatorTheme.Palette.elevatedPanelBackground)
         )
         .overlay(
             Capsule(style: .continuous)
