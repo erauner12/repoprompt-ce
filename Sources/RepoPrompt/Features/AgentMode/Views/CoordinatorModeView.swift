@@ -2217,9 +2217,6 @@ struct CoordinatorModeView: View {
                     metrics: metrics
                 )
             }
-
-            Spacer()
-                .frame(height: metrics.composerFooterHeight)
         }
     }
 
@@ -5466,6 +5463,9 @@ struct CoordinatorModeView: View {
                     }
                 )
             }
+
+            Spacer()
+                .frame(height: metrics.composerFooterHeight)
         }
     }
 
