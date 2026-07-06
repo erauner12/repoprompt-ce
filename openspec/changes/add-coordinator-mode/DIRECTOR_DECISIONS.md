@@ -90,6 +90,66 @@ ephemeral run charters may stay in `docs/plans/` but must cite this record.
   suggest encoding ("Decided itself 7×, no overrules — save these settings as a policy /
   try Hands-off for missions like this").
 
+## 3a. CHARTER — Dial override channel (dispatch-ready; explicit; supersedes nothing)
+
+**Intent: the `Step|Auto` dial is KEPT, exactly as prominent and dynamic as today. This
+charter gives it (and `Me|Director`) a real data path. Do not remove, relocate, or
+de-emphasize either dial. Any instruction that reads otherwise is a misreading.**
+
+1. **Composer state.** Add `missionPaceSelection` (and `childAskSelection`) to the
+   composer VM. Initialize: draft → from the selected grid policy
+   (`defaultPace` / `autonomy[childAsk-key]`); mission selected → from
+   `plan.policySnapshot`. **[verify]** the exact childAsk autonomy-class key string used
+   by the runtime; use it verbatim.
+2. **Draft capture honesty.** `policyProviderLines` (VM ~406) must read the **effective**
+   values — `Default pace:` from the dial selection, `Autonomy:` childAsk from the dial —
+   not the raw policy fields. What the runtime records as `policy_snapshot` therefore
+   equals what the user configured at send.
+3. **Mid-run write path.** Dial change on a mission with a recorded plan →
+   `missionPlanUpdater` mutation setting `policySnapshot.defaultPace`
+   (resp. `autonomy[childAsk-key]`), with revision bump — **and a user-actor decision
+   record** with fixed labels: "set pace to Auto" / "set pace to Step" /
+   "routed child questions to Me" / "routed child questions to the Director". Wave 2.5's
+   ledger→transcript projection then renders the audit echo automatically; build nothing
+   extra for display.
+4. **Semantics guardrails.** A dial change never consumes a pending checkpoint
+   (held-checkpoint invariant — add the test if absent). It sends no steer and no
+   metadata; the runtime picks it up at the next boundary via `mission_status`
+   (fingerprint moves on mutation). **[verify]** `defaultPace` participates in the compact
+   policy fingerprint part; if absent, add it (one line + one test).
+5. **`edited` honesty marker.** Pure computed comparison of the snapshot's
+   {pace, childAsk} against the library policy bearing `policySnapshot.id`. When they
+   differ: composer echo and plan-pane policy chip render
+   **"Policy · {name} · edited"** (tooltip lists the diffs, e.g. "pace → Auto"). No stored
+   flag; built-ins are the comparison base today, custom policies by the same id lookup
+   later. This is Stage 2's future "Save as policy" attachment point — do not build that
+   button now.
+6. **Prompt check.** Confirm `AgentModePrompts` states the policy snapshot may change
+   mid-mission and is re-read at each boundary; add one sentence if absent. No MCP
+   protocol changes in this charter.
+7. **Tests.** (a) draft: dial flip → provider metadata carries effective pace/childAsk;
+   (b) mid-run: dial flip → snapshot mutated, revision + compact fingerprint advance,
+   user-actor decision recorded with the exact fixed label; (c) a pending checkpoint
+   survives a dial flip; (d) `edited` true/false matrix incl. flip-back-to-preset →
+   marker clears; (e) childAsk key round-trips through mission_status.
+8. **Out of scope.** Per-class autonomy menu, custom policy CRUD, a cap dial, any
+   checkpoint-anatomy changes, the boundary contract-preview, the wrap-up suggestion
+   (those are separate items in §3).
+
+## 3b. Autonomy extensibility (LOCKED 2026-07-06): the map is the mechanism
+The autonomy map (`class → ask|auto`, unknown resolves to Ask) **is** the extensible
+mechanism — new classes are one key + one prompt sentence + policy updates, with zero
+schema risk. No generalized per-class control surface is built. **Graduation rule:** a
+new class enters ask-by-default with a human display name and joins the policy
+definitions; it earns a dial only if real usage shows it is flexed mid-mission (dial
+count discipline: two today, three ever, absent strong evidence). **One structural
+investment (opportunistic, cheap):** an `AutonomyClass` registry — key, display name,
+one-line human description, default — centralizing vocabulary now scattered across
+prompts, policies, and ask-summary strings; it feeds grid copy, echo lines, the Stage 2
+editor, and the future boundary contract-preview. The general editing surface remains
+Stage 2's minimal editor, reached via "Save as policy" — from lived experience, never
+speculation.
+
 ## 4. Decisions queue doctrine + identity (LOCKED)
 - The queue contains **asks — things waiting on the user — only**: pending child
   interactions, pending checkpoints, held boundaries. Blocked nodes/sessions are never
