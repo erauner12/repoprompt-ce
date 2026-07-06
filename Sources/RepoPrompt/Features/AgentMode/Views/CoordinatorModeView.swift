@@ -2,22 +2,6 @@ import AppKit
 import SwiftUI
 
 struct CoordinatorModeView: View {
-    enum PresentationMode: String, CaseIterable, Identifiable {
-        case board
-        case plan
-
-        var id: String {
-            rawValue
-        }
-
-        var displayName: String {
-            switch self {
-            case .board: "Board"
-            case .plan: "Plan"
-            }
-        }
-    }
-
     private enum InspectorTarget {
         case row(CoordinatorModeRow)
         case planNode(CoordinatorMissionPlanNode, CoordinatorMissionWorkstreamSummary?, CoordinatorMissionPlan, CoordinatorModeRow?)
@@ -98,7 +82,6 @@ struct CoordinatorModeView: View {
     let onManageWorkspaces: (() -> Void)?
     let onOpenAgentChat: (AgentSessionDeepLinkRoute) -> Void
 
-    @State private var presentationMode: PresentationMode = .plan
     @State private var selectedRowID: UUID?
     @State private var selectedPlanNodeID: UUID?
     @State private var hoveredRowID: UUID?
@@ -122,6 +105,7 @@ struct CoordinatorModeView: View {
     @State private var isChildComposerExpanded = false
     @State private var isCoordinatorRailVisible = true
     @State private var isInspectorVisible = true
+    @State private var isMissionPlanPaneVisible = true
     @State private var isSortMenuOpen = false
     @State private var areArchivedMissionsExpanded = false
     @State private var isMissionPolicyPopoverPresented = false
@@ -144,7 +128,7 @@ struct CoordinatorModeView: View {
             let selectedRow = selectedRow(in: sections)
             let inspectorTarget = inspectorTarget(snapshot: snapshot, sections: sections, selectedRow: selectedRow)
             let metrics = visualMetrics
-            let forceList = proxy.size.width < 540 && presentationMode == .board
+            let forceList = proxy.size.width < 540 && snapshot.boardScope == .allAgents
             let useList = forceList
             let railIsAvailable = proxy.size.width >= metrics.railAvailableWidth
             let inspectorIsAvailable = proxy.size.width >= 1200
@@ -179,133 +163,96 @@ struct CoordinatorModeView: View {
     private func coordinatorShell(
         snapshot: CoordinatorModeSnapshot,
         sections: [CoordinatorModeStatusSection],
-        selectedRow: CoordinatorModeRow?,
+        selectedRow _: CoordinatorModeRow?,
         inspectorTarget: InspectorTarget?,
         useList: Bool,
         forceList: Bool,
         railIsAvailable: Bool,
-        inspectorIsAvailable: Bool,
+        inspectorIsAvailable _: Bool,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        Group {
-            let isAllAgentsBoard = snapshot.boardScope == .allAgents
-            if inspectorIsAvailable {
-                HStack(spacing: 0) {
-                    if railIsAvailable {
-                        Group {
-                            if isCoordinatorRailVisible {
-                                coordinatorHistorySidebar(snapshot: snapshot, metrics: metrics)
-                            } else {
-                                collapsedCoordinatorRailRestore(metrics: metrics)
-                            }
-                        }
-                        .frame(width: isCoordinatorRailVisible ? metrics.railWidth : metrics.collapsedRailWidth)
-                        .frame(maxHeight: .infinity)
-                    }
-
-                    if !isAllAgentsBoard {
-                        coordinatorConversation(snapshot.coordinatorRail, metrics: metrics)
-                            .frame(minWidth: metrics.centerChatMinWidth, maxWidth: .infinity, maxHeight: .infinity)
-                            .background(CoordinatorTheme.Palette.windowBackground)
-                            .clipped()
-                    }
-
-                    if isAllAgentsBoard {
-                        rightWorkPanel(
-                            snapshot: snapshot,
-                            sections: sections,
-                            selectedRow: selectedRow,
-                            inspectorTarget: inspectorTarget,
-                            useList: useList,
-                            forceList: forceList,
-                            railIsAvailable: railIsAvailable,
-                            metrics: metrics
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        HStack(spacing: 0) {
+            if railIsAvailable {
+                Group {
+                    if isCoordinatorRailVisible {
+                        coordinatorHistorySidebar(snapshot: snapshot, metrics: metrics)
                     } else {
-                        rightWorkPanel(
-                            snapshot: snapshot,
-                            sections: sections,
-                            selectedRow: selectedRow,
-                            inspectorTarget: inspectorTarget,
-                            useList: useList,
-                            forceList: forceList,
-                            railIsAvailable: railIsAvailable,
-                            metrics: metrics
-                        )
-                        .frame(width: metrics.rightWorkPanelWidth)
-                        .frame(maxHeight: .infinity)
-                        .background(CoordinatorTheme.Palette.windowBackground)
+                        collapsedCoordinatorRailRestore(metrics: metrics)
                     }
                 }
-            } else {
-                HStack(spacing: 0) {
-                    if railIsAvailable {
-                        Group {
-                            if isCoordinatorRailVisible {
-                                if isAllAgentsBoard {
-                                    coordinatorHistorySidebar(snapshot: snapshot, metrics: metrics)
-                                } else {
-                                    coordinatorRail(snapshot: snapshot, metrics: metrics)
-                                }
-                            } else {
-                                collapsedCoordinatorRailRestore(metrics: metrics)
-                            }
-                        }
-                        .frame(width: isCoordinatorRailVisible ? metrics.railWidth : metrics.collapsedRailWidth)
-                        .frame(maxHeight: .infinity)
-                    }
+                .frame(width: isCoordinatorRailVisible ? metrics.railWidth : metrics.collapsedRailWidth)
+                .frame(maxHeight: .infinity)
+            }
 
-                    if !isAllAgentsBoard || !inspectorIsAvailable {
-                        coordinatorContent(
-                            snapshot: snapshot,
-                            sections: sections,
-                            useList: useList,
-                            forceList: forceList,
-                            metrics: metrics,
-                            showRailToggle: false,
-                            showInspectorToggle: inspectorIsAvailable && inspectorTarget != nil && !isInspectorVisible
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        rightWorkPanel(
-                            snapshot: snapshot,
-                            sections: sections,
-                            selectedRow: selectedRow,
-                            inspectorTarget: inspectorTarget,
-                            useList: useList,
-                            forceList: forceList,
-                            railIsAvailable: railIsAvailable,
-                            metrics: metrics
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                }
+            coordinatorCenterContent(
+                snapshot: snapshot,
+                sections: sections,
+                useList: useList,
+                forceList: forceList,
+                metrics: metrics
+            )
+            .frame(minWidth: metrics.centerChatMinWidth, maxWidth: .infinity, maxHeight: .infinity)
+            .background(CoordinatorTheme.Palette.windowBackground)
+            .clipped()
+
+            if shouldShowRightMissionPlan(for: snapshot) {
+                rightWorkPanel(
+                    snapshot: snapshot,
+                    inspectorTarget: inspectorTarget,
+                    metrics: metrics
+                )
+                .frame(width: metrics.rightWorkPanelWidth)
+                .frame(maxHeight: .infinity)
+                .background(CoordinatorTheme.Palette.windowBackground)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(CoordinatorTheme.Palette.windowBackground)
     }
 
-    private func rightWorkPanel(
+    private func shouldShowRightMissionPlan(for snapshot: CoordinatorModeSnapshot) -> Bool {
+        snapshot.boardScope != .allAgents
+            && snapshot.coordinatorRail.state == .selected
+            && snapshot.coordinatorRail.missionPlan != nil
+            && isMissionPlanPaneVisible
+    }
+
+    private func coordinatorCenterContent(
         snapshot: CoordinatorModeSnapshot,
         sections: [CoordinatorModeStatusSection],
-        selectedRow: CoordinatorModeRow?,
-        inspectorTarget: InspectorTarget?,
         useList: Bool,
         forceList: Bool,
-        railIsAvailable: Bool,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        Group {
+            if snapshot.boardScope == .allAgents {
+                coordinatorBoardContent(
+                    snapshot: snapshot,
+                    sections: sections,
+                    useList: useList,
+                    forceList: forceList,
+                    metrics: metrics
+                )
+            } else if snapshot.coordinatorRail.state == .chooseCoordinator {
+                coordinatorDraftCenter(rail: snapshot.coordinatorRail, metrics: metrics)
+            } else {
+                coordinatorConversation(snapshot.coordinatorRail, metrics: metrics)
+            }
+        }
+    }
+
+    private func rightWorkPanel(
+        snapshot: CoordinatorModeSnapshot,
+        inspectorTarget: InspectorTarget?,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(spacing: 0) {
-            coordinatorContent(
-                snapshot: snapshot,
-                sections: sections,
-                useList: useList,
-                forceList: forceList,
-                metrics: metrics,
-                showRailToggle: false,
-                showInspectorToggle: false
+            missionPlanPaneHeader(rail: snapshot.coordinatorRail, metrics: metrics)
+
+            missionPlanView(
+                rail: snapshot.coordinatorRail,
+                childCounts: snapshot.coordinatorRail.childCounts,
+                metrics: metrics
             )
             .frame(maxHeight: inspectorTarget == nil || !isInspectorVisible ? .infinity : metrics.rightBoardHeight)
 
@@ -325,24 +272,80 @@ struct CoordinatorModeView: View {
         .coordinatorFlushRegion(edge: .leading)
     }
 
-    private func coordinatorContent(
+    private func missionPlanPaneHeader(
+        rail: CoordinatorModeCoordinatorRail,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(spacing: metrics.controlSpacing) {
+            Label("Mission Plan", systemImage: "list.clipboard")
+                .font(metrics.bodySemibold)
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 0)
+
+            if let status = rail.missionPlan?.status {
+                statusChip(status.displayName, color: status.tint, metrics: metrics)
+            }
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isMissionPlanPaneVisible = false
+                }
+            } label: {
+                Image(systemName: "sidebar.right")
+                    .font(.system(size: metrics.smallIconSize, weight: .medium))
+                    .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .hoverTooltip("Collapse Mission Plan")
+            .accessibilityLabel("Collapse Mission Plan")
+        }
+        .padding(.horizontal, metrics.outerPadding)
+        .padding(.vertical, metrics.headerPadding)
+        .background(CoordinatorTheme.Palette.elevatedPanelBackground)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(CoordinatorTheme.Palette.hairline)
+                .frame(height: 0.5)
+        }
+    }
+
+    private func coordinatorDraftCenter(
+        rail: CoordinatorModeCoordinatorRail,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                coordinatorMissionDraftSurface(metrics: metrics)
+                    .padding(metrics.outerPadding)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Divider()
+                .opacity(0.45)
+
+            coordinatorComposer(rail, metrics: metrics)
+                .padding(metrics.cardPadding)
+                .background(CoordinatorTheme.Palette.panelBackground)
+        }
+        .background(CoordinatorTheme.Palette.windowBackground)
+    }
+
+    private func coordinatorBoardContent(
         snapshot: CoordinatorModeSnapshot,
         sections: [CoordinatorModeStatusSection],
         useList: Bool,
         forceList: Bool,
-        metrics: CoordinatorVisualMetrics,
-        showRailToggle: Bool = false,
-        showInspectorToggle: Bool = false
+        metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 boardControls(
-                    snapshot: snapshot,
                     mcpAwareness: snapshot.mcpAwareness,
                     forceList: forceList,
-                    metrics: metrics,
-                    showRailToggle: showRailToggle,
-                    showInspectorToggle: showInspectorToggle
+                    metrics: metrics
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -356,13 +359,7 @@ struct CoordinatorModeView: View {
             }
 
             Group {
-                if presentationMode == .plan {
-                    missionPlanView(
-                        rail: snapshot.coordinatorRail,
-                        childCounts: snapshot.coordinatorRail.childCounts,
-                        metrics: metrics
-                    )
-                } else if snapshot.isEmpty {
+                if snapshot.isEmpty {
                     emptyState(snapshot: snapshot, metrics: metrics)
                 } else if useList {
                     listView(sections: sections, metrics: metrics)
@@ -376,55 +373,31 @@ struct CoordinatorModeView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if snapshot.boardScope == .allAgents, presentationMode == .board {
-                boardFilterBar(metrics: metrics)
-            }
+            boardFilterBar(metrics: metrics)
         }
         .background(CoordinatorTheme.Palette.windowBackground)
     }
 
     private func boardControls(
-        snapshot: CoordinatorModeSnapshot,
         mcpAwareness: CoordinatorModeMCPAwareness,
         forceList: Bool,
-        metrics: CoordinatorVisualMetrics,
-        showRailToggle: Bool,
-        showInspectorToggle: Bool
+        metrics: CoordinatorVisualMetrics
     ) -> some View {
         HStack(spacing: metrics.controlSpacing) {
-            if showRailToggle {
-                CoordinatorRailToggleButton(isRailVisible: false, metrics: metrics) {
-                    toggleCoordinatorRail()
-                }
-            }
+            Label("Board", systemImage: "rectangle.3.group.bubble")
+                .font(metrics.bodySemibold)
+                .foregroundStyle(.primary)
 
-            presentationPicker(metrics: metrics)
-            if presentationMode == .plan {
-                planMetadataChips(plan: snapshot.coordinatorRail.missionPlan, metrics: metrics)
-            } else {
-                sortPicker(metrics: metrics)
+            sortPicker(metrics: metrics)
 
-                if forceList {
-                    forceListLabel(metrics: metrics)
-                }
+            if forceList {
+                forceListLabel(metrics: metrics)
             }
 
             Spacer(minLength: 0)
 
             if shouldShowMCPAwarenessChip(mcpAwareness) {
                 mcpAwarenessChip(mcpAwareness, metrics: metrics)
-            }
-
-            if showInspectorToggle {
-                CoordinatorRailToggleButton(
-                    isRailVisible: false,
-                    metrics: metrics,
-                    systemImage: "sidebar.right",
-                    visibleAccessibilityLabel: "Hide Inspector",
-                    hiddenAccessibilityLabel: "Show Inspector"
-                ) {
-                    isInspectorVisible = true
-                }
             }
         }
     }
@@ -441,16 +414,11 @@ struct CoordinatorModeView: View {
     }
 
     private func shouldShowMCPAwarenessChip(_ awareness: CoordinatorModeMCPAwareness) -> Bool {
-        if presentationMode == .plan,
-           awareness.state == .empty,
-           awareness.connectedClientCount == 0,
-           awareness.activeClientCount == 0,
-           awareness.idleClientCount == 0,
-           awareness.inFlightToolCallCount == 0
-        {
-            return false
-        }
-        return true
+        awareness.state != .empty
+            || awareness.connectedClientCount > 0
+            || awareness.activeClientCount > 0
+            || awareness.idleClientCount > 0
+            || awareness.inFlightToolCallCount > 0
     }
 
     private func mcpAwarenessChip(_ awareness: CoordinatorModeMCPAwareness, metrics: CoordinatorVisualMetrics) -> some View {
@@ -491,64 +459,6 @@ struct CoordinatorModeView: View {
             parts.append("No recent Coordinator MCP calls")
         }
         return parts.joined(separator: "\n")
-    }
-
-    private func presentationPicker(metrics: CoordinatorVisualMetrics) -> some View {
-        HStack(spacing: metrics.headerSegmentSpacing) {
-            ForEach(PresentationMode.allCases) { mode in
-                Button {
-                    presentationMode = mode
-                } label: {
-                    Text(mode.displayName)
-                        .font(metrics.bodySemibold)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.9)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: metrics.headerSegmentHeight)
-                        .padding(.horizontal, metrics.headerSegmentHorizontalPadding)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(presentationMode == mode ? Color.accentColor : Color.secondary)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(presentationMode == mode ? Color.accentColor.opacity(0.16) : Color.clear)
-                )
-                .accessibilityLabel(mode.displayName)
-            }
-        }
-        .padding(metrics.headerControlInset)
-        .frame(width: metrics.controlWidth, height: metrics.headerControlHeight)
-        .coordinatorHeaderControlBackground()
-        .accessibilityLabel("Presentation")
-    }
-
-    private func scopePicker(metrics: CoordinatorVisualMetrics) -> some View {
-        HStack(spacing: metrics.headerSegmentSpacing) {
-            ForEach(CoordinatorModeBoardScope.allCases, id: \.self) { scope in
-                Button {
-                    viewModel.boardScope = scope
-                } label: {
-                    Text(scope.displayName)
-                        .font(metrics.bodySemibold)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.88)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: metrics.headerSegmentHeight)
-                        .padding(.horizontal, metrics.headerSegmentHorizontalPadding)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(viewModel.boardScope == scope ? Color.accentColor : Color.secondary)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(viewModel.boardScope == scope ? Color.accentColor.opacity(0.16) : Color.clear)
-                )
-                .accessibilityLabel(scope.accessibilityLabel)
-            }
-        }
-        .padding(metrics.headerControlInset)
-        .frame(width: metrics.scopeControlWidth, height: metrics.headerControlHeight)
-        .coordinatorHeaderControlBackground()
-        .accessibilityLabel("Board scope")
     }
 
     private func headerSegmentButton(
@@ -1098,6 +1008,7 @@ struct CoordinatorModeView: View {
         Button {
             viewModel.startNewCoordinatorRun()
             viewModel.boardScope = .coordinatorFleet
+            isMissionPlanPaneVisible = true
         } label: {
             HStack(alignment: .center, spacing: metrics.smallSpacing) {
                 Image(systemName: rail.state == .chooseCoordinator ? "plus.circle.fill" : "plus.bubble")
@@ -1135,6 +1046,7 @@ struct CoordinatorModeView: View {
         .accessibilityAction {
             viewModel.startNewCoordinatorRun()
             viewModel.boardScope = .coordinatorFleet
+            isMissionPlanPaneVisible = true
         }
     }
 
@@ -1147,6 +1059,7 @@ struct CoordinatorModeView: View {
         return Button {
             viewModel.selectCoordinator(sessionID: option.sessionID)
             viewModel.boardScope = .coordinatorFleet
+            isMissionPlanPaneVisible = true
         } label: {
             HStack(alignment: .center, spacing: metrics.smallSpacing) {
                 Image(systemName: option.isSelected ? "checkmark.circle.fill" : "bubble.left.and.bubble.right")
@@ -1200,6 +1113,8 @@ struct CoordinatorModeView: View {
         .hoverTooltip("Switch mission to \(option.title)")
         .accessibilityAction {
             viewModel.selectCoordinator(sessionID: option.sessionID)
+            viewModel.boardScope = .coordinatorFleet
+            isMissionPlanPaneVisible = true
         }
     }
 
@@ -1357,9 +1272,6 @@ struct CoordinatorModeView: View {
                         } else {
                             missionPlanNodeOutline(plan, metrics: metrics)
                         }
-                    } else if rail.state == .chooseCoordinator {
-                        coordinatorMissionDraftSurface(metrics: metrics)
-                            .frame(maxWidth: .infinity, minHeight: proxy.size.height - metrics.outerPadding * 2, alignment: .topLeading)
                     } else {
                         missionPlanEmptyState(
                             title: "No Mission Plan yet",
@@ -1482,6 +1394,34 @@ struct CoordinatorModeView: View {
         .overlay(
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
                 .stroke(Color.accentColor.opacity(0.14), lineWidth: 0.75)
+        )
+    }
+
+    private func coordinatorConversationNoPlanStrip(metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(alignment: .center, spacing: metrics.smallSpacing) {
+            Image(systemName: "list.clipboard")
+                .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                Text("No Mission Plan yet")
+                    .font(metrics.bodySemibold)
+                Text("Keep working in this conversation. The Mission Plan pane appears after the Director records a plan.")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: metrics.controlSpacing)
+            statusChip("No plan", color: .secondary, metrics: metrics)
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(Color.secondary.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(Color.secondary.opacity(0.14), lineWidth: 0.75)
         )
     }
 
@@ -2950,6 +2890,19 @@ struct CoordinatorModeView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: metrics.controlSpacing)
+                if rail.missionPlan != nil, !isMissionPlanPaneVisible {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isMissionPlanPaneVisible = true
+                        }
+                    } label: {
+                        Label("Mission Plan", systemImage: "sidebar.right")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.link)
+                    .font(metrics.microMedium)
+                    .hoverTooltip("Show the Mission Plan pane.")
+                }
                 if viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission {
                     Button {
                         stopCoordinatorMission()
@@ -2989,6 +2942,8 @@ struct CoordinatorModeView: View {
                             childCounts: rail.childCounts,
                             metrics: metrics
                         )
+                    } else if rail.state == .selected {
+                        coordinatorConversationNoPlanStrip(metrics: metrics)
                     }
 
                     if viewModel.railTranscriptEntries.isEmpty, rail.missionPlan == nil {
@@ -3711,7 +3666,7 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-            Text(rail.state == .chooseCoordinator ? "Start a Mission." : "Ask the Director what to do next.")
+            Text("Ask the Director what to do next.")
                 .font(metrics.bodyMedium)
                 .foregroundStyle(.primary.opacity(0.82))
             Text("Delegated sessions will appear on the board as this conversation creates work.")
@@ -4078,7 +4033,8 @@ struct CoordinatorModeView: View {
                 statusChip("Decided itself \(directorCount)×", color: .purple, metrics: metrics)
                 Spacer(minLength: metrics.smallSpacing)
                 Button {
-                    presentationMode = .plan
+                    viewModel.boardScope = .coordinatorFleet
+                    isMissionPlanPaneVisible = true
                     selectedPlanNodeID = nil
                 } label: {
                     Text("Receipt →")
@@ -5992,7 +5948,7 @@ struct CoordinatorModeView: View {
         sections: [CoordinatorModeStatusSection],
         selectedRow: CoordinatorModeRow?
     ) -> InspectorTarget? {
-        if presentationMode == .plan,
+        if snapshot.boardScope != .allAgents,
            let selectedPlanNode = selectedPlanNode(in: snapshot.coordinatorRail.missionPlan, sections: sections)
         {
             return .planNode(
