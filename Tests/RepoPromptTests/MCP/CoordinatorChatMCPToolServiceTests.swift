@@ -2414,6 +2414,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 isComposerSendEnabled: true
             ),
             pendingInteractions: [],
+            decisionQueue: [],
             mcpAwareness: .off,
             isEmpty: false
         )

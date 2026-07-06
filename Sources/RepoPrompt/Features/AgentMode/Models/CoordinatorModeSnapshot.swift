@@ -9,6 +9,7 @@ struct CoordinatorModeSnapshot: Equatable {
         groups: CoordinatorModeStatusGroup.allCases.map { CoordinatorModeStatusSection(group: $0, rows: []) },
         coordinatorRail: .empty,
         pendingInteractions: [],
+        decisionQueue: [],
         mcpAwareness: .off,
         isEmpty: true
     )
@@ -20,6 +21,7 @@ struct CoordinatorModeSnapshot: Equatable {
     let groups: [CoordinatorModeStatusSection]
     let coordinatorRail: CoordinatorModeCoordinatorRail
     let pendingInteractions: [CoordinatorModePendingInteractionSummary]
+    let decisionQueue: [CoordinatorModeDecisionQueueItem]
     let mcpAwareness: CoordinatorModeMCPAwareness
     let isEmpty: Bool
 
@@ -652,6 +654,29 @@ struct CoordinatorModePendingInteractionSummary: Identifiable, Equatable {
     let options: [AgentRunMCPSnapshot.Interaction.Option]
     let fields: [AgentRunMCPSnapshot.Interaction.Field]
     let details: [AgentRunMCPSnapshot.Interaction.Detail]
+    let openAgentChatRoute: AgentSessionDeepLinkRoute?
+}
+
+struct CoordinatorModeDecisionQueueItem: Identifiable, Equatable {
+    enum Source: String, Equatable {
+        case planApproval
+        case followThroughBoundary
+        case interaction
+        case review
+        case blockedUserAction
+    }
+
+    let id: UUID
+    let source: Source
+    let coordinatorSessionID: UUID?
+    let sessionID: UUID?
+    let interactionID: UUID?
+    let planID: UUID?
+    let planRevision: Int?
+    let nodeID: UUID?
+    let title: String
+    let detail: String?
+    let waitingSince: Date
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
 }
 

@@ -328,6 +328,13 @@ struct CoordinatorModeSnapshotProjector {
             rowsByID: rowsByID
         )
         let pendingInteractions = boardRows.compactMap(\.pendingInteraction)
+        let decisionRows = allRows.filter { allCoordinatorOwnerIDs[$0.sessionID] != nil }
+        let decisionQueue = decisionQueue(
+            coordinatorOptions: coordinatorOptions,
+            coordinatorRows: decisionRows,
+            coordinatorOwnerIDs: allCoordinatorOwnerIDs,
+            rowsByID: rowsByID
+        )
 
         return CoordinatorModeSnapshot(
             workspaceID: input.workspaceID,
@@ -337,6 +344,7 @@ struct CoordinatorModeSnapshotProjector {
             groups: groups,
             coordinatorRail: coordinatorRail,
             pendingInteractions: pendingInteractions,
+            decisionQueue: decisionQueue,
             mcpAwareness: mcpAwareness(from: input.dashboard),
             isEmpty: boardRows.isEmpty
         )
@@ -1094,6 +1102,260 @@ struct CoordinatorModeSnapshotProjector {
             review: rows.count(where: { $0.statusGroup == .review }),
             done: rows.count(where: { $0.statusGroup == .done })
         )
+    }
+
+    private func decisionQueue(
+        coordinatorOptions: [CoordinatorModeCoordinatorOption],
+        coordinatorRows: [CoordinatorModeRow],
+        coordinatorOwnerIDs: [UUID: UUID],
+        rowsByID: [UUID: CoordinatorModeRow]
+    ) -> [CoordinatorModeDecisionQueueItem] {
+        var items: [CoordinatorModeDecisionQueueItem] = []
+
+        for option in coordinatorOptions {
+            let coordinatorID = option.sessionID
+            let coordinatorRoute = rowsByID[coordinatorID]?.openAgentChatRoute
+            if let plan = option.missionPlan {
+                if shouldQueuePlanApproval(plan) {
+                    items.append(planApprovalDecisionItem(
+                        coordinatorSessionID: coordinatorID,
+                        plan: plan,
+                        route: coordinatorRoute
+                    ))
+                }
+                items.append(contentsOf: followThroughBoundaryDecisionItems(
+                    coordinatorSessionID: coordinatorID,
+                    plan: plan,
+                    route: coordinatorRoute
+                ))
+                items.append(contentsOf: blockedNodeDecisionItems(
+                    coordinatorSessionID: coordinatorID,
+                    plan: plan,
+                    route: coordinatorRoute
+                ))
+            }
+
+            if let row = rowsByID[coordinatorID],
+               let pendingInteraction = row.pendingInteraction
+            {
+                items.append(interactionDecisionItem(
+                    pendingInteraction,
+                    coordinatorSessionID: coordinatorID,
+                    row: row,
+                    titlePrefix: "Respond to Coordinator"
+                ))
+            }
+        }
+
+        items.append(contentsOf: coordinatorRows.compactMap { row in
+            guard let pendingInteraction = row.pendingInteraction else { return nil }
+            return interactionDecisionItem(
+                pendingInteraction,
+                coordinatorSessionID: coordinatorOwnerIDs[row.sessionID],
+                row: row,
+                titlePrefix: "Respond to child"
+            )
+        })
+
+        items.append(contentsOf: coordinatorRows.compactMap { row in
+            reviewDecisionItem(row, coordinatorSessionID: coordinatorOwnerIDs[row.sessionID])
+        })
+
+        var seen: Set<UUID> = []
+        return items
+            .filter { item in
+                guard seen.insert(item.id).inserted else { return false }
+                return true
+            }
+            .sorted { lhs, rhs in
+                if lhs.waitingSince != rhs.waitingSince { return lhs.waitingSince < rhs.waitingSince }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+    }
+
+    private func shouldQueuePlanApproval(_ plan: CoordinatorMissionPlan) -> Bool {
+        plan.approvalState == .awaitingApproval
+            && !plan.nodes.isEmpty
+            && plan.status != .completed
+            && plan.status != .stopped
+    }
+
+    private func planApprovalDecisionItem(
+        coordinatorSessionID: UUID,
+        plan: CoordinatorMissionPlan,
+        route: AgentSessionDeepLinkRoute?
+    ) -> CoordinatorModeDecisionQueueItem {
+        CoordinatorModeDecisionQueueItem(
+            id: CoordinatorMissionStableIdentity.uuid(
+                namespace: "coordinator-mode-decision-plan-approval",
+                parts: [
+                    coordinatorSessionID.uuidString,
+                    plan.id.uuidString,
+                    "r\(plan.revision)",
+                    planApprovalCheckpointInstanceID(coordinatorSessionID: coordinatorSessionID, revision: plan.revision)
+                ]
+            ),
+            source: .planApproval,
+            coordinatorSessionID: coordinatorSessionID,
+            sessionID: coordinatorSessionID,
+            interactionID: nil,
+            planID: plan.id,
+            planRevision: plan.revision,
+            nodeID: nil,
+            title: "Approve Mission plan",
+            detail: plan.objective,
+            waitingSince: plan.updatedAt,
+            openAgentChatRoute: route
+        )
+    }
+
+    private func followThroughBoundaryDecisionItems(
+        coordinatorSessionID: UUID,
+        plan: CoordinatorMissionPlan,
+        route: AgentSessionDeepLinkRoute?
+    ) -> [CoordinatorModeDecisionQueueItem] {
+        plan.routingDecisions.compactMap { decision in
+            guard decision.decision == .holdForUser || decision.operation == .coordinatorHold,
+                  !isResolvedUserBoundary(decision, in: plan)
+            else { return nil }
+            return CoordinatorModeDecisionQueueItem(
+                id: CoordinatorMissionStableIdentity.uuid(
+                    namespace: "coordinator-mode-decision-follow-through-boundary",
+                    parts: [coordinatorSessionID.uuidString, plan.id.uuidString, decision.id.uuidString]
+                ),
+                source: .followThroughBoundary,
+                coordinatorSessionID: coordinatorSessionID,
+                sessionID: decision.sessionID ?? coordinatorSessionID,
+                interactionID: nil,
+                planID: plan.id,
+                planRevision: plan.revision,
+                nodeID: decision.nodeID,
+                title: "Continue held Mission step",
+                detail: decision.reason,
+                waitingSince: decision.timestamp,
+                openAgentChatRoute: route
+            )
+        }
+    }
+
+    private func blockedNodeDecisionItems(
+        coordinatorSessionID: UUID,
+        plan: CoordinatorMissionPlan,
+        route: AgentSessionDeepLinkRoute?
+    ) -> [CoordinatorModeDecisionQueueItem] {
+        plan.nodes.compactMap { node in
+            guard node.status == .blocked,
+                  let interactionID = node.boundInteractionID,
+                  !plan.decisions.contains(where: { $0.interactionID == interactionID })
+            else { return nil }
+            return CoordinatorModeDecisionQueueItem(
+                id: CoordinatorMissionStableIdentity.uuid(
+                    namespace: "coordinator-mode-decision-blocked-user-action",
+                    parts: [coordinatorSessionID.uuidString, plan.id.uuidString, node.id.uuidString, interactionID.uuidString]
+                ),
+                source: .blockedUserAction,
+                coordinatorSessionID: coordinatorSessionID,
+                sessionID: node.boundSessionID ?? coordinatorSessionID,
+                interactionID: interactionID,
+                planID: plan.id,
+                planRevision: plan.revision,
+                nodeID: node.id,
+                title: "Resolve blocked Mission node",
+                detail: node.title,
+                waitingSince: plan.updatedAt,
+                openAgentChatRoute: route
+            )
+        }
+    }
+
+    private func isResolvedUserBoundary(
+        _ routingDecision: CoordinatorMissionRoutingDecision,
+        in plan: CoordinatorMissionPlan
+    ) -> Bool {
+        let followThroughInstanceIDs = [
+            "follow-through:\(routingDecision.id.uuidString)",
+            "follow-through:\(routingDecision.id)"
+        ]
+        if plan.decisions.contains(where: { decision in
+            decision.checkpointInstanceID.map(followThroughInstanceIDs.contains) == true
+        }) {
+            return true
+        }
+
+        let hasMatchableSubject = routingDecision.nodeID != nil
+            || routingDecision.workstreamID != nil
+            || routingDecision.sessionID != nil
+        guard hasMatchableSubject else { return false }
+        return plan.decisions.contains { decision in
+            guard decision.actor == .user,
+                  decision.timestamp >= routingDecision.timestamp
+            else { return false }
+            return (routingDecision.nodeID != nil && decision.nodeID == routingDecision.nodeID)
+                || (routingDecision.workstreamID != nil && decision.workstreamID == routingDecision.workstreamID)
+                || (routingDecision.sessionID != nil && decision.sessionID == routingDecision.sessionID)
+        }
+    }
+
+    private func interactionDecisionItem(
+        _ interaction: CoordinatorModePendingInteractionSummary,
+        coordinatorSessionID: UUID?,
+        row: CoordinatorModeRow,
+        titlePrefix: String
+    ) -> CoordinatorModeDecisionQueueItem {
+        CoordinatorModeDecisionQueueItem(
+            id: CoordinatorMissionStableIdentity.uuid(
+                namespace: "coordinator-mode-decision-interaction",
+                parts: [
+                    coordinatorSessionID?.uuidString ?? "no-coordinator",
+                    row.sessionID.uuidString,
+                    interaction.id.uuidString
+                ]
+            ),
+            source: .interaction,
+            coordinatorSessionID: coordinatorSessionID,
+            sessionID: row.sessionID,
+            interactionID: interaction.id,
+            planID: nil,
+            planRevision: nil,
+            nodeID: nil,
+            title: interaction.title ?? titlePrefix,
+            detail: interaction.prompt ?? interaction.context,
+            waitingSince: row.updatedAt,
+            openAgentChatRoute: interaction.openAgentChatRoute
+        )
+    }
+
+    private func reviewDecisionItem(
+        _ row: CoordinatorModeRow,
+        coordinatorSessionID: UUID?
+    ) -> CoordinatorModeDecisionQueueItem? {
+        guard row.statusGroup == .review else { return nil }
+        let mergeID = row.mergeAttention?.id ?? "review"
+        return CoordinatorModeDecisionQueueItem(
+            id: CoordinatorMissionStableIdentity.uuid(
+                namespace: "coordinator-mode-decision-review",
+                parts: [
+                    coordinatorSessionID?.uuidString ?? "no-coordinator",
+                    row.sessionID.uuidString,
+                    mergeID
+                ]
+            ),
+            source: .review,
+            coordinatorSessionID: coordinatorSessionID,
+            sessionID: row.sessionID,
+            interactionID: nil,
+            planID: nil,
+            planRevision: nil,
+            nodeID: nil,
+            title: row.mergeAttention == nil ? "Inspect review output" : "Inspect merge preview",
+            detail: row.title,
+            waitingSince: row.mergeAttention?.updatedAt ?? row.updatedAt,
+            openAgentChatRoute: row.openAgentChatRoute
+        )
+    }
+
+    private func planApprovalCheckpointInstanceID(coordinatorSessionID: UUID, revision: Int) -> String {
+        "coordinator:\(coordinatorSessionID.uuidString):plan-approval:r\(revision)"
     }
 
     private func pendingInteractionSummary(

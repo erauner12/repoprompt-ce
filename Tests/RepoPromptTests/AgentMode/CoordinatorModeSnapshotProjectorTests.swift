@@ -1063,6 +1063,313 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(row?.statusGroup, .done)
     }
 
+    func testDecisionQueueUsesStablePlanApprovalIDs() {
+        let coordinatorID = uuid(1)
+        let planID = uuid(50)
+        let nodeID = uuid(60)
+        let workstreamID = uuid(70)
+        let plan = CoordinatorMissionPlan(
+            id: planID,
+            revision: 2,
+            objective: "Approve stable queue",
+            status: .draft,
+            approvalState: .awaitingApproval,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Implement",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree
+                )
+            ],
+            updatedAt: date(10)
+        )
+
+        let first = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle, missionPlan: plan)
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        let expectedID = CoordinatorMissionStableIdentity.uuid(
+            namespace: "coordinator-mode-decision-plan-approval",
+            parts: [
+                coordinatorID.uuidString,
+                planID.uuidString,
+                "r2",
+                "coordinator:\(coordinatorID.uuidString):plan-approval:r2"
+            ]
+        )
+        XCTAssertEqual(first.decisionQueue.map(\.source), [.planApproval])
+        XCTAssertEqual(first.decisionQueue.first?.id, expectedID)
+        XCTAssertEqual(first.decisionQueue.first?.planID, planID)
+        XCTAssertEqual(first.decisionQueue.first?.planRevision, 2)
+
+        var retitled = plan
+        retitled.objective = "Retitled without identity churn"
+        retitled.updatedAt = date(40)
+        let second = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(50), state: .idle, missionPlan: retitled)
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        XCTAssertEqual(second.decisionQueue.first?.id, expectedID)
+
+        var revised = retitled
+        revised.revision = 3
+        let third = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(60), state: .idle, missionPlan: revised)
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        XCTAssertNotEqual(third.decisionQueue.first?.id, expectedID)
+    }
+
+    func testDecisionQueueOrdersFIFOThenStableID() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let reviewID = uuid(3)
+        let planID = uuid(50)
+        let holdID = uuid(51)
+        let interactionID = uuid(52)
+        let merge = mergeSummary(id: "merge-review", status: .previewed, conflicts: 0, updatedAt: date(40))
+        let plan = CoordinatorMissionPlan(
+            id: planID,
+            revision: 1,
+            objective: "Order decisions",
+            status: .running,
+            approvalState: .awaitingApproval,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: uuid(60),
+                    title: "Implementation",
+                    workstreamID: uuid(70),
+                    executionPolicy: .freshWorktree
+                )
+            ],
+            routingDecisions: [
+                CoordinatorMissionRoutingDecision(
+                    id: holdID,
+                    timestamp: date(10),
+                    decision: .holdForUser,
+                    operation: .coordinatorHold,
+                    reason: "Ask before mutable follow-through."
+                )
+            ],
+            updatedAt: date(30)
+        )
+        let interaction = AgentRunMCPSnapshot.Interaction(
+            id: interactionID,
+            kind: .question,
+            responseType: .structured,
+            title: "Answer child",
+            prompt: "Choose next step.",
+            context: nil,
+            allowsMultiple: nil,
+            options: [],
+            fields: [],
+            details: []
+        )
+
+        let snapshot = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(100), state: .idle, missionPlan: plan),
+                live(id: childID, tab: uuid(102), title: "Child", updatedAt: date(20), state: .waitingForQuestion, parent: coordinatorID),
+                live(id: reviewID, tab: uuid(103), title: "Review", updatedAt: date(35), state: .completed, parent: coordinatorID, merges: [merge])
+            ],
+            mcpSnapshots: [
+                childID: mcpSnapshot(
+                    sessionID: childID,
+                    tabID: uuid(102),
+                    status: .waitingForInput,
+                    interaction: interaction,
+                    parent: coordinatorID
+                )
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        XCTAssertEqual(snapshot.decisionQueue.map(\.source), [
+            .followThroughBoundary,
+            .interaction,
+            .planApproval,
+            .review
+        ])
+        XCTAssertEqual(snapshot.decisionQueue.map(\.waitingSince), [date(10), date(20), date(30), date(40)])
+
+        let sameAgePlan = CoordinatorMissionPlan(
+            id: planID,
+            revision: 1,
+            objective: "Stable tie-break",
+            status: .running,
+            approvalState: .notRequired,
+            routingDecisions: [
+                CoordinatorMissionRoutingDecision(
+                    id: uuid(80),
+                    timestamp: date(10),
+                    decision: .holdForUser,
+                    operation: .coordinatorHold,
+                    reason: "First hold."
+                ),
+                CoordinatorMissionRoutingDecision(
+                    id: uuid(81),
+                    timestamp: date(10),
+                    decision: .holdForUser,
+                    operation: .coordinatorHold,
+                    reason: "Second hold."
+                )
+            ],
+            updatedAt: date(10)
+        )
+        let tied = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(100), state: .idle, missionPlan: sameAgePlan)
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        XCTAssertEqual(tied.decisionQueue.map(\.id), tied.decisionQueue.map(\.id).sorted { $0.uuidString < $1.uuidString })
+    }
+
+    func testDecisionQueueExcludesCompletedStoppedAndResolvedApprovals() {
+        let coordinatorID = uuid(1)
+        let workstreamID = uuid(70)
+        let basePlan = CoordinatorMissionPlan(
+            id: uuid(50),
+            revision: 1,
+            objective: "Approval exclusions",
+            status: .completed,
+            approvalState: .awaitingApproval,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: uuid(60),
+                    title: "Implementation",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree
+                )
+            ],
+            updatedAt: date(10)
+        )
+
+        let completed = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle, missionPlan: basePlan)
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        XCTAssertFalse(completed.decisionQueue.contains { $0.source == .planApproval })
+
+        var stoppedPlan = basePlan
+        stoppedPlan.status = .stopped
+        let stopped = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle, missionPlan: stoppedPlan)
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        XCTAssertFalse(stopped.decisionQueue.contains { $0.source == .planApproval })
+
+        var approvedPlan = basePlan
+        approvedPlan.status = .running
+        approvedPlan.approvalState = .approved
+        let approved = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle, missionPlan: approvedPlan)
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        XCTAssertFalse(approved.decisionQueue.contains { $0.source == .planApproval })
+
+        let noNodePlan = CoordinatorMissionPlan(
+            id: uuid(51),
+            revision: 1,
+            objective: "No actionable checkpoint yet",
+            status: .running,
+            approvalState: .awaitingApproval,
+            updatedAt: date(10)
+        )
+        let noNode = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle, missionPlan: noNodePlan)
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        XCTAssertFalse(noNode.decisionQueue.contains { $0.source == .planApproval })
+    }
+
+    func testDecisionQueueExcludesTelemetryBlockedNodes() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let workstreamID = uuid(70)
+        let telemetryBlockedPlan = CoordinatorMissionPlan(
+            id: uuid(50),
+            revision: 1,
+            objective: "Telemetry only blockers",
+            status: .blocked,
+            approvalState: .approved,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: uuid(60),
+                    title: "Dependency waiting",
+                    workstreamID: workstreamID,
+                    dependsOn: [uuid(61)],
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .pending
+                ),
+                CoordinatorMissionPlanNode(
+                    id: uuid(62),
+                    title: "Blocked without explicit interaction",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .blocked
+                )
+            ],
+            updatedAt: date(10)
+        )
+
+        let telemetryOnly = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle, missionPlan: telemetryBlockedPlan),
+                live(id: childID, tab: uuid(102), title: "Failed child", updatedAt: date(15), state: .failed, parent: coordinatorID)
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        XCTAssertTrue(telemetryOnly.decisionQueue.isEmpty)
+
+        let interactionID = uuid(90)
+        var explicitBlockedPlan = telemetryBlockedPlan
+        explicitBlockedPlan.nodes[1] = CoordinatorMissionPlanNode(
+            id: uuid(62),
+            title: "Blocked on user decision",
+            workstreamID: workstreamID,
+            executionPolicy: .freshWorktree,
+            status: .blocked,
+            boundSessionID: childID,
+            boundInteractionID: interactionID
+        )
+        let explicitBlocked = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(20), state: .idle, missionPlan: explicitBlockedPlan)
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        XCTAssertEqual(explicitBlocked.decisionQueue.map(\.source), [.blockedUserAction])
+        XCTAssertEqual(explicitBlocked.decisionQueue.first?.interactionID, interactionID)
+    }
+
     func testMCPCompactProjectionCoversOffEmptyIdleAndActiveStates() {
         let off = projector.project(input(dashboard: dashboard(isRunning: false)))
         XCTAssertEqual(off.mcpAwareness.state, .off)

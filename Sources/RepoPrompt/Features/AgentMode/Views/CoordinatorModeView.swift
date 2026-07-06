@@ -882,16 +882,7 @@ struct CoordinatorModeView: View {
     }
 
     private func coordinatorPendingDecisionAttentionCount(_ snapshot: CoordinatorModeSnapshot) -> Int {
-        var count = snapshot.pendingInteractions.count
-        if let missionPlan = snapshot.coordinatorRail.missionPlan,
-           shouldShowPlanApprovalCheckpoint(missionPlan)
-        {
-            count += 1
-        }
-        if viewModel.activePendingFollowThroughEvent() != nil {
-            count += 1
-        }
-        return count
+        snapshot.decisionQueue.count
     }
 
     private func coordinatorNavigationButton(
@@ -8071,6 +8062,7 @@ private extension CoordinatorFollowThroughChildPhase {
                     isComposerSendEnabled: false
                 ),
                 pendingInteractions: [],
+                decisionQueue: [],
                 mcpAwareness: CoordinatorModeMCPAwareness(
                     state: .active,
                     connectedClientCount: 2,

@@ -941,6 +941,7 @@ final class CoordinatorModeViewModel: ObservableObject {
             groups: projected.groups,
             coordinatorRail: rail,
             pendingInteractions: projected.pendingInteractions,
+            decisionQueue: projected.decisionQueue,
             mcpAwareness: projected.mcpAwareness,
             isEmpty: projected.isEmpty
         )
