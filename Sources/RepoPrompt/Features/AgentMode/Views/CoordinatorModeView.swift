@@ -112,6 +112,7 @@ struct CoordinatorModeView: View {
     @State private var isStoppingCoordinatorMission = false
     @State private var coordinatorTextFieldResetTrigger = false
     @State private var coordinatorTextFieldHeight = ResizableTextField.height(forPresetIndex: 0, preset: .normal)
+    @State private var coordinatorComposerChromeOcclusion: CGFloat = 0
     @State private var isCoordinatorToolsPopoverPresented = false
     @State private var coordinatorToolsRevision = 0
     @State private var isChildComposerExpanded = false
@@ -648,8 +649,6 @@ struct CoordinatorModeView: View {
             statusChip("r\(plan.revision)", color: Color.accentColor, metrics: metrics)
             statusChip(plan.status.displayName, color: plan.status.tint, metrics: metrics)
             statusChip(plan.approvalState.displayName, color: plan.approvalState.tint, metrics: metrics)
-        } else {
-            statusChip("No plan", color: .secondary, metrics: metrics)
         }
     }
 
@@ -776,11 +775,13 @@ struct CoordinatorModeView: View {
         snapshot: CoordinatorModeSnapshot,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+        let decisionsCount = snapshot.coordinatorRail.missionPlan?.decisions.count ?? 0
+        return VStack(alignment: .leading, spacing: metrics.tightSpacing) {
             coordinatorNavigationButton(
                 title: "Director Chat",
                 subtitle: "Selected Mission and linked work",
                 systemImage: "bubble.left.and.bubble.right",
+                badgeCount: snapshot.coordinatorRail.availableCoordinators.count,
                 scope: .coordinatorFleet,
                 metrics: metrics
             )
@@ -789,14 +790,16 @@ struct CoordinatorModeView: View {
                 title: "All Agents Board",
                 subtitle: "Active work across Director Missions",
                 systemImage: "rectangle.3.group.bubble",
+                badgeCount: snapshot.counts.totalRows,
                 scope: .allAgents,
                 metrics: metrics
             )
 
             coordinatorDisabledNavigationButton(
                 title: "Decisions",
-                subtitle: "\(snapshot.coordinatorRail.missionPlan?.decisions.count ?? 0) recorded · queue pending",
+                subtitle: "\(decisionsCount) recorded · queue pending",
                 systemImage: "checklist.checked",
+                badgeCount: decisionsCount,
                 metrics: metrics
             )
         }
@@ -807,6 +810,7 @@ struct CoordinatorModeView: View {
         title: String,
         subtitle: String,
         systemImage: String,
+        badgeCount: Int,
         scope: CoordinatorModeBoardScope,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
@@ -820,6 +824,7 @@ struct CoordinatorModeView: View {
                 subtitle: subtitle,
                 systemImage: systemImage,
                 tint: isSelected ? Color.accentColor : .secondary,
+                badgeCount: badgeCount,
                 metrics: metrics
             )
         }
@@ -838,6 +843,7 @@ struct CoordinatorModeView: View {
         title: String,
         subtitle: String,
         systemImage: String,
+        badgeCount: Int,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         coordinatorSidebarNavigationRow(
@@ -845,6 +851,7 @@ struct CoordinatorModeView: View {
             subtitle: subtitle,
             systemImage: systemImage,
             tint: .secondary,
+            badgeCount: badgeCount,
             metrics: metrics
         )
         .opacity(0.52)
@@ -862,6 +869,7 @@ struct CoordinatorModeView: View {
         subtitle: String,
         systemImage: String,
         tint: Color,
+        badgeCount: Int,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         HStack(spacing: metrics.smallSpacing) {
@@ -882,6 +890,8 @@ struct CoordinatorModeView: View {
             }
 
             Spacer(minLength: 0)
+
+            coordinatorNavigationCountBadge(badgeCount, tint: tint, metrics: metrics)
         }
         .contentShape(Rectangle())
         .padding(.horizontal, metrics.pendingPadding)
@@ -889,20 +899,21 @@ struct CoordinatorModeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func coordinatorNavigationCountBadge(_ count: Int, tint: Color, metrics: CoordinatorVisualMetrics) -> some View {
+        Text("\(count)")
+            .font(metrics.microMedium)
+            .foregroundStyle(tint)
+            .monospacedDigit()
+            .frame(minWidth: metrics.navigationBadgeSize, minHeight: metrics.navigationBadgeSize)
+            .padding(.horizontal, count > 9 ? 4 : 0)
+            .background(Capsule(style: .continuous).fill(tint.opacity(0.12)))
+            .overlay(Capsule(style: .continuous).stroke(tint.opacity(0.24), lineWidth: 0.5))
+            .accessibilityLabel("\(count)")
+    }
+
     private func coordinatorRailFooter(snapshot: CoordinatorModeSnapshot, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(alignment: .leading, spacing: metrics.smallSpacing) {
             coordinatorRailStatusReport(snapshot.coordinatorRail.statusReport, metrics: metrics)
-
-            HStack(spacing: metrics.smallSpacing) {
-                mcpAwarenessChip(snapshot.mcpAwareness, metrics: metrics)
-                    .layoutPriority(1)
-                Spacer(minLength: 0)
-                Text("Workspace footer follows Agent Mode when workspace-root data is wired here.")
-                    .font(metrics.micro)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.trailing)
-            }
         }
         .padding(.top, metrics.sidebarVerticalPadding)
     }
@@ -1274,7 +1285,7 @@ struct CoordinatorModeView: View {
                     } else {
                         missionPlanEmptyState(
                             title: "No Mission Plan yet",
-                            subtitle: "When the Director records a plan, workstreams and DAG-lite nodes appear here.",
+                            subtitle: "When the Director records a plan, workstreams and task steps appear here.",
                             metrics: metrics
                         )
                         .frame(maxWidth: .infinity, minHeight: proxy.size.height - metrics.outerPadding * 2, alignment: .center)
@@ -4347,45 +4358,41 @@ struct CoordinatorModeView: View {
             }
 
             if pendingChildStructuredState == nil {
-                VStack(alignment: .leading, spacing: 0) {
-                    ResizableTextField(
-                        text: $coordinatorDirectiveDraft,
-                        placeholder: placeholder,
-                        onReturn: submitCoordinatorDirective,
-                        resetTrigger: $coordinatorTextFieldResetTrigger,
-                        features: coordinatorComposerFeatures(),
-                        onHeightChange: { newHeight in
-                            coordinatorTextFieldHeight = newHeight
-                        }
-                    )
-                    .frame(height: max(coordinatorTextFieldHeight, metrics.composerTextMinHeight))
-                    .disabled(!canEditCoordinatorDirective(rail))
-                    .focused($isCoordinatorComposerFocused)
-                    .overlay(
-                        Text(placeholder)
-                            .font(metrics.body)
-                            .foregroundStyle(.secondary)
-                            .opacity(coordinatorDirectiveDraft.isEmpty ? 1 : 0)
-                            .padding(.leading, metrics.composerHorizontalPadding + 5)
-                            .padding(.top, metrics.composerVerticalPadding + 2)
-                            .allowsHitTesting(false),
-                        alignment: .topLeading
-                    )
-                    .padding(.horizontal, metrics.composerHorizontalPadding)
-                    .padding(.vertical, metrics.composerVerticalPadding)
-
-                    Divider()
-                        .opacity(0.42)
-
-                    coordinatorComposerControlStrip(rail, metrics: metrics)
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
-                        .fill(Color(nsColor: .windowBackgroundColor).opacity(0.72))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
-                        .stroke(canSubmitCoordinatorDirective ? Color.accentColor.opacity(0.48) : CoordinatorStyle.hairline.opacity(1.2), lineWidth: 1)
+                ComposerChrome(
+                    bottomOcclusion: $coordinatorComposerChromeOcclusion,
+                    mainContentHeight: max(coordinatorTextFieldHeight, metrics.composerTextMinHeight),
+                    highlightColor: canSubmitCoordinatorDirective ? Color.accentColor : nil,
+                    bubbleVerticalPaddingOverride: metrics.coordinatorComposerChromeVerticalPadding,
+                    bubbleInnerSpacingOverride: metrics.coordinatorComposerChromeInnerSpacing,
+                    controlStripHeightOverride: metrics.composerControlStripHeight,
+                    main: {
+                        ResizableTextField(
+                            text: $coordinatorDirectiveDraft,
+                            placeholder: placeholder,
+                            onReturn: submitCoordinatorDirective,
+                            resetTrigger: $coordinatorTextFieldResetTrigger,
+                            features: coordinatorComposerFeatures(),
+                            onHeightChange: { newHeight in
+                                coordinatorTextFieldHeight = newHeight
+                            }
+                        )
+                        .frame(height: max(coordinatorTextFieldHeight, metrics.composerTextMinHeight))
+                        .disabled(!canEditCoordinatorDirective(rail))
+                        .focused($isCoordinatorComposerFocused)
+                        .overlay(
+                            Text(placeholder)
+                                .font(metrics.body)
+                                .foregroundStyle(.secondary)
+                                .opacity(coordinatorDirectiveDraft.isEmpty ? 1 : 0)
+                                .padding(.leading, 5)
+                                .padding(.top, 8)
+                                .allowsHitTesting(false),
+                            alignment: .topLeading
+                        )
+                    },
+                    strip: {
+                        coordinatorComposerControlStrip(rail, metrics: metrics)
+                    }
                 )
             }
         }
@@ -4833,7 +4840,7 @@ struct CoordinatorModeView: View {
     }
 
     private func coordinatorComposerAutomationModeToggle(metrics: CoordinatorVisualMetrics) -> some View {
-        HStack(spacing: metrics.headerSegmentSpacing) {
+        HStack(spacing: metrics.composerSegmentedPillSpacing) {
             coordinatorComposerAutomationModeButton(
                 title: "Step",
                 isSelected: !viewModel.usesAutoMode,
@@ -4853,7 +4860,11 @@ struct CoordinatorModeView: View {
         .padding(metrics.composerToggleInset)
         .background(
             Capsule(style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.22))
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.28))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(CoordinatorStyle.hairline.opacity(0.7), lineWidth: 0.5)
         )
         .accessibilityLabel("Director chat automation mode")
     }
@@ -4874,7 +4885,11 @@ struct CoordinatorModeView: View {
                 .frame(minWidth: metrics.composerAutomationModeSegmentMinWidth)
                 .background(
                     Capsule(style: .continuous)
-                        .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
+                        .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(isSelected ? Color.accentColor.opacity(0.28) : Color.clear, lineWidth: 0.5)
                 )
         }
         .buttonStyle(.plain)
@@ -6542,6 +6557,10 @@ private struct CoordinatorVisualMetrics {
         fontPreset.scaledClamped(2, max: 3)
     }
 
+    var composerSegmentedPillSpacing: CGFloat {
+        fontPreset.scaledClamped(2, max: 3)
+    }
+
     var composerAutomationModeSegmentMinWidth: CGFloat {
         fontPreset.scaledClamped(46, min: 42, max: 56)
     }
@@ -6674,6 +6693,10 @@ private struct CoordinatorVisualMetrics {
         fontPreset.scaledClamped(42, min: 42, max: 50)
     }
 
+    var navigationBadgeSize: CGFloat {
+        fontPreset.scaledClamped(20, min: 20, max: 26)
+    }
+
     var footerVerticalPadding: CGFloat {
         fontPreset.scaledClamped(8, max: 11)
     }
@@ -6796,6 +6819,14 @@ private struct CoordinatorVisualMetrics {
 
     var childComposerTextMinHeight: CGFloat {
         fontPreset.scaledClamped(30, min: 30, max: 38)
+    }
+
+    var coordinatorComposerChromeVerticalPadding: CGFloat {
+        fontPreset.scaledClamped(8, max: 8)
+    }
+
+    var coordinatorComposerChromeInnerSpacing: CGFloat {
+        fontPreset.scaledClamped(2, max: 2)
     }
 
     var composerHorizontalPadding: CGFloat {
