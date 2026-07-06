@@ -65,6 +65,30 @@ ephemeral run charters may stay in `docs/plans/` but must cite this record.
   rules, sharing/marketplace. Templates compose via the recommended-policy pointer only.
   *Timing:* behind the screenshot parity pass + demo; ~two focused runs (store/model,
   then editor UI).
+- **Autonomy control model — three layers (LOCKED 2026-07-06).** The levers differ in
+  scope and must look like it:
+  *Layer 1 — Policy (noun, picked once):* the named stance chosen on the draft grid;
+  rendered everywhere as the name.
+  *Layer 2 — Dials (standing adjustments, exactly two):* pace (`Step|Auto`) and
+  `Me|Director` (childAsk). Dials write **mission-level overrides onto the snapshot** via
+  `missionPlanUpdater` — never mutate the library policy, never re-send metadata. When a
+  dial diverges from the named policy, the name must say so: echo becomes
+  **"Policy · Default · edited (pace → Auto)"** — a preset name may never lie. ("Save as
+  policy" attaches here in Stage 2.) Application semantics, one rule stated in UI help and
+  here: **dial changes apply from the next boundary; a pending checkpoint is never
+  consumed** (toggles configure, buttons act). Every mid-run dial change posts a ledger
+  line ("You set pace → Auto for this mission") so scope is self-evident and audited.
+  Current-code gap (recon 2026-07-06): pace exists *only* inside the policy snapshot — no
+  composer pace variable, no mission-level override channel; the dial must gain the
+  override path rather than binding to the preset's field.
+  *Layer 3 — Moment buttons (one-time acts):* checkpoint triad, gate approval, overrule —
+  always act once, never configure. Visual grammar: dials are segmented toggles, moment
+  acts are buttons; the two never share styling.
+  *Legibility rule:* the contract shows where it bites — at boundaries/strip, derive a
+  dynamic preview from the autonomy map × the ready set ("Auto continues: launch 2 ready
+  steps · Stops for: merge (irreversible)"). *Trust loop:* the wrap-up stat card may
+  suggest encoding ("Decided itself 7×, no overrules — save these settings as a policy /
+  try Hands-off for missions like this").
 
 ## 4. Decisions queue doctrine + identity (LOCKED)
 - The queue contains **asks — things waiting on the user — only**: pending child
