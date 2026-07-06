@@ -3568,7 +3568,6 @@
             <textarea ${isDraft?'id="missionDraftInput" ':'id="missionChatInput" '}placeholder="${placeholder}"></textarea>
             <div class="composer-strip">
               <button class="cpill">MCP / Tools<span class="cpill-cv">⌄</span></button>
-              <button class="cpill">Permissions<span class="cpill-cv">⌄</span></button>
               <span class="spacer"></span>
               <span class="status-dot-pill"><span class="sd" style="background:${statusColor}"></span>${escapeHtml(statusText)}</span>
               ${renderSendButton(executing, isDraft ? "start-new-mission" : (executing ? undefined : "send-mission"))}

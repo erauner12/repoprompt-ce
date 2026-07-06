@@ -210,7 +210,6 @@ struct CoordinatorModeView: View {
     @State private var isMissionPlanPaneVisible = true
     @State private var isSortMenuOpen = false
     @State private var areArchivedMissionsExpanded = false
-    @State private var isMissionPolicyPopoverPresented = false
     @State private var copiedMissionReceiptPlanID: UUID?
     @State private var coordinatorColumnVisibility: NavigationSplitViewVisibility = .all
     @FocusState private var isCoordinatorComposerFocused: Bool
@@ -5504,7 +5503,6 @@ struct CoordinatorModeView: View {
             if !isChildReply {
                 coordinatorComposerAutomationModeToggle(metrics: metrics)
                 coordinatorComposerToolsButton(metrics: metrics)
-                coordinatorMissionPolicyPicker(metrics: metrics, isEditable: rail.state == .chooseCoordinator)
             }
 
             Spacer(minLength: metrics.smallSpacing)
@@ -5539,38 +5537,6 @@ struct CoordinatorModeView: View {
         }
         .frame(height: metrics.composerControlStripHeight)
         .padding(.horizontal, metrics.composerControlHorizontalPadding)
-    }
-
-    private func coordinatorMissionPolicyPicker(metrics: CoordinatorVisualMetrics, isEditable: Bool) -> some View {
-        Button {
-            guard isEditable else { return }
-            isMissionPolicyPopoverPresented.toggle()
-        } label: {
-            HStack(spacing: metrics.miniPillIconSpacing) {
-                Image(systemName: "shield.lefthalf.filled")
-                    .font(.system(size: metrics.microIconSize, weight: .medium))
-                Text("Permissions")
-                    .font(metrics.microMedium)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, metrics.miniPillHorizontalPadding)
-            .padding(.vertical, metrics.miniPillVerticalPadding)
-            .fixedSize(horizontal: true, vertical: false)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(Color.secondary.opacity(isEditable ? 1 : 0.55))
-        .background(
-            Capsule(style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(isEditable ? 0.22 : 0.12))
-        )
-        .disabled(!isEditable)
-        .popover(isPresented: $isMissionPolicyPopoverPresented, arrowEdge: .bottom) {
-            CoordinatorMissionPolicyPopoverView(
-                selectedPolicy: $viewModel.selectedMissionPolicy,
-                isPresented: $isMissionPolicyPopoverPresented
-            )
-        }
-        .hoverTooltip(isEditable ? "Choose the permissions captured with the fresh Mission" : "Permissions were captured when this Mission started")
     }
 
     private func coordinatorComposerPolicyEchoText(_ rail: CoordinatorModeCoordinatorRail) -> String {
@@ -6769,114 +6735,6 @@ struct CoordinatorModeView: View {
 
     private func shortID(_ id: UUID) -> String {
         String(id.uuidString.prefix(8))
-    }
-}
-
-private struct CoordinatorMissionPolicyPopoverView: View {
-    @Binding var selectedPolicy: CoordinatorMissionPolicySnapshot
-    @Binding var isPresented: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Mission Policy")
-                    .font(.system(size: 13, weight: .semibold))
-                Text("Captured with a fresh Mission. Policy details are sent to the provider only; your visible directive stays unchanged.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(12)
-
-            Divider()
-                .opacity(0.35)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(CoordinatorMissionPolicySnapshot.builtInPolicies) { policy in
-                        policyRow(policy)
-                    }
-                }
-                .padding(8)
-            }
-        }
-        .frame(width: 340, height: 300)
-    }
-
-    private func policyRow(_ policy: CoordinatorMissionPolicySnapshot) -> some View {
-        let isSelected = selectedPolicy.id == policy.id
-        return Button {
-            selectedPolicy = policy
-            isPresented = false
-        } label: {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: policyIcon(policy))
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color.purple)
-                    .frame(width: 18)
-                    .padding(.top, 1)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text(policy.name)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.primary)
-                        Text(policy.defaultPace.rawValue)
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.purple)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.purple.opacity(0.12)))
-                    }
-                    Text(policyAskSummary(policy))
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    if let standingGuidance = policy.standingGuidance {
-                        Text(standingGuidance)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                    if let definitionOfDone = policy.definitionOfDone {
-                        Text("Done: \(definitionOfDone)")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(2)
-                    }
-                }
-                Spacer(minLength: 6)
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.purple)
-                        .padding(.top, 1)
-                }
-            }
-            .padding(8)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? Color.purple.opacity(0.16) : Color.clear)
-            )
-        }
-        .buttonStyle(.plain)
-        .hoverTooltip(policy.standingGuidance ?? policy.name)
-    }
-
-    private func policyAskSummary(_ policy: CoordinatorMissionPolicySnapshot) -> String {
-        let askClasses = CoordinatorMissionDecisionClass.allCases
-            .filter { policy.resolvedAutonomy(for: $0) == .ask }
-            .map(\.rawValue)
-        guard !askClasses.isEmpty else { return "Asks: none" }
-        return "Asks: \(askClasses.joined(separator: " · "))"
-    }
-
-    private func policyIcon(_ policy: CoordinatorMissionPolicySnapshot) -> String {
-        switch policy.id {
-        case "hands-off": "forward.end.fill"
-        case "careful-writes": "pencil.and.outline"
-        case "read-only": "lock.doc"
-        default: "shield.lefthalf.filled"
-        }
     }
 }
 
