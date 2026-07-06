@@ -2217,6 +2217,9 @@ struct CoordinatorModeView: View {
                     metrics: metrics
                 )
             }
+
+            Spacer()
+                .frame(height: metrics.composerFooterHeight)
         }
     }
 
@@ -7307,6 +7310,10 @@ private struct CoordinatorVisualMetrics {
 
     var composerControlStripHeight: CGFloat {
         fontPreset.scaledClamped(40, min: 40, max: 48)
+    }
+
+    var composerFooterHeight: CGFloat {
+        fontPreset.scaledClamped(28, min: 24, max: 32)
     }
 
     var childComposerTextMinHeight: CGFloat {
