@@ -175,7 +175,49 @@ the unit. Follow-up (non-blocking): the ready-set rule exists twice (view projec
 MCP helper); extract a shared `CoordinatorMissionPlanScheduling` helper when either is
 next touched.
 
-## 6. Open deferrals (recorded, not holes)
+## 6. Calm Law + K-pass charter (LOCKED 2026-07-06) — attention hierarchy as layout
+
+**The law (the queue doctrine applied to pixels): show what needs you; summarize what is
+running; collapse what is done.** The screen is an attention queue — one loud thing
+maximum, ambient state quiet, history folded. Diagnosis from live screenshots: identical
+facts render 3–5× per screen; every entry is a bordered card; plan events spam the
+transcript; raw session IDs wear chips; two composers coexist on completed missions.
+
+**Principles:**
+1. **One home per fact.** If a fact renders twice on one screen, one instance is wrong.
+   Canonical homes: plan structure/objective → right pane only (the in-conversation plan
+   card becomes a one-line reference: "Mission Plan · r7 → view"); policy/pace/cap →
+   strip only; counts → strip rollup only. The receipt keeps its archival copy but
+   renders collapsed (stat line + expand).
+2. **Attention tiers.** Tier 1 (loud, max ONE): the active checkpoint/question — siblings
+   dim while one exists. Tier 2 (ambient): strip rollup + running node lines. Tier 3
+   (collapsed by default): completed parts fold to one line ("Part 1 · done · 1 ✓",
+   expandable); done nodes drop their chips; the receipt folds to its stat line.
+3. **Prose over cards.** Director prose renders unboxed (Agent Mode's grammar). Cards are
+   reserved for: checkpoints, one per delegated session (updating **in place** — its
+   status line absorbs bound/completed events), evidence verdicts, the receipt.
+   **Event coalescing:** Plan Session-bound / Node-completed / Revised rows collapse into
+   the session card's status or a single "Plan updated · r6→r7" line.
+4. **Chip budget: ≤2 per row, semantic-state only, never raw IDs** (session identity is a
+   link, not a chip; fix the duplicated "Read-only child ×2" rendering). Done-state rows
+   carry zero chips.
+5. **One composer at a time.** The plan-revision composer exists only when the pane is
+   open AND the mission is active; completed missions show a single "Start a follow-up
+   Mission…" composer and nothing else. **Completed is the calmest state**: wrap-up card
+   + collapsed receipt + a "transcript" disclosure — a finished mission must look
+   *quieter* than a running one.
+
+**K-pass (staged, each its own small run):** K1 deduplicate (plan reference card, strip
+ownership, delete the mission-context card — its facts live in strip + grounding,
+collapse receipt); K2 coalesce events + in-place session cards; K3 chip budget + ID
+removal; K4 tiering/collapse + unboxed prose + checkpoint dimming; K5 composer
+exclusivity + completed-state calm. **Acceptance:** the count test — the current
+completed-mission screenshot's facts in ≤⅓ the visual elements — plus the squint rule
+above. **K6 (runtime UX note):** the generic fallback approval plan that precedes the
+first real decomposition should render as a "Drafting the plan…" state, not a full plan
+card that gets replaced — suppress the plan card until the first substantive revision.
+
+## 7. Open deferrals (recorded, not holes)
 - Custom policy CRUD — designed and staged; see §3 "Policy library roadmap" ("Save as
   policy" primary, "Edit a copy" secondary, minimal editor, post-parity timing).
 - Per-class autonomy menu; `Me|Director` dial ships via the `missionPlanUpdater` seam.

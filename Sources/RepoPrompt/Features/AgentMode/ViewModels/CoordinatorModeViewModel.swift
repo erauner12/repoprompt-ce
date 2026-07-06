@@ -1383,28 +1383,7 @@ final class CoordinatorModeViewModel: ObservableObject {
 
     private func missionLedgerTranscriptEntries(from plan: CoordinatorMissionPlan) -> [CoordinatorModeRailTranscriptEntry] {
         var entries: [CoordinatorModeRailTranscriptEntry] = []
-        let groundingID = deterministicMissionLedgerEntryID(planID: plan.id, kind: "grounding")
         let wrapUpID = deterministicMissionLedgerEntryID(planID: plan.id, kind: "wrapup")
-
-        let recordTimestamps = plan.decisions.map(\.timestamp)
-            + plan.evidence.map(\.timestamp)
-            + plan.routingDecisions.map(\.timestamp)
-            + plan.events.map(\.timestamp)
-        let existingNonGroundingTimestamps = railTranscriptEntries.compactMap { entry -> Date? in
-            guard entry.id != groundingID else { return nil }
-            return entry.createdAt
-        }
-        let groundingBaseTimestamp = (recordTimestamps + existingNonGroundingTimestamps).min() ?? plan.updatedAt
-        if plan.policySnapshot != nil || plan.shapeSummary != nil {
-            entries.append(CoordinatorModeRailTranscriptEntry(
-                id: groundingID,
-                role: .event,
-                text: "Mission grounding",
-                createdAt: groundingBaseTimestamp.addingTimeInterval(-0.001),
-                action: nil,
-                ledger: .grounding(policy: plan.policySnapshot, shape: plan.shapeSummary)
-            ))
-        }
 
         entries.append(contentsOf: plan.decisions.map { decision in
             CoordinatorModeRailTranscriptEntry(

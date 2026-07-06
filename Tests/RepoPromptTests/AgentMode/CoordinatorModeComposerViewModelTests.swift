@@ -1239,6 +1239,54 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.railTranscriptEntries.contains { $0.text.contains("Mission Policy (provider-only)") })
     }
 
+    func testPresentationPolicyShowsTerminalStatusAheadOfStaleApproval() {
+        let completedPlan = CoordinatorMissionPlan(
+            id: uuid(690),
+            status: .completed,
+            approvalState: .awaitingApproval
+        )
+        let stoppedPlan = CoordinatorMissionPlan(
+            id: uuid(691),
+            status: .stopped,
+            approvalState: .revisionRequested
+        )
+
+        XCTAssertEqual(CoordinatorMissionPresentationPolicy.primaryStatus(for: completedPlan), .mission(.completed))
+        XCTAssertEqual(CoordinatorMissionPresentationPolicy.primaryStatus(for: stoppedPlan), .mission(.stopped))
+    }
+
+    func testPresentationPolicyKeepsActiveApprovalVisible() {
+        let plan = CoordinatorMissionPlan(
+            id: uuid(692),
+            status: .running,
+            approvalState: .awaitingApproval
+        )
+
+        XCTAssertEqual(CoordinatorMissionPresentationPolicy.primaryStatus(for: plan), .approval(.awaitingApproval))
+    }
+
+    func testPresentationPolicySuppressesLiveAndPlanRevisionForTerminalMissions() {
+        let completedPlan = CoordinatorMissionPlan(id: uuid(693), status: .completed)
+        let stoppedPlan = CoordinatorMissionPlan(id: uuid(694), status: .stopped)
+        let runningPlan = CoordinatorMissionPlan(id: uuid(695), status: .running)
+
+        XCTAssertFalse(CoordinatorMissionPresentationPolicy.shouldShowLiveBadge(for: completedPlan))
+        XCTAssertFalse(CoordinatorMissionPresentationPolicy.shouldShowLiveBadge(for: stoppedPlan))
+        XCTAssertTrue(CoordinatorMissionPresentationPolicy.shouldShowLiveBadge(for: runningPlan))
+        XCTAssertFalse(CoordinatorMissionPresentationPolicy.shouldShowPlanRevisionComposer(for: completedPlan))
+        XCTAssertFalse(CoordinatorMissionPresentationPolicy.shouldShowPlanRevisionComposer(for: stoppedPlan))
+        XCTAssertTrue(CoordinatorMissionPresentationPolicy.shouldShowPlanRevisionComposer(for: runningPlan))
+    }
+
+    func testPresentationPolicyUsesTerminalConversationSummary() {
+        let completedPlan = CoordinatorMissionPlan(id: uuid(696), status: .completed)
+        let runningPlan = CoordinatorMissionPlan(id: uuid(697), status: .running)
+
+        XCTAssertEqual(CoordinatorMissionPresentationPolicy.conversationMode(for: completedPlan), .terminalSummary(.completed))
+        XCTAssertEqual(CoordinatorMissionPresentationPolicy.conversationMode(for: runningPlan), .planReference)
+        XCTAssertEqual(CoordinatorMissionPresentationPolicy.conversationMode(for: nil), .noPlan)
+    }
+
     func testMissionLedgerEntriesAreIdempotentAcrossRepeatedSnapshotApplies() {
         let coordinatorID = uuid(1)
         var plan = CoordinatorMissionPlan(
@@ -1295,14 +1343,14 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         viewModel.refresh()
 
         let ledgerEntries = viewModel.railTranscriptEntries.filter { $0.ledger != nil }
-        XCTAssertEqual(ledgerEntries.count, 6)
-        XCTAssertEqual(Set(ledgerEntries.map(\.id)).count, 6)
+        XCTAssertEqual(ledgerEntries.count, 5)
+        XCTAssertEqual(Set(ledgerEntries.map(\.id)).count, 5)
         XCTAssertEqual(decisionLedgerEntries(in: viewModel).map(\.id), [uuid(702)])
         XCTAssertEqual(evidenceLedgerEntries(in: viewModel).map(\.id), [uuid(703)])
         XCTAssertEqual(routingLedgerEntries(in: viewModel).map(\.id), [uuid(701)])
         XCTAssertEqual(planEventLedgerEntries(in: viewModel).map(\.id), [uuid(704)])
         XCTAssertEqual(wrapUpLedgerEntryCount(in: viewModel), 1)
-        XCTAssertEqual(groundingLedgerEntryCount(in: viewModel), 1)
+        XCTAssertEqual(groundingLedgerEntryCount(in: viewModel), 0)
     }
 
     func testMissionLedgerEntriesInterleaveByTimestampAndID() {

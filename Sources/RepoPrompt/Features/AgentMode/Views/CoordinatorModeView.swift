@@ -411,7 +411,9 @@ struct CoordinatorModeView: View {
             )
             .frame(maxHeight: inspectorTarget == nil || !isInspectorVisible ? .infinity : metrics.rightBoardHeight)
 
-            if snapshot.coordinatorRail.missionPlan != nil {
+            if CoordinatorMissionPresentationPolicy.shouldShowPlanRevisionComposer(
+                for: snapshot.coordinatorRail.missionPlan
+            ) {
                 Divider()
                     .opacity(0.28)
                 missionPlanFooterComposer(rail: snapshot.coordinatorRail, metrics: metrics)
@@ -1457,10 +1459,17 @@ struct CoordinatorModeView: View {
     }
 
     private func coordinatorMissionStatus(for option: CoordinatorModeCoordinatorOption) -> (text: String, color: Color)? {
+        if let missionPlan = option.missionPlan,
+           missionPlan.status.isTerminal
+        {
+            return (missionPlan.status.displayName, missionPlan.status.tint)
+        }
         if let runState = option.runState, runState.isActive {
             return (runState.coordinatorMissionDisplayName, .blue)
         }
-        if option.isLiveInCurrentWindow {
+        if option.isLiveInCurrentWindow,
+           CoordinatorMissionPresentationPolicy.shouldShowLiveBadge(for: option.missionPlan)
+        {
             return ("Live", .green)
         }
         return nil
@@ -1708,6 +1717,7 @@ struct CoordinatorModeView: View {
               let plan = rail.missionPlan,
               rail.isComposerEnabled,
               rail.isComposerSendEnabled,
+              CoordinatorMissionPresentationPolicy.shouldShowPlanRevisionComposer(for: plan),
               plan.approvalState != .awaitingApproval
         else { return false }
         return !isSubmittingMissionPlanRevision
@@ -2052,39 +2062,46 @@ struct CoordinatorModeView: View {
         let projection = MissionPlanReadinessProjection(plan: plan)
         let blockedNodeCount = plan.nodes.count { $0.status == .blocked }
         let isOverCap = plan.policySnapshot.map { projection.runningNodeCount > $0.maxConcurrent } ?? false
-        let readinessText = [
-            plan.policySnapshot.map { "running \(projection.runningNodeCount)/\($0.maxConcurrent)" } ?? "running \(projection.runningNodeCount)",
-            "\(projection.readyCount) ready",
-            "\(projection.waitingCount) waiting",
-            blockedNodeCount > 0 ? "\(blockedNodeCount) blocked" : nil
-        ]
-        .compactMap(\.self)
-        .joined(separator: " · ")
+        let readinessText: String = if plan.status.isTerminal {
+            plan.nodes.isEmpty
+                ? "no nodes"
+                : "\(plan.nodes.count { $0.status.isTerminal })/\(plan.nodes.count) done"
+        } else {
+            [
+                plan.policySnapshot.map { "running \(projection.runningNodeCount)/\($0.maxConcurrent)" } ?? "running \(projection.runningNodeCount)",
+                "\(projection.readyCount) ready",
+                "\(projection.waitingCount) waiting",
+                blockedNodeCount > 0 ? "\(blockedNodeCount) blocked" : nil
+            ]
+            .compactMap(\.self)
+            .joined(separator: " · ")
+        }
         let readinessTint: Color = if isOverCap || blockedNodeCount > 0 {
             .red
         } else if plan.status == .completed {
             .green
+        } else if plan.status == .stopped {
+            .orange
         } else if projection.runningNodeCount > 0 {
             .blue
         } else {
             .secondary
         }
-        let statusTitle: String = switch plan.approvalState {
-        case .awaitingApproval, .revisionRequested:
-            plan.approvalState.displayName
-        case .notRequired, .approved:
-            plan.status.displayName
+        let primaryStatus = CoordinatorMissionPresentationPolicy.primaryStatus(for: plan)
+        let statusTitle: String = switch primaryStatus {
+        case let .mission(status):
+            status.displayName
+        case let .approval(approval):
+            approval.displayName
         }
-        let statusTint: Color = switch (plan.approvalState, plan.status) {
-        case (.awaitingApproval, _), (.revisionRequested, _):
+        let statusTint: Color = switch primaryStatus {
+        case let .mission(status):
+            status.tint
+        case .approval(.awaitingApproval):
             .red
-        case (_, .running):
-            .blue
-        case (_, .blocked):
-            .red
-        case (_, .completed):
-            .green
-        default:
+        case .approval(.revisionRequested):
+            .purple
+        case .approval(.notRequired), .approval(.approved):
             .secondary
         }
         let userDecisionCount = plan.decisions.count(where: { $0.actor == .user })
@@ -3450,18 +3467,32 @@ struct CoordinatorModeView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
-                    if let missionPlan = rail.missionPlan {
-                        coordinatorMissionPlanCard(
-                            missionPlan,
-                            missionTemplate: rail.missionTemplate,
-                            childCounts: rail.childCounts,
-                            metrics: metrics
-                        )
-                    } else if rail.state == .selected {
-                        coordinatorConversationNoPlanStrip(metrics: metrics)
+                    switch CoordinatorMissionPresentationPolicy.conversationMode(for: rail.missionPlan) {
+                    case .noPlan:
+                        if rail.state == .selected {
+                            coordinatorConversationNoPlanStrip(metrics: metrics)
+                        }
+                    case .planReference:
+                        if let missionPlan = rail.missionPlan {
+                            coordinatorMissionPlanReferenceCard(
+                                missionPlan,
+                                missionTemplate: rail.missionTemplate,
+                                metrics: metrics
+                            )
+                        }
+                    case let .terminalSummary(status):
+                        if let missionPlan = rail.missionPlan {
+                            coordinatorTerminalMissionSummaryCard(missionPlan, status: status, metrics: metrics)
+                        }
                     }
 
-                    if viewModel.railTranscriptEntries.isEmpty, rail.missionPlan == nil {
+                    if rail.missionPlan?.status.isTerminal == true {
+                        coordinatorTerminalTranscriptDisclosure(
+                            planID: rail.missionPlan?.id,
+                            entries: viewModel.railTranscriptEntries,
+                            metrics: metrics
+                        )
+                    } else if viewModel.railTranscriptEntries.isEmpty, rail.missionPlan == nil {
                         coordinatorEmptyConversation(rail, metrics: metrics)
                     } else {
                         ForEach(viewModel.railTranscriptEntries) { entry in
@@ -3514,7 +3545,9 @@ struct CoordinatorModeView: View {
         }
         if rail.isPersistedOnly {
             parts.append("Archived")
-        } else if rail.isLiveInCurrentWindow {
+        } else if rail.isLiveInCurrentWindow,
+                  CoordinatorMissionPresentationPolicy.shouldShowLiveBadge(for: rail.missionPlan)
+        {
             parts.append("Live")
         }
         return parts.isEmpty ? "Director Mission" : parts.joined(separator: " · ")
@@ -3647,6 +3680,137 @@ struct CoordinatorModeView: View {
             && !missionPlan.nodes.isEmpty
             && missionPlan.status != .stopped
             && missionPlan.status != .completed
+    }
+
+    private func coordinatorMissionPlanReferenceCard(
+        _ plan: CoordinatorMissionPlan,
+        missionTemplate: CoordinatorMissionTemplateSummary?,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(alignment: .top, spacing: metrics.smallSpacing) {
+            Image(systemName: "list.clipboard")
+                .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: metrics.smallIconSize)
+
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                HStack(spacing: metrics.smallSpacing) {
+                    Text("Mission Plan")
+                        .font(metrics.bodySemibold)
+                        .foregroundStyle(.primary)
+                    Text("r\(plan.revision)")
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.secondary)
+                    if let missionTemplate {
+                        coordinatorMissionTemplateBadge(missionTemplate, metrics: metrics)
+                    }
+                }
+                if let objective = plan.objective?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !objective.isEmpty
+                {
+                    Text(objective)
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Spacer(minLength: metrics.smallSpacing)
+
+            Button {
+                viewModel.showMissionDestination()
+                isMissionPlanPaneVisible = true
+                selectedPlanNodeID = nil
+            } label: {
+                Label("View", systemImage: "sidebar.right")
+                    .font(metrics.microMedium)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+            .hoverTooltip("Show the full Mission Plan in the plan pane.")
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.16))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.10), lineWidth: 0.75)
+        )
+    }
+
+    private func coordinatorTerminalMissionSummaryCard(
+        _ plan: CoordinatorMissionPlan,
+        status: CoordinatorMissionPlanStatus,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let userCount = plan.decisions.count(where: { $0.actor == .user })
+        let directorCount = plan.decisions.count(where: { $0.actor == .director })
+        let title = plan.objective?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let actionTitle = status == .completed ? "Receipt" : "Mission Plan"
+
+        return VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                Label(status == .completed ? "Mission complete" : "Mission stopped", systemImage: status == .completed ? "checkmark.seal.fill" : "stop.circle.fill")
+                    .font(metrics.bodySemibold)
+                    .foregroundStyle(status.tint)
+                Spacer(minLength: metrics.smallSpacing)
+                Button {
+                    viewModel.showMissionDestination()
+                    isMissionPlanPaneVisible = true
+                    selectedPlanNodeID = nil
+                } label: {
+                    Label(actionTitle, systemImage: "doc.text.magnifyingglass")
+                        .font(metrics.microMedium)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+                .hoverTooltip("Show the full Mission Plan and receipt details in the plan pane.")
+            }
+
+            if let title, !title.isEmpty {
+                Text(title)
+                    .font(metrics.body)
+                    .foregroundStyle(.primary.opacity(0.9))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: metrics.smallSpacing) {
+                statusChip("Needed you · \(userCount)", color: .green, metrics: metrics)
+                statusChip("Decided itself · \(directorCount)", color: .secondary, metrics: metrics)
+            }
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(status.tint.opacity(0.07))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(status.tint.opacity(0.18), lineWidth: 0.75)
+        )
+    }
+
+    @ViewBuilder
+    private func coordinatorTerminalTranscriptDisclosure(
+        planID: UUID?,
+        entries: [CoordinatorModeRailTranscriptEntry],
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        if !entries.isEmpty {
+            CoordinatorTerminalTranscriptDisclosure(
+                entries: entries,
+                metrics: metrics,
+                isDisabled: planID == nil
+            ) { entry in
+                coordinatorConversationEntry(entry, metrics: metrics)
+            }
+        }
     }
 
     private func coordinatorMissionPlanCard(
@@ -6833,6 +6997,68 @@ struct CoordinatorModeView: View {
 
     private func shortID(_ id: UUID) -> String {
         String(id.uuidString.prefix(8))
+    }
+}
+
+private struct CoordinatorTerminalTranscriptDisclosure<EntryContent: View>: View {
+    let entries: [CoordinatorModeRailTranscriptEntry]
+    let metrics: CoordinatorVisualMetrics
+    let isDisabled: Bool
+    private let entryContent: (CoordinatorModeRailTranscriptEntry) -> EntryContent
+
+    @State private var isExpanded = false
+
+    init(
+        entries: [CoordinatorModeRailTranscriptEntry],
+        metrics: CoordinatorVisualMetrics,
+        isDisabled: Bool,
+        @ViewBuilder entryContent: @escaping (CoordinatorModeRailTranscriptEntry) -> EntryContent
+    ) {
+        self.entries = entries
+        self.metrics = metrics
+        self.isDisabled = isDisabled
+        self.entryContent = entryContent
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+            Button {
+                isExpanded.toggle()
+            } label: {
+                HStack(spacing: metrics.smallSpacing) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: metrics.microIconSize, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: metrics.microIconSize)
+                    Label("Transcript · \(entries.count)", systemImage: "text.bubble")
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: metrics.smallSpacing)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isDisabled)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
+                    ForEach(entries) { entry in
+                        entryContent(entry)
+                    }
+                }
+                .padding(.top, metrics.tightSpacing)
+            }
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(Color.secondary.opacity(0.10), lineWidth: 0.75)
+        )
     }
 }
 
