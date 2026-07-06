@@ -968,36 +968,42 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(submittedEvents, [event])
     }
 
-    func testAcceptedDirectiveDoesNotDuplicateRuntimeBackedUserTranscriptEntry() async {
+    func testAcceptedDirectiveDoesNotDuplicateRuntimeBackedUserTranscriptEntryAndStripsProviderOnlyPolicyMetadata() async {
         let coordinatorID = uuid(1)
         let coordinatorTab = uuid(101)
+        var liveSessions: [CoordinatorModeSnapshotProjector.LiveSession] = []
+        var demoCoordinatorIDs: Set<UUID> = []
         var transcriptEntries: [CoordinatorModeRailTranscriptEntry] = []
+        var submissions: [CoordinatorDirectiveSubmission] = []
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in
                 self.input(
-                    live: [
-                        self.live(
-                            id: coordinatorID,
-                            tab: coordinatorTab,
-                            title: "Coordinator",
-                            updatedAt: self.date(20),
-                            state: .idle,
-                            isMCP: true
-                        )
-                    ],
+                    live: liveSessions,
                     selectedCoordinatorID: selectedCoordinatorID,
                     sort: sortMode,
-                    demoCoordinatorIDs: [coordinatorID]
+                    demoCoordinatorIDs: demoCoordinatorIDs
                 )
             },
             transcriptProvider: { _ in transcriptEntries },
             dashboardVisibilityHandler: { _ in },
             directiveSubmitter: { submission in
+                submissions.append(submission)
+                liveSessions = [
+                    self.live(
+                        id: coordinatorID,
+                        tab: coordinatorTab,
+                        title: "Coordinator",
+                        updatedAt: self.date(20),
+                        state: .idle,
+                        isMCP: true
+                    )
+                ]
+                demoCoordinatorIDs.insert(coordinatorID)
                 transcriptEntries = [
                     self.transcriptEntry(
                         id: self.uuid(1001),
                         role: .user,
-                        text: submission.visibleText,
+                        text: submission.providerText,
                         at: self.date(30)
                     )
                 ]
@@ -1009,8 +1015,11 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         let result = await viewModel.submitCoordinatorDirective("what did it say?")
 
         XCTAssertEqual(result, .accepted)
+        XCTAssertTrue(submissions.first?.providerText.contains("Mission Policy (provider-only)") == true)
+        XCTAssertTrue(submissions.first?.providerText.contains("Max concurrent child sessions: 3") == true)
         XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.user])
         XCTAssertEqual(viewModel.railTranscriptEntries.map(\.text), ["what did it say?"])
+        XCTAssertFalse(viewModel.railTranscriptEntries.contains { $0.text.contains("Mission Policy (provider-only)") })
     }
 
     func testMissionLedgerEntriesAreIdempotentAcrossRepeatedSnapshotApplies() {
@@ -1306,6 +1315,51 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.currentRailActivityText)
         XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.coordinator])
         XCTAssertEqual(viewModel.railTranscriptEntries.last?.text, "Done.")
+    }
+
+    func testCoordinatorCancelledStatusMirrorsAsNeutralConversationEntry() {
+        let coordinatorID = uuid(1)
+        let coordinatorTab = uuid(101)
+        let mcpSnapshots: [UUID: AgentRunMCPSnapshot] = [
+            coordinatorID: mcpSnapshot(
+                sessionID: coordinatorID,
+                tabID: coordinatorTab,
+                sessionName: "Coordinator",
+                status: .failed,
+                statusText: "Cancelled",
+                assistantPreview: nil,
+                parent: nil,
+                failureReason: .cancelled
+            )
+        ]
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: coordinatorTab,
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .cancelled,
+                            isMCP: true
+                        )
+                    ],
+                    mcpSnapshots: mcpSnapshots,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+
+        viewModel.refresh()
+
+        XCTAssertNil(viewModel.currentRailActivityText)
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.coordinator])
+        XCTAssertEqual(viewModel.railTranscriptEntries.first?.text, "Cancelled")
+        XCTAssertFalse(viewModel.railTranscriptEntries.contains { $0.text.contains("Failure: Cancelled") })
     }
 
     func testCoordinatorTransportStatusesCoalesceIntoCurrentActivity() {
@@ -2372,7 +2426,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         statusText: String?,
         assistantPreview: String?,
         parent: UUID?,
-        interaction: AgentRunMCPSnapshot.Interaction? = nil
+        interaction: AgentRunMCPSnapshot.Interaction? = nil,
+        failureReason: AgentRunMCPSnapshot.FailureReason? = nil
     ) -> AgentRunMCPSnapshot {
         AgentRunMCPSnapshot(
             sessionID: sessionID,
@@ -2389,7 +2444,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             transcriptItemCount: 1,
             updatedAt: date(30),
             parentSessionID: parent,
-            failureReason: nil,
+            failureReason: failureReason,
             worktreeBindings: [],
             activeWorktreeMerges: []
         )

@@ -773,7 +773,7 @@ struct CoordinatorModeView: View {
             Divider()
                 .opacity(0.45)
                 .padding(.top, metrics.tightSpacing)
-            coordinatorRailFooter(snapshot: snapshot, metrics: metrics)
+            coordinatorRailFooter(metrics: metrics)
         }
         .frame(maxWidth: .infinity)
     }
@@ -945,12 +945,9 @@ struct CoordinatorModeView: View {
             .accessibilityLabel("\(count)")
     }
 
-    private func coordinatorRailFooter(snapshot: CoordinatorModeSnapshot, metrics: CoordinatorVisualMetrics) -> some View {
-        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-            coordinatorRailStatusReport(snapshot.coordinatorRail.statusReport, metrics: metrics)
-            coordinatorWorkspaceFooter(metrics: metrics)
-        }
-        .padding(.top, metrics.sidebarVerticalPadding)
+    private func coordinatorRailFooter(metrics: CoordinatorVisualMetrics) -> some View {
+        coordinatorWorkspaceFooter(metrics: metrics)
+            .padding(.top, metrics.sidebarVerticalPadding)
     }
 
     @ViewBuilder
@@ -3062,50 +3059,6 @@ struct CoordinatorModeView: View {
         .buttonStyle(.plain)
         .hoverTooltip(isExpanded ? "Hide Inspector" : "Show Inspector")
         .accessibilityLabel(isExpanded ? "Hide Inspector" : "Show Inspector")
-    }
-
-    @ViewBuilder
-    private func coordinatorRailStatusReport(_ report: CoordinatorModeSessionStatusReport?, metrics: CoordinatorVisualMetrics) -> some View {
-        if let report, report.hasDisplayableContent {
-            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                Label("Director status", systemImage: "waveform.path.ecg")
-                    .font(metrics.microMedium)
-                    .foregroundStyle(.secondary)
-                if let statusText = report.statusText {
-                    Text(statusText)
-                        .font(metrics.micro)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let failureReason = report.failureReason {
-                    Text("Failure: \(failureReason.displayLabel)")
-                        .font(metrics.microMedium)
-                        .foregroundStyle(.red.opacity(0.85))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let assistantPreview = report.assistantPreview {
-                    Text(assistantPreview)
-                        .font(metrics.micro)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(5)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let terminalOutput = report.terminalOutput {
-                    Text(terminalOutput)
-                        .font(metrics.micro)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(5)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .padding(metrics.pendingPadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                    .fill(Color(nsColor: .windowBackgroundColor).opacity(0.65))
-            )
-        }
     }
 
     private func coordinatorConversation(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {

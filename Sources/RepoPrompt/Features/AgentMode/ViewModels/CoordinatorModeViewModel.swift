@@ -22,6 +22,17 @@ struct CoordinatorMissionStopResult: Equatable {
     let skippedSessionIDs: [UUID]
 }
 
+private enum CoordinatorMissionPolicyProviderText {
+    static let providerOnlyHeader = "Mission Policy (provider-only)"
+    static let providerOnlyMarker = "\n\n---\n\(providerOnlyHeader)"
+
+    static func visibleTranscriptText(from text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let markerRange = trimmed.range(of: providerOnlyMarker) else { return trimmed }
+        return String(trimmed[..<markerRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 @MainActor
 final class CoordinatorModeViewModel: ObservableObject {
     enum DirectiveSubmissionResult: Equatable {
@@ -365,7 +376,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         guard let policySnapshot else { return baseText }
         let policyLines = policyProviderLines(for: policySnapshot)
         guard !policyLines.isEmpty else { return baseText }
-        return ([baseText, "", "---", "Mission Policy (provider-only)"] + policyLines).joined(separator: "\n")
+        return ([baseText + CoordinatorMissionPolicyProviderText.providerOnlyMarker] + policyLines).joined(separator: "\n")
     }
 
     private static func policyProviderLines(for policySnapshot: CoordinatorMissionPolicySnapshot) -> [String] {
@@ -1133,7 +1144,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     }
 
     private func syncRailConversationTranscript(for coordinatorSessionID: UUID?) {
-        let transcriptEntries = transcriptProvider(coordinatorSessionID)
+        let transcriptEntries = transcriptProvider(coordinatorSessionID).map(Self.visibleTranscriptEntry)
         guard !transcriptEntries.isEmpty else { return }
 
         var mergedEntries = railTranscriptEntries.filter { entry in
@@ -1278,6 +1289,20 @@ final class CoordinatorModeViewModel: ObservableObject {
         return "\(entry.role.rawValue)|\(actionKey)|\(text)"
     }
 
+    private static func visibleTranscriptEntry(_ entry: CoordinatorModeRailTranscriptEntry) -> CoordinatorModeRailTranscriptEntry {
+        guard entry.role == .user else { return entry }
+        let visibleText = CoordinatorMissionPolicyProviderText.visibleTranscriptText(from: entry.text)
+        guard visibleText != entry.text else { return entry }
+        return CoordinatorModeRailTranscriptEntry(
+            id: entry.id,
+            role: entry.role,
+            text: visibleText,
+            createdAt: entry.createdAt,
+            action: entry.action,
+            ledger: entry.ledger
+        )
+    }
+
     private func updateRailActionPresentation(from snapshot: CoordinatorModeSnapshot) {
         guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID else {
             displayedDelegateActionTargetIDs.removeAll()
@@ -1407,6 +1432,9 @@ final class CoordinatorModeViewModel: ObservableObject {
         if report.status == .completed, let terminalOutput = report.terminalOutput {
             return terminalOutput
         }
+        if report.failureReason == .cancelled {
+            return cancelledRailStatusText(from: report)
+        }
 
         var parts: [String] = []
         if let statusText = report.statusText {
@@ -1422,6 +1450,14 @@ final class CoordinatorModeViewModel: ObservableObject {
             parts.append(terminalOutput)
         }
         return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
+    private func cancelledRailStatusText(from report: CoordinatorModeSessionStatusReport) -> String {
+        let sourceText = [report.statusText, report.assistantPreview, report.terminalOutput]
+            .compactMap(\.self)
+            .joined(separator: "\n")
+            .lowercased()
+        return sourceText.contains("stop") ? "Stopped" : "Cancelled"
     }
 
     private func normalizedTransportStatusText(_ text: String) -> String {
