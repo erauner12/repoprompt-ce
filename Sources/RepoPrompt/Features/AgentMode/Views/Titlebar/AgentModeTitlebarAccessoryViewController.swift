@@ -14,6 +14,8 @@ import SwiftUI
 /// Compact "New Session" button designed for the titlebar area
 private struct AgentModeTitlebarNewSessionView: View {
     let onNewSession: () -> Void
+    let tooltip: String
+    let accessibilityLabel: String
     @State private var isHovering = false
 
     var body: some View {
@@ -36,8 +38,8 @@ private struct AgentModeTitlebarNewSessionView: View {
                 isHovering = hovering
             }
         }
-        .hoverTooltip("New Session", .bottom)
-        .accessibilityLabel("New Session")
+        .hoverTooltip(tooltip, .bottom)
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 
@@ -78,9 +80,17 @@ struct TitlebarAccessoryButtonStyle: ButtonStyle {
 final class AgentModeTitlebarAccessoryViewController: NSTitlebarAccessoryViewController {
     private var hostingView: NSHostingView<AgentModeTitlebarNewSessionView>?
     private var onNewSession: () -> Void
+    private var tooltip: String
+    private var accessibilityLabel: String
 
-    init(onNewSession: @escaping () -> Void) {
+    init(
+        onNewSession: @escaping () -> Void,
+        tooltip: String = "New Session",
+        accessibilityLabel: String = "New Session"
+    ) {
         self.onNewSession = onNewSession
+        self.tooltip = tooltip
+        self.accessibilityLabel = accessibilityLabel
         super.init(nibName: nil, bundle: nil)
         layoutAttribute = .leading
     }
@@ -91,7 +101,11 @@ final class AgentModeTitlebarAccessoryViewController: NSTitlebarAccessoryViewCon
     }
 
     override func loadView() {
-        let swiftUIView = AgentModeTitlebarNewSessionView(onNewSession: onNewSession)
+        let swiftUIView = AgentModeTitlebarNewSessionView(
+            onNewSession: onNewSession,
+            tooltip: tooltip,
+            accessibilityLabel: accessibilityLabel
+        )
         let hosting = NSHostingView(rootView: swiftUIView)
         hosting.frame.size = hosting.fittingSize
         hostingView = hosting
@@ -99,8 +113,18 @@ final class AgentModeTitlebarAccessoryViewController: NSTitlebarAccessoryViewCon
     }
 
     /// Updates the action closure without recreating the controller
-    func update(onNewSession: @escaping () -> Void) {
+    func update(
+        onNewSession: @escaping () -> Void,
+        tooltip: String = "New Session",
+        accessibilityLabel: String = "New Session"
+    ) {
         self.onNewSession = onNewSession
-        hostingView?.rootView = AgentModeTitlebarNewSessionView(onNewSession: onNewSession)
+        self.tooltip = tooltip
+        self.accessibilityLabel = accessibilityLabel
+        hostingView?.rootView = AgentModeTitlebarNewSessionView(
+            onNewSession: onNewSession,
+            tooltip: tooltip,
+            accessibilityLabel: accessibilityLabel
+        )
     }
 }

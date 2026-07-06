@@ -35,6 +35,10 @@ struct ComposerChrome<Main: View, Strip: View>: View {
     var bubbleVerticalPaddingOverride: CGFloat?
     var bubbleInnerSpacingOverride: CGFloat?
     var controlStripHeightOverride: CGFloat?
+    var bubbleFill: Color = .init(nsColor: .windowBackgroundColor)
+    var bubbleStroke: Color = .clear
+    var bubbleShadow: Color = .black.opacity(0.12)
+    var bubbleShadowRadius: CGFloat = 5
 
     /// The main content area (above the divider)
     let main: () -> Main
@@ -68,8 +72,12 @@ struct ComposerChrome<Main: View, Strip: View>: View {
     private var bubbleContent: some View {
         ZStack {
             RoundedRectangle(cornerRadius: bubbleCornerRadius)
-                .fill(Color(NSColor.windowBackgroundColor))
-                .shadow(color: Color.black.opacity(0.12), radius: 5, x: 0, y: 3)
+                .fill(bubbleFill)
+                .shadow(color: bubbleShadow, radius: bubbleShadowRadius, x: 0, y: 3)
+                .overlay(
+                    RoundedRectangle(cornerRadius: bubbleCornerRadius)
+                        .stroke(bubbleStroke, lineWidth: 0.6)
+                )
 
             if let highlightColor {
                 RoundedRectangle(cornerRadius: bubbleCornerRadius)

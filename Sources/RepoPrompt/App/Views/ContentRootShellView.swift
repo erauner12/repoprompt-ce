@@ -104,6 +104,20 @@ struct ContentRootShellView: View {
                     }
                 }
             )
+            .onAppear {
+                viewModel.state.setAgentTitlebarAccessoryVisible(
+                    true,
+                    tooltip: "New Mission",
+                    accessibilityLabel: "New Mission"
+                ) {
+                    viewModel.state.agentModeViewModel.coordinatorModeViewModel.startNewCoordinatorRun()
+                }
+            }
+            .onDisappear {
+                if mainSurfaceSelection != .agentMode {
+                    viewModel.state.setAgentTitlebarAccessoryVisible(false)
+                }
+            }
         } else {
             AgentModeView(
                 windowState: viewModel.state,

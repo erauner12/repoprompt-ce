@@ -2,7 +2,12 @@ import SwiftUI
 
 enum AgentModeSurfaceTheme {
     enum Palette {
-        static let detailBackground = Color(nsColor: .controlBackgroundColor)
+        static let detailBackground = Color(nsColor: NSColor(name: "AgentModeDetailBackground") { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(srgbRed: 36 / 255, green: 41 / 255, blue: 44 / 255, alpha: 1)
+            }
+            return .controlBackgroundColor
+        })
         static let sidebarBackground = Color(nsColor: .windowBackgroundColor)
         static let sidebarSeparator = Color(nsColor: .separatorColor).opacity(0.48)
 
@@ -19,6 +24,10 @@ enum AgentModeSurfaceTheme {
         static let workflowCardHoverFill = Color.primary.opacity(0.04)
         static let workflowCardStroke = Color.primary.opacity(0.06)
         static let workflowCardHoverStroke = Color.primary.opacity(0.12)
+
+        static let composerBubbleFill = Color(nsColor: .windowBackgroundColor)
+        static let composerBubbleStroke = Color.white.opacity(0.08)
+        static let composerShadow = Color.black.opacity(0.18)
 
         static func selectedWorkflowCardFill(_ tint: Color = .accentColor) -> Color {
             tint.opacity(0.12)

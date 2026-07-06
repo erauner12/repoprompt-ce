@@ -214,6 +214,7 @@ struct CoordinatorModeView: View {
     @State private var isMissionTemplatePopoverPresented = false
     @State private var isMissionTemplateConfigureSheetPresented = false
     @State private var copiedMissionReceiptPlanID: UUID?
+    @State private var coordinatorColumnVisibility: NavigationSplitViewVisibility = .all
     @FocusState private var isCoordinatorComposerFocused: Bool
     @FocusState private var isMissionPlanComposerFocused: Bool
     @FocusState private var isChildComposerFocused: Bool
@@ -275,19 +276,68 @@ struct CoordinatorModeView: View {
         inspectorIsAvailable _: Bool,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        HStack(spacing: 0) {
+        Group {
             if railIsAvailable {
-                Group {
-                    if isCoordinatorRailVisible {
-                        coordinatorHistorySidebar(snapshot: snapshot, metrics: metrics)
-                    } else {
-                        collapsedCoordinatorRailRestore(metrics: metrics)
-                    }
+                NavigationSplitView(columnVisibility: $coordinatorColumnVisibility) {
+                    coordinatorShellRail(snapshot: snapshot, metrics: metrics)
+                        .navigationSplitViewColumnWidth(
+                            min: coordinatorRailColumnWidth(metrics: metrics),
+                            ideal: coordinatorRailColumnWidth(metrics: metrics),
+                            max: coordinatorRailColumnWidth(metrics: metrics)
+                        )
+                } detail: {
+                    coordinatorShellDetail(
+                        snapshot: snapshot,
+                        sections: sections,
+                        inspectorTarget: inspectorTarget,
+                        useList: useList,
+                        forceList: forceList,
+                        metrics: metrics
+                    )
                 }
-                .frame(width: isCoordinatorRailVisible ? metrics.railWidth : metrics.collapsedRailWidth)
-                .frame(maxHeight: .infinity)
+            } else {
+                coordinatorShellDetail(
+                    snapshot: snapshot,
+                    sections: sections,
+                    inspectorTarget: inspectorTarget,
+                    useList: useList,
+                    forceList: forceList,
+                    metrics: metrics
+                )
             }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(CoordinatorTheme.Palette.windowBackground)
+    }
 
+    private func coordinatorRailColumnWidth(metrics: CoordinatorVisualMetrics) -> CGFloat {
+        isCoordinatorRailVisible ? metrics.railWidth : metrics.collapsedRailWidth
+    }
+
+    private func coordinatorShellRail(
+        snapshot: CoordinatorModeSnapshot,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        Group {
+            if isCoordinatorRailVisible {
+                coordinatorHistorySidebar(snapshot: snapshot, metrics: metrics)
+            } else {
+                collapsedCoordinatorRailRestore(metrics: metrics)
+            }
+        }
+        .frame(width: coordinatorRailColumnWidth(metrics: metrics))
+        .frame(maxHeight: .infinity)
+    }
+
+    private func coordinatorShellDetail(
+        snapshot: CoordinatorModeSnapshot,
+        sections: [CoordinatorModeStatusSection],
+        inspectorTarget: InspectorTarget?,
+        useList: Bool,
+        forceList: Bool,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(spacing: 0) {
             coordinatorCenterContent(
                 snapshot: snapshot,
                 sections: sections,
@@ -441,7 +491,7 @@ struct CoordinatorModeView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
-                .opacity(0.45)
+                .opacity(0.28)
 
             VStack(alignment: .leading, spacing: metrics.tightSpacing) {
                 coordinatorComposer(rail, metrics: metrics)
@@ -452,9 +502,10 @@ struct CoordinatorModeView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, metrics.cardPadding + metrics.smallSpacing)
-                    .padding(.bottom, metrics.smallSpacing)
+                    .padding(.top, metrics.smallSpacing)
+                    .padding(.bottom, metrics.sidebarVerticalPadding)
             }
-            .background(CoordinatorTheme.Palette.panelBackground)
+            .background(CoordinatorTheme.Palette.windowBackground)
         }
         .background(CoordinatorTheme.Palette.windowBackground)
     }
@@ -961,8 +1012,6 @@ struct CoordinatorModeView: View {
         let rail = snapshot.coordinatorRail
 
         return VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
-            coordinatorRailTitlebarLane(metrics: metrics)
-
             coordinatorRailHistoryContent(snapshot: snapshot, metrics: metrics)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .layoutPriority(1)
@@ -980,7 +1029,6 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
-            coordinatorRailTitlebarLane(metrics: metrics)
             coordinatorRailHistoryContent(snapshot: snapshot, metrics: metrics)
                 .frame(maxHeight: .infinity, alignment: .top)
         }
@@ -1600,6 +1648,9 @@ struct CoordinatorModeView: View {
                 bubbleVerticalPaddingOverride: metrics.coordinatorComposerChromeVerticalPadding,
                 bubbleInnerSpacingOverride: metrics.coordinatorComposerChromeInnerSpacing,
                 controlStripHeightOverride: metrics.composerControlStripHeight,
+                bubbleStroke: AgentModeSurfaceTheme.Palette.composerBubbleStroke,
+                bubbleShadow: AgentModeSurfaceTheme.Palette.composerShadow,
+                bubbleShadowRadius: 7,
                 main: {
                     ResizableTextField(
                         text: $missionPlanRevisionDraft,
@@ -5396,6 +5447,9 @@ struct CoordinatorModeView: View {
                     bubbleVerticalPaddingOverride: metrics.coordinatorComposerChromeVerticalPadding,
                     bubbleInnerSpacingOverride: metrics.coordinatorComposerChromeInnerSpacing,
                     controlStripHeightOverride: metrics.composerControlStripHeight,
+                    bubbleStroke: AgentModeSurfaceTheme.Palette.composerBubbleStroke,
+                    bubbleShadow: AgentModeSurfaceTheme.Palette.composerShadow,
+                    bubbleShadowRadius: 7,
                     main: {
                         ResizableTextField(
                             text: $coordinatorDirectiveDraft,
@@ -7960,12 +8014,16 @@ private extension View {
     }
 
     func coordinatorAgentSidebarColumn(edge: CoordinatorSidebarPanelEdge) -> some View {
-        background(AgentModeSurfaceTheme.Palette.sidebarBackground)
-            .overlay(alignment: edge.alignment) {
-                Rectangle()
-                    .fill(AgentModeSurfaceTheme.Palette.sidebarSeparator)
-                    .frame(width: 0.5)
-            }
+        background(
+            AgentModeSurfaceTheme.Palette.sidebarBackground
+                .ignoresSafeArea(.container, edges: .top)
+        )
+        .overlay(alignment: edge.alignment) {
+            Rectangle()
+                .fill(AgentModeSurfaceTheme.Palette.sidebarSeparator)
+                .frame(width: 0.5)
+                .ignoresSafeArea(.container, edges: .top)
+        }
     }
 
     func coordinatorSidebarPanel(edge: CoordinatorSidebarPanelEdge) -> some View {

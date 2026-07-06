@@ -173,6 +173,8 @@ class WindowState: ObservableObject {
     private var wantsAgentTitlebarAccessory: Bool = false
     /// Action to call when the "New Session" button is tapped
     private var agentNewSessionAction: (() -> Void)?
+    private var agentTitlebarAccessoryTooltip = "New Session"
+    private var agentTitlebarAccessoryAccessibilityLabel = "New Session"
 
     /// The sticky instance number assigned for this window's current workspace (monotonically increasing per workspace).
     /// Nil when no workspace is active yet.
@@ -736,21 +738,32 @@ class WindowState: ObservableObject {
     private func clearTitlebarAccessoryRequestsForClose() {
         wantsAgentTitlebarAccessory = false
         agentNewSessionAction = nil
+        agentTitlebarAccessoryTooltip = "New Session"
+        agentTitlebarAccessoryAccessibilityLabel = "New Session"
     }
 
     /// Shows or hides the Agent mode titlebar accessory ("New Session" button near traffic lights).
     /// - Parameters:
     ///   - visible: Whether to show the accessory
     ///   - onNewSession: Action to call when button is tapped (required when visible is true)
-    func setAgentTitlebarAccessoryVisible(_ visible: Bool, onNewSession: (() -> Void)? = nil) {
+    func setAgentTitlebarAccessoryVisible(
+        _ visible: Bool,
+        tooltip: String = "New Session",
+        accessibilityLabel: String = "New Session",
+        onNewSession: (() -> Void)? = nil
+    ) {
         if visible {
             guard !shouldSuppressObservationSideEffects else { return }
             wantsAgentTitlebarAccessory = true
             agentNewSessionAction = onNewSession
+            agentTitlebarAccessoryTooltip = tooltip
+            agentTitlebarAccessoryAccessibilityLabel = accessibilityLabel
             applyAgentTitlebarAccessoryIfPossible()
         } else {
             wantsAgentTitlebarAccessory = false
             agentNewSessionAction = nil
+            agentTitlebarAccessoryTooltip = "New Session"
+            agentTitlebarAccessoryAccessibilityLabel = "New Session"
             removeAgentTitlebarAccessory()
         }
     }
@@ -766,12 +779,20 @@ class WindowState: ObservableObject {
         }
 
         if let existing = agentTitlebarAccessory {
-            existing.update(onNewSession: action)
+            existing.update(
+                onNewSession: action,
+                tooltip: agentTitlebarAccessoryTooltip,
+                accessibilityLabel: agentTitlebarAccessoryAccessibilityLabel
+            )
             if !window.titlebarAccessoryViewControllers.contains(where: { $0 === existing }) {
                 window.addTitlebarAccessoryViewController(existing)
             }
         } else {
-            let accessory = AgentModeTitlebarAccessoryViewController(onNewSession: action)
+            let accessory = AgentModeTitlebarAccessoryViewController(
+                onNewSession: action,
+                tooltip: agentTitlebarAccessoryTooltip,
+                accessibilityLabel: agentTitlebarAccessoryAccessibilityLabel
+            )
             window.addTitlebarAccessoryViewController(accessory)
             agentTitlebarAccessory = accessory
         }
