@@ -657,6 +657,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let coordinatorID = UUID()
         let workstreamID = UUID()
         let nodeID = UUID()
+        let probeSessionID = try XCTUnwrap(UUID(uuidString: "10000000-0000-4000-8000-000000000010"))
+        let probeInteractionID = try XCTUnwrap(UUID(uuidString: "10000000-0000-4000-8000-000000000011"))
+        let routingDecisionID = try XCTUnwrap(UUID(uuidString: "10000000-0000-4000-8000-000000000012"))
+        let overruledDecisionID = try XCTUnwrap(UUID(uuidString: "10000000-0000-4000-8000-000000000013"))
         let decisionID = try XCTUnwrap(UUID(uuidString: "10000000-0000-4000-8000-000000000001"))
         let evidenceID = try XCTUnwrap(UUID(uuidString: "10000000-0000-4000-8000-000000000002"))
         let secondEvidenceID = try XCTUnwrap(UUID(uuidString: "10000000-0000-4000-8000-000000000003"))
@@ -685,6 +689,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 "id": .string("careful-writes"),
                 "name": .string("Careful writes"),
                 "default_pace": .string("step"),
+                "max_concurrent": .int(4),
                 "autonomy": .object([
                     "advance": .string("ask"),
                     "writes": .string("ask")
@@ -729,7 +734,11 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     "node_title": .string("Verify MCP ledger path"),
                     "workstream_title": .string("Discovery"),
                     "checkpoint_id": .string("plan_approval"),
-                    "checkpoint_instance_id": .string("plan:r1")
+                    "checkpoint_instance_id": .string("plan:r1"),
+                    "overruled_decision_id": .string(overruledDecisionID.uuidString),
+                    "overrule_reason": .string("Earlier probe conclusion did not include done criteria."),
+                    "correction_reason": .string("Director correction used structured evidence instead."),
+                    "correction_steer_text": .string("Steer the probe to answer only the missing evidence question.")
                 ])
             ]),
             "evidence": .array([
@@ -739,7 +748,38 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     "summary": .string("The old payload fields still coexist with ledgers."),
                     "timestamp": .string("2026-07-02T10:01:00Z"),
                     "node_title": .string("Verify MCP ledger path"),
-                    "decision_id": .string(decisionID.uuidString)
+                    "session_id": .string(probeSessionID.uuidString),
+                    "interaction_id": .string(probeInteractionID.uuidString),
+                    "decision_id": .string(decisionID.uuidString),
+                    "source": .object([
+                        "kind": .string("probe_answer"),
+                        "operation": .string("agent_explore.start"),
+                        "routing_decision_id": .string(routingDecisionID.uuidString),
+                        "node_title": .string("Verify MCP ledger path"),
+                        "session_id": .string(probeSessionID.uuidString),
+                        "interaction_id": .string(probeInteractionID.uuidString),
+                        "answer_id": .string("probe-answer-1"),
+                        "summary": .string("Read-only probe answered the evidence question without transcript import.")
+                    ]),
+                    "judgment_bundle": .object([
+                        "done_criteria": .string("Decision and evidence append without replacing existing ledger records."),
+                        "structured_evidence": .string("Focused MCP test exercises policy, overrule, and evidence source fields."),
+                        "diff_stats": .object([
+                            "files_changed": .int(3),
+                            "insertions": .int(120),
+                            "deletions": .int(4),
+                            "summary": .string("Schema, MCP service, and focused tests changed.")
+                        ]),
+                        "probe_answer": .object([
+                            "answer_id": .string("probe-answer-1"),
+                            "source": .string("agent_explore.start"),
+                            "answer": .string("The narrow probe found the required MCP contract paths."),
+                            "session_id": .string(probeSessionID.uuidString),
+                            "interaction_id": .string(probeInteractionID.uuidString),
+                            "routing_decision_id": .string(routingDecisionID.uuidString)
+                        ]),
+                        "transcript_framing": .string("not_transcript_summary")
+                    ])
                 ])
             ])
         ])
@@ -774,6 +814,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let plan = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue)
         XCTAssertEqual(plan["shape_summary"]?.objectValue?["display_name"]?.stringValue, "Investigation")
         XCTAssertEqual(plan["policy_snapshot"]?.objectValue?["name"]?.stringValue, "Careful writes")
+        XCTAssertEqual(plan["policy_snapshot"]?.objectValue?["max_concurrent"]?.intValue, 4)
         XCTAssertEqual(plan["policy_snapshot"]?.objectValue?["pinned_skill_ids"]?.arrayValue?.first?.stringValue, "rpce-test-quality")
         XCTAssertEqual(plan["autonomy"]?.objectValue?["writes"]?.stringValue, "auto")
         let node = try XCTUnwrap(plan["nodes"]?.arrayValue?.first?.objectValue)
@@ -782,9 +823,16 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(decisions.count, 1)
         XCTAssertEqual(decisions.first?.objectValue?["label"]?.stringValue, "started read-only proof")
         XCTAssertEqual(decisions.first?.objectValue?["node_id"]?.stringValue, nodeID.uuidString)
+        XCTAssertEqual(decisions.first?.objectValue?["overruled_decision_id"]?.stringValue, overruledDecisionID.uuidString)
+        XCTAssertEqual(decisions.first?.objectValue?["correction_steer_text"]?.stringValue, "Steer the probe to answer only the missing evidence question.")
         let evidence = try XCTUnwrap(plan["evidence"]?.arrayValue)
         XCTAssertEqual(evidence.count, 2)
         XCTAssertEqual(evidence.first?.objectValue?["summary"]?.stringValue, "The old payload fields still coexist with ledgers.")
+        XCTAssertEqual(evidence.first?.objectValue?["source"]?.objectValue?["operation"]?.stringValue, "agent_explore.start")
+        XCTAssertEqual(evidence.first?.objectValue?["source"]?.objectValue?["node_id"]?.stringValue, nodeID.uuidString)
+        XCTAssertEqual(evidence.first?.objectValue?["judgment_bundle"]?.objectValue?["transcript_framing"]?.stringValue, "not_transcript_summary")
+        XCTAssertEqual(evidence.first?.objectValue?["judgment_bundle"]?.objectValue?["diff_stats"]?.objectValue?["files_changed"]?.intValue, 3)
+        XCTAssertEqual(evidence.first?.objectValue?["judgment_bundle"]?.objectValue?["probe_answer"]?.objectValue?["answer_id"]?.stringValue, "probe-answer-1")
         XCTAssertEqual(evidence.last?.objectValue?["summary"]?.stringValue, "Follow-up proof is still short on UI projection.")
 
         let statusResponse = try await service.execute(args: ["op": .string("mission_status")])
@@ -804,6 +852,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let compactPlan = try XCTUnwrap(compactStatus["plan"]?.objectValue)
         XCTAssertEqual(compactPlan["shape_summary"]?.objectValue?["id"]?.stringValue, "investigation")
         XCTAssertEqual(compactPlan["policy_snapshot"]?.objectValue?["id"]?.stringValue, "careful-writes")
+        XCTAssertEqual(compactPlan["policy_snapshot"]?.objectValue?["max_concurrent"]?.intValue, 4)
         let effectiveAsk = compactPlan["autonomy_summary"]?.objectValue?["ask"]?.arrayValue?.compactMap(\.stringValue)
         XCTAssertTrue(effectiveAsk?.contains("customRisk") == true)
         XCTAssertTrue(effectiveAsk?.contains("irreversible") == true)
@@ -1241,7 +1290,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("Approved to proceed") == true)
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("actor:\"director\"") == true)
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("Do not record user decisions") == true)
+        XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("bounded Mission ledger") == true)
+        XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("Auto decisions are visible and contestable") == true)
         XCTAssertTrue(proceed["mission_plan_append_guidance"]?.stringValue?.contains("actor:\"director\"") == true)
+        XCTAssertTrue(proceed["mission_plan_append_guidance"]?.stringValue?.contains("overruled_decision_id") == true)
     }
 
     func testMissionStatusCompactFlagsFreshSessionDriftAfterPrimaryExists() async throws {
@@ -1425,6 +1477,103 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertNotEqual(status["fingerprint"]?.stringValue, fingerprint)
         XCTAssertEqual(status["decision_counts_by_actor"]?.objectValue?["director"]?.intValue, 1)
         XCTAssertEqual(status["evidence_counts"]?.objectValue?["meets"]?.intValue, 1)
+    }
+
+    func testCompactMissionStatusFingerprintChangesForDirectorDoctrineFields() async throws {
+        let coordinatorID = UUID()
+        let decisionID = try XCTUnwrap(UUID(uuidString: "20000000-0000-4000-8000-000000000001"))
+        let evidenceID = try XCTUnwrap(UUID(uuidString: "20000000-0000-4000-8000-000000000002"))
+        let basePlan = CoordinatorMissionPlan(
+            revision: 7,
+            objective: "Watch Director doctrine fields",
+            status: .running,
+            approvalState: .approved,
+            policySnapshot: CoordinatorMissionPolicySnapshot(
+                id: "director-default",
+                name: "Director default",
+                defaultPace: .auto,
+                maxConcurrent: 3
+            ),
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    id: decisionID,
+                    decisionClass: CoordinatorMissionDecisionClass.advance.rawValue,
+                    actor: .director,
+                    label: "continued after evidence",
+                    timestamp: Date(timeIntervalSince1970: 10),
+                    correctionReason: "Initial correction reason."
+                )
+            ],
+            evidence: [
+                CoordinatorMissionEvidenceRecord(
+                    id: evidenceID,
+                    verdict: .meets,
+                    summary: "Evidence summary.",
+                    timestamp: Date(timeIntervalSince1970: 11),
+                    judgmentBundle: CoordinatorMissionJudgmentBundle(
+                        doneCriteria: "Focused test passes.",
+                        structuredEvidence: "Initial structured evidence."
+                    )
+                )
+            ]
+        )
+        let updatedPlan = CoordinatorMissionPlan(
+            id: basePlan.id,
+            revision: basePlan.revision,
+            objective: basePlan.objective,
+            status: basePlan.status,
+            approvalState: basePlan.approvalState,
+            policySnapshot: CoordinatorMissionPolicySnapshot(
+                id: "director-default",
+                name: "Director default",
+                defaultPace: .auto,
+                maxConcurrent: 4
+            ),
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    id: decisionID,
+                    decisionClass: CoordinatorMissionDecisionClass.advance.rawValue,
+                    actor: .director,
+                    label: "continued after evidence",
+                    timestamp: Date(timeIntervalSince1970: 10),
+                    correctionReason: "Updated correction reason."
+                )
+            ],
+            evidence: [
+                CoordinatorMissionEvidenceRecord(
+                    id: evidenceID,
+                    verdict: .meets,
+                    summary: "Evidence summary.",
+                    timestamp: Date(timeIntervalSince1970: 11),
+                    judgmentBundle: CoordinatorMissionJudgmentBundle(
+                        doneCriteria: "Focused test passes.",
+                        structuredEvidence: "Updated structured evidence."
+                    )
+                )
+            ],
+            updatedAt: basePlan.updatedAt
+        )
+        let baseService = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: basePlan] }
+        )
+        let updatedService = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: updatedPlan] }
+        )
+        let args: [String: Value] = [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ]
+
+        let base = try await baseService.execute(args: args)
+        let updated = try await updatedService.execute(args: args)
+        let baseFingerprint = try XCTUnwrap(base.objectValue?["mission_status"]?.objectValue?["fingerprint"]?.stringValue)
+        let updatedFingerprint = try XCTUnwrap(updated.objectValue?["mission_status"]?.objectValue?["fingerprint"]?.stringValue)
+
+        XCTAssertNotEqual(baseFingerprint, updatedFingerprint)
     }
 
     func testCompactMissionStatusFingerprintChangesForGrandchildFleetMotion() async throws {

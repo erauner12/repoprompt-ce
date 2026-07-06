@@ -485,6 +485,7 @@ struct CoordinatorModeMissionSummary: Equatable {
         let id: String
         let name: String
         let defaultPace: CoordinatorMissionPolicyPace
+        let maxConcurrent: Int
     }
 
     struct Decisions: Equatable {

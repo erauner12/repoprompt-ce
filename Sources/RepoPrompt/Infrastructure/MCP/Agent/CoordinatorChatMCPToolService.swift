@@ -465,10 +465,20 @@ struct CoordinatorChatMCPToolService {
             name: AgentMCPToolHelpers.requireNonEmptyString(object["name"], name: "policy_snapshot.name"),
             defaultPace: pace,
             autonomy: autonomy,
+            maxConcurrent: parseOptionalPositiveInt(
+                object["max_concurrent"] ?? object["maxConcurrent"],
+                name: "policy_snapshot.max_concurrent"
+            ) ?? CoordinatorMissionPolicySnapshot.defaultMaxConcurrent,
             definitionOfDone: normalizedString(object["definition_of_done"] ?? object["definitionOfDone"]),
             standingGuidance: normalizedString(object["standing_guidance"] ?? object["standingGuidance"]),
-            pinnedSkillIDs: parseOptionalStringArray(object["pinned_skill_ids"] ?? object["pinnedSkillIDs"], name: "policy_snapshot.pinned_skill_ids") ?? [],
-            pinnedContextIDs: parseOptionalStringArray(object["pinned_context_ids"] ?? object["pinnedContextIDs"], name: "policy_snapshot.pinned_context_ids") ?? []
+            pinnedSkillIDs: parseOptionalStringArray(
+                object["pinned_skill_ids"] ?? object["pinnedSkillIDs"],
+                name: "policy_snapshot.pinned_skill_ids"
+            ) ?? [],
+            pinnedContextIDs: parseOptionalStringArray(
+                object["pinned_context_ids"] ?? object["pinnedContextIDs"],
+                name: "policy_snapshot.pinned_context_ids"
+            ) ?? []
         )
     }
 
@@ -854,7 +864,11 @@ struct CoordinatorChatMCPToolService {
                 sessionID: optionalUUID(object["session_id"] ?? object["sessionID"], name: "decisions[].session_id"),
                 interactionID: optionalUUID(object["interaction_id"] ?? object["interactionID"], name: "decisions[].interaction_id"),
                 checkpointID: normalizedString(object["checkpoint_id"] ?? object["checkpointID"]),
-                checkpointInstanceID: normalizedString(object["checkpoint_instance_id"] ?? object["checkpointInstanceID"])
+                checkpointInstanceID: normalizedString(object["checkpoint_instance_id"] ?? object["checkpointInstanceID"]),
+                overruledDecisionID: optionalUUID(object["overruled_decision_id"] ?? object["overruledDecisionID"], name: "decisions[].overruled_decision_id"),
+                overruleReason: normalizedString(object["overrule_reason"] ?? object["overruleReason"]),
+                correctionReason: normalizedString(object["correction_reason"] ?? object["correctionReason"]),
+                correctionSteerText: normalizedString(object["correction_steer_text"] ?? object["correctionSteerText"])
             )
         }
     }
@@ -887,9 +901,82 @@ struct CoordinatorChatMCPToolService {
                 workstreamID: parseLedgerWorkstreamID(object, workstreams: workstreams, fieldPrefix: "evidence[]"),
                 sessionID: optionalUUID(object["session_id"] ?? object["sessionID"], name: "evidence[].session_id"),
                 interactionID: optionalUUID(object["interaction_id"] ?? object["interactionID"], name: "evidence[].interaction_id"),
-                decisionID: optionalUUID(object["decision_id"] ?? object["decisionID"], name: "evidence[].decision_id")
+                decisionID: optionalUUID(object["decision_id"] ?? object["decisionID"], name: "evidence[].decision_id"),
+                source: parseMissionEvidenceSource(
+                    object["source"] ?? object["evidence_source"] ?? object["evidenceSource"],
+                    nodes: nodes,
+                    fieldPrefix: "evidence[].source"
+                ),
+                judgmentBundle: parseMissionJudgmentBundle(
+                    object["judgment_bundle"] ?? object["judgmentBundle"] ?? object["judgment"]
+                )
             )
         }
+    }
+
+    private func parseMissionEvidenceSource(
+        _ value: Value?,
+        nodes: [CoordinatorMissionPlanNode],
+        fieldPrefix: String
+    ) throws -> CoordinatorMissionEvidenceSource? {
+        guard let value, value != .null else { return nil }
+        guard let object = value.objectValue else {
+            throw MCPError.invalidParams("\(fieldPrefix) must be an object.")
+        }
+        let operation = try parseOptionalMissionRoutingOperation(object["operation"], name: "\(fieldPrefix).operation")
+        return try CoordinatorMissionEvidenceSource(
+            kind: AgentMCPToolHelpers.requireNonEmptyString(object["kind"], name: "\(fieldPrefix).kind"),
+            operation: operation,
+            routingDecisionID: optionalUUID(object["routing_decision_id"] ?? object["routingDecisionID"], name: "\(fieldPrefix).routing_decision_id"),
+            nodeID: parseLedgerNodeID(object, nodes: nodes, fieldPrefix: fieldPrefix),
+            sessionID: optionalUUID(object["session_id"] ?? object["sessionID"], name: "\(fieldPrefix).session_id"),
+            interactionID: optionalUUID(object["interaction_id"] ?? object["interactionID"], name: "\(fieldPrefix).interaction_id"),
+            answerID: normalizedString(object["answer_id"] ?? object["answerID"]),
+            summary: normalizedString(object["summary"])
+        )
+    }
+
+    private func parseMissionJudgmentBundle(_ value: Value?) throws -> CoordinatorMissionJudgmentBundle? {
+        guard let value, value != .null else { return nil }
+        guard let object = value.objectValue else {
+            throw MCPError.invalidParams("judgment_bundle must be an object.")
+        }
+        return try CoordinatorMissionJudgmentBundle(
+            doneCriteria: normalizedString(object["done_criteria"] ?? object["doneCriteria"]),
+            structuredEvidence: normalizedString(object["structured_evidence"] ?? object["structuredEvidence"]),
+            diffStats: parseMissionDiffStats(object["diff_stats"] ?? object["diffStats"]),
+            probeAnswer: parseMissionProbeAnswerSummary(object["probe_answer"] ?? object["probeAnswer"]),
+            transcriptFraming: normalizedString(object["transcript_framing"] ?? object["transcriptFraming"])
+                ?? CoordinatorMissionJudgmentBundle.notTranscriptFraming
+        )
+    }
+
+    private func parseMissionDiffStats(_ value: Value?) throws -> CoordinatorMissionDiffStats? {
+        guard let value, value != .null else { return nil }
+        guard let object = value.objectValue else {
+            throw MCPError.invalidParams("judgment_bundle.diff_stats must be an object.")
+        }
+        return try CoordinatorMissionDiffStats(
+            filesChanged: parseOptionalNonNegativeInt(object["files_changed"] ?? object["filesChanged"], name: "judgment_bundle.diff_stats.files_changed"),
+            insertions: parseOptionalNonNegativeInt(object["insertions"], name: "judgment_bundle.diff_stats.insertions"),
+            deletions: parseOptionalNonNegativeInt(object["deletions"], name: "judgment_bundle.diff_stats.deletions"),
+            summary: normalizedString(object["summary"])
+        )
+    }
+
+    private func parseMissionProbeAnswerSummary(_ value: Value?) throws -> CoordinatorMissionProbeAnswerSummary? {
+        guard let value, value != .null else { return nil }
+        guard let object = value.objectValue else {
+            throw MCPError.invalidParams("judgment_bundle.probe_answer must be an object.")
+        }
+        return try CoordinatorMissionProbeAnswerSummary(
+            answerID: normalizedString(object["answer_id"] ?? object["answerID"]),
+            source: normalizedString(object["source"]),
+            answer: normalizedString(object["answer"]),
+            sessionID: optionalUUID(object["session_id"] ?? object["sessionID"], name: "judgment_bundle.probe_answer.session_id"),
+            interactionID: optionalUUID(object["interaction_id"] ?? object["interactionID"], name: "judgment_bundle.probe_answer.interaction_id"),
+            routingDecisionID: optionalUUID(object["routing_decision_id"] ?? object["routingDecisionID"], name: "judgment_bundle.probe_answer.routing_decision_id")
+        )
     }
 
     private func parseLedgerNodeID(
@@ -1053,6 +1140,30 @@ struct CoordinatorChatMCPToolService {
             throw MCPError.invalidParams("nodes[].status must be one of: \(CoordinatorMissionPlanNodeStatus.allCases.map(\.rawValue).joined(separator: ", ")).")
         }
         return status
+    }
+
+    private func parseOptionalMissionRoutingOperation(_ value: Value?, name: String) throws -> CoordinatorMissionRoutingOperation? {
+        guard let raw = normalizedString(value) else { return nil }
+        guard let operation = CoordinatorMissionRoutingOperation(rawValue: raw) else {
+            throw MCPError.invalidParams("\(name) must be one of: \(CoordinatorMissionRoutingOperation.allCases.map(\.rawValue).joined(separator: ", ")).")
+        }
+        return operation
+    }
+
+    private func parseOptionalPositiveInt(_ value: Value?, name: String) throws -> Int? {
+        guard let value else { return nil }
+        guard let int = value.intValue, int >= 1 else {
+            throw MCPError.invalidParams("\(name) must be a positive integer.")
+        }
+        return int
+    }
+
+    private func parseOptionalNonNegativeInt(_ value: Value?, name: String) throws -> Int? {
+        guard let value else { return nil }
+        guard let int = value.intValue, int >= 0 else {
+            throw MCPError.invalidParams("\(name) must be a non-negative integer.")
+        }
+        return int
     }
 
     private func parseOptionalDate(_ value: Value?, name: String) throws -> Date? {
@@ -1551,6 +1662,7 @@ struct CoordinatorChatMCPToolService {
         parts.append(plan.policySnapshot?.id ?? "policy:nil")
         parts.append(plan.policySnapshot?.name ?? "policy_name:nil")
         parts.append(plan.policySnapshot?.defaultPace.rawValue ?? "policy_pace:nil")
+        parts.append(String(plan.policySnapshot?.maxConcurrent ?? CoordinatorMissionPolicySnapshot.defaultMaxConcurrent))
         parts.append(plan.policySnapshot?.definitionOfDone ?? "policy_dod:nil")
         parts.append(plan.policySnapshot?.standingGuidance ?? "policy_guidance:nil")
         for (key, mode) in plan.autonomy.sorted(by: { $0.key < $1.key }) {
@@ -1560,6 +1672,7 @@ struct CoordinatorChatMCPToolService {
             for (key, mode) in policySnapshot.autonomy.sorted(by: { $0.key < $1.key }) {
                 parts.append(contentsOf: ["policy_autonomy", key, mode.rawValue])
             }
+            parts.append(String(policySnapshot.maxConcurrent))
             parts.append(policySnapshot.pinnedSkillIDs.sorted().joined(separator: ","))
             parts.append(policySnapshot.pinnedContextIDs.sorted().joined(separator: ","))
         }
@@ -1584,7 +1697,7 @@ struct CoordinatorChatMCPToolService {
             ])
         }
         for decision in plan.decisions {
-            parts.append(contentsOf: [
+            let decisionParts: [String] = [
                 "decision",
                 decision.id.uuidString,
                 decision.decisionClass,
@@ -1597,11 +1710,16 @@ struct CoordinatorChatMCPToolService {
                 decision.sessionID?.uuidString ?? "session:nil",
                 decision.interactionID?.uuidString ?? "interaction:nil",
                 decision.checkpointID ?? "checkpoint:nil",
-                decision.checkpointInstanceID ?? "checkpoint_instance:nil"
-            ])
+                decision.checkpointInstanceID ?? "checkpoint_instance:nil",
+                decision.overruledDecisionID?.uuidString ?? "overruled_decision:nil",
+                decision.overruleReason ?? "overrule_reason:nil",
+                decision.correctionReason ?? "correction_reason:nil",
+                decision.correctionSteerText ?? "correction_steer_text:nil"
+            ]
+            parts.append(contentsOf: decisionParts)
         }
         for evidence in plan.evidence {
-            parts.append(contentsOf: [
+            let evidenceParts: [String] = [
                 "evidence",
                 evidence.id.uuidString,
                 evidence.verdict.rawValue,
@@ -1612,7 +1730,10 @@ struct CoordinatorChatMCPToolService {
                 evidence.sessionID?.uuidString ?? "session:nil",
                 evidence.interactionID?.uuidString ?? "interaction:nil",
                 evidence.decisionID?.uuidString ?? "decision:nil"
-            ])
+            ]
+            parts.append(contentsOf: evidenceParts)
+            appendEvidenceSourceFingerprint(evidence.source, to: &parts)
+            appendJudgmentBundleFingerprint(evidence.judgmentBundle, to: &parts)
         }
         let childRows = compactMissionDescendantRows(option: option, rows: rows)
         parts.append(contentsOf: [
@@ -1632,6 +1753,67 @@ struct CoordinatorChatMCPToolService {
             ])
         }
         return stableFingerprint(parts)
+    }
+
+    private func appendEvidenceSourceFingerprint(
+        _ source: CoordinatorMissionEvidenceSource?,
+        to parts: inout [String]
+    ) {
+        guard let source else {
+            parts.append("evidence_source:nil")
+            return
+        }
+        parts.append(contentsOf: [
+            "evidence_source",
+            source.kind,
+            source.operation?.rawValue ?? "operation:nil",
+            source.routingDecisionID?.uuidString ?? "routing_decision:nil",
+            source.nodeID?.uuidString ?? "source_node:nil",
+            source.sessionID?.uuidString ?? "source_session:nil",
+            source.interactionID?.uuidString ?? "source_interaction:nil",
+            source.answerID ?? "answer:nil",
+            source.summary ?? "source_summary:nil"
+        ])
+    }
+
+    private func appendJudgmentBundleFingerprint(
+        _ bundle: CoordinatorMissionJudgmentBundle?,
+        to parts: inout [String]
+    ) {
+        guard let bundle else {
+            parts.append("judgment_bundle:nil")
+            return
+        }
+        parts.append(contentsOf: [
+            "judgment_bundle",
+            bundle.doneCriteria ?? "done_criteria:nil",
+            bundle.structuredEvidence ?? "structured_evidence:nil",
+            bundle.transcriptFraming
+        ])
+        if let diffStats = bundle.diffStats {
+            parts.append(contentsOf: [
+                "diff_stats",
+                diffStats.filesChanged.map(String.init) ?? "files_changed:nil",
+                diffStats.insertions.map(String.init) ?? "insertions:nil",
+                diffStats.deletions.map(String.init) ?? "deletions:nil",
+                diffStats.summary ?? "diff_summary:nil"
+            ])
+        } else {
+            parts.append("diff_stats:nil")
+        }
+        if let probeAnswer = bundle.probeAnswer {
+            parts.append(contentsOf: [
+                "probe_answer",
+                probeAnswer.answerID ?? "answer:nil",
+                probeAnswer.source ?? "source:nil",
+                probeAnswer.answer ?? "answer_text:nil",
+                probeAnswer.sessionID?.uuidString ?? "session:nil",
+                probeAnswer.interactionID?.uuidString ?? "interaction:nil",
+                probeAnswer.routingDecisionID?.uuidString ?? "routing_decision:nil"
+            ])
+        } else {
+            parts.append("probe_answer:nil")
+        }
     }
 
     private func compactMissionDescendantRows(
@@ -1967,6 +2149,7 @@ struct CoordinatorChatMCPToolService {
             "id": .string(policy.id),
             "name": .string(policy.name),
             "default_pace": .string(policy.defaultPace.rawValue),
+            "max_concurrent": .int(policy.maxConcurrent),
             "definition_of_done": AgentMCPToolHelpers.stringOrNull(policy.definitionOfDone)
         ])
     }
@@ -2176,7 +2359,11 @@ struct CoordinatorChatMCPToolService {
             "session_id": AgentMCPToolHelpers.stringOrNull(decision.sessionID?.uuidString),
             "interaction_id": AgentMCPToolHelpers.stringOrNull(decision.interactionID?.uuidString),
             "checkpoint_id": AgentMCPToolHelpers.stringOrNull(decision.checkpointID),
-            "checkpoint_instance_id": AgentMCPToolHelpers.stringOrNull(decision.checkpointInstanceID)
+            "checkpoint_instance_id": AgentMCPToolHelpers.stringOrNull(decision.checkpointInstanceID),
+            "overruled_decision_id": AgentMCPToolHelpers.stringOrNull(decision.overruledDecisionID?.uuidString),
+            "overrule_reason": AgentMCPToolHelpers.stringOrNull(decision.overruleReason),
+            "correction_reason": AgentMCPToolHelpers.stringOrNull(decision.correctionReason),
+            "correction_steer_text": AgentMCPToolHelpers.stringOrNull(decision.correctionSteerText)
         ])
     }
 
@@ -2190,7 +2377,56 @@ struct CoordinatorChatMCPToolService {
             "workstream_id": AgentMCPToolHelpers.stringOrNull(evidence.workstreamID?.uuidString),
             "session_id": AgentMCPToolHelpers.stringOrNull(evidence.sessionID?.uuidString),
             "interaction_id": AgentMCPToolHelpers.stringOrNull(evidence.interactionID?.uuidString),
-            "decision_id": AgentMCPToolHelpers.stringOrNull(evidence.decisionID?.uuidString)
+            "decision_id": AgentMCPToolHelpers.stringOrNull(evidence.decisionID?.uuidString),
+            "source": missionEvidenceSourceValue(evidence.source),
+            "judgment_bundle": missionJudgmentBundleValue(evidence.judgmentBundle)
+        ])
+    }
+
+    private func missionEvidenceSourceValue(_ source: CoordinatorMissionEvidenceSource?) -> Value {
+        guard let source else { return .null }
+        return .object([
+            "kind": .string(source.kind),
+            "operation": AgentMCPToolHelpers.stringOrNull(source.operation?.rawValue),
+            "routing_decision_id": AgentMCPToolHelpers.stringOrNull(source.routingDecisionID?.uuidString),
+            "node_id": AgentMCPToolHelpers.stringOrNull(source.nodeID?.uuidString),
+            "session_id": AgentMCPToolHelpers.stringOrNull(source.sessionID?.uuidString),
+            "interaction_id": AgentMCPToolHelpers.stringOrNull(source.interactionID?.uuidString),
+            "answer_id": AgentMCPToolHelpers.stringOrNull(source.answerID),
+            "summary": AgentMCPToolHelpers.stringOrNull(source.summary)
+        ])
+    }
+
+    private func missionJudgmentBundleValue(_ bundle: CoordinatorMissionJudgmentBundle?) -> Value {
+        guard let bundle else { return .null }
+        return .object([
+            "done_criteria": AgentMCPToolHelpers.stringOrNull(bundle.doneCriteria),
+            "structured_evidence": AgentMCPToolHelpers.stringOrNull(bundle.structuredEvidence),
+            "diff_stats": missionDiffStatsValue(bundle.diffStats),
+            "probe_answer": missionProbeAnswerSummaryValue(bundle.probeAnswer),
+            "transcript_framing": .string(bundle.transcriptFraming)
+        ])
+    }
+
+    private func missionDiffStatsValue(_ diffStats: CoordinatorMissionDiffStats?) -> Value {
+        guard let diffStats else { return .null }
+        return .object([
+            "files_changed": diffStats.filesChanged.map(Value.int) ?? .null,
+            "insertions": diffStats.insertions.map(Value.int) ?? .null,
+            "deletions": diffStats.deletions.map(Value.int) ?? .null,
+            "summary": AgentMCPToolHelpers.stringOrNull(diffStats.summary)
+        ])
+    }
+
+    private func missionProbeAnswerSummaryValue(_ probeAnswer: CoordinatorMissionProbeAnswerSummary?) -> Value {
+        guard let probeAnswer else { return .null }
+        return .object([
+            "answer_id": AgentMCPToolHelpers.stringOrNull(probeAnswer.answerID),
+            "source": AgentMCPToolHelpers.stringOrNull(probeAnswer.source),
+            "answer": AgentMCPToolHelpers.stringOrNull(probeAnswer.answer),
+            "session_id": AgentMCPToolHelpers.stringOrNull(probeAnswer.sessionID?.uuidString),
+            "interaction_id": AgentMCPToolHelpers.stringOrNull(probeAnswer.interactionID?.uuidString),
+            "routing_decision_id": AgentMCPToolHelpers.stringOrNull(probeAnswer.routingDecisionID?.uuidString)
         ])
     }
 

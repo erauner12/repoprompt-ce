@@ -845,6 +845,52 @@ The system SHALL keep the Coordinator view calm by default and expose detail onl
 - **WHEN** the user needs full transcript, raw log, detailed runtime state, file context, diff context, or action handling
 - **THEN** the Coordinator view SHALL route the user to the existing Agent Mode surface.
 
+### Requirement: Director runtime doctrine, evidence judgment, and mission shape
+The system SHALL treat Director supervision as a ledger-bounded control-plane contract rather than a transcript-driven conversation.
+
+#### Scenario: Director context is assembled from Mission ledger state
+- **WHEN** the Director drafts answers, judges evidence, or decides whether to continue a Mission
+- **THEN** its context SHALL be assembled from bounded Mission state such as the user directive, Mission Policy, plan revision, per-node done criteria, structured evidence summaries, decision trail, standing guidance, and bounded exhibits
+- **AND** it SHALL NOT import full child transcripts, full files, or mounted file selections into the Director judgment path by default.
+
+#### Scenario: Evidence judgment bundle is disclosed and receipt-ready
+- **WHEN** the Director or a sibling judge evaluates whether a node meets its done criteria
+- **THEN** the judgment bundle SHALL include the node done criteria, returned structured evidence, relevant diff stats when available, and any recorded read-only probe answer
+- **AND** the visible evidence card or receipt-ready summary SHALL disclose the bundle categories used for judgment
+- **AND** it SHALL explicitly frame the bundle as not being the child transcript.
+
+#### Scenario: Read-only probe escalation records an answer as evidence
+- **WHEN** returned evidence is thin, ambiguous, or needs independent read-only verification
+- **THEN** the Director MAY escalate by starting an `agent_explore.start`-style read-only probe or equivalent read-only probe session
+- **AND** the probe SHALL be represented as delegated read-only work owned by the Mission
+- **AND** only the probe answer, concise summary, and optional export/artifact reference SHALL be appended to Mission evidence
+- **AND** the probe transcript, selection, and raw session context SHALL NOT be imported into Director context.
+
+#### Scenario: Director auto-decisions are contestable
+- **WHEN** the Director records an automatic decision such as answering a child question, accepting evidence, or steering recovery
+- **THEN** the decision SHALL remain visible as a director-actor decision and SHALL be eligible for a user overrule while it is still actionable
+- **AND** a user overrule SHALL append a user-actor decision that references the original Director decision, marks the original as overruled rather than deleting it, and steers the affected session or Mission path with the user's correction
+- **AND** the overrule itself SHALL be final for that decision instance unless a later explicit checkpoint creates a new decision.
+
+#### Scenario: Mission Policy limits concurrent delegated flights
+- **WHEN** a Mission Policy is snapped onto a Mission
+- **THEN** the Mission MAY carry a `maxConcurrent` delegated-flight cap with a default of `3`
+- **AND** the scheduler SHALL NOT start more running delegated Mission nodes than the policy cap permits
+- **AND** ready nodes beyond the cap SHALL remain queued without being marked blocked or failed
+- **AND** status surfaces MAY later show this as `running N/cap`, such as `running 2/3`.
+
+#### Scenario: PRD Slices shape decomposes into independent and dependent chains
+- **WHEN** a directive is inferred or selected as a PRD Slices Mission shape
+- **THEN** the drafted plan SHALL use a hub node that slices the PRD and records per-slice acceptance criteria
+- **AND** it SHALL create independent slice chains that each run Deep Plan → Orchestrate → Review in their own execution lane/worktree when mutable
+- **AND** it SHALL support a dependent slice chain that starts only after slices A and B have completed and consolidated, with the dependent Deep Plan written against the combined A+B result
+- **AND** it SHALL finish with a final combined review against the PRD followed by stacked PR landing or the policy-defined close.
+
+#### Scenario: Larger runtime concerns remain recorded deferrals
+- **WHEN** this Wave 1 alignment is complete
+- **THEN** failure retry and the Blocked-lane unblock flow, budget-breach checkpointing, restart/resume reattachment contracts, hub-freeze reshaping checkpoints, a fresh-eyes final reviewer policy knob, and queue-aging/starvation behavior SHALL be recorded as explicit follow-ups
+- **AND** this wave SHALL NOT require Swift implementation for those deferred behaviors.
+
 ### Requirement: Mission Policy, autonomy, decision, evidence, and receipt state
 The system SHALL extend Mission-owned state with additive Mission Policy, autonomy, decision, evidence, and receipt-projection inputs without introducing a second source of truth.
 
@@ -852,6 +898,7 @@ The system SHALL extend Mission-owned state with additive Mission Policy, autono
 - **WHEN** a Mission is started or restored
 - **THEN** the Mission MAY carry a policy snapshot with stable policy ID, display name, default pace, autonomy map, optional Definition of Done, optional standing guidance, and pinned skills or context IDs
 - **AND** Mission Policy SHALL represent trust/settings/guidance rather than prompt-wrapper topology
+- **AND** Mission Policy MAY include a `maxConcurrent` delegated-flight cap whose default is `3`
 - **AND** Mission Templates SHALL remain separate prompt wrappers until a deliberate policy replacement path exists.
 
 #### Scenario: Autonomy map uses shared decision classes

@@ -701,6 +701,7 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(plan.shapeSummary?.displayName, "Single track")
         XCTAssertEqual(plan.shapeSummary?.namedClose, "Close with receipt")
         XCTAssertEqual(plan.policySnapshot?.id, "careful-writes")
+        XCTAssertEqual(plan.policySnapshot?.maxConcurrent, CoordinatorMissionPolicySnapshot.defaultMaxConcurrent)
         XCTAssertEqual(plan.policySnapshot?.pinnedSkillIDs, ["rpce-test-quality"])
         XCTAssertEqual(plan.autonomy[CoordinatorMissionDecisionClass.writes.rawValue], .ask)
         XCTAssertEqual(plan.nodes.first?.doneCriteria, "README and tests describe the behavior.")
@@ -709,6 +710,100 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
 
         let data = try JSONEncoder().encode(plan)
         let decodedAgain = try JSONDecoder().decode(CoordinatorMissionPlan.self, from: data)
+        XCTAssertEqual(decodedAgain, plan)
+    }
+
+    func testMissionPlanDirectorDoctrineFieldsRoundTripLosslessly() throws {
+        let nodeID = try XCTUnwrap(UUID(uuidString: "00000000-0000-4000-8000-000000000901"))
+        let sessionID = try XCTUnwrap(UUID(uuidString: "00000000-0000-4000-8000-000000000902"))
+        let interactionID = try XCTUnwrap(UUID(uuidString: "00000000-0000-4000-8000-000000000903"))
+        let routingDecisionID = try XCTUnwrap(UUID(uuidString: "00000000-0000-4000-8000-000000000904"))
+        let firstDecisionID = try XCTUnwrap(UUID(uuidString: "00000000-0000-4000-8000-000000000905"))
+        let overruleDecisionID = try XCTUnwrap(UUID(uuidString: "00000000-0000-4000-8000-000000000906"))
+        let evidenceID = try XCTUnwrap(UUID(uuidString: "00000000-0000-4000-8000-000000000907"))
+        let plan = CoordinatorMissionPlan(
+            objective: "Ship Director receipt",
+            policySnapshot: CoordinatorMissionPolicySnapshot(
+                id: "director-default",
+                name: "Director default",
+                defaultPace: .auto,
+                maxConcurrent: 5,
+                definitionOfDone: "Done criteria are disclosed with evidence."
+            ),
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    id: firstDecisionID,
+                    decisionClass: CoordinatorMissionDecisionClass.advance.rawValue,
+                    actor: .director,
+                    label: "advanced after read-only probe",
+                    timestamp: Date(timeIntervalSince1970: 10)
+                ),
+                CoordinatorMissionDecisionRecord(
+                    id: overruleDecisionID,
+                    decisionClass: CoordinatorMissionDecisionClass.advance.rawValue,
+                    actor: .director,
+                    label: "corrected probe conclusion",
+                    timestamp: Date(timeIntervalSince1970: 11),
+                    overruledDecisionID: firstDecisionID,
+                    overruleReason: "Probe evidence was incomplete.",
+                    correctionReason: "Diff stats showed one missing test file.",
+                    correctionSteerText: "Re-check the focused persistence test."
+                )
+            ],
+            evidence: [
+                CoordinatorMissionEvidenceRecord(
+                    id: evidenceID,
+                    verdict: .meets,
+                    summary: "Structured evidence is a summary, not a transcript.",
+                    timestamp: Date(timeIntervalSince1970: 12),
+                    nodeID: nodeID,
+                    sessionID: sessionID,
+                    interactionID: interactionID,
+                    decisionID: overruleDecisionID,
+                    source: CoordinatorMissionEvidenceSource(
+                        kind: "probe_answer",
+                        operation: .agentExploreStart,
+                        routingDecisionID: routingDecisionID,
+                        nodeID: nodeID,
+                        sessionID: sessionID,
+                        interactionID: interactionID,
+                        answerID: "probe-answer-1",
+                        summary: "Explore probe mapped the relevant files."
+                    ),
+                    judgmentBundle: CoordinatorMissionJudgmentBundle(
+                        doneCriteria: "Focused tests pass.",
+                        structuredEvidence: "Persistence and MCP contract tests cover the new fields.",
+                        diffStats: CoordinatorMissionDiffStats(
+                            filesChanged: 3,
+                            insertions: 120,
+                            deletions: 4,
+                            summary: "Schema, MCP, and tests changed."
+                        ),
+                        probeAnswer: CoordinatorMissionProbeAnswerSummary(
+                            answerID: "probe-answer-1",
+                            source: "agent_explore.start",
+                            answer: "Relevant files are CoordinatorFollowThroughState and CoordinatorChatMCPToolServiceTests.",
+                            sessionID: sessionID,
+                            interactionID: interactionID,
+                            routingDecisionID: routingDecisionID
+                        )
+                    )
+                )
+            ]
+        )
+
+        let data = try JSONEncoder().encode(plan)
+        let decodedAgain = try JSONDecoder().decode(CoordinatorMissionPlan.self, from: data)
+
+        XCTAssertEqual(decodedAgain.policySnapshot?.maxConcurrent, 5)
+        XCTAssertEqual(decodedAgain.decisions.last?.overruledDecisionID, firstDecisionID)
+        XCTAssertEqual(decodedAgain.decisions.last?.correctionSteerText, "Re-check the focused persistence test.")
+        XCTAssertEqual(decodedAgain.evidence.first?.source?.operation, .agentExploreStart)
+        XCTAssertEqual(decodedAgain.evidence.first?.source?.answerID, "probe-answer-1")
+        XCTAssertEqual(decodedAgain.evidence.first?.judgmentBundle?.doneCriteria, "Focused tests pass.")
+        XCTAssertEqual(decodedAgain.evidence.first?.judgmentBundle?.diffStats?.filesChanged, 3)
+        XCTAssertEqual(decodedAgain.evidence.first?.judgmentBundle?.probeAnswer?.source, "agent_explore.start")
+        XCTAssertEqual(decodedAgain.evidence.first?.judgmentBundle?.transcriptFraming, CoordinatorMissionJudgmentBundle.notTranscriptFraming)
         XCTAssertEqual(decodedAgain, plan)
     }
 

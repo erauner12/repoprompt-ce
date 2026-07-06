@@ -360,7 +360,11 @@ struct CoordinatorModeView: View {
 
             Group {
                 if presentationMode == .plan {
-                    missionPlanView(plan: snapshot.coordinatorRail.missionPlan, metrics: metrics)
+                    missionPlanView(
+                        plan: snapshot.coordinatorRail.missionPlan,
+                        childCounts: snapshot.coordinatorRail.childCounts,
+                        metrics: metrics
+                    )
                 } else if snapshot.isEmpty {
                     emptyState(snapshot: snapshot, metrics: metrics)
                 } else if useList {
@@ -1181,12 +1185,16 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func missionPlanView(plan: CoordinatorMissionPlan?, metrics: CoordinatorVisualMetrics) -> some View {
+    private func missionPlanView(
+        plan: CoordinatorMissionPlan?,
+        childCounts: CoordinatorModeCoordinatorChildCounts,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
         GeometryReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
                     if let plan {
-                        missionPlanSummary(plan, metrics: metrics)
+                        missionPlanSummary(plan, childCounts: childCounts, metrics: metrics)
 
                         if plan.workstreams.isEmpty, plan.nodes.isEmpty {
                             missionPlanEmptyState(
@@ -1216,7 +1224,11 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func missionPlanSummary(_ plan: CoordinatorMissionPlan, metrics: CoordinatorVisualMetrics) -> some View {
+    private func missionPlanSummary(
+        _ plan: CoordinatorMissionPlan,
+        childCounts: CoordinatorModeCoordinatorChildCounts,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
         VStack(alignment: .leading, spacing: metrics.smallSpacing) {
             HStack(spacing: metrics.smallSpacing) {
                 Label("Mission Plan", systemImage: "point.3.connected.trianglepath.dotted")
@@ -1234,8 +1246,10 @@ struct CoordinatorModeView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            missionStatusStrip(plan, metrics: metrics)
+            missionStatusStrip(plan, childCounts: childCounts, metrics: metrics)
                 .padding(.top, metrics.tightSpacing)
+
+            missionShapePolicyDisclosure(plan, metrics: metrics)
 
             if plan.predecessorMissionID != nil || plan.predecessorTitle != nil || plan.predecessorSummary != nil {
                 VStack(alignment: .leading, spacing: metrics.tightSpacing) {
@@ -1274,7 +1288,11 @@ struct CoordinatorModeView: View {
         )
     }
 
-    private func missionStatusStrip(_ plan: CoordinatorMissionPlan, metrics: CoordinatorVisualMetrics) -> some View {
+    private func missionStatusStrip(
+        _ plan: CoordinatorMissionPlan,
+        childCounts: CoordinatorModeCoordinatorChildCounts? = nil,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
         let completedNodeCount = plan.nodes.count(where: { node in
             if case .completed = node.status {
                 return true
@@ -1309,6 +1327,12 @@ struct CoordinatorModeView: View {
                 statusChip("Shape · \(shapeSummary.displayName)", color: Color.accentColor, metrics: metrics)
             }
             if let policySnapshot = plan.policySnapshot {
+                let runningChildCount = childCounts?.working ?? activeNodeCount
+                statusChip(
+                    "running \(runningChildCount)/\(policySnapshot.maxConcurrent)",
+                    color: runningChildCount > policySnapshot.maxConcurrent ? .red : .blue,
+                    metrics: metrics
+                )
                 statusChip("Policy · \(policySnapshot.name)", color: .purple, metrics: metrics)
             }
             let userDecisionCount = plan.decisions.count(where: { $0.actor == .user })
@@ -1331,6 +1355,59 @@ struct CoordinatorModeView: View {
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
                 .stroke(Color.accentColor.opacity(0.12), lineWidth: 0.75)
         )
+    }
+
+    @ViewBuilder
+    private func missionShapePolicyDisclosure(
+        _ plan: CoordinatorMissionPlan,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        if plan.shapeSummary != nil || plan.policySnapshot != nil {
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                if let shapeSummary = plan.shapeSummary {
+                    HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                        Label("Shape · \(shapeSummary.displayName)", systemImage: "square.stack.3d.up")
+                            .font(metrics.microMedium)
+                            .foregroundStyle(Color.accentColor)
+                        Text(shapeSummary.id)
+                            .font(metrics.micro)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    if let reason = shapeSummary.reason {
+                        Text(reason)
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let namedClose = shapeSummary.namedClose {
+                        Text("Close as: \(namedClose)")
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let policySnapshot = plan.policySnapshot {
+                    HStack(spacing: metrics.smallSpacing) {
+                        statusChip("Policy · \(policySnapshot.name)", color: .purple, metrics: metrics)
+                        statusChip("cap \(policySnapshot.maxConcurrent)", color: .purple, metrics: metrics)
+                        statusChip(policySnapshot.defaultPace.rawValue, color: Color.accentColor, metrics: metrics)
+                    }
+                    if let definitionOfDone = policySnapshot.definitionOfDone {
+                        Label("Done: \(definitionOfDone)", systemImage: "checkmark.seal")
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .padding(.horizontal, metrics.pendingPadding)
+            .padding(.vertical, metrics.smallSpacing)
+            .background(
+                RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.16))
+            )
+        }
     }
 
     private func missionPlanNodeOutline(_ plan: CoordinatorMissionPlan, metrics: CoordinatorVisualMetrics) -> some View {
@@ -2216,6 +2293,9 @@ struct CoordinatorModeView: View {
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
+                        if let doneCriteria = node.doneCriteria {
+                            keyValue("Done criteria", doneCriteria, metrics: metrics)
+                        }
                         if let completionEvidence = node.completionEvidence {
                             keyValue("Completion evidence", completionEvidence, metrics: metrics)
                         }
@@ -2538,6 +2618,7 @@ struct CoordinatorModeView: View {
                         coordinatorMissionPlanCard(
                             missionPlan,
                             missionTemplate: rail.missionTemplate,
+                            childCounts: rail.childCounts,
                             metrics: metrics
                         )
                     }
@@ -2709,6 +2790,7 @@ struct CoordinatorModeView: View {
     private func coordinatorMissionPlanCard(
         _ plan: CoordinatorMissionPlan,
         missionTemplate: CoordinatorMissionTemplateSummary?,
+        childCounts: CoordinatorModeCoordinatorChildCounts,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.smallSpacing) {
@@ -2733,7 +2815,9 @@ struct CoordinatorModeView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            missionStatusStrip(plan, metrics: metrics)
+            missionStatusStrip(plan, childCounts: childCounts, metrics: metrics)
+
+            missionShapePolicyDisclosure(plan, metrics: metrics)
 
             if !plan.workstreams.isEmpty {
                 VStack(alignment: .leading, spacing: metrics.tightSpacing) {
@@ -2853,6 +2937,22 @@ struct CoordinatorModeView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
+            if decision.actor == .director {
+                HStack(spacing: metrics.smallSpacing) {
+                    Text("Auto decision · contestable")
+                        .font(metrics.micro)
+                        .foregroundStyle(.tertiary)
+                    Spacer(minLength: metrics.smallSpacing)
+                    Button {} label: {
+                        Label("Overrule", systemImage: "arrow.uturn.backward.circle")
+                            .font(metrics.microMedium)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .disabled(true)
+                    .hoverTooltip("Overrule steering is not wired yet; reply to the Director with the correction and reason.")
+                }
+            }
         }
         .padding(metrics.tightSpacing)
         .background(
@@ -2865,22 +2965,113 @@ struct CoordinatorModeView: View {
         _ evidence: CoordinatorMissionEvidenceRecord,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
-            statusChip(evidence.verdict.rawValue, color: evidence.verdict == .meets ? .green : .orange, metrics: metrics)
-            Text(evidence.summary)
-                .font(metrics.micro)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-            Spacer(minLength: metrics.smallSpacing)
-            Text(evidence.timestamp.formatted(date: .omitted, time: .shortened))
-                .font(metrics.micro)
-                .foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                statusChip(evidence.verdict.rawValue, color: evidence.verdict == .meets ? .green : .orange, metrics: metrics)
+                Text(evidence.summary)
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer(minLength: metrics.smallSpacing)
+                Text(evidence.timestamp.formatted(date: .omitted, time: .shortened))
+                    .font(metrics.micro)
+                    .foregroundStyle(.tertiary)
+            }
+            if let judgmentBundle = evidence.judgmentBundle {
+                judgmentBundleDisclosure(judgmentBundle, metrics: metrics)
+            }
         }
         .padding(metrics.tightSpacing)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color(nsColor: .controlBackgroundColor).opacity(0.18))
         )
+    }
+
+    private func judgmentBundleDisclosure(
+        _ bundle: CoordinatorMissionJudgmentBundle,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            Label("Judgment bundle · not transcript", systemImage: "doc.text.magnifyingglass")
+                .font(metrics.microMedium)
+                .foregroundStyle(.secondary)
+            Text(judgmentBundleFramingText(bundle.transcriptFraming))
+                .font(metrics.micro)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let doneCriteria = bundle.doneCriteria {
+                Label("Done criteria: \(doneCriteria)", systemImage: "checkmark.seal")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let structuredEvidence = bundle.structuredEvidence {
+                Label(structuredEvidence, systemImage: "list.bullet.clipboard")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let diffStats = bundle.diffStats {
+                Label(diffStatsSummary(diffStats), systemImage: "plusminus")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let probeAnswer = bundle.probeAnswer,
+               let probeSummary = probeAnswerSummary(probeAnswer)
+            {
+                Label(probeSummary, systemImage: "bubble.left.and.text.bubble.right")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.leading, metrics.smallSpacing)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.18))
+                .frame(width: 2)
+        }
+    }
+
+    private func judgmentBundleFramingText(_ framing: String) -> String {
+        if framing == CoordinatorMissionJudgmentBundle.notTranscriptFraming {
+            return "Structured evidence summary; not a transcript excerpt."
+        }
+        return "Framing: \(framing). Not a transcript excerpt."
+    }
+
+    private func diffStatsSummary(_ stats: CoordinatorMissionDiffStats) -> String {
+        var parts: [String] = []
+        if let filesChanged = stats.filesChanged {
+            parts.append("\(filesChanged) files")
+        }
+        if let insertions = stats.insertions {
+            parts.append("+\(insertions)")
+        }
+        if let deletions = stats.deletions {
+            parts.append("-\(deletions)")
+        }
+        if let summary = stats.summary {
+            parts.append(summary)
+        }
+        return parts.isEmpty ? "Diff stats recorded" : "Diff: \(parts.joined(separator: ", "))"
+    }
+
+    private func probeAnswerSummary(_ answer: CoordinatorMissionProbeAnswerSummary) -> String? {
+        let source = answer.source ?? answer.answerID
+        let body = answer.answer
+        switch (source, body) {
+        case let (source?, body?):
+            return "Probe \(source): \(body)"
+        case let (source?, nil):
+            return "Probe \(source) recorded"
+        case let (nil, body?):
+            return "Probe answer: \(body)"
+        case (nil, nil):
+            return nil
+        }
     }
 
     private func completedMissionReceipt(
@@ -2921,6 +3112,9 @@ struct CoordinatorModeView: View {
                     .font(metrics.micro)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                if let judgmentBundle = latestEvidence.judgmentBundle {
+                    judgmentBundleDisclosure(judgmentBundle, metrics: metrics)
+                }
             }
         }
         .padding(metrics.tightSpacing)

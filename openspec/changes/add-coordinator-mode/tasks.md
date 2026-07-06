@@ -175,7 +175,7 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 ## 10A. Director / Command Center policy and ledger alignment
 
 - [ ] 10A.1 Update user-facing surface, rail, Mission, policy, decision/evidence, and receipt copy to use Director vocabulary while keeping Swift symbols, MCP op names, Codable keys, fixtures, and raw debug payloads Coordinator-named.
-- [ ] 10A.2 Add Mission Policy as a Mission-owned snapshot distinct from Mission Templates, including built-in Default, Hands-off, Careful writes, and Read-only policies with default pace, autonomy map, optional Definition of Done, standing guidance, and pinned skills/context IDs.
+- [ ] 10A.2 Add Mission Policy as a Mission-owned snapshot distinct from Mission Templates, including built-in Default, Hands-off, Careful writes, and Read-only policies with default pace, autonomy map, optional Definition of Done, standing guidance, pinned skills/context IDs, and `maxConcurrent` with default 3.
 - [ ] 10A.3 Extend Mission Plan state with additive/defaulted shape summary, policy snapshot, autonomy map, decision ledger, evidence ledger, and receipt-projection inputs without introducing a separate store.
 - [ ] 10A.4 Implement append-only decision/evidence merge semantics with ID-only dedupe, omitted-field preservation, and deterministic UUID user-decision IDs from `(checkpointInstanceID, label)`, including `plan.revision` for plan approvals.
 - [ ] 10A.5 Record user-actor decisions through the app and external MCP `op=submit` paths at plan approval/revision, step continuation, child-answer, and Mission-stop checkpoints using the existing Mission Plan update seam.
@@ -184,7 +184,12 @@ Deferred selection affordance note: no v1 UI currently sets user selection from 
 - [ ] 10A.8 Extend `coordinator_chat op="mission_status"`, compact status, compact Mission status fingerprints, and `wait_for_update` behavior so policy/ledger/receipt-ready fields serialize and unblock waiters after decision/evidence appends.
 - [ ] 10A.9 Project Mission Policy, autonomy, decisions, evidence, and receipt-ready summaries from Mission-owned state into Director/Coordinator snapshot surfaces only after ledger-visible state participates in refresh/fingerprints.
 - [ ] 10A.10 Add focused persistence, projector, app/MCP submit, runtime-directive, and MCP serialization tests for unknown autonomy Ask behavior, unknown decision-class round-trip, append-only ledger dedupe, deterministic IDs, plan re-approval after revision, and wait-for-update advancement.
-- [ ] 10A.11 Respect the v1 deferrals recorded in `design.md` Decisions 0F / Risks rather than implementing broader Command Center reshaping in this wave.
+- [ ] 10A.11 Add the Director context contract for evidence judgment: ledger-bounded Director calls, done-criteria + structured-evidence + diff-stat bundles, optional probe-answer evidence, receipt disclosure, and explicit “not transcript” framing.
+- [ ] 10A.12 Add read-only probe escalation using an `agent_explore.start`-style probe or equivalent read-only probe session; ledger the probe answer/export reference as evidence without importing the probe transcript or selection.
+- [ ] 10A.13 Make director-actor auto-decisions contestable: user overrule records a linked user-actor decision, marks the Director decision overruled, and steers the affected session or Mission path with the correction.
+- [ ] 10A.14 Enforce Mission Policy `maxConcurrent` as a delegated-flight scheduler cap with default 3 and status-ready `running N/cap` projection inputs.
+- [ ] 10A.15 Add the PRD Slices Mission shape: PRD hub, independent slice chains, dependent slice after A+B consolidation, final combined review, and stacked PR/policy-defined landing.
+- [ ] 10A.16 Respect the v1 deferrals recorded in `design.md` Decisions 0F / Risks rather than implementing broader Command Center reshaping, failure retry/Blocked unblock flow, budget-breach checkpoints, restart/resume contracts, hub-freeze reshaping, fresh-eyes final reviewer policy, or queue aging in this wave.
 
 ## 11. Validation
 

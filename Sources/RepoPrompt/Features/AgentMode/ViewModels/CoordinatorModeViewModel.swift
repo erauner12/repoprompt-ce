@@ -37,7 +37,9 @@ final class CoordinatorModeViewModel: ObservableObject {
         case startSmaller
         case stopHere
 
-        static let runtimeLedgerInstruction = "Runtime ledger rule: append only Director-owned decisions (actor:\"director\") and evidence records through coordinator_chat op=mission_plan. Do not record user decisions; the app/MCP submit path owns user-actor checkpoint decisions."
+        static let runtimeLedgerInstruction = """
+        Runtime ledger rule: append only Director-owned decisions (actor:"director") and evidence records through coordinator_chat op=mission_plan. Judge from the bounded Mission ledger and any judgment_bundle/probe_answer evidence, not the full transcript. If evidence is thin, use a narrow read-only agent_explore.start probe and record the probe answer as evidence before deciding. Do not record user decisions; the app/MCP submit path owns user-actor checkpoint decisions. Auto decisions are visible and contestable; if the user overrules one, treat it as a user decision plus correction steer, preserve the original record, and link the Director correction with overruled_decision_id/overrule_reason/correction_reason/correction_steer_text when useful.
+        """
 
         var directiveText: String {
             switch self {
@@ -370,6 +372,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         var lines = [
             "Policy: \(policySnapshot.name) [\(policySnapshot.id)]",
             "Default pace: \(policySnapshot.defaultPace.rawValue)",
+            "Max concurrent child sessions: \(policySnapshot.maxConcurrent)",
             "Autonomy: \(policySnapshot.autonomy.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value.rawValue)" }.joined(separator: ", "))"
         ]
         if let definitionOfDone = policySnapshot.definitionOfDone {

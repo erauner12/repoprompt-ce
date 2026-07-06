@@ -185,6 +185,7 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(summary.shape?.displayName, "Scoped Change")
         XCTAssertEqual(summary.shape?.namedClose, "PR")
         XCTAssertEqual(summary.policy?.name, "Careful writes")
+        XCTAssertEqual(summary.policy?.maxConcurrent, CoordinatorMissionPolicySnapshot.carefulWrites.maxConcurrent)
         XCTAssertEqual(summary.askAutonomyClasses, ["plan", "unknown", "writes"])
         XCTAssertEqual(summary.decisions.userCount, 1)
         XCTAssertEqual(summary.decisions.directorCount, 1)

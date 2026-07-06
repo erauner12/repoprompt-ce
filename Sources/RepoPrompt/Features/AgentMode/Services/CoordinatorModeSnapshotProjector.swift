@@ -1047,7 +1047,8 @@ struct CoordinatorModeSnapshotProjector {
             CoordinatorModeMissionSummary.Policy(
                 id: $0.id,
                 name: $0.name,
-                defaultPace: $0.defaultPace
+                defaultPace: $0.defaultPace,
+                maxConcurrent: $0.maxConcurrent
             )
         }
         let askAutonomyClasses = plan.autonomy.keys

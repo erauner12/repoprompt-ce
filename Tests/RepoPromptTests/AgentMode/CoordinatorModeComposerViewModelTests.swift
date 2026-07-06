@@ -41,6 +41,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
 
         XCTAssertEqual(result, .accepted)
         XCTAssertTrue(submissions.first?.text.hasPrefix("start scoped work\n\n---\nMission Policy (provider-only)") == true)
+        XCTAssertTrue(submissions.first?.text.contains("Max concurrent child sessions: 3") == true)
         XCTAssertTrue(submissions.first?.text.contains("Standing guidance: Keep every boundary visible while trust is earned.") == true)
         XCTAssertNil(submissions.first?.sessionID)
         XCTAssertEqual(submissions.first?.forceNewRuntime, true)
@@ -688,6 +689,10 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertTrue(text.contains("approval_state:\"awaiting_approval\""))
         XCTAssertTrue(text.contains("execution_policy:\"fresh_readonly_child\""))
         XCTAssertTrue(text.contains("agent_explore.start"))
+        XCTAssertTrue(text.contains("bounded Mission ledger"))
+        XCTAssertTrue(text.contains("judgment_bundle/probe_answer"))
+        XCTAssertTrue(text.contains("Auto decisions are visible and contestable"))
+        XCTAssertTrue(text.contains("correction steer"))
         XCTAssertTrue(text.contains("workflow_name:\"Investigate\""))
         XCTAssertTrue(text.contains("chosen model_id"))
         XCTAssertTrue(text.contains("agent_run.start"))

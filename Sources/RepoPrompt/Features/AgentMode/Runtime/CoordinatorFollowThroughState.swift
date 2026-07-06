@@ -600,6 +600,8 @@ struct CoordinatorMissionShapeSummary: Codable, Equatable, Identifiable {
 }
 
 struct CoordinatorMissionPolicySnapshot: Codable, Equatable, Identifiable {
+    static let defaultMaxConcurrent = 3
+
     static let defaultAutonomy: [String: CoordinatorMissionAutonomyMode] = [
         CoordinatorMissionDecisionClass.plan.rawValue: .ask,
         CoordinatorMissionDecisionClass.advance.rawValue: .ask,
@@ -653,6 +655,7 @@ struct CoordinatorMissionPolicySnapshot: Codable, Equatable, Identifiable {
     var name: String
     var defaultPace: CoordinatorMissionPolicyPace
     var autonomy: [String: CoordinatorMissionAutonomyMode]
+    var maxConcurrent: Int
     var definitionOfDone: String?
     var standingGuidance: String?
     var pinnedSkillIDs: [String]
@@ -663,6 +666,7 @@ struct CoordinatorMissionPolicySnapshot: Codable, Equatable, Identifiable {
         name: String,
         defaultPace: CoordinatorMissionPolicyPace,
         autonomy: [String: CoordinatorMissionAutonomyMode] = Self.defaultAutonomy,
+        maxConcurrent: Int = Self.defaultMaxConcurrent,
         definitionOfDone: String? = nil,
         standingGuidance: String? = nil,
         pinnedSkillIDs: [String] = [],
@@ -672,10 +676,38 @@ struct CoordinatorMissionPolicySnapshot: Codable, Equatable, Identifiable {
         self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         self.defaultPace = defaultPace
         self.autonomy = autonomy
+        self.maxConcurrent = max(1, maxConcurrent)
         self.definitionOfDone = definitionOfDone?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.standingGuidance = standingGuidance?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.pinnedSkillIDs = pinnedSkillIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         self.pinnedContextIDs = pinnedContextIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case defaultPace
+        case autonomy
+        case maxConcurrent
+        case definitionOfDone
+        case standingGuidance
+        case pinnedSkillIDs
+        case pinnedContextIDs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            id: container.decode(String.self, forKey: .id),
+            name: container.decode(String.self, forKey: .name),
+            defaultPace: container.decode(CoordinatorMissionPolicyPace.self, forKey: .defaultPace),
+            autonomy: container.decodeIfPresent([String: CoordinatorMissionAutonomyMode].self, forKey: .autonomy) ?? Self.defaultAutonomy,
+            maxConcurrent: container.decodeIfPresent(Int.self, forKey: .maxConcurrent) ?? Self.defaultMaxConcurrent,
+            definitionOfDone: container.decodeIfPresent(String.self, forKey: .definitionOfDone),
+            standingGuidance: container.decodeIfPresent(String.self, forKey: .standingGuidance),
+            pinnedSkillIDs: container.decodeIfPresent([String].self, forKey: .pinnedSkillIDs) ?? [],
+            pinnedContextIDs: container.decodeIfPresent([String].self, forKey: .pinnedContextIDs) ?? []
+        )
     }
 
     func resolvedAutonomy(for decisionClass: String) -> CoordinatorMissionAutonomyMode {
@@ -749,6 +781,10 @@ struct CoordinatorMissionDecisionRecord: Codable, Equatable, Identifiable {
     var interactionID: UUID?
     var checkpointID: String?
     var checkpointInstanceID: String?
+    var overruledDecisionID: UUID?
+    var overruleReason: String?
+    var correctionReason: String?
+    var correctionSteerText: String?
 
     init(
         id: UUID = UUID(),
@@ -762,7 +798,11 @@ struct CoordinatorMissionDecisionRecord: Codable, Equatable, Identifiable {
         sessionID: UUID? = nil,
         interactionID: UUID? = nil,
         checkpointID: String? = nil,
-        checkpointInstanceID: String? = nil
+        checkpointInstanceID: String? = nil,
+        overruledDecisionID: UUID? = nil,
+        overruleReason: String? = nil,
+        correctionReason: String? = nil,
+        correctionSteerText: String? = nil
     ) {
         self.id = id
         self.decisionClass = decisionClass.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -776,6 +816,10 @@ struct CoordinatorMissionDecisionRecord: Codable, Equatable, Identifiable {
         self.interactionID = interactionID
         self.checkpointID = checkpointID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.checkpointInstanceID = checkpointInstanceID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.overruledDecisionID = overruledDecisionID
+        self.overruleReason = overruleReason?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.correctionReason = correctionReason?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.correctionSteerText = correctionSteerText?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }
 
     init(
@@ -836,6 +880,8 @@ struct CoordinatorMissionEvidenceRecord: Codable, Equatable, Identifiable {
     var sessionID: UUID?
     var interactionID: UUID?
     var decisionID: UUID?
+    var source: CoordinatorMissionEvidenceSource?
+    var judgmentBundle: CoordinatorMissionJudgmentBundle?
 
     init(
         id: UUID = UUID(),
@@ -846,7 +892,9 @@ struct CoordinatorMissionEvidenceRecord: Codable, Equatable, Identifiable {
         workstreamID: UUID? = nil,
         sessionID: UUID? = nil,
         interactionID: UUID? = nil,
-        decisionID: UUID? = nil
+        decisionID: UUID? = nil,
+        source: CoordinatorMissionEvidenceSource? = nil,
+        judgmentBundle: CoordinatorMissionJudgmentBundle? = nil
     ) {
         self.id = id
         self.verdict = verdict
@@ -857,6 +905,126 @@ struct CoordinatorMissionEvidenceRecord: Codable, Equatable, Identifiable {
         self.sessionID = sessionID
         self.interactionID = interactionID
         self.decisionID = decisionID
+        self.source = source
+        self.judgmentBundle = judgmentBundle
+    }
+}
+
+struct CoordinatorMissionEvidenceSource: Codable, Equatable {
+    var kind: String
+    var operation: CoordinatorMissionRoutingOperation?
+    var routingDecisionID: UUID?
+    var nodeID: UUID?
+    var sessionID: UUID?
+    var interactionID: UUID?
+    var answerID: String?
+    var summary: String?
+
+    init(
+        kind: String,
+        operation: CoordinatorMissionRoutingOperation? = nil,
+        routingDecisionID: UUID? = nil,
+        nodeID: UUID? = nil,
+        sessionID: UUID? = nil,
+        interactionID: UUID? = nil,
+        answerID: String? = nil,
+        summary: String? = nil
+    ) {
+        self.kind = kind.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.operation = operation
+        self.routingDecisionID = routingDecisionID
+        self.nodeID = nodeID
+        self.sessionID = sessionID
+        self.interactionID = interactionID
+        self.answerID = answerID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+}
+
+struct CoordinatorMissionJudgmentBundle: Codable, Equatable {
+    static let notTranscriptFraming = "not_transcript_summary"
+
+    var doneCriteria: String?
+    var structuredEvidence: String?
+    var diffStats: CoordinatorMissionDiffStats?
+    var probeAnswer: CoordinatorMissionProbeAnswerSummary?
+    var transcriptFraming: String
+
+    init(
+        doneCriteria: String? = nil,
+        structuredEvidence: String? = nil,
+        diffStats: CoordinatorMissionDiffStats? = nil,
+        probeAnswer: CoordinatorMissionProbeAnswerSummary? = nil,
+        transcriptFraming: String = Self.notTranscriptFraming
+    ) {
+        self.doneCriteria = doneCriteria?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.structuredEvidence = structuredEvidence?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.diffStats = diffStats
+        self.probeAnswer = probeAnswer
+        self.transcriptFraming = transcriptFraming.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? Self.notTranscriptFraming
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case doneCriteria
+        case structuredEvidence
+        case diffStats
+        case probeAnswer
+        case transcriptFraming
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            doneCriteria: container.decodeIfPresent(String.self, forKey: .doneCriteria),
+            structuredEvidence: container.decodeIfPresent(String.self, forKey: .structuredEvidence),
+            diffStats: container.decodeIfPresent(CoordinatorMissionDiffStats.self, forKey: .diffStats),
+            probeAnswer: container.decodeIfPresent(CoordinatorMissionProbeAnswerSummary.self, forKey: .probeAnswer),
+            transcriptFraming: container.decodeIfPresent(String.self, forKey: .transcriptFraming) ?? Self.notTranscriptFraming
+        )
+    }
+}
+
+struct CoordinatorMissionDiffStats: Codable, Equatable {
+    var filesChanged: Int?
+    var insertions: Int?
+    var deletions: Int?
+    var summary: String?
+
+    init(
+        filesChanged: Int? = nil,
+        insertions: Int? = nil,
+        deletions: Int? = nil,
+        summary: String? = nil
+    ) {
+        self.filesChanged = filesChanged
+        self.insertions = insertions
+        self.deletions = deletions
+        self.summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+}
+
+struct CoordinatorMissionProbeAnswerSummary: Codable, Equatable {
+    var answerID: String?
+    var source: String?
+    var answer: String?
+    var sessionID: UUID?
+    var interactionID: UUID?
+    var routingDecisionID: UUID?
+
+    init(
+        answerID: String? = nil,
+        source: String? = nil,
+        answer: String? = nil,
+        sessionID: UUID? = nil,
+        interactionID: UUID? = nil,
+        routingDecisionID: UUID? = nil
+    ) {
+        self.answerID = answerID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.source = source?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.answer = answer?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.sessionID = sessionID
+        self.interactionID = interactionID
+        self.routingDecisionID = routingDecisionID
     }
 }
 

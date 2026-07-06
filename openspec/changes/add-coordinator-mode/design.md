@@ -49,7 +49,7 @@ This also means the shortcut flip is deferred. User-facing Director wording shou
 
 ### 0B. Mission Policy and autonomy are Mission-owned trust guidance
 
-Mission Policy is separate from Mission Templates. Templates remain prompt wrappers and topology instructions for fresh Mission starts. Policies are trust/settings/guidance snapshots attached to a Mission: stable policy ID/name, default pace, a string-keyed autonomy map, optional Definition of Done, optional standing guidance, and pinned skills/context IDs. Built-ins for the first pass are Default, Hands-off, Careful writes, and Read-only.
+Mission Policy is separate from Mission Templates. Templates remain prompt wrappers and topology instructions for fresh Mission starts. Policies are trust/settings/guidance snapshots attached to a Mission: stable policy ID/name, default pace, a string-keyed autonomy map, optional Definition of Done, optional standing guidance, pinned skills/context IDs, and a policy-level `maxConcurrent` delegated-flight cap. Built-ins for the first pass are Default, Hands-off, Careful writes, and Read-only. `maxConcurrent` defaults to 3; schedulers should let ready work wait rather than launching more running delegated nodes than the cap allows, and later status UI can surface this as `running N/3`.
 
 The autonomy map shares its string key space with decision classes. Known v1 classes are `plan`, `advance`, `writes`, `childAsk`, `recover`, and `irreversible`; unknown classes round-trip but resolve to Ask. This keeps the ledger foundation open to future classes without accidentally granting autonomy.
 
@@ -80,6 +80,24 @@ Ledger-visible fields also need to move the Coordinator/Director snapshot when p
 ### 0F. V1 Command Center deferrals
 
 The v1 cutline deliberately defers broader Command Center reshaping: full symbol/API/key rename, shared Agent Board/direct-Agent expansion, a dedicated Decisions rail, Plan-is-board layout, and shortcut flip. The current selected-Mission board plus read-only Plan presentation remains the layout boundary until a later OpenSpec changes it. Direct Agent sessions stay in Agent Mode unless structurally owned by a Coordinator/Director Mission; preserving `CoordinatorModeRowOrigin.directAgent` is for a later shared-board/filter relaxation, not this pass.
+
+Larger runtime doctrine is also recorded but not implemented in this wave: failure retry and the Blocked-lane unblock flow, budget-breach checkpoints, restart/resume reattachment semantics, hub freeze after slice chains start, a fresh-eyes final-review policy knob, and queue-aging/starvation behavior. These need explicit follow-up tasks/spec work before Swift expands into those areas.
+
+### 0G. Director context and evidence judgment bundles
+
+Director judgment must stay ledger-bounded. A Director call should be assembled fresh from the Mission directive, policy/guidance, plan revision, per-node done criteria, returned structured evidence, decision trail, and bounded exhibits such as diff stats or short excerpts. It should not mount child transcripts, full files, or file selections into the Director context by default.
+
+Evidence judgment is a one-shot claim over a recorded bundle, not a hidden read of the child transcript. The bundle that feeds the Director or sibling judge should be receipt-ready and disclose its categories: done criteria, structured evidence, diff stats when available, and any read-only probe answer. Evidence cards and receipts should explicitly frame this as "not the transcript" so users can audit what the judgment did and did not see.
+
+When evidence is thin, the escalation path is a read-only probe, not transcript import. In Swift terms this should look like an `agent_explore.start`-style read-only probe or equivalent read-only probe session whose answer, concise summary, and optional export/artifact reference are appended to Mission evidence. The probe transcript, selection, and raw session context stay below the Director boundary.
+
+### 0H. Director decisions are contestable
+
+Auto mode is never silent and should not be final. Director auto-decisions — answering a worker, accepting evidence, or steering recovery — remain visible director-actor decisions. While the affected work is still actionable, the user can overrule the decision. An overrule records a user-actor decision linked to the original Director decision, marks the original as overruled rather than deleting it, and steers the affected session or Mission path with the user's correction. The original Director call and the overrule both remain in the receipt trail.
+
+### 0I. PRD Slices mission shape
+
+PRD Slices is a first-class mission shape for the Careful-writes/community demo path. The shape starts with a read-only hub node that slices the PRD and records per-slice acceptance. It then runs independent slice chains — each Deep Plan → Orchestrate → Review, with mutable work isolated per slice — and supports a dependent slice whose Deep Plan starts only after slices A and B have completed and consolidated. The shape ends with one final combined review against the PRD and then stacked PR landing or the policy-defined close.
 
 ### 1. Coordinator mode lives inside `.main`
 
