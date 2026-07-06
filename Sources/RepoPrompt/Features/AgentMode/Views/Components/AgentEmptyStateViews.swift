@@ -87,22 +87,22 @@ struct AgentWorkflowLaunchCard: View {
 
     private var cardBackgroundColor: Color {
         if isSelected {
-            return item.definition.accentColor.opacity(0.12)
+            return AgentModeSurfaceTheme.Palette.selectedWorkflowCardFill(item.definition.accentColor)
         }
         if isHovered {
-            return Color.primary.opacity(0.04)
+            return AgentModeSurfaceTheme.Palette.workflowCardHoverFill
         }
-        return Color.primary.opacity(0.02)
+        return AgentModeSurfaceTheme.Palette.workflowCardFill
     }
 
     private var cardBorderColor: Color {
         if isSelected {
-            return item.definition.accentColor.opacity(0.55)
+            return AgentModeSurfaceTheme.Palette.selectedWorkflowCardStroke(item.definition.accentColor)
         }
         if isHovered {
-            return Color.primary.opacity(0.12)
+            return AgentModeSurfaceTheme.Palette.workflowCardHoverStroke
         }
-        return Color.primary.opacity(0.06)
+        return AgentModeSurfaceTheme.Palette.workflowCardStroke
     }
 }
 
@@ -388,11 +388,11 @@ struct AgentTipCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.02))
+                .fill(AgentModeSurfaceTheme.Palette.workflowCardFill)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 0.5)
+                .stroke(AgentModeSurfaceTheme.Palette.workflowCardStroke, lineWidth: 0.5)
         )
     }
 }

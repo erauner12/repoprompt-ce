@@ -9,10 +9,10 @@ import SwiftUI
 /// waves can reuse the same card, pill, and status primitives instead of restyling per view.
 enum CoordinatorTheme {
     enum Palette {
-        static let windowBackground = Color(nsColor: .windowBackgroundColor)
-        static let panelBackground = Color(nsColor: .windowBackgroundColor)
-        static let elevatedPanelBackground = Color(nsColor: .controlBackgroundColor).opacity(0.42)
-        static let recessedPanelBackground = Color(nsColor: .windowBackgroundColor).opacity(0.68)
+        static let windowBackground = AgentModeSurfaceTheme.Palette.detailBackground
+        static let panelBackground = AgentModeSurfaceTheme.Palette.sidebarBackground
+        static let elevatedPanelBackground = Color(nsColor: .controlBackgroundColor).opacity(0.34)
+        static let recessedPanelBackground = Color(nsColor: .windowBackgroundColor).opacity(0.58)
         static let hairline = Color.secondary.opacity(0.16)
         static let strongHairline = Color.secondary.opacity(0.26)
         static let seam = Color.secondary.opacity(0.12)

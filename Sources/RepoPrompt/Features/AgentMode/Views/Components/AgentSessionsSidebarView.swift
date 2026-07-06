@@ -298,7 +298,7 @@ struct AgentModeSessionsSidebarView: View {
     private var sessionSearchBox: some View {
         HStack(spacing: fontPreset.scaledClamped(6, max: 8)) {
             Image(systemName: "magnifyingglass")
-                .foregroundColor(Color(NSColor.labelColor).opacity(0.6))
+                .foregroundColor(AgentModeSurfaceTheme.Palette.searchIcon)
                 .font(.system(size: searchIconSize))
 
             TextField("Search", text: agentModeVM.sidebarSearchBinding())
@@ -329,7 +329,7 @@ struct AgentModeSessionsSidebarView: View {
         .cornerRadius(searchCornerRadius)
         .overlay(
             RoundedRectangle(cornerRadius: searchCornerRadius)
-                .stroke(Color(NSColor.systemGray).opacity(0.75), lineWidth: 0.5)
+                .stroke(AgentModeSurfaceTheme.Palette.searchStroke, lineWidth: 0.5)
         )
     }
 }

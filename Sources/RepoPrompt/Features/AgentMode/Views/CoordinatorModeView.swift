@@ -921,10 +921,10 @@ struct CoordinatorModeView: View {
     private func filterSearchBox(metrics: CoordinatorVisualMetrics) -> some View {
         HStack(spacing: metrics.searchElementSpacing) {
             Image(systemName: "magnifyingglass")
-                .foregroundColor(Color(NSColor.labelColor).opacity(0.6))
+                .foregroundColor(AgentModeSurfaceTheme.Palette.searchIcon)
                 .font(.system(size: metrics.searchIconSize))
 
-            TextField("Search missions and agents", text: $filterText)
+            TextField("Search", text: $filterText)
                 .textFieldStyle(PlainTextFieldStyle())
                 .font(metrics.searchFont)
                 .foregroundColor(Color(NSColor.labelColor))
@@ -951,7 +951,7 @@ struct CoordinatorModeView: View {
         .padding(.horizontal, metrics.searchHorizontalPadding)
         .padding(.vertical, metrics.searchVerticalPadding)
         .frame(minHeight: metrics.searchControlHeight)
-        .coordinatorHeaderControlBackground()
+        .coordinatorSearchControlBackground(cornerRadius: metrics.searchCornerRadius)
     }
 
     private func coordinatorRail(
@@ -972,7 +972,7 @@ struct CoordinatorModeView: View {
         }
         .padding(.horizontal, metrics.sidebarHorizontalPadding)
         .padding(.vertical, metrics.sidebarVerticalPadding)
-        .coordinatorFlushRegion(edge: .trailing)
+        .coordinatorAgentSidebarColumn(edge: .trailing)
     }
 
     private func coordinatorHistorySidebar(
@@ -986,7 +986,7 @@ struct CoordinatorModeView: View {
         }
         .padding(.horizontal, metrics.sidebarHorizontalPadding)
         .padding(.vertical, metrics.sidebarVerticalPadding)
-        .coordinatorFlushRegion(edge: .trailing)
+        .coordinatorAgentSidebarColumn(edge: .trailing)
     }
 
     private func coordinatorRailHistoryContent(
@@ -1034,7 +1034,7 @@ struct CoordinatorModeView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .coordinatorFlushRegion(edge: .trailing)
+        .coordinatorAgentSidebarColumn(edge: .trailing)
     }
 
     private func coordinatorNavigationPanel(
@@ -1090,7 +1090,7 @@ struct CoordinatorModeView: View {
                 title: title,
                 subtitle: subtitle,
                 systemImage: systemImage,
-                tint: isSelected ? Color.accentColor : .secondary,
+                tint: title == "Agent Board" || isSelected ? Color.accentColor : .secondary,
                 badgeCount: badgeCount,
                 metrics: metrics
             )
@@ -1737,9 +1737,7 @@ struct CoordinatorModeView: View {
 
                 coordinatorDraftPolicySummary(viewModel.selectedMissionPolicy, metrics: metrics)
             }
-            .padding(metrics.pendingPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .coordinatorCardBackground(cornerRadius: metrics.pendingCornerRadius)
 
             coordinatorMissionTemplatePicker(metrics: metrics)
                 .padding(.horizontal, metrics.pendingPadding)
@@ -1852,20 +1850,20 @@ struct CoordinatorModeView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading)
         .background(
             shape.fill(
                 isSelected
-                    ? CoordinatorTheme.Palette.panelBackground.opacity(0.82)
-                    : CoordinatorTheme.Palette.panelBackground.opacity(0.58)
+                    ? AgentModeSurfaceTheme.Palette.selectedWorkflowCardFill(Color.accentColor)
+                    : AgentModeSurfaceTheme.Palette.workflowCardFill
             )
         )
         .overlay(
             shape.stroke(
                 isSelected
-                    ? Color.accentColor.opacity(0.62)
-                    : CoordinatorTheme.Palette.hairline.opacity(0.72),
-                lineWidth: isSelected ? 1.2 : 0.75
+                    ? AgentModeSurfaceTheme.Palette.selectedWorkflowCardStroke(Color.accentColor)
+                    : AgentModeSurfaceTheme.Palette.workflowCardStroke,
+                lineWidth: isSelected ? 1 : 0.5
             )
         )
         .contentShape(shape)
@@ -1890,7 +1888,7 @@ struct CoordinatorModeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.14))
+                .fill(AgentModeSurfaceTheme.Palette.workflowCardFill)
         )
     }
 
@@ -7961,6 +7959,15 @@ private extension View {
             }
     }
 
+    func coordinatorAgentSidebarColumn(edge: CoordinatorSidebarPanelEdge) -> some View {
+        background(AgentModeSurfaceTheme.Palette.sidebarBackground)
+            .overlay(alignment: edge.alignment) {
+                Rectangle()
+                    .fill(AgentModeSurfaceTheme.Palette.sidebarSeparator)
+                    .frame(width: 0.5)
+            }
+    }
+
     func coordinatorSidebarPanel(edge: CoordinatorSidebarPanelEdge) -> some View {
         let shape = RoundedRectangle(
             cornerRadius: CoordinatorStyle.floatingPanelCornerRadius,
@@ -8011,6 +8018,15 @@ private extension View {
         .clipShape(Capsule(style: .continuous))
     }
 
+    func coordinatorSearchControlBackground(cornerRadius: CGFloat) -> some View {
+        background(Color.clear)
+            .cornerRadius(cornerRadius)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(AgentModeSurfaceTheme.Palette.searchStroke, lineWidth: 0.5)
+            )
+    }
+
     func coordinatorCardBackground(
         cornerRadius: CGFloat,
         isSelected: Bool = false,
@@ -8046,7 +8062,7 @@ private extension View {
             Group {
                 if isSelected {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.15))
+                        .fill(AgentModeSurfaceTheme.Palette.selectedSidebarRowFill)
                 }
             }
         )

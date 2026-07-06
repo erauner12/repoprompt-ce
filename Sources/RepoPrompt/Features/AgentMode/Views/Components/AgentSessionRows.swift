@@ -255,10 +255,10 @@ struct AgentSessionRow: View {
             Group {
                 if isActive {
                     RoundedRectangle(cornerRadius: rowCornerRadius, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.15))
+                        .fill(AgentModeSurfaceTheme.Palette.selectedSidebarRowFill)
                 } else if isHovered {
                     RoundedRectangle(cornerRadius: rowCornerRadius, style: .continuous)
-                        .stroke(Color(NSColor.systemGray).opacity(0.5), lineWidth: 1)
+                        .stroke(AgentModeSurfaceTheme.Palette.hoveredSidebarRowStroke, lineWidth: 1)
                 }
             }
         )
