@@ -206,7 +206,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(state.missionPlan?.policySnapshot, .readOnly)
         XCTAssertEqual(state.missionPlan?.autonomy, CoordinatorMissionPolicySnapshot.readOnly.autonomy)
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.missionSummary?.policy?.name, "Read-only")
-        XCTAssertEqual(viewModel.railTranscriptEntries.first?.text, "Audit risky scripts")
+        XCTAssertEqual(viewModel.railTranscriptEntries.first(where: { $0.role == .user })?.text, "Audit risky scripts")
         XCTAssertEqual(viewModel.selectedMissionPolicy, .defaultPolicy)
     }
 
@@ -1011,6 +1011,242 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(result, .accepted)
         XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.user])
         XCTAssertEqual(viewModel.railTranscriptEntries.map(\.text), ["what did it say?"])
+    }
+
+    func testMissionLedgerEntriesAreIdempotentAcrossRepeatedSnapshotApplies() {
+        let coordinatorID = uuid(1)
+        var plan = CoordinatorMissionPlan(
+            id: uuid(700),
+            status: .completed,
+            shapeSummary: CoordinatorMissionShapeSummary(
+                id: "scoped-change",
+                displayName: "Scoped change",
+                reason: "Limit the mission to one narrow change."
+            ),
+            policySnapshot: .readOnly,
+            routingDecisions: [
+                CoordinatorMissionRoutingDecision(
+                    id: uuid(701),
+                    timestamp: date(30),
+                    decision: .startFreshReadOnlyChild,
+                    operation: .agentRunStart,
+                    reason: "Need an independent review."
+                )
+            ],
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    id: uuid(702),
+                    decisionClass: CoordinatorMissionDecisionClass.advance.rawValue,
+                    actor: .director,
+                    label: "started review",
+                    reason: "Evidence was needed.",
+                    timestamp: date(40)
+                )
+            ],
+            evidence: [
+                CoordinatorMissionEvidenceRecord(
+                    id: uuid(703),
+                    verdict: .meets,
+                    summary: "Review passed.",
+                    timestamp: date(50)
+                )
+            ],
+            events: [
+                CoordinatorMissionPlanEvent(
+                    id: uuid(704),
+                    kind: .nodeCompleted,
+                    timestamp: date(60),
+                    summary: "Review node landed."
+                )
+            ],
+            updatedAt: date(70)
+        )
+        let viewModel = ledgerTestViewModel(coordinatorID: coordinatorID, plan: { plan })
+
+        viewModel.refresh()
+        viewModel.refresh()
+        plan.updatedAt = date(70)
+        viewModel.refresh()
+
+        let ledgerEntries = viewModel.railTranscriptEntries.filter { $0.ledger != nil }
+        XCTAssertEqual(ledgerEntries.count, 6)
+        XCTAssertEqual(Set(ledgerEntries.map(\.id)).count, 6)
+        XCTAssertEqual(decisionLedgerEntries(in: viewModel).map(\.id), [uuid(702)])
+        XCTAssertEqual(evidenceLedgerEntries(in: viewModel).map(\.id), [uuid(703)])
+        XCTAssertEqual(routingLedgerEntries(in: viewModel).map(\.id), [uuid(701)])
+        XCTAssertEqual(planEventLedgerEntries(in: viewModel).map(\.id), [uuid(704)])
+        XCTAssertEqual(wrapUpLedgerEntryCount(in: viewModel), 1)
+        XCTAssertEqual(groundingLedgerEntryCount(in: viewModel), 1)
+    }
+
+    func testMissionLedgerEntriesInterleaveByTimestampAndID() {
+        let coordinatorID = uuid(1)
+        let firstTranscriptID = uuid(900)
+        let secondTranscriptID = uuid(901)
+        let plan = CoordinatorMissionPlan(
+            id: uuid(710),
+            routingDecisions: [
+                CoordinatorMissionRoutingDecision(
+                    id: uuid(7104),
+                    timestamp: date(35),
+                    decision: .steerPrimary,
+                    operation: .agentRunSteer,
+                    reason: "Steer primary before deciding."
+                )
+            ],
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    id: uuid(7102),
+                    decisionClass: CoordinatorMissionDecisionClass.advance.rawValue,
+                    actor: .director,
+                    label: "continue",
+                    timestamp: date(40)
+                )
+            ],
+            evidence: [
+                CoordinatorMissionEvidenceRecord(
+                    id: uuid(7101),
+                    verdict: .short,
+                    summary: "Needs another pass.",
+                    timestamp: date(30)
+                )
+            ],
+            events: [
+                CoordinatorMissionPlanEvent(
+                    id: uuid(7103),
+                    kind: .revised,
+                    timestamp: date(45),
+                    summary: "Plan revised."
+                )
+            ],
+            updatedAt: date(55)
+        )
+        let transcript = [
+            transcriptEntry(id: firstTranscriptID, role: .user, text: "start", at: date(20)),
+            transcriptEntry(id: secondTranscriptID, role: .coordinator, text: "done", at: date(50))
+        ]
+        let viewModel = ledgerTestViewModel(coordinatorID: coordinatorID, plan: { plan }, transcript: { transcript })
+
+        viewModel.refresh()
+
+        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.id), [
+            firstTranscriptID,
+            uuid(7101),
+            uuid(7104),
+            uuid(7102),
+            uuid(7103),
+            secondTranscriptID
+        ])
+    }
+
+    func testMissionLedgerEntriesArePreservedAcrossTranscriptResync() {
+        let coordinatorID = uuid(1)
+        let evidenceID = uuid(7201)
+        var transcript = [
+            transcriptEntry(id: uuid(920), role: .user, text: "original", at: date(20))
+        ]
+        let plan = CoordinatorMissionPlan(
+            id: uuid(720),
+            evidence: [
+                CoordinatorMissionEvidenceRecord(
+                    id: evidenceID,
+                    verdict: .meets,
+                    summary: "Evidence survives transcript reload.",
+                    timestamp: date(30)
+                )
+            ],
+            updatedAt: date(40)
+        )
+        let viewModel = ledgerTestViewModel(coordinatorID: coordinatorID, plan: { plan }, transcript: { transcript })
+
+        viewModel.refresh()
+        transcript = [
+            transcriptEntry(id: uuid(921), role: .coordinator, text: "resynced", at: date(25))
+        ]
+        viewModel.refresh()
+
+        XCTAssertEqual(evidenceLedgerEntries(in: viewModel).map(\.id), [evidenceID])
+        XCTAssertTrue(viewModel.railTranscriptEntries.contains { $0.id == uuid(921) })
+        XCTAssertFalse(viewModel.railTranscriptEntries.contains { $0.id == uuid(920) })
+    }
+
+    func testMissionLedgerWrapUpAppearsOnceOnlyWhenCompleted() {
+        let coordinatorID = uuid(1)
+        var plan = CoordinatorMissionPlan(
+            id: uuid(730),
+            status: .running,
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    id: uuid(7301),
+                    decisionClass: CoordinatorMissionDecisionClass.advance.rawValue,
+                    actor: .user,
+                    label: "continued",
+                    timestamp: date(20)
+                ),
+                CoordinatorMissionDecisionRecord(
+                    id: uuid(7302),
+                    decisionClass: CoordinatorMissionDecisionClass.recover.rawValue,
+                    actor: .director,
+                    label: "recovered",
+                    timestamp: date(30)
+                )
+            ],
+            updatedAt: date(40)
+        )
+        let viewModel = ledgerTestViewModel(coordinatorID: coordinatorID, plan: { plan })
+
+        viewModel.refresh()
+        XCTAssertEqual(wrapUpLedgerEntryCount(in: viewModel), 0)
+
+        plan.status = .completed
+        plan.updatedAt = date(50)
+        viewModel.refresh()
+        viewModel.refresh()
+
+        XCTAssertEqual(wrapUpLedgerEntryCount(in: viewModel), 1)
+        XCTAssertTrue(viewModel.railTranscriptEntries.contains { entry in
+            if case let .wrapUp(userCount, directorCount)? = entry.ledger {
+                return userCount == 1 && directorCount == 1
+            }
+            return false
+        })
+
+        plan.status = .running
+        plan.updatedAt = date(60)
+        viewModel.refresh()
+
+        XCTAssertEqual(wrapUpLedgerEntryCount(in: viewModel), 0)
+    }
+
+    func testMissionLedgerDedupesDecisionsByIDNotLabel() {
+        let coordinatorID = uuid(1)
+        let plan = CoordinatorMissionPlan(
+            id: uuid(740),
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    id: uuid(7401),
+                    decisionClass: CoordinatorMissionDecisionClass.advance.rawValue,
+                    actor: .director,
+                    label: "continue",
+                    timestamp: date(20)
+                ),
+                CoordinatorMissionDecisionRecord(
+                    id: uuid(7402),
+                    decisionClass: CoordinatorMissionDecisionClass.advance.rawValue,
+                    actor: .director,
+                    label: "continue",
+                    timestamp: date(21)
+                )
+            ],
+            updatedAt: date(30)
+        )
+        let viewModel = ledgerTestViewModel(coordinatorID: coordinatorID, plan: { plan })
+
+        viewModel.refresh()
+
+        let decisions = decisionLedgerEntries(in: viewModel)
+        XCTAssertEqual(decisions.map(\.id), [uuid(7401), uuid(7402)])
+        XCTAssertEqual(decisions.map(\.label), ["continue", "continue"])
     }
 
     func testCoordinatorStatusMirrorsIntoConversationOncePerStatus() {
@@ -2234,6 +2470,90 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         )
         viewModel.test_setSidebarAutoArchiveDependencies(promptManager: prompt, workspaceManager: manager)
         return (viewModel, manager, prompt)
+    }
+
+    private func ledgerTestViewModel(
+        coordinatorID: UUID,
+        plan: @escaping () -> CoordinatorMissionPlan,
+        transcript: @escaping () -> [CoordinatorModeRailTranscriptEntry] = { [] }
+    ) -> CoordinatorModeViewModel {
+        CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            isMCP: true,
+                            coordinatorRuntime: true,
+                            missionPlan: plan()
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            transcriptProvider: { _ in transcript() },
+            dashboardVisibilityHandler: { _ in }
+        )
+    }
+
+    private func decisionLedgerEntries(in viewModel: CoordinatorModeViewModel) -> [CoordinatorMissionDecisionRecord] {
+        viewModel.railTranscriptEntries.compactMap { entry in
+            if case let .decision(decision)? = entry.ledger {
+                return decision
+            }
+            return nil
+        }
+    }
+
+    private func evidenceLedgerEntries(in viewModel: CoordinatorModeViewModel) -> [CoordinatorMissionEvidenceRecord] {
+        viewModel.railTranscriptEntries.compactMap { entry in
+            if case let .evidence(evidence)? = entry.ledger {
+                return evidence
+            }
+            return nil
+        }
+    }
+
+    private func routingLedgerEntries(in viewModel: CoordinatorModeViewModel) -> [CoordinatorMissionRoutingDecision] {
+        viewModel.railTranscriptEntries.compactMap { entry in
+            if case let .routing(decision)? = entry.ledger {
+                return decision
+            }
+            return nil
+        }
+    }
+
+    private func planEventLedgerEntries(in viewModel: CoordinatorModeViewModel) -> [CoordinatorMissionPlanEvent] {
+        viewModel.railTranscriptEntries.compactMap { entry in
+            if case let .planEvent(event)? = entry.ledger {
+                return event
+            }
+            return nil
+        }
+    }
+
+    private func wrapUpLedgerEntryCount(in viewModel: CoordinatorModeViewModel) -> Int {
+        viewModel.railTranscriptEntries.count { entry in
+            if case .wrapUp(_, _)? = entry.ledger {
+                return true
+            }
+            return false
+        }
+    }
+
+    private func groundingLedgerEntryCount(in viewModel: CoordinatorModeViewModel) -> Int {
+        viewModel.railTranscriptEntries.count { entry in
+            if case .grounding(_, _)? = entry.ledger {
+                return true
+            }
+            return false
+        }
     }
 
     private func date(_ offset: TimeInterval) -> Date {

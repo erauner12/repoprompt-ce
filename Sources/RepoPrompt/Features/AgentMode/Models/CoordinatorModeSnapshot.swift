@@ -589,6 +589,32 @@ struct CoordinatorModeRailTranscriptEntry: Identifiable, Equatable {
     let text: String
     let createdAt: Date
     let action: CoordinatorModeCoordinatorAction?
+    let ledger: CoordinatorModeLedgerEntryPayload?
+
+    init(
+        id: UUID,
+        role: Role,
+        text: String,
+        createdAt: Date,
+        action: CoordinatorModeCoordinatorAction?,
+        ledger: CoordinatorModeLedgerEntryPayload? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.createdAt = createdAt
+        self.action = action
+        self.ledger = ledger
+    }
+}
+
+enum CoordinatorModeLedgerEntryPayload: Equatable {
+    case decision(CoordinatorMissionDecisionRecord)
+    case evidence(CoordinatorMissionEvidenceRecord)
+    case routing(CoordinatorMissionRoutingDecision)
+    case planEvent(CoordinatorMissionPlanEvent)
+    case grounding(policy: CoordinatorMissionPolicySnapshot?, shape: CoordinatorMissionShapeSummary?)
+    case wrapUp(userCount: Int, directorCount: Int)
 }
 
 struct CoordinatorModeCoordinatorAction: Equatable {

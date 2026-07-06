@@ -1028,7 +1028,7 @@ struct CoordinatorMissionProbeAnswerSummary: Codable, Equatable {
     }
 }
 
-private enum CoordinatorMissionStableIdentity {
+enum CoordinatorMissionStableIdentity {
     static func uuid(namespace: String, parts: [String]) -> UUID {
         let payload = ([namespace] + parts).joined(separator: "\u{1F}")
         var bytes = bytes(from: fnv1a64(payload)) + bytes(from: fnv1a64("uuid-v2\u{1F}\(payload)"))

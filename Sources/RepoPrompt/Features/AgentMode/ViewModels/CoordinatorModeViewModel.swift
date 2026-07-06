@@ -1018,6 +1018,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         updateRailStatusPresentation(from: nextSnapshot.coordinatorRail)
         updateRailActionPresentation(from: nextSnapshot)
         syncRailConversationTranscript(for: nextCoordinatorSessionID)
+        mergeMissionLedgerEntries(from: nextSnapshot.coordinatorRail.missionPlan)
         let nextPendingFollowThroughEvent = usesAutoMode
             ? nil
             : pendingFollowThroughEventProvider(nextCoordinatorSessionID)
@@ -1136,7 +1137,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         guard !transcriptEntries.isEmpty else { return }
 
         var mergedEntries = railTranscriptEntries.filter { entry in
-            entry.role == .event || entry.action != nil
+            entry.role == .event || entry.action != nil || entry.ledger != nil
         }
         var seenIDs = Set(mergedEntries.map(\.id))
         var seenDisplayKeys = Set(mergedEntries.map(Self.displayKey(for:)))
@@ -1154,6 +1155,117 @@ final class CoordinatorModeViewModel: ObservableObject {
             return lhs.createdAt < rhs.createdAt
         }
         railTranscriptEntries = mergedEntries
+    }
+
+    private func mergeMissionLedgerEntries(from plan: CoordinatorMissionPlan?) {
+        var mergedEntries = railTranscriptEntries.filter { $0.ledger == nil }
+        guard let plan else {
+            railTranscriptEntries = mergedEntries
+            return
+        }
+
+        var seenLedgerIDs = Set<UUID>()
+        let ledgerEntries = missionLedgerTranscriptEntries(from: plan).filter { entry in
+            seenLedgerIDs.insert(entry.id).inserted
+        }
+        mergedEntries.append(contentsOf: ledgerEntries)
+        mergedEntries.sort { lhs, rhs in
+            if lhs.createdAt == rhs.createdAt {
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            return lhs.createdAt < rhs.createdAt
+        }
+        railTranscriptEntries = mergedEntries
+    }
+
+    private func missionLedgerTranscriptEntries(from plan: CoordinatorMissionPlan) -> [CoordinatorModeRailTranscriptEntry] {
+        var entries: [CoordinatorModeRailTranscriptEntry] = []
+        let groundingID = deterministicMissionLedgerEntryID(planID: plan.id, kind: "grounding")
+        let wrapUpID = deterministicMissionLedgerEntryID(planID: plan.id, kind: "wrapup")
+
+        let recordTimestamps = plan.decisions.map(\.timestamp)
+            + plan.evidence.map(\.timestamp)
+            + plan.routingDecisions.map(\.timestamp)
+            + plan.events.map(\.timestamp)
+        let existingNonGroundingTimestamps = railTranscriptEntries.compactMap { entry -> Date? in
+            guard entry.id != groundingID else { return nil }
+            return entry.createdAt
+        }
+        let groundingBaseTimestamp = (recordTimestamps + existingNonGroundingTimestamps).min() ?? plan.updatedAt
+        if plan.policySnapshot != nil || plan.shapeSummary != nil {
+            entries.append(CoordinatorModeRailTranscriptEntry(
+                id: groundingID,
+                role: .event,
+                text: "Mission grounding",
+                createdAt: groundingBaseTimestamp.addingTimeInterval(-0.001),
+                action: nil,
+                ledger: .grounding(policy: plan.policySnapshot, shape: plan.shapeSummary)
+            ))
+        }
+
+        entries.append(contentsOf: plan.decisions.map { decision in
+            CoordinatorModeRailTranscriptEntry(
+                id: decision.id,
+                role: .event,
+                text: decision.label,
+                createdAt: decision.timestamp,
+                action: nil,
+                ledger: .decision(decision)
+            )
+        })
+        entries.append(contentsOf: plan.evidence.map { evidence in
+            CoordinatorModeRailTranscriptEntry(
+                id: evidence.id,
+                role: .event,
+                text: evidence.summary,
+                createdAt: evidence.timestamp,
+                action: nil,
+                ledger: .evidence(evidence)
+            )
+        })
+        entries.append(contentsOf: plan.routingDecisions.map { decision in
+            CoordinatorModeRailTranscriptEntry(
+                id: decision.id,
+                role: .event,
+                text: decision.reason,
+                createdAt: decision.timestamp,
+                action: nil,
+                ledger: .routing(decision)
+            )
+        })
+        entries.append(contentsOf: plan.events.map { event in
+            CoordinatorModeRailTranscriptEntry(
+                id: event.id,
+                role: .event,
+                text: event.summary ?? event.kind.rawValue,
+                createdAt: event.timestamp,
+                action: nil,
+                ledger: .planEvent(event)
+            )
+        })
+
+        if plan.status == .completed {
+            entries.append(CoordinatorModeRailTranscriptEntry(
+                id: wrapUpID,
+                role: .event,
+                text: "Mission wrap-up",
+                createdAt: plan.updatedAt,
+                action: nil,
+                ledger: .wrapUp(
+                    userCount: plan.decisions.count(where: { $0.actor == .user }),
+                    directorCount: plan.decisions.count(where: { $0.actor == .director })
+                )
+            ))
+        }
+
+        return entries
+    }
+
+    private func deterministicMissionLedgerEntryID(planID: UUID, kind: String) -> UUID {
+        CoordinatorMissionStableIdentity.uuid(
+            namespace: "coordinator-mode-ledger-entry",
+            parts: [planID.uuidString, kind]
+        )
     }
 
     private static func displayKey(for entry: CoordinatorModeRailTranscriptEntry) -> String {

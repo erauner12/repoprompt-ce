@@ -3289,12 +3289,7 @@ struct CoordinatorModeView: View {
         case "Revise":
             viewModel.queueFollowThroughRevisionDecisionAfterAcceptedDirective(event)
             if coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                coordinatorDirectiveDraft = """
-                Revise before processing this observed boundary:
-
-                \(event.stepCheckpointContext)
-
-                """
+                coordinatorDirectiveDraft = "Revise before processing this observed boundary:\n\n\(event.stepCheckpointContext)\n\n"
             }
             isCoordinatorComposerFocused = true
         case "Stop":
@@ -3334,7 +3329,9 @@ struct CoordinatorModeView: View {
         _ entry: CoordinatorModeRailTranscriptEntry,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        if let action = entry.action {
+        if let ledger = entry.ledger {
+            coordinatorLedgerConversationEntry(ledger, createdAt: entry.createdAt, metrics: metrics)
+        } else if let action = entry.action {
             coordinatorActionConversationEntry(action, metrics: metrics)
         } else {
             let isUser = entry.role == .user
@@ -3451,6 +3448,248 @@ struct CoordinatorModeView: View {
             selectDelegatedActionTarget(targetRow)
         }
         .hoverTooltip(targetRow == nil ? "Delegated session is no longer visible on the board" : "Show delegated session in inspector")
+    }
+
+    @ViewBuilder
+    private func coordinatorLedgerConversationEntry(
+        _ payload: CoordinatorModeLedgerEntryPayload,
+        createdAt: Date,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        switch payload {
+        case let .evidence(evidence):
+            coordinatorLedgerCard(
+                title: "Evidence judged",
+                systemImage: evidence.verdict == .meets ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
+                tint: evidence.verdict == .meets ? .green : .orange,
+                createdAt: createdAt,
+                metrics: metrics
+            ) {
+                evidenceLedgerRow(evidence, metrics: metrics)
+            }
+        case let .decision(decision):
+            coordinatorLedgerCard(
+                title: decision.actor == .director ? "Director decided" : "Decision recorded",
+                systemImage: decision.actor == .director ? "gearshape.fill" : "person.crop.circle.badge.checkmark",
+                tint: decision.actor == .director ? .purple : .green,
+                createdAt: createdAt,
+                metrics: metrics
+            ) {
+                decisionLedgerRow(decision, metrics: metrics)
+            }
+        case let .routing(decision):
+            coordinatorRoutingKickoffLine(decision, createdAt: createdAt, metrics: metrics)
+        case let .planEvent(event):
+            coordinatorPlanEventMarker(event, createdAt: createdAt, metrics: metrics)
+        case let .grounding(policy, shape):
+            coordinatorGroundingCard(policy: policy, shape: shape, createdAt: createdAt, metrics: metrics)
+        case let .wrapUp(userCount, directorCount):
+            coordinatorWrapUpStatCard(userCount: userCount, directorCount: directorCount, createdAt: createdAt, metrics: metrics)
+        }
+    }
+
+    private func coordinatorLedgerCard(
+        title: String,
+        systemImage: String,
+        tint: Color,
+        createdAt: Date,
+        metrics: CoordinatorVisualMetrics,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            HStack(spacing: metrics.smallSpacing) {
+                Label(title, systemImage: systemImage)
+                    .font(metrics.microMedium)
+                    .foregroundStyle(tint)
+                Spacer(minLength: metrics.smallSpacing)
+                Text(createdAt.formatted(date: .omitted, time: .shortened))
+                    .font(metrics.micro)
+                    .foregroundStyle(.tertiary)
+            }
+            content()
+        }
+        .padding(metrics.pendingPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(tint.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(tint.opacity(0.18), lineWidth: 0.75)
+        )
+    }
+
+    private func coordinatorRoutingKickoffLine(
+        _ decision: CoordinatorMissionRoutingDecision,
+        createdAt: Date,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(alignment: .top, spacing: metrics.smallSpacing) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: metrics.microIconSize, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: metrics.titlebarIconSize, height: metrics.titlebarIconSize)
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                HStack(spacing: metrics.smallSpacing) {
+                    Text("Delegating \(decision.decision.displayName.lowercased())")
+                        .font(metrics.microMedium)
+                        .foregroundStyle(Color.accentColor)
+                    statusChip(decision.operation.displayName, color: Color.accentColor, metrics: metrics)
+                    Spacer(minLength: metrics.smallSpacing)
+                    Text(createdAt.formatted(date: .omitted, time: .shortened))
+                        .font(metrics.micro)
+                        .foregroundStyle(.tertiary)
+                }
+                Text(decision.reason)
+                    .font(metrics.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let contextSummary = decision.contextSummary {
+                    Text(contextSummary)
+                        .font(metrics.micro)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.horizontal, metrics.pendingPadding)
+        .padding(.vertical, metrics.pendingPadding * 0.82)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.24))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.14), lineWidth: 0.8)
+        )
+    }
+
+    private func coordinatorPlanEventMarker(
+        _ event: CoordinatorMissionPlanEvent,
+        createdAt: Date,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+            Image(systemName: "flag.checkered")
+                .font(.system(size: metrics.microIconSize, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(event.kind.displayName)
+                .font(metrics.microMedium)
+                .foregroundStyle(.secondary)
+            if let summary = event.summary {
+                Text(summary)
+                    .font(metrics.micro)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: metrics.smallSpacing)
+            Text(createdAt.formatted(date: .omitted, time: .shortened))
+                .font(metrics.micro)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, metrics.pendingPadding)
+        .padding(.vertical, metrics.tightSpacing)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.16))
+        )
+    }
+
+    private func coordinatorGroundingCard(
+        policy: CoordinatorMissionPolicySnapshot?,
+        shape: CoordinatorMissionShapeSummary?,
+        createdAt: Date,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        coordinatorLedgerCard(
+            title: "Mission grounding",
+            systemImage: "pin.fill",
+            tint: Color.accentColor,
+            createdAt: createdAt,
+            metrics: metrics
+        ) {
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                if let shape {
+                    Label("Shape · \(shape.displayName)", systemImage: "square.stack.3d.up")
+                        .font(metrics.microMedium)
+                        .foregroundStyle(Color.accentColor)
+                    if let reason = shape.reason {
+                        Text(reason)
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let namedClose = shape.namedClose {
+                        Text("Close as: \(namedClose)")
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let policy {
+                    HStack(spacing: metrics.smallSpacing) {
+                        statusChip("Policy · \(policy.name)", color: .purple, metrics: metrics)
+                        statusChip("cap \(policy.maxConcurrent)", color: .purple, metrics: metrics)
+                        statusChip(policy.defaultPace.rawValue, color: Color.accentColor, metrics: metrics)
+                    }
+                    if let definitionOfDone = policy.definitionOfDone {
+                        Label("Done: \(definitionOfDone)", systemImage: "checkmark.seal")
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let standingGuidance = policy.standingGuidance {
+                        Label(standingGuidance, systemImage: "quote.bubble")
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !policy.pinnedSkillIDs.isEmpty {
+                        Text("Pinned skills: \(policy.pinnedSkillIDs.joined(separator: ", "))")
+                            .font(metrics.micro)
+                            .foregroundStyle(.tertiary)
+                    }
+                    if !policy.pinnedContextIDs.isEmpty {
+                        Text("Pinned context: \(policy.pinnedContextIDs.joined(separator: ", "))")
+                            .font(metrics.micro)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+    }
+
+    private func coordinatorWrapUpStatCard(
+        userCount: Int,
+        directorCount: Int,
+        createdAt: Date,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        coordinatorLedgerCard(
+            title: "Mission wrap-up",
+            systemImage: "checkmark.seal.fill",
+            tint: .green,
+            createdAt: createdAt,
+            metrics: metrics
+        ) {
+            HStack(spacing: metrics.smallSpacing) {
+                statusChip("Needed you \(userCount)×", color: .green, metrics: metrics)
+                statusChip("Decided itself \(directorCount)×", color: .purple, metrics: metrics)
+                Spacer(minLength: metrics.smallSpacing)
+                Button {
+                    presentationMode = .plan
+                    selectedPlanNodeID = nil
+                } label: {
+                    Text("Receipt →")
+                        .font(metrics.microMedium)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+                .hoverTooltip("Show the completed Mission receipt in the plan pane.")
+            }
+        }
     }
 
     private func coordinatorRow(for sessionID: UUID) -> CoordinatorModeRow? {
