@@ -217,6 +217,32 @@ above. **K6 (runtime UX note):** the generic fallback approval plan that precede
 first real decomposition should render as a "Drafting the plan…" state, not a full plan
 card that gets replaced — suppress the plan card until the first substantive revision.
 
+**K1 — ACCEPTED (2026-07-06, live-verified).** Completed-mission center = summary +
+folded transcript; terminal status wins over stale approval; mission-context card gone.
+Residual carried into K3: the plan pane duplicates itself (pane header vs. inner card
+both render "Mission Plan"/status; policy renders twice within one block) — fold so the
+pane header row IS the strip and the inner card loses its duplicate header/chips.
+
+**K3 — EXPANDED: the Signal Shape System (supersedes "chip budget"; user-derived).**
+Uniform shape flattens the signal hierarchy: when every fact is a capsule, no capsule
+can claim attention. Encode information class in form —
+*State* (mission/node status, needs-you): the ONLY filled capsules; max one per row.
+*Counts* (`2/2 done`, `running 0/3`): plain text — numbers self-signal.
+*Metadata* (policy · edited · pace · cap · workflow · role): one muted interpunct text
+line, no borders (e.g. `Default · edited · auto · cap 3`).
+*Identity* (sessions, nodes): text links, never chips; no raw ID fragments anywhere;
+fix the duplicated "Read-only child ×2" rendering.
+Rule: **a capsule is a claim on attention** — scarcity is the feature; the amber
+`needs you` pill must be visually alone in its class. Applies to strip, part headers,
+node rows, transcript cards, and receipt alike.
+
+**K7 — Inspector eviction (NEW, per user review).** The inspector never renders inside
+the Mission Plan pane. A plan node's bound session is a **link** (one tap → Open Agent);
+the inspector exists only alongside the Board (its H4 home), and receives the calm
+anatomy (no key-value debug rows) in a later polish pass.
+
+**Focus order:** K3(expanded) → K7 → K2 → K4 → K5.
+
 ## 7. Open deferrals (recorded, not holes)
 - Custom policy CRUD — designed and staged; see §3 "Policy library roadmap" ("Save as
   policy" primary, "Edit a copy" secondary, minimal editor, post-parity timing).

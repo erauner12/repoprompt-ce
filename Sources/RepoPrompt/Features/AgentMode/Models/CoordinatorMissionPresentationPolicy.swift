@@ -1,6 +1,21 @@
 import Foundation
 
 enum CoordinatorMissionPresentationPolicy {
+    enum SignalFactClass: Equatable {
+        case state
+        case attention
+        case count
+        case metadata
+        case identity
+    }
+
+    enum SignalShape: Equatable {
+        case filledCapsule
+        case plainText
+        case mutedText
+        case linkText
+    }
+
     enum PrimaryStatus: Equatable {
         case mission(CoordinatorMissionPlanStatus)
         case approval(CoordinatorMissionPlanApprovalState)
@@ -10,6 +25,19 @@ enum CoordinatorMissionPresentationPolicy {
         case noPlan
         case planReference
         case terminalSummary(CoordinatorMissionPlanStatus)
+    }
+
+    static func signalShape(for factClass: SignalFactClass) -> SignalShape {
+        switch factClass {
+        case .state, .attention:
+            .filledCapsule
+        case .count:
+            .plainText
+        case .metadata:
+            .mutedText
+        case .identity:
+            .linkText
+        }
     }
 
     static func primaryStatus(for plan: CoordinatorMissionPlan) -> PrimaryStatus {
@@ -39,6 +67,58 @@ enum CoordinatorMissionPresentationPolicy {
     static func shouldShowPlanRevisionComposer(for plan: CoordinatorMissionPlan?) -> Bool {
         guard let plan else { return false }
         return !plan.status.isTerminal
+    }
+
+    static func policyMetadataParts(for policy: CoordinatorMissionPolicySnapshot) -> [String] {
+        var title = policy.name
+        if isPolicyEdited(policy) {
+            title += " · edited"
+        }
+        return [title, policy.defaultPace.rawValue, "cap \(policy.maxConcurrent)"]
+    }
+
+    static func policyMetadataLine(for policy: CoordinatorMissionPolicySnapshot) -> String {
+        policyMetadataParts(for: policy).joined(separator: " · ")
+    }
+
+    static func missionPlanMetadataParts(for plan: CoordinatorMissionPlan) -> [String] {
+        var parts = ["r\(plan.revision)"]
+        if let policySnapshot = plan.policySnapshot {
+            parts.append(contentsOf: policyMetadataParts(for: policySnapshot))
+        }
+        return parts
+    }
+
+    static func uniqueMetadataParts(_ parts: [String?]) -> [String] {
+        var seen: Set<String> = []
+        return parts.compactMap { rawPart in
+            guard let part = rawPart?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !part.isEmpty
+            else { return nil }
+            let key = part.lowercased()
+            guard seen.insert(key).inserted else { return nil }
+            return part
+        }
+    }
+
+    static func shouldShowInspector(
+        for destination: CoordinatorModeViewModel.RailDestination,
+        hasInspectorTarget: Bool
+    ) -> Bool {
+        hasInspectorTarget && destination == .board
+    }
+
+    private static func isPolicyEdited(_ policy: CoordinatorMissionPolicySnapshot) -> Bool {
+        guard let base = CoordinatorMissionPolicySnapshot.builtInPolicies.first(where: { $0.id == policy.id }) else {
+            return false
+        }
+        return base.defaultPace != policy.defaultPace
+            || base.autonomy != policy.autonomy
+            || base.maxConcurrent != policy.maxConcurrent
+            || base.definitionOfDone != policy.definitionOfDone
+            || base.standingGuidance != policy.standingGuidance
+            || base.pinnedSkillIDs != policy.pinnedSkillIDs
+            || base.pinnedContextIDs != policy.pinnedContextIDs
     }
 }
 

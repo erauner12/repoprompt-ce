@@ -1287,6 +1287,82 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(CoordinatorMissionPresentationPolicy.conversationMode(for: nil), .noPlan)
     }
 
+    func testPresentationPolicyClassifiesSignalShapes() {
+        XCTAssertEqual(CoordinatorMissionPresentationPolicy.signalShape(for: .state), .filledCapsule)
+        XCTAssertEqual(CoordinatorMissionPresentationPolicy.signalShape(for: .attention), .filledCapsule)
+        XCTAssertEqual(CoordinatorMissionPresentationPolicy.signalShape(for: .count), .plainText)
+        XCTAssertEqual(CoordinatorMissionPresentationPolicy.signalShape(for: .metadata), .mutedText)
+        XCTAssertEqual(CoordinatorMissionPresentationPolicy.signalShape(for: .identity), .linkText)
+    }
+
+    func testPresentationPolicyBuildsMetadataLineWithoutStateFacts() {
+        var policy = CoordinatorMissionPolicySnapshot.defaultPolicy
+        policy.defaultPace = .auto
+
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.policyMetadataParts(for: policy),
+            ["Default · edited", "auto", "cap 3"]
+        )
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.policyMetadataLine(for: policy),
+            "Default · edited · auto · cap 3"
+        )
+
+        let plan = CoordinatorMissionPlan(
+            id: uuid(698),
+            revision: 7,
+            status: .completed,
+            approvalState: .awaitingApproval,
+            policySnapshot: policy
+        )
+        let metadataLine = CoordinatorMissionPresentationPolicy.missionPlanMetadataParts(for: plan).joined(separator: " · ")
+        XCTAssertEqual(metadataLine, "r7 · Default · edited · auto · cap 3")
+        XCTAssertFalse(metadataLine.localizedCaseInsensitiveContains("Completed"))
+        XCTAssertFalse(metadataLine.localizedCaseInsensitiveContains("Awaiting approval"))
+        XCTAssertFalse(metadataLine.localizedCaseInsensitiveContains("needs you"))
+    }
+
+    func testPresentationPolicyDeduplicatesMetadataParts() {
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.uniqueMetadataParts([
+                "Read-only child",
+                "read-only child",
+                "explore",
+                nil,
+                "  ",
+                "bound session"
+            ]),
+            ["Read-only child", "explore", "bound session"]
+        )
+    }
+
+    func testPresentationPolicyShowsInspectorOnlyForBoardDestination() {
+        XCTAssertFalse(
+            CoordinatorMissionPresentationPolicy.shouldShowInspector(
+                for: .mission,
+                hasInspectorTarget: true
+            )
+        )
+        XCTAssertFalse(
+            CoordinatorMissionPresentationPolicy.shouldShowInspector(
+                for: .decisions,
+                hasInspectorTarget: true
+            )
+        )
+        XCTAssertFalse(
+            CoordinatorMissionPresentationPolicy.shouldShowInspector(
+                for: .board,
+                hasInspectorTarget: false
+            )
+        )
+        XCTAssertTrue(
+            CoordinatorMissionPresentationPolicy.shouldShowInspector(
+                for: .board,
+                hasInspectorTarget: true
+            )
+        )
+    }
+
     func testMissionLedgerEntriesAreIdempotentAcrossRepeatedSnapshotApplies() {
         let coordinatorID = uuid(1)
         var plan = CoordinatorMissionPlan(

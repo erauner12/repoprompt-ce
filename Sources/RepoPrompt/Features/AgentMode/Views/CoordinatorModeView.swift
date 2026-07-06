@@ -348,16 +348,27 @@ struct CoordinatorModeView: View {
             if shouldShowRightMissionPlan(for: snapshot) {
                 rightWorkPanel(
                     snapshot: snapshot,
-                    inspectorTarget: inspectorTarget,
                     metrics: metrics
                 )
                 .frame(width: metrics.rightWorkPanelWidth)
                 .frame(maxHeight: .infinity)
                 .background(CoordinatorTheme.Palette.windowBackground)
+            } else if CoordinatorMissionPresentationPolicy.shouldShowInspector(
+                for: viewModel.railDestination,
+                hasInspectorTarget: inspectorTarget != nil
+            ), let inspectorTarget {
+                boardInspectorPanel(target: inspectorTarget, metrics: metrics)
+                    .frame(width: boardInspectorColumnWidth(metrics: metrics))
+                    .frame(maxHeight: .infinity)
+                    .background(CoordinatorTheme.Palette.windowBackground)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(CoordinatorTheme.Palette.windowBackground)
+    }
+
+    private func boardInspectorColumnWidth(metrics: CoordinatorVisualMetrics) -> CGFloat {
+        isInspectorVisible ? metrics.inspectorWidth : metrics.inspectorCollapsedWidth
     }
 
     private func shouldShowRightMissionPlan(for snapshot: CoordinatorModeSnapshot) -> Bool {
@@ -398,7 +409,6 @@ struct CoordinatorModeView: View {
 
     private func rightWorkPanel(
         snapshot: CoordinatorModeSnapshot,
-        inspectorTarget: InspectorTarget?,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(spacing: 0) {
@@ -409,7 +419,7 @@ struct CoordinatorModeView: View {
                 childCounts: snapshot.coordinatorRail.childCounts,
                 metrics: metrics
             )
-            .frame(maxHeight: inspectorTarget == nil || !isInspectorVisible ? .infinity : metrics.rightBoardHeight)
+            .frame(maxHeight: .infinity)
 
             if CoordinatorMissionPresentationPolicy.shouldShowPlanRevisionComposer(
                 for: snapshot.coordinatorRail.missionPlan
@@ -419,19 +429,32 @@ struct CoordinatorModeView: View {
                 missionPlanFooterComposer(rail: snapshot.coordinatorRail, metrics: metrics)
                     .padding(metrics.outerPadding)
             }
-
-            if let inspectorTarget, isInspectorVisible {
-                Divider()
-                    .opacity(0.28)
-                inspector(target: inspectorTarget, metrics: metrics)
-                    .frame(maxHeight: .infinity)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let inspectorTarget {
-                collapsedInspectorHandle(target: inspectorTarget, metrics: metrics)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
         }
         .background(CoordinatorTheme.Palette.windowBackground)
+        .coordinatorFlushRegion(edge: .leading)
+    }
+
+    private func boardInspectorPanel(
+        target: InspectorTarget,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        Group {
+            if isInspectorVisible {
+                inspector(target: target, metrics: metrics)
+                    .frame(maxHeight: .infinity)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                collapsedInspectorHandle(target: target, metrics: metrics)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(CoordinatorTheme.Palette.windowBackground)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(CoordinatorTheme.Palette.hairline)
+                .frame(width: 0.5)
+        }
         .animation(.easeInOut(duration: 0.22), value: isInspectorVisible)
         .coordinatorFlushRegion(edge: .leading)
     }
@@ -447,8 +470,25 @@ struct CoordinatorModeView: View {
 
             Spacer(minLength: 0)
 
-            if let status = rail.missionPlan?.status {
-                statusChip(status.displayName, color: status.tint, metrics: metrics)
+            if let plan = rail.missionPlan {
+                let primaryStatus = CoordinatorMissionPresentationPolicy.primaryStatus(for: plan)
+                let title: String = switch primaryStatus {
+                case let .mission(status):
+                    status.displayName
+                case let .approval(approval):
+                    approval.displayName
+                }
+                let tint: Color = switch primaryStatus {
+                case let .mission(status):
+                    status.tint
+                case .approval(.awaitingApproval):
+                    .red
+                case .approval(.revisionRequested):
+                    .purple
+                case .approval(.notRequired), .approval(.approved):
+                    .secondary
+                }
+                statusChip(title, color: tint, metrics: metrics)
             }
 
             Button {
@@ -949,15 +989,6 @@ struct CoordinatorModeView: View {
         Label("Agent Board falls back to List at narrow widths", systemImage: "rectangle.split.2x1")
             .font(metrics.body)
             .foregroundStyle(.secondary)
-    }
-
-    @ViewBuilder
-    private func planMetadataChips(plan: CoordinatorMissionPlan?, metrics: CoordinatorVisualMetrics) -> some View {
-        if let plan {
-            statusChip("r\(plan.revision)", color: .secondary, metrics: metrics)
-            statusChip(plan.status.displayName, color: plan.status.tint, metrics: metrics)
-            statusChip(plan.approvalState.displayName, color: plan.approvalState.tint, metrics: metrics)
-        }
     }
 
     private func filterSearchBox(metrics: CoordinatorVisualMetrics) -> some View {
@@ -1994,14 +2025,10 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-            HStack(spacing: metrics.smallSpacing) {
-                Label("Mission Plan", systemImage: "point.3.connected.trianglepath.dotted")
-                    .font(metrics.sectionTitle)
-                    .foregroundStyle(.primary)
-                Spacer(minLength: metrics.controlSpacing)
-                statusChip("r\(plan.revision)", color: .secondary, metrics: metrics)
-                statusChip(plan.status.displayName, color: plan.status.tint, metrics: metrics)
-            }
+            mutedMetadataLine(
+                CoordinatorMissionPresentationPolicy.missionPlanMetadataParts(for: plan),
+                metrics: metrics
+            )
 
             if let objective = plan.objective {
                 Text(objective)
@@ -2087,23 +2114,6 @@ struct CoordinatorModeView: View {
         } else {
             .secondary
         }
-        let primaryStatus = CoordinatorMissionPresentationPolicy.primaryStatus(for: plan)
-        let statusTitle: String = switch primaryStatus {
-        case let .mission(status):
-            status.displayName
-        case let .approval(approval):
-            approval.displayName
-        }
-        let statusTint: Color = switch primaryStatus {
-        case let .mission(status):
-            status.tint
-        case .approval(.awaitingApproval):
-            .red
-        case .approval(.revisionRequested):
-            .purple
-        case .approval(.notRequired), .approval(.approved):
-            .secondary
-        }
         let userDecisionCount = plan.decisions.count(where: { $0.actor == .user })
 
         return HStack(spacing: metrics.smallSpacing) {
@@ -2112,8 +2122,6 @@ struct CoordinatorModeView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .layoutPriority(1)
-            statusChip(statusTitle, color: statusTint, metrics: metrics)
-                .layoutPriority(3)
             Text(readinessText)
                 .font(metrics.microMedium)
                 .foregroundStyle(readinessTint)
@@ -2125,7 +2133,11 @@ struct CoordinatorModeView: View {
                     .layoutPriority(3)
             }
             if let policySnapshot = plan.policySnapshot {
-                statusChip(coordinatorPolicyDisplayTitle(policySnapshot), color: .secondary, metrics: metrics)
+                Text(CoordinatorMissionPresentationPolicy.policyMetadataLine(for: policySnapshot))
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                     .hoverTooltip(coordinatorPolicyEditDiffs(policySnapshot).isEmpty ? "Mission Policy · \(policySnapshot.name)" : coordinatorPolicyEditDiffs(policySnapshot).joined(separator: "\n"))
                     .layoutPriority(1)
             }
@@ -2188,14 +2200,14 @@ struct CoordinatorModeView: View {
                 }
 
                 if let policySnapshot = plan.policySnapshot {
-                    HStack(spacing: metrics.smallSpacing) {
-                        statusChip(coordinatorPolicyDisplayTitle(policySnapshot), color: .secondary, metrics: metrics)
-                            .hoverTooltip(coordinatorPolicyEditDiffs(policySnapshot).isEmpty ? "Mission Policy · \(policySnapshot.name)" : coordinatorPolicyEditDiffs(policySnapshot).joined(separator: "\n"))
-                        statusChip("cap \(policySnapshot.maxConcurrent)", color: .secondary, metrics: metrics)
-                        statusChip(policySnapshot.defaultPace.rawValue, color: .secondary, metrics: metrics)
-                    }
                     if let definitionOfDone = policySnapshot.definitionOfDone {
                         Label("Done: \(definitionOfDone)", systemImage: "checkmark.seal")
+                            .font(metrics.micro)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let standingGuidance = policySnapshot.standingGuidance {
+                        Label("Guidance: \(standingGuidance)", systemImage: "quote.bubble")
                             .font(metrics.micro)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -2414,26 +2426,32 @@ struct CoordinatorModeView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: metrics.controlSpacing)
-                statusChip("\(missionPlanCompletedNodeCount(nodes))/\(nodes.count) done", color: missionPlanCompletedNodeCount(nodes) == nodes.count && !nodes.isEmpty ? .green : .secondary, metrics: metrics)
-                statusChip("\(partIndex)/\(partTotal)", color: .secondary, metrics: metrics)
-                statusChip(workstream.defaultPolicy.displayName, color: .secondary, metrics: metrics)
-                statusChip(workstream.worktreeStrategy.mode.displayName, color: .secondary, metrics: metrics)
+                Text("\(missionPlanCompletedNodeCount(nodes))/\(nodes.count) done")
+                    .font(metrics.microMedium)
+                    .foregroundStyle(missionPlanCompletedNodeCount(nodes) == nodes.count && !nodes.isEmpty ? .green : .secondary)
+                    .lineLimit(1)
+                Text("\(partIndex)/\(partTotal)")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
 
-            HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
-                if let primarySessionID = workstream.primarySessionID {
-                    statusChip("Primary \(primarySessionID.uuidString.prefix(8))", color: .green, metrics: metrics)
-                }
-                if let baseRef = workstream.worktreeStrategy.baseRef {
-                    statusChip("Base \(baseRef)", color: .secondary, metrics: metrics)
-                }
-                if !workstream.purpose.isEmpty {
-                    Text(workstream.purpose)
-                        .font(metrics.micro)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            mutedMetadataLine(
+                CoordinatorMissionPresentationPolicy.uniqueMetadataParts([
+                    workstream.defaultPolicy.displayName,
+                    workstream.worktreeStrategy.mode.displayName,
+                    workstream.primarySessionID == nil ? nil : "primary session linked",
+                    workstream.worktreeStrategy.baseRef.map { "base \($0)" }
+                ]),
+                metrics: metrics
+            )
+
+            if !workstream.purpose.isEmpty {
+                Text(workstream.purpose)
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -2449,8 +2467,14 @@ struct CoordinatorModeView: View {
                 .font(metrics.bodySemibold)
                 .foregroundStyle(.secondary)
             Spacer(minLength: metrics.controlSpacing)
-            statusChip("\(missionPlanCompletedNodeCount(nodes))/\(nodes.count) done", color: missionPlanCompletedNodeCount(nodes) == nodes.count && !nodes.isEmpty ? .green : .secondary, metrics: metrics)
-            statusChip("\(partIndex)/\(partTotal)", color: .secondary, metrics: metrics)
+            Text("\(missionPlanCompletedNodeCount(nodes))/\(nodes.count) done")
+                .font(metrics.microMedium)
+                .foregroundStyle(missionPlanCompletedNodeCount(nodes) == nodes.count && !nodes.isEmpty ? .green : .secondary)
+                .lineLimit(1)
+            Text("\(partIndex)/\(partTotal)")
+                .font(metrics.micro)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
     }
 
@@ -2477,31 +2501,33 @@ struct CoordinatorModeView: View {
                     .lineLimit(1)
                     .layoutPriority(1)
                 Spacer(minLength: metrics.controlSpacing)
-                statusChip(
-                    missionPlanNodeEligibilityText(node, plan: plan, projection: projection),
-                    color: missionPlanNodeEligibilityTint(node, projection: projection),
-                    metrics: metrics
-                )
+                if node.status == .completed {
+                    Text(missionPlanNodeEligibilityText(node, plan: plan, projection: projection))
+                        .font(metrics.microMedium)
+                        .foregroundStyle(missionPlanNodeEligibilityTint(node, projection: projection))
+                        .lineLimit(1)
+                } else {
+                    statusChip(
+                        missionPlanNodeEligibilityText(node, plan: plan, projection: projection),
+                        color: missionPlanNodeEligibilityTint(node, projection: projection),
+                        metrics: metrics
+                    )
+                }
             }
 
             missionPlanNodeEligibilityLine(node, plan: plan, projection: projection, metrics: metrics)
 
-            HStack(spacing: metrics.smallSpacing) {
-                if let workflowHint = node.workflowHint {
-                    workflowBadge(workflowHint, metrics: metrics)
-                }
-                statusChip(missionPlanNodeRouteLabel(node, workstream: workstream), color: missionPlanNodeRouteTint(node, workstream: workstream), metrics: metrics)
-                statusChip(node.executionPolicy.displayName, color: .secondary, metrics: metrics)
-                if let role = node.role {
-                    statusChip(role, color: .secondary, metrics: metrics)
-                }
-                if let boundSessionID = node.boundSessionID {
-                    statusChip("Bound \(shortID(boundSessionID))", color: .green, metrics: metrics)
-                }
-                if node.boundInteractionID != nil {
-                    statusChip("Interaction", color: .orange, metrics: metrics)
-                }
-            }
+            mutedMetadataLine(
+                CoordinatorMissionPresentationPolicy.uniqueMetadataParts([
+                    node.workflowHint?.name,
+                    missionPlanNodeRouteLabel(node, workstream: workstream),
+                    node.executionPolicy.displayName,
+                    node.role,
+                    node.boundSessionID == nil ? nil : "bound session",
+                    node.boundInteractionID == nil ? nil : "interaction"
+                ]),
+                metrics: metrics
+            )
 
             if let detail = node.detail {
                 Text(detail)
@@ -3018,14 +3044,9 @@ struct CoordinatorModeView: View {
 
     private func inspector(row: CoordinatorModeRow, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(spacing: 0) {
-            inspectorSheetHandle(isExpanded: true, metrics: metrics) {
-                isInspectorVisible = false
-            }
-            .padding(.top, metrics.tightSpacing)
-
             inspectorHeader(row: row, metrics: metrics)
                 .padding(.horizontal, metrics.outerPadding)
-                .padding(.top, metrics.controlSpacing)
+                .padding(.top, metrics.headerPadding)
                 .padding(.bottom, metrics.controlSpacing)
 
             Divider()
@@ -3342,6 +3363,8 @@ struct CoordinatorModeView: View {
                 Spacer(minLength: metrics.controlSpacing)
 
                 inspectorOpenAgentButton(route: row.openAgentChatRoute, metrics: metrics)
+
+                inspectorCollapseButton(metrics: metrics)
             }
 
             VStack(alignment: .leading, spacing: metrics.tightSpacing) {
@@ -3399,15 +3422,49 @@ struct CoordinatorModeView: View {
     }
 
     private func collapsedInspectorHandle(target _: InspectorTarget, metrics: CoordinatorVisualMetrics) -> some View {
-        VStack(spacing: 0) {
-            Divider()
-                .opacity(0.28)
+        Button {
+            isInspectorVisible = true
+        } label: {
+            VStack(spacing: metrics.controlSpacing) {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
+                    .background(
+                        Circle()
+                            .fill(Color.accentColor.opacity(0.14))
+                    )
 
-            inspectorSheetHandle(isExpanded: false, metrics: metrics) {
-                isInspectorVisible = true
+                Text("Inspector")
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(90))
+                    .fixedSize()
+                    .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize * 2.2)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
         }
-        .background(.regularMaterial)
+        .buttonStyle(.plain)
+        .background(CoordinatorTheme.Palette.elevatedPanelBackground)
+        .hoverTooltip("Show Inspector")
+        .accessibilityLabel("Show Inspector")
+    }
+
+    private func inspectorCollapseButton(metrics: CoordinatorVisualMetrics) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.22)) {
+                isInspectorVisible = false
+            }
+        } label: {
+            Image(systemName: "sidebar.right")
+                .font(.system(size: metrics.smallIconSize, weight: .medium))
+                .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .hoverTooltip("Collapse Inspector")
+        .accessibilityLabel("Collapse Inspector")
     }
 
     private func inspectorSheetHandle(
@@ -3779,10 +3836,10 @@ struct CoordinatorModeView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack(spacing: metrics.smallSpacing) {
-                statusChip("Needed you · \(userCount)", color: .green, metrics: metrics)
-                statusChip("Decided itself · \(directorCount)", color: .secondary, metrics: metrics)
-            }
+            mutedMetadataLine(
+                ["Needed you \(userCount)", "Decided itself \(directorCount)"],
+                metrics: metrics
+            )
         }
         .padding(metrics.pendingPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3811,99 +3868,6 @@ struct CoordinatorModeView: View {
                 coordinatorConversationEntry(entry, metrics: metrics)
             }
         }
-    }
-
-    private func coordinatorMissionPlanCard(
-        _ plan: CoordinatorMissionPlan,
-        missionTemplate: CoordinatorMissionTemplateSummary?,
-        childCounts: CoordinatorModeCoordinatorChildCounts,
-        metrics: CoordinatorVisualMetrics
-    ) -> some View {
-        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-            HStack(spacing: metrics.smallSpacing) {
-                Label("Mission Plan", systemImage: "list.clipboard")
-                    .font(metrics.microMedium)
-                    .foregroundStyle(Color.accentColor)
-                Spacer(minLength: metrics.smallSpacing)
-                if let missionTemplate {
-                    coordinatorMissionTemplateBadge(missionTemplate, metrics: metrics)
-                }
-                Text("r\(plan.revision)")
-                    .font(metrics.microMedium)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let objective = plan.objective {
-                Text(objective)
-                    .font(metrics.bodySemibold)
-                    .foregroundStyle(.primary.opacity(0.92))
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            missionStatusStrip(plan, childCounts: childCounts, metrics: metrics)
-
-            missionShapePolicyDisclosure(plan, metrics: metrics)
-
-            if !plan.workstreams.isEmpty {
-                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                    ForEach(plan.workstreams.prefix(4)) { workstream in
-                        HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
-                            Text(workstream.title)
-                                .font(metrics.bodyMedium)
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                                .layoutPriority(1)
-                            if let role = workstream.role {
-                                Text(role)
-                                    .font(metrics.microMedium)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Text(workstream.defaultPolicy.displayName)
-                                .font(metrics.microMedium)
-                                .foregroundStyle(Color.accentColor)
-                                .padding(.horizontal, metrics.miniPillHorizontalPadding)
-                                .padding(.vertical, metrics.miniPillVerticalPadding)
-                                .background(Capsule().fill(Color.accentColor.opacity(0.10)))
-                            Text(workstream.worktreeStrategy.mode.displayName)
-                                .font(metrics.microMedium)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        if !workstream.purpose.isEmpty {
-                            Text(workstream.purpose)
-                                .font(metrics.micro)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    if plan.workstreams.count > 4 {
-                        Text("+ \(plan.workstreams.count - 4) more workstreams")
-                            .font(metrics.micro)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-            }
-
-            missionLedgerPreview(plan, metrics: metrics)
-
-            if plan.status == .completed {
-                completedMissionReceipt(plan, metrics: metrics)
-            }
-        }
-        .padding(metrics.pendingPadding)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .fill(Color.accentColor.opacity(0.055))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .stroke(Color.accentColor.opacity(0.16), lineWidth: 0.8)
-        )
     }
 
     @ViewBuilder
@@ -3946,11 +3910,14 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-            HStack(spacing: metrics.smallSpacing) {
-                statusChip(decision.actor == .user ? "Actor · you" : "Actor · Director", color: decision.actor == .user ? .green : .secondary, metrics: metrics)
-                statusChip("Kind · \(decision.decisionClass)", color: .secondary, metrics: metrics)
-                statusChip(decision.overruledDecisionID == nil ? "Status · recorded" : "Status · correction", color: decision.overruledDecisionID == nil ? .secondary : .orange, metrics: metrics)
-            }
+            mutedMetadataLine(
+                [
+                    decision.actor == .user ? "you" : "Director",
+                    decision.decisionClass,
+                    decision.overruledDecisionID == nil ? "recorded" : "correction"
+                ],
+                metrics: metrics
+            )
             Text(decision.label)
                 .font(metrics.bodySemibold)
                 .foregroundStyle(.primary.opacity(0.92))
@@ -3988,7 +3955,11 @@ struct CoordinatorModeView: View {
             HStack(spacing: metrics.smallSpacing) {
                 statusChip("Verdict · \(evidence.verdict.rawValue)", color: evidence.verdict == .meets ? .green : .orange, metrics: metrics)
                 if let source = evidenceSourceSummary(evidence.source) {
-                    statusChip("Source · \(source)", color: .secondary, metrics: metrics)
+                    Text(source)
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
             Text(evidence.summary)
@@ -4221,11 +4192,10 @@ struct CoordinatorModeView: View {
                 Text("Policy")
                     .font(metrics.microMedium)
                     .foregroundStyle(.secondary)
-                HStack(spacing: metrics.smallSpacing) {
-                    statusChip(policy.name, color: .secondary, metrics: metrics)
-                    statusChip(policy.pace, color: .secondary, metrics: metrics)
-                    statusChip("Max \(policy.maxConcurrent)", color: .secondary, metrics: metrics)
-                }
+                mutedMetadataLine(
+                    [policy.name, policy.pace, "max \(policy.maxConcurrent)"],
+                    metrics: metrics
+                )
                 if !policy.askClasses.isEmpty {
                     Text("Asks: \(policy.askClasses.joined(separator: ", "))")
                         .font(metrics.micro)
@@ -4256,11 +4226,10 @@ struct CoordinatorModeView: View {
             Text("Decisions")
                 .font(metrics.microMedium)
                 .foregroundStyle(.secondary)
-            HStack(spacing: metrics.smallSpacing) {
-                statusChip("\(decisionCounts.total) total", color: .green, metrics: metrics)
-                statusChip("\(decisionCounts.user) user", color: .green, metrics: metrics)
-                statusChip("\(decisionCounts.director) Director", color: .secondary, metrics: metrics)
-            }
+            mutedMetadataLine(
+                ["\(decisionCounts.total) total", "\(decisionCounts.user) user", "\(decisionCounts.director) Director"],
+                metrics: metrics
+            )
             if !decisionCounts.byClass.isEmpty {
                 Text(decisionCounts.byClass.map { "\($0.name) \($0.count)" }.joined(separator: " · "))
                     .font(metrics.micro)
@@ -4846,20 +4815,14 @@ struct CoordinatorModeView: View {
             metrics: metrics
         ) {
             VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                HStack(spacing: metrics.smallSpacing) {
-                    if let shape {
-                        statusChip("Shape · \(shape.displayName)", color: .secondary, metrics: metrics)
-                    }
-                    if let namedClose = shape?.namedClose {
-                        statusChip("Close · \(namedClose)", color: .secondary, metrics: metrics)
-                    }
-                    if let policy {
-                        statusChip(coordinatorPolicyDisplayTitle(policy), color: .secondary, metrics: metrics)
-                            .hoverTooltip(coordinatorPolicyEditDiffs(policy).isEmpty ? "Mission Policy · \(policy.name)" : coordinatorPolicyEditDiffs(policy).joined(separator: "\n"))
-                        statusChip("Cap · \(policy.maxConcurrent)", color: .secondary, metrics: metrics)
-                        statusChip("Pace · \(policy.defaultPace.rawValue)", color: .secondary, metrics: metrics)
-                    }
-                }
+                mutedMetadataLine(
+                    CoordinatorMissionPresentationPolicy.uniqueMetadataParts([
+                        shape.map { "shape \($0.displayName)" },
+                        shape?.namedClose.map { "close \($0)" },
+                        policy.map { CoordinatorMissionPresentationPolicy.policyMetadataLine(for: $0) }
+                    ]),
+                    metrics: metrics
+                )
                 if let reason = shape?.reason {
                     Text(reason)
                         .font(metrics.micro)
@@ -4901,8 +4864,10 @@ struct CoordinatorModeView: View {
             metrics: metrics
         ) {
             HStack(spacing: metrics.smallSpacing) {
-                statusChip("Needed you · \(userCount)", color: .green, metrics: metrics)
-                statusChip("Decided itself · \(directorCount)", color: .secondary, metrics: metrics)
+                mutedMetadataLine(
+                    ["Needed you \(userCount)", "Decided itself \(directorCount)"],
+                    metrics: metrics
+                )
                 Spacer(minLength: metrics.smallSpacing)
                 Button {
                     viewModel.showMissionDestination()
@@ -6881,6 +6846,18 @@ struct CoordinatorModeView: View {
         }
     }
 
+    @ViewBuilder
+    private func mutedMetadataLine(_ parts: [String], metrics: CoordinatorVisualMetrics) -> some View {
+        if !parts.isEmpty {
+            Text(parts.joined(separator: " · "))
+                .font(metrics.micro)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private func statusChip(_ text: String, color: Color, metrics: CoordinatorVisualMetrics) -> some View {
         CoordinatorPill(
             title: text,
@@ -7180,6 +7157,10 @@ private struct CoordinatorVisualMetrics {
 
     var inspectorWidth: CGFloat {
         fontPreset.scaledClamped(300, min: 300, max: 360)
+    }
+
+    var inspectorCollapsedWidth: CGFloat {
+        fontPreset.scaledClamped(52, min: 48, max: 58)
     }
 
     var inspectorHandleWidth: CGFloat {
