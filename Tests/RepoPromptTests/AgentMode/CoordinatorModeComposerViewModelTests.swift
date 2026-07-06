@@ -290,6 +290,140 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedMissionPolicy, .defaultPolicy)
     }
 
+    func testFreshMissionDialsAreCapturedInProviderTextAndPolicySnapshot() async throws {
+        let coordinatorID = uuid(1)
+        var liveSessions: [CoordinatorModeSnapshotProjector.LiveSession] = []
+        var demoCoordinatorIDs: Set<UUID> = []
+        var state = CoordinatorFollowThroughState()
+        var submissions: [CoordinatorDirectiveSubmission] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: liveSessions,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    autoSelectDemoCoordinator: false,
+                    sort: sortMode,
+                    demoCoordinatorIDs: demoCoordinatorIDs
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { submission in
+                submissions.append(submission)
+                liveSessions = [
+                    self.live(
+                        id: coordinatorID,
+                        tab: self.uuid(101),
+                        title: "Director",
+                        updatedAt: self.date(30),
+                        state: .idle,
+                        isMCP: true,
+                        coordinatorRuntime: true,
+                        missionPlan: state.missionPlan
+                    )
+                ]
+                demoCoordinatorIDs.insert(coordinatorID)
+                return .accepted
+            },
+            missionPlanUpdater: { sessionID, update in
+                XCTAssertEqual(sessionID, coordinatorID)
+                state.updateMissionPlan(update)
+                liveSessions = [
+                    self.live(
+                        id: coordinatorID,
+                        tab: self.uuid(101),
+                        title: "Director",
+                        updatedAt: self.date(31),
+                        state: .idle,
+                        isMCP: true,
+                        coordinatorRuntime: true,
+                        missionPlan: state.missionPlan
+                    )
+                ]
+            }
+        )
+        viewModel.refresh()
+
+        viewModel.setExecutionPace(.auto)
+        viewModel.setChildAskSelection(.auto)
+        let result = await viewModel.submitCoordinatorDirective("Run the smoke mission")
+
+        XCTAssertEqual(result, .accepted)
+        let submission = try XCTUnwrap(submissions.first)
+        XCTAssertTrue(submission.providerText.contains("Default pace: auto"))
+        XCTAssertTrue(submission.providerText.contains("childAsk=auto"))
+        XCTAssertEqual(submission.missionPolicySnapshot?.defaultPace, .auto)
+        XCTAssertEqual(submission.missionPolicySnapshot?.resolvedAutonomy(for: .childAsk), .auto)
+        XCTAssertEqual(state.missionPlan?.policySnapshot?.defaultPace, .auto)
+        XCTAssertEqual(state.missionPlan?.policySnapshot?.resolvedAutonomy(for: .childAsk), .auto)
+        XCTAssertEqual(state.missionPlan?.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key], .auto)
+    }
+
+    func testMissionDialsMutatePlanSnapshotAndRecordLedgerWithoutClearingApprovalCheckpoint() throws {
+        let coordinatorID = uuid(1)
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Smoke the platform layer",
+            status: .running,
+            approvalState: .awaitingApproval,
+            policySnapshot: .defaultPolicy,
+            autonomy: CoordinatorMissionPolicySnapshot.defaultAutonomy
+        ))
+        var liveSessions = [
+            live(
+                id: coordinatorID,
+                tab: uuid(101),
+                title: "Director",
+                updatedAt: date(20),
+                state: .idle,
+                isMCP: true,
+                coordinatorRuntime: true,
+                missionPlan: state.missionPlan
+            )
+        ]
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: liveSessions,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            missionPlanUpdater: { sessionID, update in
+                XCTAssertEqual(sessionID, coordinatorID)
+                state.updateMissionPlan(update)
+                liveSessions = [
+                    self.live(
+                        id: coordinatorID,
+                        tab: self.uuid(101),
+                        title: "Director",
+                        updatedAt: self.date(21),
+                        state: .idle,
+                        isMCP: true,
+                        coordinatorRuntime: true,
+                        missionPlan: state.missionPlan
+                    )
+                ]
+            }
+        )
+        viewModel.refresh()
+
+        viewModel.setExecutionPace(.auto)
+        var plan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(plan.policySnapshot?.defaultPace, .auto)
+        XCTAssertEqual(plan.approvalState, .awaitingApproval)
+        XCTAssertEqual(plan.decisions.last?.label, CoordinatorMissionUserDecisionLabel.setPaceToAuto.rawValue)
+        XCTAssertEqual(plan.decisions.last?.actor, .user)
+
+        viewModel.setChildAskSelection(.auto)
+        plan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(plan.policySnapshot?.resolvedAutonomy(for: .childAsk), .auto)
+        XCTAssertEqual(plan.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key], .auto)
+        XCTAssertEqual(plan.approvalState, .awaitingApproval)
+        XCTAssertEqual(plan.decisions.last?.label, CoordinatorMissionUserDecisionLabel.routedChildQuestionsToDirector.rawValue)
+        XCTAssertEqual(plan.decisions.last?.actor, .user)
+    }
+
     func testMissionPlanUpdaterRefreshesSelectedCoordinatorSnapshot() throws {
         let coordinatorID = uuid(1)
         let workstream = CoordinatorMissionWorkstreamSummary(
@@ -908,7 +1042,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.railTranscriptEntries.map(\.text), ["first directive", "first answer"])
     }
 
-    func testExecutionPaceDefaultsStepAndPersistsChanges() throws {
+    func testExecutionPaceDefaultsToDraftPolicyInsteadOfRestoringGlobalPreference() throws {
         let suiteName = "CoordinatorModeComposerViewModelTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
@@ -931,8 +1065,13 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             dashboardVisibilityHandler: { _ in },
             userDefaults: defaults
         )
+        XCTAssertEqual(restored.executionPace, .step)
+        XCTAssertFalse(restored.usesAutoMode)
+
+        restored.selectedMissionPolicy = .handsOff
         XCTAssertEqual(restored.executionPace, .auto)
-        XCTAssertTrue(restored.usesAutoMode)
+        XCTAssertEqual(restored.missionPaceSelection, .auto)
+        XCTAssertEqual(restored.childAskSelection, .auto)
     }
 
     func testStepPaceExposesPendingFollowThroughEventAndAutoHidesIt() throws {

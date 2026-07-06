@@ -862,7 +862,7 @@ struct CoordinatorModeView: View {
         HStack(spacing: metrics.headerSegmentSpacing) {
             headerSegmentButton(
                 title: "Step",
-                isSelected: !viewModel.usesAutoMode,
+                isSelected: viewModel.missionPaceSelection == .step,
                 metrics: metrics
             ) {
                 viewModel.setExecutionPace(.step)
@@ -870,7 +870,7 @@ struct CoordinatorModeView: View {
 
             headerSegmentButton(
                 title: "Auto",
-                isSelected: viewModel.usesAutoMode,
+                isSelected: viewModel.missionPaceSelection == .auto,
                 metrics: metrics
             ) {
                 viewModel.setExecutionPace(.auto)
@@ -1775,7 +1775,7 @@ struct CoordinatorModeView: View {
                     }
                 }
 
-                coordinatorDraftPolicySummary(viewModel.selectedMissionPolicy, metrics: metrics)
+                coordinatorDraftPolicySummary(coordinatorEffectivePolicySnapshot(viewModel.snapshot.coordinatorRail), metrics: metrics)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -2101,7 +2101,8 @@ struct CoordinatorModeView: View {
                     .layoutPriority(3)
             }
             if let policySnapshot = plan.policySnapshot {
-                statusChip("Policy · \(policySnapshot.name)", color: .secondary, metrics: metrics)
+                statusChip(coordinatorPolicyDisplayTitle(policySnapshot), color: .secondary, metrics: metrics)
+                    .hoverTooltip(coordinatorPolicyEditDiffs(policySnapshot).isEmpty ? "Mission Policy · \(policySnapshot.name)" : coordinatorPolicyEditDiffs(policySnapshot).joined(separator: "\n"))
                     .layoutPriority(1)
             }
             Spacer(minLength: 0)
@@ -2164,7 +2165,8 @@ struct CoordinatorModeView: View {
 
                 if let policySnapshot = plan.policySnapshot {
                     HStack(spacing: metrics.smallSpacing) {
-                        statusChip("Policy · \(policySnapshot.name)", color: .secondary, metrics: metrics)
+                        statusChip(coordinatorPolicyDisplayTitle(policySnapshot), color: .secondary, metrics: metrics)
+                            .hoverTooltip(coordinatorPolicyEditDiffs(policySnapshot).isEmpty ? "Mission Policy · \(policySnapshot.name)" : coordinatorPolicyEditDiffs(policySnapshot).joined(separator: "\n"))
                         statusChip("cap \(policySnapshot.maxConcurrent)", color: .secondary, metrics: metrics)
                         statusChip(policySnapshot.defaultPace.rawValue, color: .secondary, metrics: metrics)
                     }
@@ -4681,7 +4683,8 @@ struct CoordinatorModeView: View {
                         statusChip("Close · \(namedClose)", color: .secondary, metrics: metrics)
                     }
                     if let policy {
-                        statusChip("Policy · \(policy.name)", color: .secondary, metrics: metrics)
+                        statusChip(coordinatorPolicyDisplayTitle(policy), color: .secondary, metrics: metrics)
+                            .hoverTooltip(coordinatorPolicyEditDiffs(policy).isEmpty ? "Mission Policy · \(policy.name)" : coordinatorPolicyEditDiffs(policy).joined(separator: "\n"))
                         statusChip("Cap · \(policy.maxConcurrent)", color: .secondary, metrics: metrics)
                         statusChip("Pace · \(policy.defaultPace.rawValue)", color: .secondary, metrics: metrics)
                     }
@@ -5502,12 +5505,14 @@ struct CoordinatorModeView: View {
         return HStack(spacing: metrics.smallSpacing) {
             if !isChildReply {
                 coordinatorComposerAutomationModeToggle(metrics: metrics)
+                coordinatorComposerChildAskToggle(metrics: metrics)
                 coordinatorComposerToolsButton(metrics: metrics)
             }
 
             Spacer(minLength: metrics.smallSpacing)
 
-            Text(isChildReply ? "Child needs your reply" : coordinatorComposerPolicyEchoText(rail))
+            let policyEcho = coordinatorComposerPolicyEcho(rail)
+            Text(isChildReply ? "Child needs your reply" : policyEcho.text)
                 .font(metrics.microMedium)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -5515,6 +5520,7 @@ struct CoordinatorModeView: View {
                 .multilineTextAlignment(.trailing)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .layoutPriority(1)
+                .hoverTooltip(isChildReply ? "Answer the child question." : policyEcho.tooltip)
 
             HStack(spacing: metrics.tightSpacing) {
                 if !isChildReply, viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission {
@@ -5539,12 +5545,66 @@ struct CoordinatorModeView: View {
         .padding(.horizontal, metrics.composerControlHorizontalPadding)
     }
 
-    private func coordinatorComposerPolicyEchoText(_ rail: CoordinatorModeCoordinatorRail) -> String {
-        let policyName = rail.missionSummary?.policy?.name ?? rail.missionPlan?.policySnapshot?.name
-        let policy = policyName.flatMap { name in
-            CoordinatorMissionPolicySnapshot.builtInPolicies.first { $0.name == name }
-        } ?? viewModel.selectedMissionPolicy
-        return "Policy · \(policy.name) · always asks: \(coordinatorPolicyAlwaysAsksText(policy).replacingOccurrences(of: ", ", with: " · "))"
+    private func coordinatorComposerPolicyEcho(_ rail: CoordinatorModeCoordinatorRail) -> (text: String, tooltip: String) {
+        let policy = coordinatorEffectivePolicySnapshot(rail)
+        let diffs = coordinatorPolicyEditDiffs(policy)
+        if diffs.isEmpty {
+            return (
+                "Policy · \(policy.name) · always asks: \(coordinatorPolicyAlwaysAsksText(policy).replacingOccurrences(of: ", ", with: " · "))",
+                "Mission Policy · \(policy.name)"
+            )
+        }
+        return (
+            "Policy · \(policy.name) · edited",
+            diffs.joined(separator: "\n")
+        )
+    }
+
+    private func coordinatorEffectivePolicySnapshot(_ rail: CoordinatorModeCoordinatorRail) -> CoordinatorMissionPolicySnapshot {
+        if let policySnapshot = rail.missionPlan?.policySnapshot {
+            return policySnapshot
+        }
+        var policySnapshot = viewModel.selectedMissionPolicy
+        policySnapshot.defaultPace = viewModel.missionPaceSelection
+        policySnapshot.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key] = viewModel.childAskSelection
+        return policySnapshot
+    }
+
+    private func coordinatorPolicyEditDiffs(_ policy: CoordinatorMissionPolicySnapshot) -> [String] {
+        guard let base = CoordinatorMissionPolicySnapshot.builtInPolicies.first(where: { $0.id == policy.id }) else { return [] }
+        var diffs: [String] = []
+        if base.defaultPace != policy.defaultPace {
+            diffs.append("pace → \(coordinatorPaceDisplayName(policy.defaultPace))")
+        }
+        let baseChildAsk = base.resolvedAutonomy(for: .childAsk)
+        let childAsk = policy.resolvedAutonomy(for: .childAsk)
+        if baseChildAsk != childAsk {
+            diffs.append("questions → \(coordinatorChildAskDisplayName(childAsk))")
+        }
+        return diffs
+    }
+
+    private func coordinatorPolicyDisplayTitle(_ policy: CoordinatorMissionPolicySnapshot) -> String {
+        let suffix = coordinatorPolicyEditDiffs(policy).isEmpty ? "" : " · edited"
+        return "Policy · \(policy.name)\(suffix)"
+    }
+
+    private func coordinatorPaceDisplayName(_ pace: CoordinatorMissionPolicyPace) -> String {
+        switch pace {
+        case .step:
+            "Step"
+        case .auto:
+            "Auto"
+        }
+    }
+
+    private func coordinatorChildAskDisplayName(_ mode: CoordinatorMissionAutonomyMode) -> String {
+        switch mode {
+        case .ask:
+            "Me"
+        case .auto:
+            "Director"
+        }
     }
 
     private func coordinatorComposerStopButton(metrics: CoordinatorVisualMetrics) -> some View {
@@ -5830,7 +5890,7 @@ struct CoordinatorModeView: View {
         HStack(spacing: metrics.composerSegmentedPillSpacing) {
             coordinatorComposerAutomationModeButton(
                 title: "Step",
-                isSelected: !viewModel.usesAutoMode,
+                isSelected: viewModel.missionPaceSelection == .step,
                 metrics: metrics
             ) {
                 viewModel.setExecutionPace(.step)
@@ -5838,7 +5898,7 @@ struct CoordinatorModeView: View {
 
             coordinatorComposerAutomationModeButton(
                 title: "Auto",
-                isSelected: viewModel.usesAutoMode,
+                isSelected: viewModel.missionPaceSelection == .auto,
                 metrics: metrics
             ) {
                 viewModel.setExecutionPace(.auto)
@@ -5854,6 +5914,37 @@ struct CoordinatorModeView: View {
                 .stroke(CoordinatorStyle.hairline.opacity(0.7), lineWidth: 0.5)
         )
         .accessibilityLabel("Director chat automation mode")
+    }
+
+    private func coordinatorComposerChildAskToggle(metrics: CoordinatorVisualMetrics) -> some View {
+        HStack(spacing: metrics.composerSegmentedPillSpacing) {
+            coordinatorComposerAutomationModeButton(
+                title: "Me",
+                isSelected: viewModel.childAskSelection == .ask,
+                metrics: metrics
+            ) {
+                viewModel.setChildAskSelection(.ask)
+            }
+
+            coordinatorComposerAutomationModeButton(
+                title: "Director",
+                isSelected: viewModel.childAskSelection == .auto,
+                metrics: metrics
+            ) {
+                viewModel.setChildAskSelection(.auto)
+            }
+        }
+        .padding(metrics.composerToggleInset)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.28))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(CoordinatorStyle.hairline.opacity(0.7), lineWidth: 0.5)
+        )
+        .accessibilityLabel("Director child question routing")
+        .hoverTooltip("Who answers delegated workers' questions. Me pauses for you; Director answers from mission context.")
     }
 
     private func coordinatorComposerAutomationModeButton(

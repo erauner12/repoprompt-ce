@@ -195,9 +195,17 @@ final class CoordinatorModeViewModel: ObservableObject {
     @Published private(set) var composerNotice: String?
     @Published private(set) var isFreshCoordinatorRunPending = false
     @Published private(set) var executionPace: CoordinatorExecutionPace
+    @Published private(set) var missionPaceSelection: CoordinatorMissionPolicyPace
+    @Published private(set) var childAskSelection: CoordinatorMissionAutonomyMode
     @Published private(set) var pendingFollowThroughEvent: CoordinatorFollowThroughEvent?
     @Published private(set) var railDestination: RailDestination = .mission
-    @Published var selectedMissionPolicy: CoordinatorMissionPolicySnapshot = .defaultPolicy
+    @Published var selectedMissionPolicy: CoordinatorMissionPolicySnapshot = .defaultPolicy {
+        didSet {
+            guard selectedMissionPolicy != oldValue else { return }
+            syncDraftDialSelectionsFromSelectedPolicy()
+        }
+    }
+
     @Published var sortMode: CoordinatorModeSortMode = .lastUpdated {
         didSet {
             guard sortMode != oldValue else { return }
@@ -254,6 +262,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private var lastDurableRailStatusEntryKey: String?
     private var displayedDelegateActionTargetIDs: Set<UUID> = []
     private var pendingAcceptedDirectiveDecision: PendingMissionUserDecision?
+    private var draftDialOverridesPolicy = false
     private(set) var isVisible = false
 
     private struct PendingMissionUserDecision {
@@ -315,11 +324,17 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.followThroughEventResolver = followThroughEventResolver
         self.projector = projector
         self.userDefaults = userDefaults
-        executionPace = CoordinatorModeAutomationPreference.executionPace(defaults: userDefaults)
+        let storedPace = CoordinatorModeAutomationPreference.executionPace(defaults: userDefaults)
+        executionPace = CoordinatorExecutionPace(CoordinatorMissionPolicySnapshot.defaultPolicy.defaultPace)
+        missionPaceSelection = CoordinatorMissionPolicySnapshot.defaultPolicy.defaultPace
+        childAskSelection = CoordinatorMissionPolicySnapshot.defaultPolicy.resolvedAutonomy(for: .childAsk)
+        if storedPace.missionPolicyPace != missionPaceSelection {
+            CoordinatorModeAutomationPreference.setExecutionPace(executionPace, defaults: userDefaults)
+        }
     }
 
     var usesAutoMode: Bool {
-        executionPace.usesAutoMode
+        missionPaceSelection == .auto
     }
 
     func setVisible(_ visible: Bool) {
@@ -342,6 +357,40 @@ final class CoordinatorModeViewModel: ObservableObject {
         let isNewDraft = selectionState == .newDraft
         isFreshCoordinatorRunPending = isNewDraft
         publishIfChanged(isNewDraft ? pendingFreshCoordinatorSnapshot(from: projected) : projected)
+    }
+
+    private func syncDraftDialSelectionsFromSelectedPolicy() {
+        draftDialOverridesPolicy = false
+        missionPaceSelection = selectedMissionPolicy.defaultPace
+        executionPace = CoordinatorExecutionPace(selectedMissionPolicy.defaultPace)
+        childAskSelection = selectedMissionPolicy.resolvedAutonomy(for: .childAsk)
+    }
+
+    private func syncDialSelections(from rail: CoordinatorModeCoordinatorRail) {
+        if rail.state == .chooseCoordinator {
+            if !draftDialOverridesPolicy {
+                syncDraftDialSelectionsFromSelectedPolicy()
+            }
+            return
+        }
+        guard let plan = rail.missionPlan else { return }
+        if let policySnapshot = plan.policySnapshot {
+            missionPaceSelection = policySnapshot.defaultPace
+            executionPace = CoordinatorExecutionPace(policySnapshot.defaultPace)
+            childAskSelection = policySnapshot.resolvedAutonomy(for: .childAsk)
+        } else {
+            childAskSelection = CoordinatorMissionPolicySnapshot.resolveAutonomy(
+                plan.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key],
+                for: CoordinatorMissionAutonomyClasses.childAsk.key
+            )
+        }
+    }
+
+    private func effectiveSelectedMissionPolicySnapshot() -> CoordinatorMissionPolicySnapshot {
+        var policySnapshot = selectedMissionPolicy
+        policySnapshot.defaultPace = missionPaceSelection
+        policySnapshot.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key] = childAskSelection
+        return policySnapshot
     }
 
     func updateMissionPlan(
@@ -569,20 +618,128 @@ final class CoordinatorModeViewModel: ObservableObject {
     }
 
     func setExecutionPace(_ executionPace: CoordinatorExecutionPace) {
-        guard self.executionPace != executionPace else { return }
+        setMissionPaceSelection(executionPace.missionPolicyPace)
+    }
+
+    func setMissionPaceSelection(_ pace: CoordinatorMissionPolicyPace) {
+        guard missionPaceSelection != pace else { return }
         let pendingEventBeforeChange = pendingFollowThroughEvent
-        self.executionPace = executionPace
+        missionPaceSelection = pace
+        executionPace = CoordinatorExecutionPace(pace)
         CoordinatorModeAutomationPreference.setExecutionPace(executionPace, defaults: userDefaults)
-        pendingFollowThroughEvent = executionPace.usesAutoMode
+
+        if snapshot.coordinatorRail.state == .chooseCoordinator || snapshot.coordinatorRail.missionPlan == nil {
+            draftDialOverridesPolicy = true
+        } else {
+            applyMissionPaceOverride(pace)
+        }
+
+        pendingFollowThroughEvent = pace == .auto
             ? nil
             : pendingFollowThroughEventProvider(snapshot.coordinatorRail.coordinatorSessionID)
-        if executionPace == .auto,
+        if pace == .auto,
            snapshot.coordinatorRail.isComposerSendEnabled,
            let pendingEventBeforeChange
         {
             Task { @MainActor in
                 await submitPendingFollowThroughEvent(pendingEventBeforeChange)
             }
+        }
+    }
+
+    func setChildAskSelection(_ mode: CoordinatorMissionAutonomyMode) {
+        guard childAskSelection != mode else { return }
+        childAskSelection = mode
+        if snapshot.coordinatorRail.state == .chooseCoordinator || snapshot.coordinatorRail.missionPlan == nil {
+            draftDialOverridesPolicy = true
+        } else {
+            applyMissionChildAskOverride(mode)
+        }
+    }
+
+    private func applyMissionPaceOverride(_ pace: CoordinatorMissionPolicyPace) {
+        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID,
+              let plan = snapshot.coordinatorRail.missionPlan
+        else { return }
+        var policySnapshot = plan.policySnapshot ?? CoordinatorMissionPolicySnapshot.defaultPolicy
+        policySnapshot.defaultPace = pace
+        let timestamp = Date()
+        applyMissionDialOverride(
+            coordinatorSessionID: coordinatorSessionID,
+            plan: plan,
+            policySnapshot: policySnapshot,
+            autonomy: nil,
+            label: pace == .auto ? .setPaceToAuto : .setPaceToStep,
+            decisionClass: .advance,
+            checkpointSubject: "pace",
+            timestamp: timestamp
+        )
+    }
+
+    private func applyMissionChildAskOverride(_ mode: CoordinatorMissionAutonomyMode) {
+        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID,
+              let plan = snapshot.coordinatorRail.missionPlan
+        else { return }
+        let key = CoordinatorMissionAutonomyClasses.childAsk.key
+        var policySnapshot = plan.policySnapshot ?? CoordinatorMissionPolicySnapshot.defaultPolicy
+        var autonomy = plan.autonomy
+        if autonomy.isEmpty {
+            autonomy = policySnapshot.autonomy
+        }
+        policySnapshot.autonomy[key] = mode
+        autonomy[key] = mode
+        let timestamp = Date()
+        applyMissionDialOverride(
+            coordinatorSessionID: coordinatorSessionID,
+            plan: plan,
+            policySnapshot: policySnapshot,
+            autonomy: autonomy,
+            label: mode == .ask ? .routedChildQuestionsToMe : .routedChildQuestionsToDirector,
+            decisionClass: .childAsk,
+            checkpointSubject: "childAsk",
+            timestamp: timestamp
+        )
+    }
+
+    private func applyMissionDialOverride(
+        coordinatorSessionID: UUID,
+        plan: CoordinatorMissionPlan,
+        policySnapshot: CoordinatorMissionPolicySnapshot,
+        autonomy: [String: CoordinatorMissionAutonomyMode]?,
+        label: CoordinatorMissionUserDecisionLabel,
+        decisionClass: CoordinatorMissionDecisionClass,
+        checkpointSubject: String,
+        timestamp: Date
+    ) {
+        let checkpointInstanceID = [
+            "mission-policy",
+            coordinatorSessionID.uuidString,
+            "r\(plan.revision)",
+            checkpointSubject,
+            "\(timestamp.timeIntervalSince1970)"
+        ].joined(separator: ":")
+        let record = CoordinatorMissionDecisionRecord(
+            decisionClass: decisionClass.rawValue,
+            actor: .user,
+            label: label.rawValue,
+            timestamp: timestamp,
+            sessionID: coordinatorSessionID,
+            checkpointID: Self.missionPolicyOverrideCheckpointID,
+            checkpointInstanceID: checkpointInstanceID
+        )
+        do {
+            try missionPlanUpdater(
+                coordinatorSessionID,
+                CoordinatorMissionPlanUpdate(
+                    policySnapshot: policySnapshot,
+                    autonomy: autonomy,
+                    decisions: [record],
+                    updatedAt: timestamp
+                )
+            )
+            refresh()
+        } catch {
+            composerNotice = "Mission policy could not be updated: \(error.localizedDescription)"
         }
     }
 
@@ -610,7 +767,7 @@ final class CoordinatorModeViewModel: ObservableObject {
             }
         }
 
-        let missionPolicySnapshot = forceNewRuntime ? selectedMissionPolicy : nil
+        let missionPolicySnapshot = forceNewRuntime ? effectiveSelectedMissionPolicySnapshot() : nil
         let submission = CoordinatorDirectiveSubmission(
             visibleText: trimmed,
             providerText: Self.providerText(trimmed, policySnapshot: missionPolicySnapshot),
@@ -635,6 +792,7 @@ final class CoordinatorModeViewModel: ObservableObject {
                     previousCoordinatorIDs: previousCoordinatorIDs
                 )
                 selectedMissionPolicy = .defaultPolicy
+                syncDraftDialSelectionsFromSelectedPolicy()
             }
             let acceptedDirectiveDecision = pendingAcceptedDirectiveDecision
             pendingAcceptedDirectiveDecision = nil
@@ -717,6 +875,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private static let stepCheckInCheckpointID = "step-check-in"
     private static let childQuestionCheckpointID = "child-question"
     private static let missionStopCheckpointID = "mission-stop"
+    private static let missionPolicyOverrideCheckpointID = "mission-policy-override"
 
     private func missionUserDecisionRecord(for action: ContinuationAction) -> PendingMissionUserDecision? {
         switch action {
@@ -1060,6 +1219,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
         updateRailStatusPresentation(from: nextSnapshot.coordinatorRail)
         updateRailActionPresentation(from: nextSnapshot)
+        syncDialSelections(from: nextSnapshot.coordinatorRail)
         syncRailConversationTranscript(for: nextCoordinatorSessionID)
         mergeMissionLedgerEntries(from: nextSnapshot.coordinatorRail.missionPlan)
         let nextPendingFollowThroughEvent = usesAutoMode
@@ -1791,7 +1951,7 @@ extension AgentModeViewModel {
         var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
         guard state.originalObjectiveSummary?.isEmpty == false else { return }
         guard state.missionPlan?.status != .stopped else { return }
-        let shouldAutoSubmit = coordinatorModeViewModel.usesAutoMode
+        let shouldAutoSubmit = state.missionPlan?.policySnapshot?.defaultPace == .auto
 
         let ownedRows = rows.filter { $0.parentCoordinator?.sessionID == coordinatorSessionID }
         defer {

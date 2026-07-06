@@ -755,12 +755,44 @@ enum CoordinatorMissionDecisionClass: String, Codable, Equatable, Hashable, Case
     case irreversible
 }
 
+struct CoordinatorMissionAutonomyClass: Equatable, Identifiable {
+    var id: String {
+        key
+    }
+
+    let key: String
+    let displayName: String
+    let description: String
+    let defaultMode: CoordinatorMissionAutonomyMode
+}
+
+enum CoordinatorMissionAutonomyClasses {
+    static let childAsk = CoordinatorMissionAutonomyClass(
+        key: CoordinatorMissionDecisionClass.childAsk.rawValue,
+        displayName: "Child questions",
+        description: "Who answers delegated workers when they need direction.",
+        defaultMode: CoordinatorMissionPolicySnapshot.defaultAutonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] ?? .ask
+    )
+
+    static let all: [CoordinatorMissionAutonomyClass] = [
+        childAsk
+    ]
+
+    static func definition(for key: String) -> CoordinatorMissionAutonomyClass? {
+        all.first { $0.key == key }
+    }
+}
+
 enum CoordinatorMissionUserDecisionLabel: String, Codable, Equatable, CaseIterable {
     case approvedMissionPlan = "approved the Mission plan"
     case requestedPlanRevision = "requested plan revision"
     case stoppedMission = "stopped the Mission"
     case continuedPastStepCheckIn = "continued past a step check-in"
     case answeredChildQuestion = "answered a child question"
+    case setPaceToAuto = "set pace to Auto"
+    case setPaceToStep = "set pace to Step"
+    case routedChildQuestionsToMe = "routed child questions to Me"
+    case routedChildQuestionsToDirector = "routed child questions to the Director"
 }
 
 enum CoordinatorMissionDecisionActor: String, Codable, Equatable, CaseIterable {

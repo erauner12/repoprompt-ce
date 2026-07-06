@@ -4,8 +4,26 @@ enum CoordinatorExecutionPace: String, Codable, Equatable, CaseIterable {
     case step
     case auto
 
+    init(_ missionPace: CoordinatorMissionPolicyPace) {
+        switch missionPace {
+        case .step:
+            self = .step
+        case .auto:
+            self = .auto
+        }
+    }
+
     var usesAutoMode: Bool {
         self == .auto
+    }
+
+    var missionPolicyPace: CoordinatorMissionPolicyPace {
+        switch self {
+        case .step:
+            .step
+        case .auto:
+            .auto
+        }
     }
 }
 
