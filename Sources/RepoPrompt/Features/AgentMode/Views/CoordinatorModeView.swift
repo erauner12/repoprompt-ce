@@ -719,7 +719,7 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         HStack(spacing: metrics.controlSpacing) {
-            Label("Board", systemImage: "rectangle.3.group.bubble")
+            Label("Agent Board", systemImage: "rectangle.3.group.bubble")
                 .font(metrics.bodySemibold)
                 .foregroundStyle(.primary)
 
@@ -907,7 +907,7 @@ struct CoordinatorModeView: View {
     }
 
     private func forceListLabel(metrics: CoordinatorVisualMetrics) -> some View {
-        Label("Board falls back to List at narrow widths", systemImage: "rectangle.split.2x1")
+        Label("Agent Board falls back to List at narrow widths", systemImage: "rectangle.split.2x1")
             .font(metrics.body)
             .foregroundStyle(.secondary)
     }
@@ -1047,8 +1047,8 @@ struct CoordinatorModeView: View {
         let pendingDecisionAttentionCount = coordinatorPendingDecisionAttentionCount(snapshot)
         return VStack(alignment: .leading, spacing: metrics.tightSpacing) {
             coordinatorNavigationButton(
-                title: "Board",
-                subtitle: "Active work across Director Missions",
+                title: "Agent Board",
+                subtitle: "Live delegated Agents across Director Missions",
                 systemImage: "rectangle.3.group.bubble",
                 badgeCount: snapshot.counts.liveRows,
                 destination: .board,
@@ -6190,7 +6190,7 @@ struct CoordinatorModeView: View {
                 .foregroundStyle(.secondary)
             Text(snapshot.workspaceID == nil ? "Open a workspace" : (isAllAgents ? "No active delegated work yet" : "No delegated work yet"))
                 .font(metrics.headerTitle)
-            Text(isAllAgents ? "The board shows active delegated work across Director Missions." : "The board shows delegated work from the selected Mission.")
+            Text(isAllAgents ? "The Agent Board shows live delegated work across Director Missions." : "The board shows delegated work from the selected Mission.")
                 .font(metrics.sectionTitle)
                 .foregroundStyle(.secondary)
         }
@@ -7963,7 +7963,7 @@ private extension CoordinatorModeBoardScope {
     var displayName: String {
         switch self {
         case .coordinatorFleet: "Missions"
-        case .allAgents: "Board"
+        case .allAgents: "Agent Board"
         }
     }
 
