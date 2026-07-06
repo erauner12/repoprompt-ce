@@ -137,6 +137,12 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
     }
 
+    enum RailDestination: Equatable {
+        case mission
+        case board
+        case decisions
+    }
+
     struct ChildInteractionResponseSubmission: Equatable {
         var text: String?
         var skip: Bool
@@ -190,6 +196,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     @Published private(set) var isFreshCoordinatorRunPending = false
     @Published private(set) var executionPace: CoordinatorExecutionPace
     @Published private(set) var pendingFollowThroughEvent: CoordinatorFollowThroughEvent?
+    @Published private(set) var railDestination: RailDestination = .mission
     @Published var selectedMissionTemplate: CoordinatorMissionTemplate?
     @Published var selectedMissionPolicy: CoordinatorMissionPolicySnapshot = .defaultPolicy
     @Published var sortMode: CoordinatorModeSortMode = .lastUpdated {
@@ -204,6 +211,24 @@ final class CoordinatorModeViewModel: ObservableObject {
             guard boardScope != oldValue else { return }
             refresh()
         }
+    }
+
+    func showMissionDestination() {
+        railDestination = .mission
+        if boardScope != .coordinatorFleet {
+            boardScope = .coordinatorFleet
+        }
+    }
+
+    func showBoardDestination() {
+        if boardScope != .allAgents {
+            boardScope = .allAgents
+        }
+        railDestination = .board
+    }
+
+    func showDecisionsDestination() {
+        railDestination = .decisions
     }
 
     private let inputProvider: InputProvider
@@ -486,7 +511,12 @@ final class CoordinatorModeViewModel: ObservableObject {
             isFreshCoordinatorRunPending = false
         }
         coordinatorSelectionByWorkspaceID[workspaceID] = sessionID.map(CoordinatorSelectionState.session) ?? .newDraft
-        refresh()
+        railDestination = .mission
+        if boardScope != .coordinatorFleet {
+            boardScope = .coordinatorFleet
+        } else {
+            refresh()
+        }
         if let sessionID,
            let option = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == sessionID }),
            option.isPersistedOnly || !option.isLiveInCurrentWindow
@@ -509,7 +539,12 @@ final class CoordinatorModeViewModel: ObservableObject {
         if let workspaceID = snapshot.workspaceID ?? inputProvider(sortMode, nil).workspaceID {
             coordinatorSelectionByWorkspaceID[workspaceID] = .newDraft
         }
-        refresh()
+        railDestination = .mission
+        if boardScope != .coordinatorFleet {
+            boardScope = .coordinatorFleet
+        } else {
+            refresh()
+        }
         composerNotice = nil
     }
 

@@ -303,7 +303,7 @@ struct CoordinatorModeView: View {
     }
 
     private func shouldShowRightMissionPlan(for snapshot: CoordinatorModeSnapshot) -> Bool {
-        snapshot.boardScope != .allAgents
+        viewModel.railDestination == .mission
             && snapshot.coordinatorRail.state == .selected
             && snapshot.coordinatorRail.missionPlan != nil
             && isMissionPlanPaneVisible
@@ -317,7 +317,14 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         Group {
-            if snapshot.boardScope == .allAgents {
+            switch viewModel.railDestination {
+            case .mission:
+                if snapshot.coordinatorRail.state == .chooseCoordinator {
+                    coordinatorDraftCenter(rail: snapshot.coordinatorRail, metrics: metrics)
+                } else {
+                    coordinatorConversation(snapshot.coordinatorRail, metrics: metrics)
+                }
+            case .board:
                 coordinatorBoardContent(
                     snapshot: snapshot,
                     sections: sections,
@@ -325,10 +332,8 @@ struct CoordinatorModeView: View {
                     forceList: forceList,
                     metrics: metrics
                 )
-            } else if snapshot.coordinatorRail.state == .chooseCoordinator {
-                coordinatorDraftCenter(rail: snapshot.coordinatorRail, metrics: metrics)
-            } else {
-                coordinatorConversation(snapshot.coordinatorRail, metrics: metrics)
+            case .decisions:
+                coordinatorDecisionsPlaceholder(snapshot: snapshot, metrics: metrics)
             }
         }
     }
@@ -467,6 +472,53 @@ struct CoordinatorModeView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             boardFilterBar(metrics: metrics)
+        }
+        .background(CoordinatorTheme.Palette.windowBackground)
+    }
+
+    private func coordinatorDecisionsPlaceholder(
+        snapshot: CoordinatorModeSnapshot,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let pendingDecisionAttentionCount = coordinatorPendingDecisionAttentionCount(snapshot)
+        return VStack(spacing: 0) {
+            HStack(spacing: metrics.controlSpacing) {
+                Label("Decisions", systemImage: "checklist.checked")
+                    .font(metrics.bodySemibold)
+                    .foregroundStyle(.primary)
+
+                Spacer(minLength: 0)
+
+                statusChip(
+                    pendingDecisionAttentionCount == 0 ? "No pending attention" : "\(pendingDecisionAttentionCount) pending",
+                    color: pendingDecisionAttentionCount == 0 ? .secondary : Color.accentColor,
+                    metrics: metrics
+                )
+            }
+            .padding(.horizontal, metrics.outerPadding)
+            .padding(.vertical, metrics.headerPadding)
+            .background(CoordinatorTheme.Palette.elevatedPanelBackground)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(CoordinatorTheme.Palette.hairline)
+                    .frame(height: 0.5)
+            }
+
+            VStack(spacing: metrics.cardInnerSpacing) {
+                Image(systemName: "checklist")
+                    .font(.system(size: metrics.emptyStateIconSize, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text("Decisions queue coming next")
+                    .font(metrics.inspectorTitle)
+                    .foregroundStyle(.primary)
+                Text("This destination is wired so the next pass can project pending Director decisions here. For now, answer open checkpoints from the selected Mission.")
+                    .font(metrics.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(metrics.outerPadding)
         }
         .background(CoordinatorTheme.Palette.windowBackground)
     }
@@ -809,17 +861,22 @@ struct CoordinatorModeView: View {
                 subtitle: "Active work across Director Missions",
                 systemImage: "rectangle.3.group.bubble",
                 badgeCount: snapshot.counts.liveRows,
-                scope: .allAgents,
+                destination: .board,
                 metrics: metrics
-            )
+            ) {
+                viewModel.showBoardDestination()
+            }
 
-            coordinatorDisabledNavigationButton(
+            coordinatorNavigationButton(
                 title: "Decisions",
                 subtitle: pendingDecisionAttentionCount == 0 ? "No pending attention" : "\(pendingDecisionAttentionCount) pending attention",
                 systemImage: "checklist.checked",
                 badgeCount: pendingDecisionAttentionCount == 0 ? nil : pendingDecisionAttentionCount,
+                destination: .decisions,
                 metrics: metrics
-            )
+            ) {
+                viewModel.showDecisionsDestination()
+            }
         }
         .accessibilityLabel("Director navigation")
     }
@@ -842,13 +899,14 @@ struct CoordinatorModeView: View {
         subtitle: String,
         systemImage: String,
         badgeCount: Int?,
-        scope: CoordinatorModeBoardScope,
-        metrics: CoordinatorVisualMetrics
+        destination: CoordinatorModeViewModel.RailDestination,
+        metrics: CoordinatorVisualMetrics,
+        action: @escaping () -> Void
     ) -> some View {
-        let isSelected = viewModel.boardScope == scope
+        let isSelected = viewModel.railDestination == destination
 
         return Button {
-            viewModel.boardScope = scope
+            action()
         } label: {
             coordinatorSidebarNavigationRow(
                 title: title,
@@ -868,31 +926,6 @@ struct CoordinatorModeView: View {
         )
         .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-
-    private func coordinatorDisabledNavigationButton(
-        title: String,
-        subtitle: String,
-        systemImage: String,
-        badgeCount: Int?,
-        metrics: CoordinatorVisualMetrics
-    ) -> some View {
-        coordinatorSidebarNavigationRow(
-            title: title,
-            subtitle: subtitle,
-            systemImage: systemImage,
-            tint: .secondary,
-            badgeCount: badgeCount,
-            metrics: metrics
-        )
-        .opacity(0.52)
-        .coordinatorCardBackground(
-            cornerRadius: metrics.pendingCornerRadius,
-            fillOpacity: 0.04,
-            strokeOpacity: 0.06
-        )
-        .hoverTooltip("Decisions destination is a placeholder in this parity pass.")
-        .accessibilityLabel("Decisions placeholder")
     }
 
     private func coordinatorSidebarNavigationRow(
@@ -1097,7 +1130,6 @@ struct CoordinatorModeView: View {
     ) -> some View {
         Button {
             viewModel.startNewCoordinatorRun()
-            viewModel.boardScope = .coordinatorFleet
             isMissionPlanPaneVisible = true
         } label: {
             HStack(alignment: .center, spacing: metrics.smallSpacing) {
@@ -1135,7 +1167,6 @@ struct CoordinatorModeView: View {
         .hoverTooltip("Prepare a fresh mission")
         .accessibilityAction {
             viewModel.startNewCoordinatorRun()
-            viewModel.boardScope = .coordinatorFleet
             isMissionPlanPaneVisible = true
         }
     }
@@ -1148,7 +1179,6 @@ struct CoordinatorModeView: View {
 
         return Button {
             viewModel.selectCoordinator(sessionID: option.sessionID)
-            viewModel.boardScope = .coordinatorFleet
             isMissionPlanPaneVisible = true
         } label: {
             HStack(alignment: .center, spacing: metrics.smallSpacing) {
@@ -1203,7 +1233,6 @@ struct CoordinatorModeView: View {
         .hoverTooltip("Switch mission to \(option.title)")
         .accessibilityAction {
             viewModel.selectCoordinator(sessionID: option.sessionID)
-            viewModel.boardScope = .coordinatorFleet
             isMissionPlanPaneVisible = true
         }
     }
@@ -4160,7 +4189,7 @@ struct CoordinatorModeView: View {
                 statusChip("Decided itself \(directorCount)×", color: .secondary, metrics: metrics)
                 Spacer(minLength: metrics.smallSpacing)
                 Button {
-                    viewModel.boardScope = .coordinatorFleet
+                    viewModel.showMissionDestination()
                     isMissionPlanPaneVisible = true
                     selectedPlanNodeID = nil
                 } label: {

@@ -48,6 +48,100 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, coordinatorID)
     }
 
+    func testRailDestinationTransitionsUseBoardWithoutClearingSelectedMission() {
+        let firstCoordinatorID = uuid(1)
+        let secondCoordinatorID = uuid(2)
+        let liveSessions = [
+            live(
+                id: firstCoordinatorID,
+                tab: uuid(101),
+                title: "First mission",
+                updatedAt: date(10),
+                state: .idle,
+                isMCP: true,
+                coordinatorRuntime: true
+            ),
+            live(
+                id: secondCoordinatorID,
+                tab: uuid(102),
+                title: "Second mission",
+                updatedAt: date(20),
+                state: .idle,
+                isMCP: true,
+                coordinatorRuntime: true
+            )
+        ]
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: liveSessions,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    autoSelectDemoCoordinator: false,
+                    sort: sortMode
+                )
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+        viewModel.refresh()
+
+        viewModel.selectCoordinator(sessionID: firstCoordinatorID)
+        XCTAssertEqual(viewModel.railDestination, .mission)
+        XCTAssertEqual(viewModel.boardScope, .coordinatorFleet)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, firstCoordinatorID)
+
+        viewModel.showBoardDestination()
+        XCTAssertEqual(viewModel.railDestination, .board)
+        XCTAssertEqual(viewModel.boardScope, .allAgents)
+        XCTAssertEqual(viewModel.snapshot.boardScope, .allAgents)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, firstCoordinatorID)
+
+        viewModel.showDecisionsDestination()
+        XCTAssertEqual(viewModel.railDestination, .decisions)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, firstCoordinatorID)
+
+        viewModel.selectCoordinator(sessionID: secondCoordinatorID)
+        XCTAssertEqual(viewModel.railDestination, .mission)
+        XCTAssertEqual(viewModel.boardScope, .coordinatorFleet)
+        XCTAssertEqual(viewModel.snapshot.boardScope, .coordinatorFleet)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, secondCoordinatorID)
+    }
+
+    func testStartingDraftReturnsToMissionDestination() {
+        let coordinatorID = uuid(1)
+        let liveSessions = [
+            live(
+                id: coordinatorID,
+                tab: uuid(101),
+                title: "Mission",
+                updatedAt: date(10),
+                state: .idle,
+                isMCP: true,
+                coordinatorRuntime: true
+            )
+        ]
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: liveSessions,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    autoSelectDemoCoordinator: false,
+                    sort: sortMode
+                )
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+        viewModel.refresh()
+        viewModel.selectCoordinator(sessionID: coordinatorID)
+        viewModel.showBoardDestination()
+
+        viewModel.startNewCoordinatorRun()
+
+        XCTAssertEqual(viewModel.railDestination, .mission)
+        XCTAssertEqual(viewModel.boardScope, .coordinatorFleet)
+        XCTAssertEqual(viewModel.snapshot.boardScope, .coordinatorFleet)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.state, .chooseCoordinator)
+    }
+
     func testScopedChangeTemplateWrapsInitialCoordinatorDirectiveOnly() async {
         var submissions: [(text: String, sessionID: UUID?, forceNewRuntime: Bool, template: CoordinatorMissionTemplateSummary?)] = []
         let viewModel = CoordinatorModeViewModel(
