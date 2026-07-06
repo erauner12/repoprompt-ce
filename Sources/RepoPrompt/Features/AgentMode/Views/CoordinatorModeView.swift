@@ -2037,46 +2037,65 @@ struct CoordinatorModeView: View {
     ) -> some View {
         let projection = MissionPlanReadinessProjection(plan: plan)
         let blockedNodeCount = plan.nodes.count { $0.status == .blocked }
+        let isOverCap = plan.policySnapshot.map { projection.runningNodeCount > $0.maxConcurrent } ?? false
+        let readinessText = [
+            plan.policySnapshot.map { "running \(projection.runningNodeCount)/\($0.maxConcurrent)" } ?? "running \(projection.runningNodeCount)",
+            "\(projection.readyCount) ready",
+            "\(projection.waitingCount) waiting",
+            blockedNodeCount > 0 ? "\(blockedNodeCount) blocked" : nil
+        ]
+        .compactMap(\.self)
+        .joined(separator: " · ")
+        let readinessTint: Color = if isOverCap || blockedNodeCount > 0 {
+            .red
+        } else if plan.status == .completed {
+            .green
+        } else if projection.runningNodeCount > 0 {
+            .blue
+        } else {
+            .secondary
+        }
+        let statusTitle: String = switch plan.approvalState {
+        case .awaitingApproval, .revisionRequested:
+            plan.approvalState.displayName
+        case .notRequired, .approved:
+            plan.status.displayName
+        }
+        let statusTint: Color = switch (plan.approvalState, plan.status) {
+        case (.awaitingApproval, _), (.revisionRequested, _):
+            .red
+        case (_, .running):
+            .blue
+        case (_, .blocked):
+            .red
+        case (_, .completed):
+            .green
+        default:
+            .secondary
+        }
+        let userDecisionCount = plan.decisions.count(where: { $0.actor == .user })
 
         return HStack(spacing: metrics.smallSpacing) {
-            Label("Mission status", systemImage: "waveform.path.ecg")
+            Label("Mission", systemImage: "waveform.path.ecg")
                 .font(metrics.microMedium)
-                .foregroundStyle(Color.accentColor)
-            statusChip(plan.status.displayName, color: plan.status.tint, metrics: metrics)
-            statusChip(plan.approvalState.displayName, color: plan.approvalState.tint, metrics: metrics)
-            if !plan.nodes.isEmpty {
-                statusChip("\(projection.completedCount)/\(plan.nodes.count) nodes done", color: projection.completedCount == plan.nodes.count ? .green : .secondary, metrics: metrics)
-                if projection.readyCount > 0 {
-                    statusChip("\(projection.readyCount) ready", color: .green, metrics: metrics)
-                }
-                if projection.waitingCount > 0 {
-                    statusChip("\(projection.waitingCount) waiting", color: .secondary, metrics: metrics)
-                }
-                if blockedNodeCount > 0 {
-                    statusChip("\(blockedNodeCount) blocked", color: .red, metrics: metrics)
-                }
-            }
-            if !plan.workstreams.isEmpty {
-                statusChip("\(plan.workstreams.count) workstreams", color: .secondary, metrics: metrics)
-            }
-            if let shapeSummary = plan.shapeSummary {
-                statusChip("Shape · \(shapeSummary.displayName)", color: .secondary, metrics: metrics)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .layoutPriority(1)
+            statusChip(statusTitle, color: statusTint, metrics: metrics)
+                .layoutPriority(3)
+            Text(readinessText)
+                .font(metrics.microMedium)
+                .foregroundStyle(readinessTint)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(2)
+            if userDecisionCount > 0 {
+                statusChip("needs you \(userDecisionCount)", color: .red, metrics: metrics)
+                    .layoutPriority(3)
             }
             if let policySnapshot = plan.policySnapshot {
-                statusChip(
-                    "running \(projection.runningNodeCount)/\(policySnapshot.maxConcurrent)",
-                    color: projection.runningNodeCount > policySnapshot.maxConcurrent ? .red : (projection.runningNodeCount > 0 ? .blue : .secondary),
-                    metrics: metrics
-                )
                 statusChip("Policy · \(policySnapshot.name)", color: .secondary, metrics: metrics)
-            }
-            let userDecisionCount = plan.decisions.count(where: { $0.actor == .user })
-            if userDecisionCount > 0 {
-                statusChip("needed you \(userDecisionCount)×", color: .secondary, metrics: metrics)
-            }
-            if !plan.evidence.isEmpty {
-                let meetsCount = plan.evidence.count(where: { $0.verdict == .meets })
-                statusChip("evidence \(meetsCount)/\(plan.evidence.count)", color: meetsCount == plan.evidence.count ? .green : .orange, metrics: metrics)
+                    .layoutPriority(1)
             }
             Spacer(minLength: 0)
         }
