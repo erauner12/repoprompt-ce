@@ -697,7 +697,11 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
                 "requested plan revision",
                 "stopped the Mission",
                 "continued past a step check-in",
-                "answered a child question"
+                "answered a child question",
+                "set pace to Auto",
+                "set pace to Step",
+                "routed child questions to Me",
+                "routed child questions to the Director"
             ]
         )
     }
