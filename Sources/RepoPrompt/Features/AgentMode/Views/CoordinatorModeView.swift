@@ -200,7 +200,6 @@ struct CoordinatorModeView: View {
 
                     if !isAllAgentsBoard {
                         coordinatorConversation(snapshot.coordinatorRail, metrics: metrics)
-                            .padding(metrics.outerPadding)
                             .frame(minWidth: metrics.centerChatMinWidth, maxWidth: .infinity, maxHeight: .infinity)
                             .background(CoordinatorTheme.Palette.windowBackground)
                     }
@@ -314,7 +313,7 @@ struct CoordinatorModeView: View {
             }
         }
         .animation(.easeInOut(duration: 0.22), value: isInspectorVisible)
-        .coordinatorSidebarPanel(edge: .leading)
+        .coordinatorFlushRegion(edge: .leading)
     }
 
     private func coordinatorContent(
@@ -341,6 +340,11 @@ struct CoordinatorModeView: View {
             .padding(.horizontal, metrics.outerPadding)
             .padding(.vertical, metrics.headerPadding)
             .background(CoordinatorTheme.Palette.elevatedPanelBackground)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(CoordinatorTheme.Palette.hairline)
+                    .frame(height: 0.5)
+            }
 
             Group {
                 if presentationMode == .plan {
@@ -701,8 +705,9 @@ struct CoordinatorModeView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(maxHeight: .infinity, alignment: .top)
         }
-        .padding(metrics.outerPadding)
-        .coordinatorSidebarPanel(edge: .trailing)
+        .padding(.horizontal, metrics.sidebarHorizontalPadding)
+        .padding(.vertical, metrics.sidebarVerticalPadding)
+        .coordinatorFlushRegion(edge: .trailing)
     }
 
     private func coordinatorHistorySidebar(
@@ -714,23 +719,35 @@ struct CoordinatorModeView: View {
             coordinatorRailHistoryContent(snapshot: snapshot, metrics: metrics)
                 .frame(maxHeight: .infinity, alignment: .top)
         }
-        .padding(metrics.outerPadding)
-        .coordinatorSidebarPanel(edge: .trailing)
+        .padding(.horizontal, metrics.sidebarHorizontalPadding)
+        .padding(.vertical, metrics.sidebarVerticalPadding)
+        .coordinatorFlushRegion(edge: .trailing)
     }
 
     private func coordinatorRailHistoryContent(
         snapshot: CoordinatorModeSnapshot,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
-                coordinatorNavigationPanel(snapshot: snapshot, metrics: metrics)
-                coordinatorMissionsPanel(snapshot.coordinatorRail, metrics: metrics)
+        VStack(spacing: 0) {
+            filterSearchBox(metrics: metrics)
+                .padding(.bottom, metrics.sidebarVerticalPadding)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
+                    coordinatorNavigationPanel(snapshot: snapshot, metrics: metrics)
+                    coordinatorMissionsPanel(snapshot.coordinatorRail, metrics: metrics)
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.bottom, metrics.sidebarVerticalPadding)
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(.bottom, metrics.outerPadding)
+            .scrollIndicators(.visible)
+            .frame(maxWidth: .infinity)
+
+            Divider()
+                .opacity(0.45)
+                .padding(.top, metrics.tightSpacing)
+            coordinatorRailFooter(snapshot: snapshot, metrics: metrics)
         }
-        .scrollIndicators(.visible)
         .frame(maxWidth: .infinity)
     }
 
@@ -752,7 +769,7 @@ struct CoordinatorModeView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .coordinatorSidebarPanel(edge: .trailing)
+        .coordinatorFlushRegion(edge: .trailing)
     }
 
     private func coordinatorNavigationPanel(
@@ -775,13 +792,14 @@ struct CoordinatorModeView: View {
                 scope: .allAgents,
                 metrics: metrics
             )
+
+            coordinatorDisabledNavigationButton(
+                title: "Decisions",
+                subtitle: "\(snapshot.coordinatorRail.missionPlan?.decisions.count ?? 0) recorded · queue pending",
+                systemImage: "checklist.checked",
+                metrics: metrics
+            )
         }
-        .padding(metrics.cardPadding)
-        .coordinatorCardBackground(
-            cornerRadius: metrics.cardCornerRadius,
-            fillOpacity: CoordinatorStyle.railCardFillOpacity,
-            strokeOpacity: 0
-        )
         .accessibilityLabel("Director navigation")
     }
 
@@ -797,29 +815,13 @@ struct CoordinatorModeView: View {
         return Button {
             viewModel.boardScope = scope
         } label: {
-            HStack(spacing: metrics.smallSpacing) {
-                Image(systemName: systemImage)
-                    .font(.system(size: metrics.smallIconSize, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
-                    .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
-
-                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                    Text(title)
-                        .font(metrics.bodySemibold)
-                        .foregroundStyle(.primary.opacity(0.9))
-                        .lineLimit(1)
-                    Text(subtitle)
-                        .font(metrics.micro)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
-            .padding(.horizontal, metrics.pendingPadding)
-            .padding(.vertical, metrics.smallSpacing)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            coordinatorSidebarNavigationRow(
+                title: title,
+                subtitle: subtitle,
+                systemImage: systemImage,
+                tint: isSelected ? Color.accentColor : .secondary,
+                metrics: metrics
+            )
         }
         .buttonStyle(.plain)
         .coordinatorCardBackground(
@@ -830,6 +832,79 @@ struct CoordinatorModeView: View {
         )
         .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func coordinatorDisabledNavigationButton(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        coordinatorSidebarNavigationRow(
+            title: title,
+            subtitle: subtitle,
+            systemImage: systemImage,
+            tint: .secondary,
+            metrics: metrics
+        )
+        .opacity(0.52)
+        .coordinatorCardBackground(
+            cornerRadius: metrics.pendingCornerRadius,
+            fillOpacity: 0.04,
+            strokeOpacity: 0.06
+        )
+        .hoverTooltip("Decisions destination is a placeholder in this parity pass.")
+        .accessibilityLabel("Decisions placeholder")
+    }
+
+    private func coordinatorSidebarNavigationRow(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        tint: Color,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(spacing: metrics.smallSpacing) {
+            Image(systemName: systemImage)
+                .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: metrics.titlebarButtonSize, height: metrics.titlebarButtonSize)
+
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                Text(title)
+                    .font(metrics.bodySemibold)
+                    .foregroundStyle(.primary.opacity(0.9))
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .padding(.horizontal, metrics.pendingPadding)
+        .padding(.vertical, metrics.smallSpacing)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func coordinatorRailFooter(snapshot: CoordinatorModeSnapshot, metrics: CoordinatorVisualMetrics) -> some View {
+        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+            coordinatorRailStatusReport(snapshot.coordinatorRail.statusReport, metrics: metrics)
+
+            HStack(spacing: metrics.smallSpacing) {
+                mcpAwarenessChip(snapshot.mcpAwareness, metrics: metrics)
+                    .layoutPriority(1)
+                Spacer(minLength: 0)
+                Text("Workspace footer follows Agent Mode when workspace-root data is wired here.")
+                    .font(metrics.micro)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
+            }
+        }
+        .padding(.top, metrics.sidebarVerticalPadding)
     }
 
     private func coordinatorMissionsPanel(
@@ -2573,18 +2648,26 @@ struct CoordinatorModeView: View {
 
     private func coordinatorConversation(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: metrics.smallSpacing) {
-                Label("Conversation", systemImage: "bubble.left.and.text.bubble.right")
-                    .font(metrics.cardTitle)
-                    .foregroundStyle(.secondary)
-                Spacer()
+            HStack(alignment: .center, spacing: metrics.controlSpacing) {
+                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                    Text(coordinatorConversationTitle(rail))
+                        .font(metrics.inspectorTitle)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(coordinatorConversationSubtitle(rail))
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: metrics.controlSpacing)
                 Button {
                     stopCoordinatorMission()
                 } label: {
                     Label("Stop", systemImage: "stop.circle.fill")
+                        .labelStyle(.titleAndIcon)
                 }
                 .buttonStyle(.link)
-                .font(metrics.micro)
+                .font(metrics.microMedium)
                 .foregroundStyle(Color.red.opacity(viewModel.canStopSelectedCoordinatorMission ? 0.95 : 0.45))
                 .disabled(!viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission)
                 .hoverTooltip("Stop the selected Mission and cancel its live linked sessions without archiving or deleting them.")
@@ -2592,12 +2675,17 @@ struct CoordinatorModeView: View {
                     viewModel.clearCoordinatorRailTranscript()
                 }
                 .buttonStyle(.link)
-                .font(metrics.micro)
+                .font(metrics.microMedium)
                 .disabled(viewModel.railTranscriptEntries.isEmpty)
             }
-            .padding(.horizontal, metrics.cardPadding)
-            .padding(.top, metrics.cardPadding)
-            .padding(.bottom, metrics.smallSpacing)
+            .padding(.horizontal, metrics.outerPadding)
+            .padding(.vertical, metrics.headerPadding)
+            .background(CoordinatorTheme.Palette.windowBackground)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(CoordinatorTheme.Palette.hairline)
+                    .frame(height: 0.5)
+            }
 
             ScrollView {
                 VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
@@ -2630,12 +2718,43 @@ struct CoordinatorModeView: View {
 
             coordinatorComposer(rail, metrics: metrics)
                 .padding(metrics.cardPadding)
+                .background(CoordinatorTheme.Palette.panelBackground.opacity(0.72))
         }
-        .coordinatorCardBackground(
-            cornerRadius: metrics.cardCornerRadius,
-            fillOpacity: CoordinatorStyle.railCardFillOpacity,
-            strokeOpacity: 0
-        )
+        .background(CoordinatorTheme.Palette.windowBackground)
+    }
+
+    private func coordinatorConversationTitle(_ rail: CoordinatorModeCoordinatorRail) -> String {
+        if let title = rail.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return title
+        }
+        if let objective = rail.missionPlan?.objective?.trimmingCharacters(in: .whitespacesAndNewlines), !objective.isEmpty {
+            return objective
+        }
+        return "New Mission"
+    }
+
+    private func coordinatorConversationSubtitle(_ rail: CoordinatorModeCoordinatorRail) -> String {
+        var parts: [String] = []
+        if let status = rail.missionPlan?.status.displayName {
+            parts.append(status)
+        } else if rail.state == .chooseCoordinator {
+            parts.append("Draft Mission")
+        }
+        if let source = rail.selectionSource?.displayName {
+            parts.append(source)
+        }
+        if rail.childCounts.total > 0 {
+            parts.append("\(rail.childCounts.total) delegated")
+        }
+        if rail.isPinned {
+            parts.append("Pinned")
+        }
+        if rail.isPersistedOnly {
+            parts.append("Archived")
+        } else if rail.isLiveInCurrentWindow {
+            parts.append("Live")
+        }
+        return parts.isEmpty ? "Director Mission" : parts.joined(separator: " · ")
     }
 
     @ViewBuilder
@@ -2944,7 +3063,7 @@ struct CoordinatorModeView: View {
         .padding(metrics.tightSpacing)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.18))
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.12))
         )
     }
 
@@ -2971,7 +3090,7 @@ struct CoordinatorModeView: View {
         .padding(metrics.tightSpacing)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.18))
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.12))
         )
     }
 
@@ -3424,11 +3543,11 @@ struct CoordinatorModeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.30))
+                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.74))
         )
         .overlay(
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .stroke(action.verb.tint.opacity(0.16), lineWidth: 0.8)
+                .stroke(action.verb.tint.opacity(0.14), lineWidth: 0.8)
         )
         .contentShape(Rectangle())
         .onTapGesture {
@@ -3499,11 +3618,11 @@ struct CoordinatorModeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .fill(tint.opacity(0.08))
+                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.74))
         )
         .overlay(
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .stroke(tint.opacity(0.18), lineWidth: 0.75)
+                .stroke(tint.opacity(0.16), lineWidth: 0.75)
         )
     }
 
@@ -6352,7 +6471,7 @@ private struct CoordinatorVisualMetrics {
     }
 
     var railWidth: CGFloat {
-        fontPreset.scaledClamped(292, min: 280, max: 340)
+        AgentSidebarSizing.idealWidth(for: fontPreset)
     }
 
     var collapsedRailWidth: CGFloat {
@@ -6465,6 +6584,14 @@ private struct CoordinatorVisualMetrics {
 
     var headerPadding: CGFloat {
         fontPreset.scaledClamped(12, max: 16)
+    }
+
+    var sidebarHorizontalPadding: CGFloat {
+        fontPreset.scaledClamped(8, max: 12)
+    }
+
+    var sidebarVerticalPadding: CGFloat {
+        fontPreset.scaledClamped(8, max: 11)
     }
 
     var railTitlebarLaneHeight: CGFloat {
@@ -6708,7 +6835,7 @@ private struct CoordinatorVisualMetrics {
     }
 
     var composerCornerRadius: CGFloat {
-        fontPreset.scaledClamped(12, max: 16)
+        fontPreset.scaledClamped(18, min: 18, max: 22)
     }
 
     var emptyStateIconSize: CGFloat {
@@ -6768,6 +6895,15 @@ private enum CoordinatorSidebarPanelEdge {
 }
 
 private extension View {
+    func coordinatorFlushRegion(edge: CoordinatorSidebarPanelEdge) -> some View {
+        background(CoordinatorTheme.Palette.panelBackground.opacity(0.96))
+            .overlay(alignment: edge.alignment) {
+                Rectangle()
+                    .fill(CoordinatorStyle.panelSeam)
+                    .frame(width: 0.5)
+            }
+    }
+
     func coordinatorSidebarPanel(edge: CoordinatorSidebarPanelEdge) -> some View {
         let shape = RoundedRectangle(
             cornerRadius: CoordinatorStyle.floatingPanelCornerRadius,
