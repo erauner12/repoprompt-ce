@@ -443,9 +443,18 @@ struct CoordinatorModeView: View {
             Divider()
                 .opacity(0.45)
 
-            coordinatorComposer(rail, metrics: metrics)
-                .padding(metrics.cardPadding)
-                .background(CoordinatorTheme.Palette.panelBackground)
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                coordinatorComposer(rail, metrics: metrics)
+                    .padding(.horizontal, metrics.cardPadding)
+                    .padding(.top, metrics.cardPadding)
+                Text(coordinatorDraftFooterText())
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, metrics.cardPadding + metrics.smallSpacing)
+                    .padding(.bottom, metrics.smallSpacing)
+            }
+            .background(CoordinatorTheme.Palette.panelBackground)
         }
         .background(CoordinatorTheme.Palette.windowBackground)
     }
@@ -1739,11 +1748,13 @@ struct CoordinatorModeView: View {
             coordinatorDraftNoPlanStrip(metrics: metrics)
 
             VStack(alignment: .leading, spacing: metrics.cardInnerSpacing) {
-                HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
                     Label("Mission Policy", systemImage: "shield.lefthalf.filled")
                         .font(metrics.sectionTitle)
-                    Spacer(minLength: metrics.controlSpacing)
-                    coordinatorMissionPolicyPicker(metrics: metrics, isEditable: true)
+                    Text("Policy controls when the Director stops to ask; your directive still chooses the mission shape.")
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: metrics.controlSpacing), count: 2), spacing: metrics.controlSpacing) {
@@ -1758,16 +1769,8 @@ struct CoordinatorModeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .coordinatorCardBackground(cornerRadius: metrics.pendingCornerRadius)
 
-            HStack(spacing: metrics.smallSpacing) {
-                coordinatorMissionTemplatePicker(metrics: metrics)
-                Spacer(minLength: metrics.controlSpacing)
-                Text(coordinatorDraftFooterText(for: viewModel.selectedMissionPolicy))
-                    .font(metrics.micro)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.trailing)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.horizontal, metrics.pendingPadding)
+            coordinatorMissionTemplatePicker(metrics: metrics)
+                .padding(.horizontal, metrics.pendingPadding)
         }
     }
 
@@ -1948,8 +1951,8 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func coordinatorDraftFooterText(for policy: CoordinatorMissionPolicySnapshot) -> String {
-        "Shape examples: a quick investigation can close with a report; a sliced build can fan out and return for review. \(policy.name) stops the Director at \(coordinatorPolicyAlwaysAsksText(policy)) in plain checkpoints before work continues."
+    private func coordinatorDraftFooterText() -> String {
+        "Shape examples: a quick investigation can close with a report; a sliced build can fan out, return for review, and stop at approved checkpoints. The Director drafts the shape from your words; Mission Policy only decides when it must ask before continuing."
     }
 
     private func coordinatorPolicyIcon(_ policy: CoordinatorMissionPolicySnapshot) -> String {
@@ -3543,13 +3546,13 @@ struct CoordinatorModeView: View {
             }
         case .planApproval:
             coordinatorDirectorCheckpointTriadCard(
-                badgeTitle: "Director checkpoint",
+                badgeTitle: "Mission checkpoint · Plan approval",
                 badgeSystemImage: "flag.checkered",
-                title: "Approval required",
-                context: "Choose how the Director should continue from this checkpoint.",
+                title: "Approve the Mission Plan",
+                context: "Approving starts the plan the Director inferred from your directive. Revise if the shape or scope is off.",
                 accentColor: Color.accentColor,
-                proceedDescription: "Approve the current plan and let the Director run the next safe step.",
-                reviseDescription: "Keep the Mission paused and use the composer to add plan changes or nuance.",
+                proceedDescription: "Approve the current plan and let the Director continue.",
+                reviseDescription: "Keep the Mission paused and use the composer to change the plan first.",
                 stopDescription: "End this Mission here and record the stop decision.",
                 metrics: metrics,
                 onProceed: {
@@ -3567,13 +3570,13 @@ struct CoordinatorModeView: View {
             .padding(.vertical, metrics.smallSpacing)
         case let .stepBoundary(event):
             coordinatorDirectorCheckpointTriadCard(
-                badgeTitle: "Step checkpoint",
+                badgeTitle: "Mission checkpoint · Step",
                 badgeSystemImage: "pause.circle.fill",
                 title: event.stepCheckpointTitle,
                 context: event.stepCheckpointContext,
                 accentColor: Color.accentColor,
-                proceedDescription: "Resume the Director with this observed boundary.",
-                reviseDescription: "Keep the boundary paused and use the composer to revise instructions first.",
+                proceedDescription: "Continue from this checkpoint.",
+                reviseDescription: "Keep the Mission paused and use the composer to revise instructions first.",
                 stopDescription: "End this Mission here and record the stop decision.",
                 metrics: metrics,
                 onProceed: {
@@ -4896,10 +4899,6 @@ struct CoordinatorModeView: View {
                     Label(badgeTitle, systemImage: badgeSystemImage)
                         .font(metrics.microMedium)
                         .foregroundStyle(accentColor)
-                    Spacer(minLength: metrics.smallSpacing)
-                    Text("Choose next step")
-                        .font(metrics.micro)
-                        .foregroundStyle(.secondary)
                 }
 
                 Text(title)

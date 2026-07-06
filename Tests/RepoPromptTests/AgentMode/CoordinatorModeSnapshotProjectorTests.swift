@@ -1199,10 +1199,11 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(snapshot.decisionQueue.map(\.source), [
             .followThroughBoundary,
             .interaction,
-            .planApproval,
-            .review
+            .planApproval
         ])
-        XCTAssertEqual(snapshot.decisionQueue.map(\.waitingSince), [date(10), date(20), date(30), date(40)])
+        XCTAssertEqual(snapshot.decisionQueue.map(\.waitingSince), [date(10), date(20), date(30)])
+        XCTAssertTrue(snapshot.decisionQueue.contains { $0.source == .interaction && $0.id == interactionID })
+        XCTAssertFalse(snapshot.decisionQueue.contains { $0.source == .review })
 
         let sameAgePlan = CoordinatorMissionPlan(
             id: planID,
@@ -1238,9 +1239,11 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(tied.decisionQueue.map(\.id), tied.decisionQueue.map(\.id).sorted { $0.uuidString < $1.uuidString })
     }
 
-    func testDecisionQueueExcludesCompletedStoppedAndResolvedApprovals() {
+    func testDecisionQueueExcludesCompletedStoppedAndResolvedPlans() {
         let coordinatorID = uuid(1)
         let workstreamID = uuid(70)
+        let nodeID = uuid(60)
+        let interactionID = uuid(90)
         let basePlan = CoordinatorMissionPlan(
             id: uuid(50),
             revision: 1,
@@ -1249,10 +1252,23 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             approvalState: .awaitingApproval,
             nodes: [
                 CoordinatorMissionPlanNode(
-                    id: uuid(60),
+                    id: nodeID,
                     title: "Implementation",
                     workstreamID: workstreamID,
-                    executionPolicy: .freshWorktree
+                    executionPolicy: .freshWorktree,
+                    status: .blocked,
+                    boundInteractionID: interactionID
+                )
+            ],
+            routingDecisions: [
+                CoordinatorMissionRoutingDecision(
+                    id: uuid(80),
+                    timestamp: date(12),
+                    nodeID: nodeID,
+                    workstreamID: workstreamID,
+                    decision: .holdForUser,
+                    operation: .coordinatorHold,
+                    reason: "Ask before mutable follow-through."
                 )
             ],
             updatedAt: date(10)
@@ -1266,6 +1282,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             demoCoordinatorIDs: [coordinatorID]
         ))
         XCTAssertFalse(completed.decisionQueue.contains { $0.source == .planApproval })
+        XCTAssertFalse(completed.decisionQueue.contains { $0.source == .followThroughBoundary })
+        XCTAssertFalse(completed.decisionQueue.contains { $0.source == .blockedUserAction })
 
         var stoppedPlan = basePlan
         stoppedPlan.status = .stopped
@@ -1277,6 +1295,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             demoCoordinatorIDs: [coordinatorID]
         ))
         XCTAssertFalse(stopped.decisionQueue.contains { $0.source == .planApproval })
+        XCTAssertFalse(stopped.decisionQueue.contains { $0.source == .followThroughBoundary })
+        XCTAssertFalse(stopped.decisionQueue.contains { $0.source == .blockedUserAction })
 
         var approvedPlan = basePlan
         approvedPlan.status = .running
@@ -1306,6 +1326,139 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             demoCoordinatorIDs: [coordinatorID]
         ))
         XCTAssertFalse(noNode.decisionQueue.contains { $0.source == .planApproval })
+    }
+
+    func testHeldBoundaryDecisionIDTracksPlanRevisionNotRoutingID() {
+        let coordinatorID = uuid(1)
+        let nodeID = uuid(60)
+        let workstreamID = uuid(70)
+        let planID = uuid(50)
+        let routingID = uuid(80)
+        let plan = CoordinatorMissionPlan(
+            id: planID,
+            revision: 1,
+            objective: "Hold identity",
+            status: .running,
+            approvalState: .approved,
+            routingDecisions: [
+                CoordinatorMissionRoutingDecision(
+                    id: routingID,
+                    timestamp: date(10),
+                    nodeID: nodeID,
+                    workstreamID: workstreamID,
+                    decision: .holdForUser,
+                    operation: .coordinatorHold,
+                    reason: "Ask before mutable follow-through."
+                )
+            ],
+            updatedAt: date(20)
+        )
+
+        let first = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(30), state: .idle, missionPlan: plan)
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        let expectedID = CoordinatorMissionStableIdentity.uuid(
+            namespace: "coordinator-mode-decision-held-boundary",
+            parts: [
+                coordinatorID.uuidString,
+                planID.uuidString,
+                "held-checkpoint",
+                "r1",
+                "node:\(nodeID.uuidString)"
+            ]
+        )
+        XCTAssertEqual(first.decisionQueue.first?.source, .followThroughBoundary)
+        XCTAssertEqual(first.decisionQueue.first?.id, expectedID)
+
+        var sameRevisionNewRouting = plan
+        sameRevisionNewRouting.routingDecisions = [
+            CoordinatorMissionRoutingDecision(
+                id: uuid(81),
+                timestamp: date(10),
+                nodeID: nodeID,
+                workstreamID: workstreamID,
+                decision: .holdForUser,
+                operation: .coordinatorHold,
+                reason: "Ask before mutable follow-through."
+            )
+        ]
+        let sameRevision = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(40), state: .idle, missionPlan: sameRevisionNewRouting)
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        XCTAssertEqual(sameRevision.decisionQueue.first?.id, expectedID)
+
+        var revised = sameRevisionNewRouting
+        revised.revision = 2
+        let secondRevision = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(101), title: "Coordinator Runtime Demo", updatedAt: date(50), state: .idle, missionPlan: revised)
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        XCTAssertNotEqual(secondRevision.decisionQueue.first?.id, expectedID)
+    }
+
+    func testDecisionQueueExcludesPersistedOnlyStoppedMissionInteractions() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let interactionID = uuid(52)
+        let stoppedPlan = CoordinatorMissionPlan(
+            id: uuid(50),
+            revision: 3,
+            objective: "Stopped persisted mission",
+            status: .stopped,
+            approvalState: .awaitingApproval,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: uuid(60),
+                    title: "Old approval",
+                    workstreamID: uuid(70),
+                    executionPolicy: .freshWorktree
+                )
+            ],
+            updatedAt: date(10)
+        )
+        let interaction = AgentRunMCPSnapshot.Interaction(
+            id: interactionID,
+            kind: .question,
+            responseType: .structured,
+            title: "Old child ask",
+            prompt: "This should not surface.",
+            context: nil,
+            allowsMultiple: nil,
+            options: [],
+            fields: [],
+            details: []
+        )
+
+        let snapshot = projector.project(input(
+            persisted: [
+                persisted(id: coordinatorID, tab: uuid(101), title: "Stopped Coordinator", updatedAt: date(20), state: .completed, coordinatorRuntime: true, missionPlan: stoppedPlan),
+                persisted(id: childID, tab: uuid(102), title: "Old child", updatedAt: date(15), state: .waitingForQuestion, parent: coordinatorID)
+            ],
+            mcpSnapshots: [
+                childID: mcpSnapshot(
+                    sessionID: childID,
+                    tabID: uuid(102),
+                    status: .waitingForInput,
+                    interaction: interaction,
+                    parent: coordinatorID
+                )
+            ],
+            selectedCoordinatorID: nil,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        XCTAssertTrue(snapshot.decisionQueue.isEmpty)
     }
 
     func testDecisionQueueExcludesTelemetryBlockedNodes() {

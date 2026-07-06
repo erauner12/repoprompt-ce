@@ -108,7 +108,19 @@ struct ContentRootShellView: View {
             AgentModeView(
                 windowState: viewModel.state,
                 agentModeVM: viewModel.state.agentModeViewModel,
-                promptManager: viewModel.promptManager
+                promptManager: viewModel.promptManager,
+                onOpenCoordinatorDestination: { destination in
+                    let coordinatorViewModel = viewModel.state.agentModeViewModel.coordinatorModeViewModel
+                    switch destination {
+                    case .mission:
+                        coordinatorViewModel.showMissionDestination()
+                    case .board:
+                        coordinatorViewModel.showBoardDestination()
+                    case .decisions:
+                        coordinatorViewModel.showDecisionsDestination()
+                    }
+                    mainSurfaceSelection = .coordinatorMode
+                }
             )
         }
     }

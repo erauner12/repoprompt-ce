@@ -97,6 +97,102 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(plan["predecessor_summary"]?.stringValue, "Doctor UX discovery found missing prerequisite guidance.")
     }
 
+    func testStartMissionWaitsForInitialAwaitingApprovalPlan() async throws {
+        let coordinatorID = UUID()
+        let nodeID = UUID()
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
+        var sleepCalls = 0
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submit: { _ in .accepted },
+            missionPlans: { missionPlans },
+            initialMissionPlanTimeoutSeconds: 0.1,
+            initialMissionPlanPollIntervalSeconds: 0.01,
+            sleep: { _ in
+                sleepCalls += 1
+                missionPlans[coordinatorID] = CoordinatorMissionPlan(
+                    objective: "Visible approval plan",
+                    status: .draft,
+                    approvalState: .awaitingApproval,
+                    nodes: [
+                        CoordinatorMissionPlanNode(
+                            id: nodeID,
+                            title: "Implement",
+                            workstreamID: UUID(),
+                            executionPolicy: .freshWorktree
+                        )
+                    ]
+                )
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("start_mission"),
+            "message": .string("Plan before running children.")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+        let plan = try XCTUnwrap(object["mission_plan"]?.objectValue)
+
+        XCTAssertGreaterThanOrEqual(sleepCalls, 1)
+        XCTAssertEqual(plan["approval_state"]?.stringValue, "awaiting_approval")
+        XCTAssertEqual(plan["nodes"]?.arrayValue?.count, 1)
+        XCTAssertNil(object["initial_plan_visible"])
+        XCTAssertNil(object["warning"])
+    }
+
+    func testStartMissionPublishesFallbackInitialPlanWhenRuntimePlanDoesNotAppear() async throws {
+        let coordinatorID = UUID()
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submit: { _ in .accepted },
+            missionPlans: { missionPlans },
+            updateMissionPlan: { sessionID, update in
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(update)
+                missionPlans[sessionID] = state.missionPlan
+            },
+            initialMissionPlanTimeoutSeconds: 0
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("start_mission"),
+            "message": .string("Plan before running children.")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+        let plan = try XCTUnwrap(object["mission_plan"]?.objectValue)
+
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["initial_plan_visible"]?.boolValue, true)
+        XCTAssertEqual(object["initial_plan_fallback_published"]?.boolValue, true)
+        XCTAssertNil(object["warning"])
+        XCTAssertEqual(plan["approval_state"]?.stringValue, "awaiting_approval")
+        XCTAssertEqual(plan["nodes"]?.arrayValue?.count, 1)
+    }
+
+    func testStartMissionReportsInitialPlanTimeoutWhenFallbackCannotPublish() async throws {
+        let coordinatorID = UUID()
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submit: { _ in .accepted },
+            initialMissionPlanTimeoutSeconds: 0
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("start_mission"),
+            "message": .string("Plan before running children.")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["initial_plan_visible"]?.boolValue, false)
+        XCTAssertEqual(object["initial_plan_wait_timed_out"]?.boolValue, true)
+        XCTAssertEqual(object["warning"]?.stringValue, "Timed out waiting for an awaiting-approval Mission Plan.")
+    }
+
     func testSubmitDefaultsToCompactResponseForExternalDrivers() async throws {
         let coordinatorID = UUID()
         var submittedMessages: [String] = []
@@ -2294,7 +2390,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         counts: CoordinatorModeCounts = .empty,
         rows: [CoordinatorModeRow] = [],
         missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },
-        updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in }
+        updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in },
+        initialMissionPlanTimeoutSeconds: TimeInterval = 0,
+        initialMissionPlanPollIntervalSeconds: TimeInterval = 0.01,
+        sleep: @escaping (UInt64) async -> Void = { _ in }
     ) -> CoordinatorChatMCPToolService {
         makeService(
             coordinatorIDs: coordinatorIDs,
@@ -2309,7 +2408,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             counts: counts,
             rows: rows,
             missionPlans: missionPlans,
-            updateMissionPlan: updateMissionPlan
+            updateMissionPlan: updateMissionPlan,
+            initialMissionPlanTimeoutSeconds: initialMissionPlanTimeoutSeconds,
+            initialMissionPlanPollIntervalSeconds: initialMissionPlanPollIntervalSeconds,
+            sleep: sleep
         )
     }
 
@@ -2329,11 +2431,17 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         counts: CoordinatorModeCounts = .empty,
         rows: [CoordinatorModeRow] = [],
         missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },
-        updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in }
+        updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in },
+        initialMissionPlanTimeoutSeconds: TimeInterval = 0,
+        initialMissionPlanPollIntervalSeconds: TimeInterval = 0.01,
+        sleep: @escaping (UInt64) async -> Void = { _ in }
     ) -> CoordinatorChatMCPToolService {
         CoordinatorChatMCPToolService(
             toolName: MCPWindowToolName.coordinatorChat,
-            captureRequestMetadata: captureRequestMetadata
+            captureRequestMetadata: captureRequestMetadata,
+            initialMissionPlanTimeoutSeconds: initialMissionPlanTimeoutSeconds,
+            initialMissionPlanPollIntervalSeconds: initialMissionPlanPollIntervalSeconds,
+            sleep: sleep
         ) {
             CoordinatorChatMCPToolService.Environment(
                 snapshot: {

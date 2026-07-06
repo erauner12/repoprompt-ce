@@ -20,14 +20,25 @@ struct CoordinatorChatMCPToolService {
     private let toolName: String
     private let makeEnvironment: () throws -> Environment
     private let captureRequestMetadata: () async -> RequestMetadata
+    private let initialMissionPlanTimeoutSeconds: TimeInterval
+    private let initialMissionPlanPollIntervalSeconds: TimeInterval
+    private let sleep: (UInt64) async -> Void
 
     init(
         toolName: String,
         requireTargetWindow: @escaping MCPWindowToolDependencies.RequireTargetWindow,
-        captureRequestMetadata: @escaping () async -> RequestMetadata
+        captureRequestMetadata: @escaping () async -> RequestMetadata,
+        initialMissionPlanTimeoutSeconds: TimeInterval = 10,
+        initialMissionPlanPollIntervalSeconds: TimeInterval = 0.25,
+        sleep: @escaping (UInt64) async -> Void = { nanoseconds in
+            try? await Task.sleep(nanoseconds: nanoseconds)
+        }
     ) {
         self.toolName = toolName
         self.captureRequestMetadata = captureRequestMetadata
+        self.initialMissionPlanTimeoutSeconds = initialMissionPlanTimeoutSeconds
+        self.initialMissionPlanPollIntervalSeconds = initialMissionPlanPollIntervalSeconds
+        self.sleep = sleep
         makeEnvironment = {
             let coordinatorViewModel = try requireTargetWindow().agentModeViewModel.coordinatorModeViewModel
             return Environment(
@@ -49,10 +60,18 @@ struct CoordinatorChatMCPToolService {
         captureRequestMetadata: @escaping () async -> RequestMetadata = {
             RequestMetadata(connectionID: nil, clientName: nil, windowID: nil)
         },
+        initialMissionPlanTimeoutSeconds: TimeInterval = 10,
+        initialMissionPlanPollIntervalSeconds: TimeInterval = 0.25,
+        sleep: @escaping (UInt64) async -> Void = { nanoseconds in
+            try? await Task.sleep(nanoseconds: nanoseconds)
+        },
         makeEnvironment: @escaping () throws -> Environment
     ) {
         self.toolName = toolName
         self.captureRequestMetadata = captureRequestMetadata
+        self.initialMissionPlanTimeoutSeconds = initialMissionPlanTimeoutSeconds
+        self.initialMissionPlanPollIntervalSeconds = initialMissionPlanPollIntervalSeconds
+        self.sleep = sleep
         self.makeEnvironment = makeEnvironment
     }
 
@@ -129,13 +148,21 @@ struct CoordinatorChatMCPToolService {
                     try environment.updateMissionPlan(coordinatorSessionID, update)
                     environment.refresh()
                 }
-                return stateResponse(environment.snapshot(), extra: [
+                var waitResult = await waitForInitialMissionPlanPublication(in: environment)
+                if !waitResult.isVisible {
+                    waitResult = try publishFallbackInitialMissionPlan(
+                        in: environment,
+                        directive: message,
+                        missionKey: missionKey
+                    )
+                }
+                return stateResponse(waitResult.snapshot, extra: [
                     "accepted": .bool(true),
                     "routed_to": .string("coordinator"),
                     "started_new_mission": .bool(true),
                     "selected_existing_mission": .bool(false),
                     "mission_key": AgentMCPToolHelpers.stringOrNull(missionKey)
-                ])
+                ].merging(waitResult.extra) { _, new in new })
             case let .rejected(message):
                 return stateResponse(environment.snapshot(), extra: [
                     "accepted": .bool(false),
@@ -1356,6 +1383,145 @@ struct CoordinatorChatMCPToolService {
         guard snapshot.coordinatorRail.availableCoordinators.contains(where: { $0.sessionID == sessionID }) else {
             throw MCPError.invalidParams("Coordinator session \(sessionID.uuidString) is not available in this window.")
         }
+    }
+
+    private struct InitialMissionPlanWaitResult {
+        var snapshot: CoordinatorModeSnapshot
+        var isVisible: Bool
+        var extra: [String: Value]
+    }
+
+    private func waitForInitialMissionPlanPublication(
+        in environment: Environment
+    ) async -> InitialMissionPlanWaitResult {
+        environment.refresh()
+        var latest = environment.snapshot()
+        if hasVisibleInitialApprovalPlan(latest) {
+            return InitialMissionPlanWaitResult(snapshot: latest, isVisible: true, extra: [:])
+        }
+        if initialMissionPlanTimeoutSeconds <= 0 {
+            return initialMissionPlanTimeoutResult(snapshot: latest)
+        }
+
+        let deadline = Date().addingTimeInterval(initialMissionPlanTimeoutSeconds)
+        let pollNanoseconds = UInt64(max(initialMissionPlanPollIntervalSeconds, 0.01) * 1_000_000_000)
+        while Date() < deadline {
+            await sleep(pollNanoseconds)
+            environment.refresh()
+            latest = environment.snapshot()
+            if hasVisibleInitialApprovalPlan(latest) {
+                return InitialMissionPlanWaitResult(snapshot: latest, isVisible: true, extra: [:])
+            }
+            if hasTerminalMissionPlanWithoutInitialApproval(latest) {
+                return initialMissionPlanTimeoutResult(
+                    snapshot: latest,
+                    warning: "Mission ended before publishing a visible awaiting-approval plan."
+                )
+            }
+        }
+
+        environment.refresh()
+        latest = environment.snapshot()
+        if hasVisibleInitialApprovalPlan(latest) {
+            return InitialMissionPlanWaitResult(snapshot: latest, isVisible: true, extra: [:])
+        }
+        return initialMissionPlanTimeoutResult(snapshot: latest)
+    }
+
+    private func publishFallbackInitialMissionPlan(
+        in environment: Environment,
+        directive: String,
+        missionKey: String?
+    ) throws -> InitialMissionPlanWaitResult {
+        environment.refresh()
+        let snapshot = environment.snapshot()
+        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID else {
+            return initialMissionPlanTimeoutResult(snapshot: snapshot)
+        }
+
+        let objective = normalizedString(.string(directive)) ?? directive
+        let identityParts = [
+            coordinatorSessionID.uuidString,
+            missionKey ?? objective
+        ]
+        let workstreamID = CoordinatorMissionStableIdentity.uuid(
+            namespace: "coordinator-chat-initial-plan-workstream",
+            parts: identityParts
+        )
+        let nodeID = CoordinatorMissionStableIdentity.uuid(
+            namespace: "coordinator-chat-initial-plan-node",
+            parts: identityParts
+        )
+        let updatedAt = Date()
+        try environment.updateMissionPlan(
+            coordinatorSessionID,
+            CoordinatorMissionPlanUpdate(
+                objective: objective,
+                missionKey: missionKey,
+                status: .draft,
+                approvalState: .awaitingApproval,
+                workstreams: [
+                    CoordinatorMissionWorkstreamSummary(
+                        id: workstreamID,
+                        title: "Scoped mission intake",
+                        purpose: "Keep the mission bounded to the external directive and pause before any delegated child sessions.",
+                        role: "coordinator",
+                        defaultPolicy: .askUser,
+                        worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                            mode: .noneReadOnly,
+                            reason: "No child sessions or repository changes are authorized until the initial Mission Plan is approved."
+                        )
+                    )
+                ],
+                nodes: [
+                    CoordinatorMissionPlanNode(
+                        id: nodeID,
+                        title: "Approve scoped Mission Plan",
+                        detail: "Review the directive, tighten the scope if needed, and approve before the Director starts any child sessions.",
+                        completionEvidence: "A visible Mission Plan is approved or revised by the user before delegation.",
+                        workstreamID: workstreamID,
+                        executionPolicy: .askUser
+                    )
+                ],
+                replaceWorkstreams: true,
+                replaceNodes: true,
+                updatedAt: updatedAt
+            )
+        )
+        environment.refresh()
+        let updatedSnapshot = environment.snapshot()
+        guard hasVisibleInitialApprovalPlan(updatedSnapshot) else {
+            return initialMissionPlanTimeoutResult(snapshot: updatedSnapshot)
+        }
+        return InitialMissionPlanWaitResult(snapshot: updatedSnapshot, isVisible: true, extra: [
+            "initial_plan_visible": .bool(true),
+            "initial_plan_fallback_published": .bool(true)
+        ])
+    }
+
+    private func hasVisibleInitialApprovalPlan(_ snapshot: CoordinatorModeSnapshot) -> Bool {
+        guard let plan = snapshot.coordinatorRail.missionPlan else { return false }
+        return plan.approvalState == .awaitingApproval
+            && !plan.nodes.isEmpty
+            && plan.status != .completed
+            && plan.status != .stopped
+    }
+
+    private func hasTerminalMissionPlanWithoutInitialApproval(_ snapshot: CoordinatorModeSnapshot) -> Bool {
+        guard let plan = snapshot.coordinatorRail.missionPlan else { return false }
+        return plan.status == .completed || plan.status == .stopped
+    }
+
+    private func initialMissionPlanTimeoutResult(
+        snapshot: CoordinatorModeSnapshot,
+        warning: String? = nil
+    ) -> InitialMissionPlanWaitResult {
+        InitialMissionPlanWaitResult(snapshot: snapshot, isVisible: false, extra: [
+            "initial_plan_visible": .bool(false),
+            "initial_plan_wait_timed_out": .bool(warning == nil),
+            "initial_plan_timeout_seconds": .double(initialMissionPlanTimeoutSeconds),
+            "warning": .string(warning ?? "Timed out waiting for an awaiting-approval Mission Plan.")
+        ])
     }
 
     private func stateResponse(

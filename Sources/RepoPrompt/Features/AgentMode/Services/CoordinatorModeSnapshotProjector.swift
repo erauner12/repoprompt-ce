@@ -1111,9 +1111,15 @@ struct CoordinatorModeSnapshotProjector {
         rowsByID: [UUID: CoordinatorModeRow]
     ) -> [CoordinatorModeDecisionQueueItem] {
         var items: [CoordinatorModeDecisionQueueItem] = []
+        let queueableCoordinatorIDs = Set(
+            coordinatorOptions
+                .filter(isQueueableCoordinatorOption)
+                .map(\.sessionID)
+        )
 
         for option in coordinatorOptions {
             let coordinatorID = option.sessionID
+            guard queueableCoordinatorIDs.contains(coordinatorID) else { continue }
             let coordinatorRoute = rowsByID[coordinatorID]?.openAgentChatRoute
             if let plan = option.missionPlan {
                 if shouldQueuePlanApproval(plan) {
@@ -1148,17 +1154,16 @@ struct CoordinatorModeSnapshotProjector {
         }
 
         items.append(contentsOf: coordinatorRows.compactMap { row in
-            guard let pendingInteraction = row.pendingInteraction else { return nil }
+            guard let pendingInteraction = row.pendingInteraction,
+                  let coordinatorID = coordinatorOwnerIDs[row.sessionID],
+                  queueableCoordinatorIDs.contains(coordinatorID)
+            else { return nil }
             return interactionDecisionItem(
                 pendingInteraction,
-                coordinatorSessionID: coordinatorOwnerIDs[row.sessionID],
+                coordinatorSessionID: coordinatorID,
                 row: row,
                 titlePrefix: "Respond to child"
             )
-        })
-
-        items.append(contentsOf: coordinatorRows.compactMap { row in
-            reviewDecisionItem(row, coordinatorSessionID: coordinatorOwnerIDs[row.sessionID])
         })
 
         var seen: Set<UUID> = []
@@ -1173,10 +1178,20 @@ struct CoordinatorModeSnapshotProjector {
             }
     }
 
+    private func isQueueableCoordinatorOption(_ option: CoordinatorModeCoordinatorOption) -> Bool {
+        guard option.isLiveInCurrentWindow else { return false }
+        guard let plan = option.missionPlan else { return true }
+        return isDecisionQueueable(plan)
+    }
+
     private func shouldQueuePlanApproval(_ plan: CoordinatorMissionPlan) -> Bool {
         plan.approvalState == .awaitingApproval
             && !plan.nodes.isEmpty
-            && plan.status != .completed
+            && isDecisionQueueable(plan)
+    }
+
+    private func isDecisionQueueable(_ plan: CoordinatorMissionPlan) -> Bool {
+        plan.status != .completed
             && plan.status != .stopped
     }
 
@@ -1214,15 +1229,13 @@ struct CoordinatorModeSnapshotProjector {
         plan: CoordinatorMissionPlan,
         route: AgentSessionDeepLinkRoute?
     ) -> [CoordinatorModeDecisionQueueItem] {
-        plan.routingDecisions.compactMap { decision in
+        guard isDecisionQueueable(plan) else { return [] }
+        return plan.routingDecisions.compactMap { decision -> CoordinatorModeDecisionQueueItem? in
             guard decision.decision == .holdForUser || decision.operation == .coordinatorHold,
                   !isResolvedUserBoundary(decision, in: plan)
             else { return nil }
             return CoordinatorModeDecisionQueueItem(
-                id: CoordinatorMissionStableIdentity.uuid(
-                    namespace: "coordinator-mode-decision-follow-through-boundary",
-                    parts: [coordinatorSessionID.uuidString, plan.id.uuidString, decision.id.uuidString]
-                ),
+                id: heldBoundaryDecisionID(coordinatorSessionID: coordinatorSessionID, plan: plan, decision: decision),
                 source: .followThroughBoundary,
                 coordinatorSessionID: coordinatorSessionID,
                 sessionID: decision.sessionID ?? coordinatorSessionID,
@@ -1238,12 +1251,43 @@ struct CoordinatorModeSnapshotProjector {
         }
     }
 
+    private func heldBoundaryDecisionID(
+        coordinatorSessionID: UUID,
+        plan: CoordinatorMissionPlan,
+        decision: CoordinatorMissionRoutingDecision
+    ) -> UUID {
+        CoordinatorMissionStableIdentity.uuid(
+            namespace: "coordinator-mode-decision-held-boundary",
+            parts: [
+                coordinatorSessionID.uuidString,
+                plan.id.uuidString,
+                "held-checkpoint",
+                "r\(plan.revision)",
+                heldBoundarySubject(for: decision)
+            ]
+        )
+    }
+
+    private func heldBoundarySubject(for decision: CoordinatorMissionRoutingDecision) -> String {
+        if let nodeID = decision.nodeID {
+            return "node:\(nodeID.uuidString)"
+        }
+        if let workstreamID = decision.workstreamID {
+            return "workstream:\(workstreamID.uuidString)"
+        }
+        if let sessionID = decision.sessionID {
+            return "session:\(sessionID.uuidString)"
+        }
+        return "mission:\(decision.timestamp.timeIntervalSinceReferenceDate):\(decision.reason)"
+    }
+
     private func blockedNodeDecisionItems(
         coordinatorSessionID: UUID,
         plan: CoordinatorMissionPlan,
         route: AgentSessionDeepLinkRoute?
     ) -> [CoordinatorModeDecisionQueueItem] {
-        plan.nodes.compactMap { node in
+        guard isDecisionQueueable(plan) else { return [] }
+        return plan.nodes.compactMap { node -> CoordinatorModeDecisionQueueItem? in
             guard node.status == .blocked,
                   let interactionID = node.boundInteractionID,
                   !plan.decisions.contains(where: { $0.interactionID == interactionID })
@@ -1303,14 +1347,7 @@ struct CoordinatorModeSnapshotProjector {
         titlePrefix: String
     ) -> CoordinatorModeDecisionQueueItem {
         CoordinatorModeDecisionQueueItem(
-            id: CoordinatorMissionStableIdentity.uuid(
-                namespace: "coordinator-mode-decision-interaction",
-                parts: [
-                    coordinatorSessionID?.uuidString ?? "no-coordinator",
-                    row.sessionID.uuidString,
-                    interaction.id.uuidString
-                ]
-            ),
+            id: interaction.id,
             source: .interaction,
             coordinatorSessionID: coordinatorSessionID,
             sessionID: row.sessionID,
@@ -1322,35 +1359,6 @@ struct CoordinatorModeSnapshotProjector {
             detail: interaction.prompt ?? interaction.context,
             waitingSince: row.updatedAt,
             openAgentChatRoute: interaction.openAgentChatRoute
-        )
-    }
-
-    private func reviewDecisionItem(
-        _ row: CoordinatorModeRow,
-        coordinatorSessionID: UUID?
-    ) -> CoordinatorModeDecisionQueueItem? {
-        guard row.statusGroup == .review else { return nil }
-        let mergeID = row.mergeAttention?.id ?? "review"
-        return CoordinatorModeDecisionQueueItem(
-            id: CoordinatorMissionStableIdentity.uuid(
-                namespace: "coordinator-mode-decision-review",
-                parts: [
-                    coordinatorSessionID?.uuidString ?? "no-coordinator",
-                    row.sessionID.uuidString,
-                    mergeID
-                ]
-            ),
-            source: .review,
-            coordinatorSessionID: coordinatorSessionID,
-            sessionID: row.sessionID,
-            interactionID: nil,
-            planID: nil,
-            planRevision: nil,
-            nodeID: nil,
-            title: row.mergeAttention == nil ? "Inspect review output" : "Inspect merge preview",
-            detail: row.title,
-            waitingSince: row.mergeAttention?.updatedAt ?? row.updatedAt,
-            openAgentChatRoute: row.openAgentChatRoute
         )
     }
 

@@ -2,6 +2,11 @@ import SwiftUI
 
 // MARK: - Sessions Sidebar
 
+struct AgentSidebarDirectorSummary: Equatable {
+    var liveAgentCount: Int
+    var decisionCount: Int
+}
+
 struct AgentModeSessionsSidebarView: View {
     let rootsStore: AgentWorkspaceRootsSidebarStore
     let agentModeVM: AgentModeViewModel
@@ -13,6 +18,8 @@ struct AgentModeSessionsSidebarView: View {
     /// changes (model lists, connection state, etc.).
     let apiSettingsVM: APISettingsViewModel
     let currentTabID: UUID?
+    let directorSummary: AgentSidebarDirectorSummary
+    let onOpenCoordinatorDestination: (CoordinatorModeViewModel.RailDestination) -> Void
     let onManageWorkspaces: () -> Void
 
     @State private var isCollapseAllThreadsButtonHovered = false
@@ -99,6 +106,8 @@ struct AgentModeSessionsSidebarView: View {
                 diagnosticSource: "sidebarTopBar.animation"
             ))
 
+            directorNavigationSection
+
             AgentModeSessionsListView(
                 agentModeVM: agentModeVM,
                 sidebarUI: sidebarUI,
@@ -138,6 +147,83 @@ struct AgentModeSessionsSidebarView: View {
                 )
             )
         }
+    }
+
+    private var directorNavigationSection: some View {
+        VStack(alignment: .leading, spacing: fontPreset.scaledClamped(5, max: 7)) {
+            Button {
+                onOpenCoordinatorDestination(.board)
+            } label: {
+                HStack(spacing: fontPreset.scaledClamped(8, max: 10)) {
+                    Image(systemName: "rectangle.3.group.bubble")
+                        .font(.system(size: fontPreset.scaledClamped(13, max: 16), weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: fontPreset.scaledClamped(18, max: 22))
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Agent Board")
+                            .font(fontPreset.swiftUIFont(sizeAtNormal: 12.5, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Text("Director view")
+                            .font(fontPreset.swiftUIFont(sizeAtNormal: 10.5))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    if directorSummary.liveAgentCount > 0 {
+                        Text("\(directorSummary.liveAgentCount)")
+                            .font(fontPreset.swiftUIFont(sizeAtNormal: 10.5, weight: .semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .monospacedDigit()
+                            .padding(.horizontal, 6)
+                            .frame(height: fontPreset.scaledClamped(18, max: 22))
+                            .background(Color.accentColor.opacity(0.12), in: Capsule(style: .continuous))
+                    }
+                }
+                .padding(.horizontal, fontPreset.scaledClamped(9, max: 12))
+                .frame(height: fontPreset.scaledClamped(42, min: 40, max: 50))
+                .background(Color(NSColor.controlBackgroundColor).opacity(0.7), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color(NSColor.separatorColor).opacity(0.55), lineWidth: 0.5)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .hoverTooltip("Open the Director Agent Board")
+            .accessibilityLabel("Open Agent Board")
+
+            if directorSummary.decisionCount > 0 {
+                Button {
+                    onOpenCoordinatorDestination(.decisions)
+                } label: {
+                    HStack(spacing: fontPreset.scaledClamped(5, max: 7)) {
+                        Image(systemName: "checklist.checked")
+                            .font(.system(size: fontPreset.scaledClamped(11, max: 14), weight: .semibold))
+                        Text("\(directorSummary.decisionCount) decisions waiting in Director")
+                            .font(fontPreset.swiftUIFont(sizeAtNormal: 11, weight: .medium))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.9)
+                        Spacer(minLength: 0)
+                        Text("⌘2")
+                            .font(fontPreset.swiftUIFont(sizeAtNormal: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, fontPreset.scaledClamped(9, max: 12))
+                    .frame(height: fontPreset.scaledClamped(26, min: 24, max: 32))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .hoverTooltip("Open Director decisions")
+                .accessibilityLabel("\(directorSummary.decisionCount) decisions waiting in Director")
+            }
+        }
+        .padding(.horizontal, topBarHorizontalPadding)
+        .padding(.bottom, fontPreset.scaledClamped(6, max: 9))
     }
 
     @ViewBuilder
