@@ -48,6 +48,23 @@ ephemeral run charters may stay in `docs/plans/` but must cite this record.
 - **Vocabulary:** "Permissions" is reserved for run-level permissions (the Agent Mode
   concept). Director says "Mission Policy" exclusively. A per-mission run-permission
   preset for delegated children is a recorded deferral, not a feature.
+- **Policy library roadmap (LOCKED 2026-07-06 — custom policies: yes, staged).**
+  *Why:* a policy is a named, reusable trust envelope — the encoding of earned trust for a
+  recurring kind of mission (mission-is-the-unit: recurring kinds → recurring envelopes;
+  the name survives into ledger and receipt as the one-word trust story).
+  *Stage 0 (done):* four built-ins + snapshot-at-draft + single picker.
+  *Stage 1 (scheduled):* the two dials (pace; `Me|Director` via `missionPlanUpdater`) —
+  per-mission adjustment without library writes.
+  *Stage 2 (custom policies):* primary affordance is **"Save as policy"** from a mission's
+  captured snapshot (policies are born from lived missions, not blank forms); secondary is
+  "Edit a copy" from a built-in. Both open one minimal editor: name · pace · per-class
+  ask/auto in human display names (F3 vocabulary rule applies) · cap · guidance. Storage
+  mirrors `CoordinatorMissionTemplateStore`; customs join the grid; built-ins immutable;
+  snapshot doctrine already guarantees library edits never touch running missions.
+  *Never build:* policy-per-node (the envelope is mission-scoped), per-repo auto-selection
+  rules, sharing/marketplace. Templates compose via the recommended-policy pointer only.
+  *Timing:* behind the screenshot parity pass + demo; ~two focused runs (store/model,
+  then editor UI).
 
 ## 4. Decisions queue doctrine + identity (LOCKED)
 - The queue contains **asks — things waiting on the user — only**: pending child
@@ -75,7 +92,8 @@ MCP helper); extract a shared `CoordinatorMissionPlanScheduling` helper when eit
 next touched.
 
 ## 6. Open deferrals (recorded, not holes)
-- Custom policy CRUD ("Edit a copy" / "+ New" editor behavior).
+- Custom policy CRUD — designed and staged; see §3 "Policy library roadmap" ("Save as
+  policy" primary, "Edit a copy" secondary, minimal editor, post-parity timing).
 - Per-class autonomy menu; `Me|Director` dial ships via the `missionPlanUpdater` seam.
 - Policy snapshot **drift guard** (compare sent policy vs runtime-recorded snapshot on
   first publish; pure projection).
