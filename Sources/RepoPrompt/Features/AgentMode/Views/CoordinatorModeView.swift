@@ -3627,12 +3627,8 @@ struct CoordinatorModeView: View {
 
             coordinatorContinuationControls(rail, metrics: metrics)
 
-            Divider()
-                .opacity(0.45)
-
             coordinatorComposer(rail, metrics: metrics)
                 .padding(metrics.cardPadding)
-                .background(CoordinatorTheme.Palette.panelBackground)
         }
         .background(CoordinatorTheme.Palette.windowBackground)
     }
