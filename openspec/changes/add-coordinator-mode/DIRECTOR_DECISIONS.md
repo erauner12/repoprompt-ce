@@ -308,6 +308,21 @@ presentation-policy tests.
   (decode-compat), `CoordinatorMissionRoutingOperation` closed-enum forward-compat
   strategy before any new operation is added.
 
+## 13. Task-queuing article audit — CLOSED (2026-07-07, code-verified)
+The founding gap analysis is resolved: DAG scheduling/auto-pickup (W1, S2 live-proof),
+attention queue (Decisions, H3.1), idle telemetry (`eligible_nodes_idle`, adopted as the
+harness's failure oracle), conflict safety (worktree isolation + proven steer-not-respawn
+recovery, beyond the article), contract + receipts. Deferrals stand: priority (FIFO
+doctrine), backlog tiers (`mission_key` hook; Light Missions absorb quick capture),
+soft edges. **Remaining gap: Spend.** Receipt reserve exists
+(`CoordinatorMissionReceiptProjection.spendReserveCopy`, test-asserted, shape frozen);
+`Runtime/Usage` holds context estimators only. **Spend v1 wave:** [verify] whether
+per-session cumulative usage is captured today → if yes, pure projection summing
+mission-owned sessions into the reserved slot (+ optional strip figure); if no, capture
+then project. Budget enforcement stays behind visibility and arrives later as a `spend`
+autonomy class via §3b's graduation rule. E2E: extend a scenario to assert receipt
+spend present once v1 lands.
+
 ## 8. coordinator_chat extension roadmap (2026-07-07, harness-driven)
 
 Rule: extend for **observation** and **user-channel parity** only; never new runtime
