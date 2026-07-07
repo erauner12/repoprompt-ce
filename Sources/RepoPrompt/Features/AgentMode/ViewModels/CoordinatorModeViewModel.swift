@@ -1856,6 +1856,13 @@ extension AgentModeViewModel {
         }
     }
 
+    private static func canAcceptCoordinatorDirective(runState: AgentSessionRunState) -> Bool {
+        switch runState {
+        case .running: false
+        case .idle, .waitingForUser, .waitingForQuestion, .waitingForApproval, .completed, .cancelled, .failed: true
+        }
+    }
+
     @MainActor
     func submitCoordinatorDirectiveToAgentMode(
         _ text: String,
@@ -1890,7 +1897,7 @@ extension AgentModeViewModel {
         guard let session = sessions[runtime.tabID] else {
             return .blocked(message: "Coordinator composer is unavailable for this session state.")
         }
-        guard !session.runState.isActive else {
+        guard Self.canAcceptCoordinatorDirective(runState: session.runState) else {
             return .blocked(message: "Coordinator is mid-run. Send directives when it reaches an ordinary turn boundary.")
         }
         guard let target = makeComposerSubmitTarget(tabID: runtime.tabID, session: session),
@@ -2065,7 +2072,7 @@ extension AgentModeViewModel {
         tabID: UUID,
         session: TabSession
     ) async -> CoordinatorModeViewModel.DirectiveSubmissionResult {
-        guard !session.runState.isActive else {
+        guard Self.canAcceptCoordinatorDirective(runState: session.runState) else {
             var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
             state.enqueue(event)
             state.markDeferred(event)

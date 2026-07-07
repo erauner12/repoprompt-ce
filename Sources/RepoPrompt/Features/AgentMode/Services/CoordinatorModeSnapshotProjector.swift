@@ -714,6 +714,13 @@ struct CoordinatorModeSnapshotProjector {
         }
     }
 
+    private func canAcceptCoordinatorDirective(_ state: AgentSessionRunState) -> Bool {
+        switch state {
+        case .running: false
+        case .idle, .waitingForUser, .waitingForQuestion, .waitingForApproval, .completed, .cancelled, .failed: true
+        }
+    }
+
     private func hasConflictedMerge(_ summaries: [AgentSessionWorktreeMergeSummary]) -> Bool {
         summaries.contains { summary in
             summary.status == .conflicted || summary.conflictFileCount > 0
@@ -1037,7 +1044,7 @@ struct CoordinatorModeSnapshotProjector {
             openAgentChatRoute: nil,
             statusReport: row.statusReport,
             isComposerEnabled: isLiveInCurrentWindow,
-            isComposerSendEnabled: isLiveInCurrentWindow && !row.runState.isActive
+            isComposerSendEnabled: isLiveInCurrentWindow && canAcceptCoordinatorDirective(row.runState)
         )
     }
 

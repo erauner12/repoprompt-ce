@@ -2313,6 +2313,50 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.railTranscriptEntries.compactMap(\.action).map(\.targetSessionID), [childID])
     }
 
+    func testCoordinatorQuestionBoundaryAcceptsDirective() async {
+        let coordinatorID = uuid(1)
+        let input = input(
+            live: [
+                live(
+                    id: coordinatorID,
+                    tab: uuid(101),
+                    title: "Coordinator",
+                    updatedAt: date(20),
+                    state: .waitingForQuestion,
+                    isMCP: true,
+                    coordinatorRuntime: true
+                )
+            ],
+            demoCoordinatorIDs: [coordinatorID]
+        )
+        var submissions: [CoordinatorDirectiveSubmission] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                var next = input
+                next.sortMode = sortMode
+                if let selectedCoordinatorID {
+                    next.selectedCoordinatorID = selectedCoordinatorID
+                }
+                return next
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { submission in
+                submissions.append(submission)
+                return .accepted
+            }
+        )
+        viewModel.refresh()
+        XCTAssertTrue(viewModel.snapshot.coordinatorRail.isComposerEnabled)
+        XCTAssertTrue(viewModel.snapshot.coordinatorRail.isComposerSendEnabled)
+
+        let result = await viewModel.submitCoordinatorDirective("Proceed with the approved plan.")
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(submissions.map(\.visibleText), ["Proceed with the approved plan."])
+        XCTAssertEqual(submissions.first?.coordinatorSessionID, coordinatorID)
+        XCTAssertEqual(submissions.first?.forceNewRuntime, false)
+    }
+
     func testForceNewCoordinatorRuntimeAddsRuntimeEvenWhenOldRuntimeIsMarked() async throws {
         let oldTabID = uuid(301)
         let oldSessionID = uuid(302)

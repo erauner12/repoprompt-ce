@@ -910,6 +910,31 @@ final class AgentModeStopSubmitTargetTests: XCTestCase {
         XCTAssertTrue(recorder.sentTexts().isEmpty)
     }
 
+    func testCoordinatorDirectiveAllowsWaitingQuestionBoundary() async throws {
+        let recorder = StopSubmitSendRecorder()
+        let controller = StopSubmitNoopCodexController(recorder: recorder, hasActiveThread: true)
+        let vm = makeViewModel(codexController: controller)
+        let coordinatorTabID = UUID()
+        let coordinatorSessionID = UUID()
+        vm.ensureSession(for: coordinatorTabID)
+        let coordinatorSession = try XCTUnwrap(vm.sessions[coordinatorTabID])
+        coordinatorSession.hasLoadedPersistedState = true
+        coordinatorSession.selectedAgent = .codexExec
+        coordinatorSession.testInstallPersistentSessionBinding(sessionID: coordinatorSessionID)
+        coordinatorSession.runState = .waitingForQuestion
+        coordinatorSession.runID = UUID()
+        coordinatorSession.beginRunAttempt(source: "test.waitingCoordinator")
+
+        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+            "Proceed with the approved plan.",
+            coordinatorSessionID: coordinatorSessionID
+        )
+
+        XCTAssertEqual(result, .submitted)
+        XCTAssertEqual(coordinatorSession.items.filter { $0.kind == .user }.map(\.text), ["Proceed with the approved plan."])
+        XCTAssertTrue(coordinatorSession.pendingInstructions.isEmpty)
+    }
+
     func testCoordinatorDirectiveRejectsMissingLiveCoordinatorWithoutCreatingSession() async {
         let vm = makeViewModel()
         let existingTabIDs = Set(vm.sessions.keys)
