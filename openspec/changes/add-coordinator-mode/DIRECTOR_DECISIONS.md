@@ -6,6 +6,7 @@ Recreated 2026-07-06 after the untracked `docs/plans/mock-parity-2026-07-05.md` 
 ephemeral run charters may stay in `docs/plans/` but must cite this record.
 
 ## 1. Fidelity principles (LOCKED)
+
 - **Mock for structure, Agent Mode for temperature.** The HTML mock
   (`reference/RepoPrompt_Command_Center.html`) is authoritative for layout, anatomy, copy,
   and interaction. Agent Mode is authoritative for palette, chip severity, and accent
@@ -22,6 +23,7 @@ ephemeral run charters may stay in `docs/plans/` but must cite this record.
   The inspector remains exclusively for Agent Board rows.
 
 ## 2. Deliberate divergences from the mock (each needs a future mock-sync pass)
+
 - Header `Stop / Clear` removed — composer stop is canonical; Clear conflicts with
   ledger-is-history doctrine.
 - Neutral palette / chip discipline (see §1) supersedes the mock's colorful chips, which
@@ -30,6 +32,7 @@ ephemeral run charters may stay in `docs/plans/` but must cite this record.
   was ported theater from Agent Mode with no defined Director behavior.
 
 ## 3. Policy ownership model (LOCKED 2026-07-06)
+
 - **One picker: the draft-surface policy grid.** The composer policy popover
   (`CoordinatorMissionPolicyPopoverView` behind the "Permissions" chip) duplicated the
   picker with internal ask-class vocabulary and a colliding name; it is removed from the
@@ -42,34 +45,34 @@ ephemeral run charters may stay in `docs/plans/` but must cite this record.
   `missionPlanUpdater` seam — never a re-pick, never a re-send.
 - **Mission Templates are orthogonal.** Policy = "how much stops for you" (never shape);
   Template = "what kind of work" (never trust). The one coupling: a template MAY carry a
-  *recommended* policy pointer that pre-selects the grid but never locks it. `▸ Try:`
+  _recommended_ policy pointer that pre-selects the grid but never locks it. `▸ Try:`
   chips are inline templates and the reference pattern:
   `MissionTemplate = { directive text, optional recommended-policy ref, optional shape hint }`.
 - **Vocabulary:** "Permissions" is reserved for run-level permissions (the Agent Mode
   concept). Director says "Mission Policy" exclusively. A per-mission run-permission
   preset for delegated children is a recorded deferral, not a feature.
 - **Policy library roadmap (LOCKED 2026-07-06 — custom policies: yes, staged).**
-  *Why:* a policy is a named, reusable trust envelope — the encoding of earned trust for a
+  _Why:_ a policy is a named, reusable trust envelope — the encoding of earned trust for a
   recurring kind of mission (mission-is-the-unit: recurring kinds → recurring envelopes;
   the name survives into ledger and receipt as the one-word trust story).
-  *Stage 0 (done):* four built-ins + snapshot-at-draft + single picker.
-  *Stage 1 (scheduled):* the two dials (pace; `Me|Director` via `missionPlanUpdater`) —
+  _Stage 0 (done):_ four built-ins + snapshot-at-draft + single picker.
+  _Stage 1 (scheduled):_ the two dials (pace; `Me|Director` via `missionPlanUpdater`) —
   per-mission adjustment without library writes.
-  *Stage 2 (custom policies):* primary affordance is **"Save as policy"** from a mission's
+  _Stage 2 (custom policies):_ primary affordance is **"Save as policy"** from a mission's
   captured snapshot (policies are born from lived missions, not blank forms); secondary is
   "Edit a copy" from a built-in. Both open one minimal editor: name · pace · per-class
   ask/auto in human display names (F3 vocabulary rule applies) · cap · guidance. Storage
   mirrors `CoordinatorMissionTemplateStore`; customs join the grid; built-ins immutable;
   snapshot doctrine already guarantees library edits never touch running missions.
-  *Never build:* policy-per-node (the envelope is mission-scoped), per-repo auto-selection
+  _Never build:_ policy-per-node (the envelope is mission-scoped), per-repo auto-selection
   rules, sharing/marketplace. Templates compose via the recommended-policy pointer only.
-  *Timing:* behind the screenshot parity pass + demo; ~two focused runs (store/model,
+  _Timing:_ behind the screenshot parity pass + demo; ~two focused runs (store/model,
   then editor UI).
 - **Autonomy control model — three layers (LOCKED 2026-07-06).** The levers differ in
   scope and must look like it:
-  *Layer 1 — Policy (noun, picked once):* the named stance chosen on the draft grid;
+  _Layer 1 — Policy (noun, picked once):_ the named stance chosen on the draft grid;
   rendered everywhere as the name.
-  *Layer 2 — Dials (standing adjustments, exactly two):* pace (`Step|Auto`) and
+  _Layer 2 — Dials (standing adjustments, exactly two):_ pace (`Step|Auto`) and
   `Me|Director` (childAsk). Dials write **mission-level overrides onto the snapshot** via
   `missionPlanUpdater` — never mutate the library policy, never re-send metadata. When a
   dial diverges from the named policy, the name must say so: echo becomes
@@ -78,15 +81,15 @@ ephemeral run charters may stay in `docs/plans/` but must cite this record.
   here: **dial changes apply from the next boundary; a pending checkpoint is never
   consumed** (toggles configure, buttons act). Every mid-run dial change posts a ledger
   line ("You set pace → Auto for this mission") so scope is self-evident and audited.
-  Current-code gap (recon 2026-07-06): pace exists *only* inside the policy snapshot — no
+  Current-code gap (recon 2026-07-06): pace exists _only_ inside the policy snapshot — no
   composer pace variable, no mission-level override channel; the dial must gain the
   override path rather than binding to the preset's field.
-  *Layer 3 — Moment buttons (one-time acts):* checkpoint triad, gate approval, overrule —
+  _Layer 3 — Moment buttons (one-time acts):_ checkpoint triad, gate approval, overrule —
   always act once, never configure. Visual grammar: dials are segmented toggles, moment
   acts are buttons; the two never share styling.
-  *Legibility rule:* the contract shows where it bites — at boundaries/strip, derive a
+  _Legibility rule:_ the contract shows where it bites — at boundaries/strip, derive a
   dynamic preview from the autonomy map × the ready set ("Auto continues: launch 2 ready
-  steps · Stops for: merge (irreversible)"). *Trust loop:* the wrap-up stat card may
+  steps · Stops for: merge (irreversible)"). _Trust loop:_ the wrap-up stat card may
   suggest encoding ("Decided itself 7×, no overrules — save these settings as a policy /
   try Hands-off for missions like this").
 
@@ -137,6 +140,7 @@ de-emphasize either dial. Any instruction that reads otherwise is a misreading.*
    (those are separate items in §3).
 
 ## 3b. Autonomy extensibility (LOCKED 2026-07-06): the map is the mechanism
+
 The autonomy map (`class → ask|auto`, unknown resolves to Ask) **is** the extensible
 mechanism — new classes are one key + one prompt sentence + policy updates, with zero
 schema risk. No generalized per-class control surface is built. **Graduation rule:** a
@@ -151,6 +155,7 @@ Stage 2's minimal editor, reached via "Save as policy" — from lived experience
 speculation.
 
 ## 4. Decisions queue doctrine + identity (LOCKED)
+
 - The queue contains **asks — things waiting on the user — only**: pending child
   interactions, pending checkpoints, held boundaries. Blocked nodes/sessions are never
   queue items unless they carry a pending interaction; scheduler stalls are
@@ -164,16 +169,18 @@ speculation.
   never telemetry.
 
 ## 5. W1/W2 content-review gate — PASSED (2026-07-06 @ a131f2dc)
+
 Resume-directive eligibility instruction present and test-asserted; flight cap counts
 **running nodes** (`denyFlightCapReached`, default 3) uniformly across run/explore starts
 including pre-approval probes; compact `mission_status` carries per-node `deps_satisfied`
-+ top-level `ready_node_ids`; the compact fingerprint carries both **explicitly**
-(edge-only revisions advance `wait_for_update`); `eligible_nodes_idle` documents its
-transient-fire window as telemetry. The `running N/cap` chip reads
-`MissionPlanReadinessProjection.runningNodeCount` — UI and scheduler agree on the node as
-the unit. Follow-up (non-blocking): the ready-set rule exists twice (view projection +
-MCP helper); extract a shared `CoordinatorMissionPlanScheduling` helper when either is
-next touched.
+
+- top-level `ready_node_ids`; the compact fingerprint carries both **explicitly**
+  (edge-only revisions advance `wait_for_update`); `eligible_nodes_idle` documents its
+  transient-fire window as telemetry. The `running N/cap` chip reads
+  `MissionPlanReadinessProjection.runningNodeCount` — UI and scheduler agree on the node as
+  the unit. Follow-up (non-blocking): the ready-set rule exists twice (view projection +
+  MCP helper); extract a shared `CoordinatorMissionPlanScheduling` helper when either is
+  next touched.
 
 ## 6. Calm Law + K-pass charter (LOCKED 2026-07-06) — attention hierarchy as layout
 
@@ -184,6 +191,7 @@ facts render 3–5× per screen; every entry is a bordered card; plan events spa
 transcript; raw session IDs wear chips; two composers coexist on completed missions.
 
 **Principles:**
+
 1. **One home per fact.** If a fact renders twice on one screen, one instance is wrong.
    Canonical homes: plan structure/objective → right pane only (the in-conversation plan
    card becomes a one-line reference: "Mission Plan · r7 → view"); policy/pace/cap →
@@ -204,8 +212,8 @@ transcript; raw session IDs wear chips; two composers coexist on completed missi
 5. **One composer at a time.** The plan-revision composer exists only when the pane is
    open AND the mission is active; completed missions show a single "Start a follow-up
    Mission…" composer and nothing else. **Completed is the calmest state**: wrap-up card
-   + collapsed receipt + a "transcript" disclosure — a finished mission must look
-   *quieter* than a running one.
+   - collapsed receipt + a "transcript" disclosure — a finished mission must look
+     _quieter_ than a running one.
 
 **K-pass (staged, each its own small run):** K1 deduplicate (plan reference card, strip
 ownership, delete the mission-context card — its facts live in strip + grounding,
@@ -226,11 +234,11 @@ pane header row IS the strip and the inner card loses its duplicate header/chips
 **K3 — EXPANDED: the Signal Shape System (supersedes "chip budget"; user-derived).**
 Uniform shape flattens the signal hierarchy: when every fact is a capsule, no capsule
 can claim attention. Encode information class in form —
-*State* (mission/node status, needs-you): the ONLY filled capsules; max one per row.
-*Counts* (`2/2 done`, `running 0/3`): plain text — numbers self-signal.
-*Metadata* (policy · edited · pace · cap · workflow · role): one muted interpunct text
+_State_ (mission/node status, needs-you): the ONLY filled capsules; max one per row.
+_Counts_ (`2/2 done`, `running 0/3`): plain text — numbers self-signal.
+_Metadata_ (policy · edited · pace · cap · workflow · role): one muted interpunct text
 line, no borders (e.g. `Default · edited · auto · cap 3`).
-*Identity* (sessions, nodes): text links, never chips; no raw ID fragments anywhere;
+_Identity_ (sessions, nodes): text links, never chips; no raw ID fragments anywhere;
 fix the duplicated "Read-only child ×2" rendering.
 Rule: **a capsule is a claim on attention** — scarcity is the feature; the amber
 `needs you` pill must be visually alone in its class. Applies to strip, part headers,
@@ -246,13 +254,14 @@ anatomy (no key-value debug rows) in a later polish pass.
 **K3/K7 — ACCEPTED (2026-07-06, live-verified).** Signal Shape System formalized as a
 typed mapping in `CoordinatorMissionPresentationPolicy` (`SignalFactClass → SignalShape`);
 mission-pane inspector evicted; Board inspector collapses to a side rail. Carried flag →
-**K7b:** the Board inspector's *inner* anatomy is still key-value debug rows; give it the
+**K7b:** the Board inspector's _inner_ anatomy is still key-value debug rows; give it the
 calm treatment in a later pass.
 
 **K8 — State-conditional calm (from the 2026-07-06 computer-use audit): controls and
 emphasis must respond to mission state.** Extend `CoordinatorMissionPresentationPolicy`
 with pure, tested functions (`composerMode(for:)`, `paneEmphasis(for:)`,
 `boardColumnEmphasis(for:)`, `railRowSignal(for:)`):
+
 - **K8a — Terminal composer.** Completed/stopped missions never show the full composer
   (dials, policy echo, stop are live-mission controls and contradict finality). Replace
   with ONE quiet action — "Start a follow-up Mission →" — which reveals the full composer
@@ -269,11 +278,11 @@ with pure, tested functions (`composerMode(for:)`, `paneEmphasis(for:)`,
 
 **Audit finding #4 (policy grid before intent) — DEFERRED.** It would reverse the
 accepted, mock-locked C3 draft surface, whose grid is the demo's teaching surface ("your
-words choose the shape; policy chooses stops"). Captured kernel for later: *progressive
-familiarity* — after the user's first few missions, the grid may default-collapse to the
+words choose the shape; policy chooses stops"). Captured kernel for later: _progressive
+familiarity_ — after the user's first few missions, the grid may default-collapse to the
 summary row with the four-card chooser on demand. Revisit post-demo.
 
-**Focus order (updated):** K8 → K2 (event coalescing — matters for *running* missions,
+**Focus order (updated):** K8 → K2 (event coalescing — matters for _running_ missions,
 which K1's completed-state folding doesn't touch) → K4 remainder (unboxed Director prose,
 checkpoint dimming) → K7b (calm inspector anatomy).
 
@@ -282,6 +291,7 @@ capsule, folded evidence, neutral board columns, muted rail history — all land
 presentation-policy tests.
 
 **K9 — Demo-polish run (bang-for-buck ranking toward the demo video):**
+
 1. **K2 executes now** — the running transcript is where demo eyes live; four stacked
    Plan event rows per worker completion fold into the in-place session card + one
    "Plan updated · rN→rM" line.
@@ -296,6 +306,7 @@ presentation-policy tests.
    outstanding seven-state screenshot pass; record after.
 
 ## 7. Open deferrals (recorded, not holes)
+
 - Custom policy CRUD — designed and staged; see §3 "Policy library roadmap" ("Save as
   policy" primary, "Edit a copy" secondary, minimal editor, post-parity timing).
 - Per-class autonomy menu; `Me|Director` dial ships via the `missionPlanUpdater` seam.
@@ -309,6 +320,7 @@ presentation-policy tests.
   strategy before any new operation is added.
 
 ## 13. Task-queuing article audit — CLOSED (2026-07-07, code-verified)
+
 The founding gap analysis is resolved: DAG scheduling/auto-pickup (W1, S2 live-proof),
 attention queue (Decisions, H3.1), idle telemetry (`eligible_nodes_idle`, adopted as the
 harness's failure oracle), conflict safety (worktree isolation + proven steer-not-respawn
@@ -322,6 +334,36 @@ mission-owned sessions into the reserved slot (+ optional strip figure); if no, 
 then project. Budget enforcement stays behind visibility and arrives later as a `spend`
 autonomy class via §3b's graduation rule. E2E: extend a scenario to assert receipt
 spend present once v1 lands.
+
+## 14. feature scan (2026-07-07) — adopt / have / skip
+
+**Validation:** converged on the doctrine —
+"everything not in the queue is already moving" (= queue never lies), "earned autonomy"
+(= trust model), "missions, not sessions" (= survives-the-worker). We have it shipped.
+**ADOPT:**
+
+- **A. Mission Pins** (their Context Pins): user-attached files/notes per mission,
+  riding every delegation charter + judge bundle via the existing bounded-exhibit
+  machinery (`forkFileContentsBlock`) — additive plan field + composer/pane affordance.
+  Kills the re-explaining tax; the Context Contract already designed the transport.
+- **B. Receipt-grounded follow-ups** (their "reopen with full context" / pragmatic
+  Cross-Mission Memory v1): a follow-up mission auto-pins its predecessor's receipt.
+  Composes three existing pieces — predecessor links + receipt projection + pins (A).
+  Full cross-mission memory (receipts corpus grounding `director ask`) stays the §12
+  post-v1 bet.
+- **C. Attempt budgets** (their "Max 3 attempts"): a runaway-loop guard the bar-recovery
+  path lacks — after N consecutive short-evidence verdicts on a node, escalate to a
+  checkpoint instead of re-steering forever. Implementable NOW (pre-Spend); additive
+  policy/node field + prompt sentence + one e2e assertion. Dollar budgets remain gated
+  behind Spend v1 (§13) and the future `spend` autonomy class.
+- **D. Cost-per-completed-step framing** (their "$2.14 · 23 tasks"): presentation
+  decision recorded now so Spend v1 builds per-mission/per-step rollups, never
+  token-counter UI.
+  **SKIP (with reasons):** Mission Notes (ledger + guidance + a note-type pin cover it;
+  §11 one-concept discipline), Handoffs (the receipt IS the handoff; single-user CE),
+  grouping/initiatives (backlog-tier adjacent, deferred), quick-switcher (post-v1 polish),
+  cost/speed/second-opinion routing (seams exist — routing decisions record model;
+  fork/pick-winner deferred; cost-aware waits on Spend — noted, not built).
 
 ## 8. coordinator_chat extension roadmap (2026-07-07, harness-driven)
 
