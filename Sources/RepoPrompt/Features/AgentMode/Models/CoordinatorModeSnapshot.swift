@@ -614,9 +614,40 @@ enum CoordinatorModeLedgerEntryPayload: Equatable {
     case decision(CoordinatorMissionDecisionRecord)
     case evidence(CoordinatorMissionEvidenceRecord)
     case routing(CoordinatorMissionRoutingDecision)
+    case planUpdate(CoordinatorModePlanUpdateSummary)
     case planEvent(CoordinatorMissionPlanEvent)
     case grounding(policy: CoordinatorMissionPolicySnapshot?, shape: CoordinatorMissionShapeSummary?)
     case wrapUp(userCount: Int, directorCount: Int)
+}
+
+struct CoordinatorModePlanUpdateSummary: Equatable {
+    let id: UUID
+    let eventKind: CoordinatorMissionPlanEventKind
+    let previousRevision: Int?
+    let revision: Int?
+    let summary: String?
+    let foldedEventCount: Int
+
+    var title: String {
+        switch eventKind {
+        case .created:
+            "Plan recorded"
+        case .revised:
+            "Plan updated"
+        case .approved:
+            "Plan approved"
+        case .nodeStarted, .nodeCompleted, .nodeBlocked, .sessionBound, .gateCleared:
+            eventKind.rawValue
+        }
+    }
+
+    var revisionText: String? {
+        guard let revision else { return nil }
+        if let previousRevision, previousRevision != revision {
+            return "r\(previousRevision) → r\(revision)"
+        }
+        return "r\(revision)"
+    }
 }
 
 struct CoordinatorModeCoordinatorAction: Equatable {

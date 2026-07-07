@@ -479,15 +479,10 @@ struct CoordinatorModeView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Divider()
-                .opacity(0.28)
-
-            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                coordinatorComposer(rail, metrics: metrics)
-                    .padding(.horizontal, metrics.cardPadding)
-                    .padding(.top, metrics.cardPadding)
-            }
-            .background(CoordinatorTheme.Palette.windowBackground)
+            coordinatorComposer(rail, metrics: metrics)
+                .padding(.horizontal, metrics.cardPadding)
+                .padding(.top, metrics.smallSpacing)
+                .padding(.bottom, metrics.cardPadding)
         }
         .background(CoordinatorTheme.Palette.windowBackground)
     }
@@ -3628,7 +3623,9 @@ struct CoordinatorModeView: View {
             coordinatorContinuationControls(rail, metrics: metrics)
 
             coordinatorComposer(rail, metrics: metrics)
-                .padding(metrics.cardPadding)
+                .padding(.horizontal, metrics.cardPadding)
+                .padding(.top, metrics.smallSpacing)
+                .padding(.bottom, metrics.cardPadding)
         }
         .background(CoordinatorTheme.Palette.windowBackground)
     }
@@ -4709,6 +4706,8 @@ struct CoordinatorModeView: View {
             }
         case let .routing(decision):
             coordinatorRoutingKickoffLine(decision, createdAt: createdAt, metrics: metrics)
+        case let .planUpdate(update):
+            coordinatorPlanUpdateMarker(update, createdAt: createdAt, metrics: metrics)
         case let .planEvent(event):
             coordinatorPlanEventMarker(event, createdAt: createdAt, metrics: metrics)
         case let .grounding(policy, shape):
@@ -4820,6 +4819,45 @@ struct CoordinatorModeView: View {
             selectDelegatedActionTarget(targetRow)
         }
         .hoverTooltip(targetRow == nil ? "Delegated session is no longer visible on the board" : "Show delegated session in inspector")
+    }
+
+    private func coordinatorPlanUpdateMarker(
+        _ update: CoordinatorModePlanUpdateSummary,
+        createdAt: Date,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        HStack(alignment: .top, spacing: metrics.smallSpacing) {
+            Capsule(style: .continuous)
+                .fill(Color.accentColor.opacity(0.18))
+                .frame(width: 2)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+                    Label(update.title, systemImage: "list.clipboard")
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.secondary)
+                    if let revisionText = update.revisionText {
+                        Text(revisionText)
+                            .font(metrics.micro)
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer(minLength: metrics.smallSpacing)
+                    Text(createdAt.formatted(date: .omitted, time: .shortened))
+                        .font(metrics.micro)
+                        .foregroundStyle(.tertiary)
+                }
+
+                if let summary = update.summary {
+                    Text(summary)
+                        .font(metrics.micro)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                }
+            }
+        }
+        .padding(.horizontal, metrics.smallSpacing)
+        .padding(.vertical, metrics.tightSpacing * 0.65)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func coordinatorPlanEventMarker(
@@ -5648,9 +5686,6 @@ struct CoordinatorModeView: View {
                     )
                 }
             }
-
-            Spacer()
-                .frame(height: metrics.composerFooterHeight)
         }
     }
 
@@ -7413,10 +7448,6 @@ private struct CoordinatorVisualMetrics {
         fontPreset.scaledClamped(40, min: 40, max: 48)
     }
 
-    var composerFooterHeight: CGFloat {
-        fontPreset.scaledClamped(28, min: 24, max: 32)
-    }
-
     var coordinatorComposerChromeVerticalPadding: CGFloat {
         fontPreset.scaledClamped(8, max: 8)
     }
@@ -7812,7 +7843,7 @@ private extension CoordinatorModeRailTranscriptEntry.Role {
         case .user:
             Color.accentColor.opacity(0.16)
         case .coordinator:
-            Color(nsColor: .windowBackgroundColor).opacity(0.72)
+            Color.clear
         case .event:
             Color(nsColor: .controlBackgroundColor).opacity(0.26)
         }
@@ -7823,7 +7854,7 @@ private extension CoordinatorModeRailTranscriptEntry.Role {
         case .user:
             Color.accentColor.opacity(0.22)
         case .coordinator:
-            Color.secondary.opacity(0.10)
+            Color.clear
         case .event:
             Color.secondary.opacity(0.08)
         }

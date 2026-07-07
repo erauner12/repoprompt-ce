@@ -277,6 +277,24 @@ summary row with the four-card chooser on demand. Revisit post-demo.
 which K1's completed-state folding doesn't touch) → K4 remainder (unboxed Director prose,
 checkpoint dimming) → K7b (calm inspector anatomy).
 
+**K8 — ACCEPTED (2026-07-06, live-verified).** Terminal follow-up action, single pane
+capsule, folded evidence, neutral board columns, muted rail history — all landed with
+presentation-policy tests.
+
+**K9 — Demo-polish run (bang-for-buck ranking toward the demo video):**
+1. **K2 executes now** — the running transcript is where demo eyes live; four stacked
+   Plan event rows per worker completion fold into the in-place session card + one
+   "Plan updated · rN→rM" line.
+2. **Narration vocabulary (bundle with K2):** the runtime's own prose is the last
+   internals leak ("Policy snapshot is Auto with childAsk auto…"). One `AgentModePrompts`
+   sentence: narrate in human terms, never autonomy class keys. Also tuck `r7` revision
+   jargon into metadata form.
+3. **K4-lite:** unbox Director prose (Agent Mode's grammar).
+4. **Stage the demo mission:** the parallel fan-out story (two independent chains →
+   converging review; `running 2/3`; `Waiting on A ✓ · B …` ticking; auto-pickup on the
+   second parent; evidence; receipt) — W1's on-camera moment. One dry run doubles as the
+   outstanding seven-state screenshot pass; record after.
+
 ## 7. Open deferrals (recorded, not holes)
 - Custom policy CRUD — designed and staged; see §3 "Policy library roadmap" ("Save as
   policy" primary, "Edit a copy" secondary, minimal editor, post-parity timing).

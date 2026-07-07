@@ -1395,16 +1395,7 @@ final class CoordinatorModeViewModel: ObservableObject {
                 ledger: .routing(decision)
             )
         })
-        entries.append(contentsOf: plan.events.map { event in
-            CoordinatorModeRailTranscriptEntry(
-                id: event.id,
-                role: .event,
-                text: event.summary ?? event.kind.rawValue,
-                createdAt: event.timestamp,
-                action: nil,
-                ledger: .planEvent(event)
-            )
-        })
+        entries.append(contentsOf: missionPlanEventTranscriptEntries(from: plan))
 
         if plan.status == .completed {
             entries.append(CoordinatorModeRailTranscriptEntry(
@@ -1421,6 +1412,70 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
 
         return entries
+    }
+
+    private func missionPlanEventTranscriptEntries(from plan: CoordinatorMissionPlan) -> [CoordinatorModeRailTranscriptEntry] {
+        let events = plan.events.sorted { lhs, rhs in
+            if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
+            return lhs.timestamp < rhs.timestamp
+        }
+        let revisionEvents = events.filter(\.kind.isRevisionMarker)
+        let firstRenderedRevision = max(1, plan.revision - revisionEvents.count + 1)
+        var renderedRevisionIndex = 0
+        var foldedProgressEventCount = 0
+        var entries: [CoordinatorModeRailTranscriptEntry] = []
+
+        for event in events {
+            if event.kind.isFoldedTranscriptProgress {
+                foldedProgressEventCount += 1
+                continue
+            }
+
+            if event.kind.isRevisionMarker {
+                let revision = firstRenderedRevision + renderedRevisionIndex
+                let previousRevision = event.kind == .revised ? max(1, revision - 1) : nil
+                renderedRevisionIndex += 1
+                let update = CoordinatorModePlanUpdateSummary(
+                    id: event.id,
+                    eventKind: event.kind,
+                    previousRevision: previousRevision,
+                    revision: revision,
+                    summary: Self.usefulPlanEventSummary(event.summary),
+                    foldedEventCount: foldedProgressEventCount
+                )
+                foldedProgressEventCount = 0
+                entries.append(CoordinatorModeRailTranscriptEntry(
+                    id: event.id,
+                    role: .event,
+                    text: [update.title, update.revisionText].compactMap(\.self).joined(separator: " · "),
+                    createdAt: event.timestamp,
+                    action: nil,
+                    ledger: .planUpdate(update)
+                ))
+                continue
+            }
+
+            foldedProgressEventCount = 0
+            entries.append(CoordinatorModeRailTranscriptEntry(
+                id: event.id,
+                role: .event,
+                text: event.summary ?? event.kind.rawValue,
+                createdAt: event.timestamp,
+                action: nil,
+                ledger: .planEvent(event)
+            ))
+        }
+
+        return entries
+    }
+
+    private static func usefulPlanEventSummary(_ summary: String?) -> String? {
+        let trimmed = summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else { return nil }
+        if trimmed.caseInsensitiveCompare("Mission plan updated") == .orderedSame {
+            return nil
+        }
+        return trimmed
     }
 
     private func deterministicMissionLedgerEntryID(planID: UUID, kind: String) -> UUID {
@@ -2545,5 +2600,25 @@ extension AgentModeViewModel {
     private func coordinatorModeTabName(for tabID: UUID) -> String? {
         promptManager?.currentComposeTabs.first(where: { $0.id == tabID })?.name
             ?? workspaceManager?.composeTabName(with: tabID)
+    }
+}
+
+private extension CoordinatorMissionPlanEventKind {
+    var isRevisionMarker: Bool {
+        switch self {
+        case .created, .revised:
+            true
+        case .approved, .nodeStarted, .nodeCompleted, .nodeBlocked, .sessionBound, .gateCleared:
+            false
+        }
+    }
+
+    var isFoldedTranscriptProgress: Bool {
+        switch self {
+        case .nodeStarted, .nodeCompleted, .sessionBound:
+            true
+        case .created, .revised, .approved, .nodeBlocked, .gateCleared:
+            false
+        }
     }
 }

@@ -1535,14 +1535,85 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         viewModel.refresh()
 
         let ledgerEntries = viewModel.railTranscriptEntries.filter { $0.ledger != nil }
-        XCTAssertEqual(ledgerEntries.count, 5)
-        XCTAssertEqual(Set(ledgerEntries.map(\.id)).count, 5)
+        XCTAssertEqual(ledgerEntries.count, 4)
+        XCTAssertEqual(Set(ledgerEntries.map(\.id)).count, 4)
         XCTAssertEqual(decisionLedgerEntries(in: viewModel).map(\.id), [uuid(702)])
         XCTAssertEqual(evidenceLedgerEntries(in: viewModel).map(\.id), [uuid(703)])
         XCTAssertEqual(routingLedgerEntries(in: viewModel).map(\.id), [uuid(701)])
-        XCTAssertEqual(planEventLedgerEntries(in: viewModel).map(\.id), [uuid(704)])
+        XCTAssertEqual(planEventLedgerEntries(in: viewModel).map(\.id), [])
+        XCTAssertEqual(planUpdateLedgerEntries(in: viewModel).map(\.id), [])
         XCTAssertEqual(wrapUpLedgerEntryCount(in: viewModel), 1)
         XCTAssertEqual(groundingLedgerEntryCount(in: viewModel), 0)
+    }
+
+    func testMissionLedgerCoalescesRoutinePlanProgressEvents() {
+        let coordinatorID = uuid(1)
+        let plan = CoordinatorMissionPlan(
+            id: uuid(705),
+            revision: 7,
+            events: [
+                CoordinatorMissionPlanEvent(
+                    id: uuid(7051),
+                    kind: .sessionBound,
+                    timestamp: date(20),
+                    summary: "Bound child session."
+                ),
+                CoordinatorMissionPlanEvent(
+                    id: uuid(7052),
+                    kind: .nodeCompleted,
+                    timestamp: date(21),
+                    summary: "Discovery completed."
+                ),
+                CoordinatorMissionPlanEvent(
+                    id: uuid(7053),
+                    kind: .nodeCompleted,
+                    timestamp: date(22),
+                    summary: "Report completed."
+                ),
+                CoordinatorMissionPlanEvent(
+                    id: uuid(7054),
+                    kind: .revised,
+                    timestamp: date(23),
+                    summary: "Mission plan updated"
+                )
+            ],
+            updatedAt: date(24)
+        )
+        let viewModel = ledgerTestViewModel(coordinatorID: coordinatorID, plan: { plan })
+
+        viewModel.refresh()
+
+        XCTAssertEqual(planEventLedgerEntries(in: viewModel).map(\.id), [])
+        let updates = planUpdateLedgerEntries(in: viewModel)
+        XCTAssertEqual(updates.count, 1)
+        XCTAssertEqual(updates.first?.id, uuid(7054))
+        XCTAssertEqual(updates.first?.previousRevision, 6)
+        XCTAssertEqual(updates.first?.revision, 7)
+        XCTAssertEqual(updates.first?.foldedEventCount, 3)
+        XCTAssertNil(updates.first?.summary)
+        XCTAssertEqual(viewModel.railTranscriptEntries.filter { $0.ledger != nil }.map(\.id), [uuid(7054)])
+    }
+
+    func testMissionLedgerKeepsBlockingPlanEventsVisible() {
+        let coordinatorID = uuid(1)
+        let plan = CoordinatorMissionPlan(
+            id: uuid(706),
+            events: [
+                CoordinatorMissionPlanEvent(
+                    id: uuid(7061),
+                    kind: .nodeBlocked,
+                    timestamp: date(20),
+                    summary: "Reviewer is blocked on missing evidence."
+                )
+            ],
+            updatedAt: date(21)
+        )
+        let viewModel = ledgerTestViewModel(coordinatorID: coordinatorID, plan: { plan })
+
+        viewModel.refresh()
+
+        XCTAssertEqual(planEventLedgerEntries(in: viewModel).map(\.id), [uuid(7061)])
+        XCTAssertEqual(planUpdateLedgerEntries(in: viewModel), [])
     }
 
     func testMissionLedgerEntriesInterleaveByTimestampAndID() {
@@ -3036,6 +3107,15 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         viewModel.railTranscriptEntries.compactMap { entry in
             if case let .routing(decision)? = entry.ledger {
                 return decision
+            }
+            return nil
+        }
+    }
+
+    private func planUpdateLedgerEntries(in viewModel: CoordinatorModeViewModel) -> [CoordinatorModePlanUpdateSummary] {
+        viewModel.railTranscriptEntries.compactMap { entry in
+            if case let .planUpdate(update)? = entry.ledger {
+                return update
             }
             return nil
         }
