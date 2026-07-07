@@ -1417,6 +1417,198 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(blockedNode["deps_satisfied"]?.boolValue, true)
     }
 
+    func testMissionEventsReturnsSequencedJournalEntries() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let parentID = UUID()
+        let childID = UUID()
+        let entry = CoordinatorMissionEventJournal.Entry(
+            seq: 2,
+            observedAt: Date(timeIntervalSince1970: 12),
+            coordinatorSessionID: coordinatorID,
+            fingerprint: "fp-2",
+            title: "Coordinator 1",
+            selected: true,
+            runState: "running",
+            hasPlan: true,
+            plan: CoordinatorMissionEventJournal.PlanSummary(
+                revision: 4,
+                missionKey: "s2",
+                status: "running",
+                approvalState: "approved",
+                terminalNodeCount: 1,
+                nodeCount: 2
+            ),
+            nodeCounts: ["completed": 1, "pending": 1],
+            readyNodeIDs: [childID],
+            activeNodeIDs: [],
+            nodes: [
+                CoordinatorMissionEventJournal.NodeSummary(
+                    id: parentID,
+                    title: "A",
+                    status: "completed",
+                    executionPolicy: "fresh_worktree",
+                    workstreamID: workstreamID,
+                    dependsOn: [],
+                    depsSatisfied: true,
+                    boundSessionID: nil,
+                    boundInteractionID: nil
+                ),
+                CoordinatorMissionEventJournal.NodeSummary(
+                    id: childID,
+                    title: "Summary",
+                    status: "pending",
+                    executionPolicy: "coordinator_only",
+                    workstreamID: workstreamID,
+                    dependsOn: [parentID],
+                    depsSatisfied: true,
+                    boundSessionID: nil,
+                    boundInteractionID: nil
+                )
+            ],
+            recentEventIDs: [UUID()],
+            routingDecisionIDs: [UUID()],
+            livenessWarnings: []
+        )
+        let plan = CoordinatorMissionPlan(
+            objective: "Watch events",
+            status: .running,
+            approvalState: .approved
+        )
+        var requestedSinceSeq: Int?
+        var requestedLimit: Int?
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] },
+            missionEvents: { _, sinceSeq, limit in
+                requestedSinceSeq = sinceSeq
+                requestedLimit = limit
+                return CoordinatorMissionEventJournal.Batch(
+                    events: [entry],
+                    nextSeq: 2,
+                    oldestSeq: 1,
+                    latestSeq: 2,
+                    truncated: false
+                )
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_events"),
+            "since_seq": .int(1),
+            "limit": .int(25)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+        let events = try XCTUnwrap(object["events"]?.arrayValue?.compactMap(\.objectValue))
+        let first = try XCTUnwrap(events.first)
+        let nodes = try XCTUnwrap(first["nodes"]?.arrayValue?.compactMap(\.objectValue))
+
+        XCTAssertEqual(requestedSinceSeq, 1)
+        XCTAssertEqual(requestedLimit, 25)
+        XCTAssertEqual(object["next_seq"]?.intValue, 2)
+        XCTAssertEqual(object["oldest_seq"]?.intValue, 1)
+        XCTAssertEqual(object["latest_seq"]?.intValue, 2)
+        XCTAssertEqual(object["truncated"]?.boolValue, false)
+        XCTAssertEqual(first["seq"]?.intValue, 2)
+        XCTAssertEqual(first["fingerprint"]?.stringValue, "fp-2")
+        XCTAssertEqual(first["plan"]?.objectValue?["revision"]?.intValue, 4)
+        XCTAssertEqual(first["ready_node_ids"]?.arrayValue?.compactMap(\.stringValue), [childID.uuidString])
+        XCTAssertEqual(nodes[1]["deps_satisfied"]?.boolValue, true)
+        XCTAssertEqual(nodes[1]["depends_on"]?.arrayValue?.compactMap(\.stringValue), [parentID.uuidString])
+    }
+
+    func testMissionEventJournalRecordsReadyRunningCompletedTransitionOrder() {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let firstID = UUID()
+        let secondID = UUID()
+        let summaryID = UUID()
+        let journal = CoordinatorMissionEventJournal(capacity: 16)
+
+        func plan(
+            firstStatus: CoordinatorMissionPlanNodeStatus,
+            secondStatus: CoordinatorMissionPlanNodeStatus,
+            summaryStatus: CoordinatorMissionPlanNodeStatus,
+            revision: Int
+        ) -> CoordinatorMissionPlan {
+            CoordinatorMissionPlan(
+                revision: revision,
+                objective: "S2 exact transition",
+                status: summaryStatus == .completed ? .completed : .running,
+                approvalState: .approved,
+                nodes: [
+                    CoordinatorMissionPlanNode(
+                        id: firstID,
+                        title: "A",
+                        workstreamID: workstreamID,
+                        executionPolicy: .freshWorktree,
+                        status: firstStatus
+                    ),
+                    CoordinatorMissionPlanNode(
+                        id: secondID,
+                        title: "B",
+                        workstreamID: workstreamID,
+                        executionPolicy: .freshWorktree,
+                        status: secondStatus
+                    ),
+                    CoordinatorMissionPlanNode(
+                        id: summaryID,
+                        title: "Summary",
+                        workstreamID: workstreamID,
+                        dependsOn: [firstID, secondID],
+                        executionPolicy: .coordinatorOnly,
+                        status: summaryStatus
+                    )
+                ]
+            )
+        }
+
+        journal.record(snapshot: Self.snapshot(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            coordinatorRunState: .running,
+            missionPlans: [
+                coordinatorID: plan(firstStatus: .running, secondStatus: .running, summaryStatus: .pending, revision: 1)
+            ]
+        ))
+        journal.record(snapshot: Self.snapshot(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            coordinatorRunState: .running,
+            missionPlans: [
+                coordinatorID: plan(firstStatus: .completed, secondStatus: .completed, summaryStatus: .pending, revision: 2)
+            ]
+        ))
+        journal.record(snapshot: Self.snapshot(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            coordinatorRunState: .running,
+            missionPlans: [
+                coordinatorID: plan(firstStatus: .completed, secondStatus: .completed, summaryStatus: .running, revision: 3)
+            ]
+        ))
+        journal.record(snapshot: Self.snapshot(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            coordinatorRunState: .completed,
+            missionPlans: [
+                coordinatorID: plan(firstStatus: .completed, secondStatus: .completed, summaryStatus: .completed, revision: 4)
+            ]
+        ))
+
+        let events = journal.events(for: coordinatorID, sinceSeq: 0, limit: 10).events
+        let summaryStates = events.compactMap { event in
+            event.nodes.first { $0.id == summaryID }
+        }
+
+        XCTAssertEqual(events.map(\.seq), [1, 2, 3, 4])
+        XCTAssertEqual(summaryStates.map(\.status), ["pending", "pending", "running", "completed"])
+        XCTAssertEqual(events[1].readyNodeIDs, [summaryID])
+        XCTAssertEqual(events[2].activeNodeIDs, [summaryID])
+        XCTAssertEqual(events[3].plan?.status, "completed")
+    }
+
     func testCompactMissionStatusFingerprintMovesForReadySetDeltaAndEdgeOnlyRevision() async throws {
         let coordinatorID = UUID()
         let workstreamID = UUID()
@@ -2391,6 +2583,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         rows: [CoordinatorModeRow] = [],
         missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },
         updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in },
+        missionEvents: @escaping (UUID, Int, Int) -> CoordinatorMissionEventJournal.Batch = { _, sinceSeq, _ in
+            CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
+        },
         initialMissionPlanTimeoutSeconds: TimeInterval = 0,
         initialMissionPlanPollIntervalSeconds: TimeInterval = 0.01,
         sleep: @escaping (UInt64) async -> Void = { _ in }
@@ -2409,6 +2604,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             rows: rows,
             missionPlans: missionPlans,
             updateMissionPlan: updateMissionPlan,
+            missionEvents: missionEvents,
             initialMissionPlanTimeoutSeconds: initialMissionPlanTimeoutSeconds,
             initialMissionPlanPollIntervalSeconds: initialMissionPlanPollIntervalSeconds,
             sleep: sleep
@@ -2432,6 +2628,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         rows: [CoordinatorModeRow] = [],
         missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },
         updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in },
+        missionEvents: @escaping (UUID, Int, Int) -> CoordinatorMissionEventJournal.Batch = { _, sinceSeq, _ in
+            CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
+        },
         initialMissionPlanTimeoutSeconds: TimeInterval = 0,
         initialMissionPlanPollIntervalSeconds: TimeInterval = 0.01,
         sleep: @escaping (UInt64) async -> Void = { _ in }
@@ -2461,7 +2660,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 submitDirective: submit,
                 activePendingChildInteractionRow: pendingChild,
                 submitPendingChildInteractionResponse: submitPendingChild,
-                updateMissionPlan: updateMissionPlan
+                updateMissionPlan: updateMissionPlan,
+                missionEvents: missionEvents
             )
         }
     }

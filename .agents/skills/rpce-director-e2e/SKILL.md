@@ -27,7 +27,7 @@ Useful knobs:
 
 - `--idle-timeout-seconds 120`: fail only after no observable progress and no running work.
 - `--repeat N`: produce per-attempt reports plus `repeat_report.json`.
-- `--events-mode auto|snapshot|required`: use future `mission_events` when available; default falls back to snapshot history.
+- `--events-mode auto|snapshot|required`: use Swift `mission_events` when available; default falls back to snapshot history.
 - `--receipt-mode auto|summary|required`: use future receipt markdown when available; default falls back to receipt-ready summary.
 - `--clean-sandbox`: clean a known throwaway Director E2E sandbox before writable scenarios.
 

@@ -254,6 +254,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let pendingFollowThroughEventProvider: PendingFollowThroughEventProvider
     private let followThroughEventSubmitter: FollowThroughEventSubmitter
     private let followThroughEventResolver: FollowThroughEventResolver
+    private let missionEventJournal: CoordinatorMissionEventJournal
     private let projector: CoordinatorModeSnapshotProjector
     private let userDefaults: UserDefaults
     private var coordinatorSelectionByWorkspaceID: [UUID: CoordinatorSelectionState] = [:]
@@ -301,6 +302,7 @@ final class CoordinatorModeViewModel: ObservableObject {
             .rejected(message: "Coordinator follow-through is unavailable.")
         },
         followThroughEventResolver: @escaping FollowThroughEventResolver = { _ in },
+        missionEventJournal: CoordinatorMissionEventJournal? = nil,
         projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector(),
         userDefaults: UserDefaults = .standard
     ) {
@@ -322,6 +324,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.pendingFollowThroughEventProvider = pendingFollowThroughEventProvider
         self.followThroughEventSubmitter = followThroughEventSubmitter
         self.followThroughEventResolver = followThroughEventResolver
+        self.missionEventJournal = missionEventJournal ?? .shared
         self.projector = projector
         self.userDefaults = userDefaults
         let storedPace = CoordinatorModeAutomationPreference.executionPace(defaults: userDefaults)
@@ -1184,8 +1187,21 @@ final class CoordinatorModeViewModel: ObservableObject {
     #if DEBUG
         func testPublish(_ snapshot: CoordinatorModeSnapshot) {
             self.snapshot = snapshot
+            missionEventJournal.record(snapshot: snapshot)
         }
     #endif
+
+    func missionEvents(
+        coordinatorSessionID: UUID,
+        sinceSeq: Int,
+        limit: Int
+    ) -> CoordinatorMissionEventJournal.Batch {
+        missionEventJournal.events(
+            for: coordinatorSessionID,
+            sinceSeq: sinceSeq,
+            limit: limit
+        )
+    }
 
     private func publishIfChanged(_ nextSnapshot: CoordinatorModeSnapshot) {
         let nextCoordinatorSessionID = nextSnapshot.coordinatorRail.coordinatorSessionID
@@ -1211,6 +1227,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         let nextFingerprint = nextSnapshot.fingerprint
         guard lastPublishedFingerprint != nextFingerprint else { return }
         lastPublishedFingerprint = nextFingerprint
+        missionEventJournal.record(snapshot: nextSnapshot)
         snapshot = nextSnapshot
     }
 

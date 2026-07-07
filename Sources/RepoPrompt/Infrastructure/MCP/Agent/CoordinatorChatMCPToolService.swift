@@ -15,6 +15,7 @@ struct CoordinatorChatMCPToolService {
         var activePendingChildInteractionRow: () -> CoordinatorModeRow?
         var submitPendingChildInteractionResponse: (_ submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission, _ row: CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var updateMissionPlan: (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
+        var missionEvents: (_ coordinatorSessionID: UUID, _ sinceSeq: Int, _ limit: Int) -> CoordinatorMissionEventJournal.Batch
     }
 
     private let toolName: String
@@ -50,7 +51,8 @@ struct CoordinatorChatMCPToolService {
                 submitDirective: { await coordinatorViewModel.submitCoordinatorDirective($0) },
                 activePendingChildInteractionRow: { coordinatorViewModel.activePendingChildInteractionRow() },
                 submitPendingChildInteractionResponse: { await coordinatorViewModel.submitPendingChildInteractionResponse($0, to: $1) },
-                updateMissionPlan: { try coordinatorViewModel.updateMissionPlan(coordinatorSessionID: $0, update: $1) }
+                updateMissionPlan: { try coordinatorViewModel.updateMissionPlan(coordinatorSessionID: $0, update: $1) },
+                missionEvents: { coordinatorViewModel.missionEvents(coordinatorSessionID: $0, sinceSeq: $1, limit: $2) }
             )
         }
     }
@@ -284,6 +286,16 @@ struct CoordinatorChatMCPToolService {
                 ? compactStateResponse(snapshot, extra: extra)
                 : stateResponse(snapshot, extra: extra)
 
+        case "mission_events":
+            environment.refresh()
+            let snapshot = environment.snapshot()
+            let coordinatorSessionID = try resolveCoordinatorSessionID(args["coordinator_session_id"], in: snapshot)
+            try validateCoordinatorExists(coordinatorSessionID, in: snapshot)
+            let sinceSeq = try parseOptionalNonNegativeInt(args["since_seq"] ?? args["sinceSeq"], name: "since_seq") ?? 0
+            let limit = try parseOptionalPositiveInt(args["limit"], name: "limit") ?? 200
+            let batch = environment.missionEvents(coordinatorSessionID, sinceSeq, min(limit, 500))
+            return compactStateResponse(snapshot, extra: missionEventsResponseValue(batch))
+
         case "wait_for_update":
             let timeout = try parseCoordinatorWaitTimeout(args["timeout_seconds"] ?? args["timeout"])
             let sinceFingerprint = normalizedString(args["since_fingerprint"] ?? args["sinceFingerprint"])
@@ -319,7 +331,7 @@ struct CoordinatorChatMCPToolService {
             } while true
 
         default:
-            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, ensure_mission, start_mission, stop_mission, submit, mission_plan, mission_status, wait_for_update.")
+            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, ensure_mission, start_mission, stop_mission, submit, mission_plan, mission_status, mission_events, wait_for_update.")
         }
     }
 
@@ -1785,6 +1797,65 @@ struct CoordinatorChatMCPToolService {
             "primary_session_status_group": AgentMCPToolHelpers.stringOrNull(primaryRow?.statusGroup.rawValue),
             "bound_row_count": .int(boundRows.count),
             "next_recommended_route": .string(compactMissionNextRecommendedRoute(workstream: workstream, plan: plan))
+        ])
+    }
+
+    private func missionEventsResponseValue(_ batch: CoordinatorMissionEventJournal.Batch) -> [String: Value] {
+        [
+            "events": .array(batch.events.map(missionEventJournalEntryValue)),
+            "next_seq": .int(batch.nextSeq),
+            "oldest_seq": batch.oldestSeq.map(Value.int) ?? .null,
+            "latest_seq": batch.latestSeq.map(Value.int) ?? .null,
+            "truncated": .bool(batch.truncated),
+            "event_source": .string("mission_events")
+        ]
+    }
+
+    private func missionEventJournalEntryValue(_ entry: CoordinatorMissionEventJournal.Entry) -> Value {
+        .object([
+            "seq": .int(entry.seq),
+            "observed_at": .string(AgentMCPToolHelpers.timestamp(entry.observedAt)),
+            "coordinator_session_id": .string(entry.coordinatorSessionID.uuidString),
+            "fingerprint": .string(entry.fingerprint),
+            "title": .string(entry.title),
+            "selected": .bool(entry.selected),
+            "run_state": AgentMCPToolHelpers.stringOrNull(entry.runState),
+            "has_plan": .bool(entry.hasPlan),
+            "plan": entry.plan.map(missionEventPlanSummaryValue) ?? .null,
+            "node_counts": .object(Dictionary(uniqueKeysWithValues: entry.nodeCounts.sorted(by: { $0.key < $1.key }).map { key, value in
+                (key, .int(value))
+            })),
+            "ready_node_ids": .array(entry.readyNodeIDs.map { .string($0.uuidString) }),
+            "active_node_ids": .array(entry.activeNodeIDs.map { .string($0.uuidString) }),
+            "nodes": .array(entry.nodes.map(missionEventNodeSummaryValue)),
+            "recent_event_ids": .array(entry.recentEventIDs.map { .string($0.uuidString) }),
+            "routing_decision_ids": .array(entry.routingDecisionIDs.map { .string($0.uuidString) }),
+            "liveness_warnings": .array(entry.livenessWarnings.map(Value.string))
+        ])
+    }
+
+    private func missionEventPlanSummaryValue(_ plan: CoordinatorMissionEventJournal.PlanSummary) -> Value {
+        .object([
+            "revision": .int(plan.revision),
+            "mission_key": AgentMCPToolHelpers.stringOrNull(plan.missionKey),
+            "status": .string(plan.status),
+            "approval_state": .string(plan.approvalState),
+            "terminal_node_count": .int(plan.terminalNodeCount),
+            "node_count": .int(plan.nodeCount)
+        ])
+    }
+
+    private func missionEventNodeSummaryValue(_ node: CoordinatorMissionEventJournal.NodeSummary) -> Value {
+        .object([
+            "id": .string(node.id.uuidString),
+            "title": .string(node.title),
+            "status": .string(node.status),
+            "execution_policy": .string(node.executionPolicy),
+            "workstream_id": .string(node.workstreamID.uuidString),
+            "depends_on": .array(node.dependsOn.map { .string($0.uuidString) }),
+            "deps_satisfied": .bool(node.depsSatisfied),
+            "bound_session_id": AgentMCPToolHelpers.stringOrNull(node.boundSessionID?.uuidString),
+            "bound_interaction_id": AgentMCPToolHelpers.stringOrNull(node.boundInteractionID?.uuidString)
         ])
     }
 

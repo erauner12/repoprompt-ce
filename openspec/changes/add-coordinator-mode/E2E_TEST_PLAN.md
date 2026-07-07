@@ -130,9 +130,9 @@ failure mid-recovery.
 The first extension-ready runner pass keeps today's snapshot contract but adds adapters
 for future `coordinator_chat` ops:
 
-- `--events-mode auto|snapshot|required`: current builds derive `status_history.jsonl`
-  from `mission_status`; future `mission_events since_seq` writes `events.jsonl` and
-  lets S2 tighten from ready/running/completed tolerance to exact transition ordering.
+- `--events-mode auto|snapshot|required`: builds without `mission_events` derive
+  `status_history.jsonl` from `mission_status`; builds with `mission_events since_seq`
+  write `events.jsonl` and make S2 assert exact ready → running → completed ordering.
 - `--receipt-mode auto|summary|required`: current builds retain
   `receipt_ready_summary.json`; future `receipt format=markdown` writes `receipt.md`.
 - `--idle-timeout-seconds`, `--repeat`, and `--clean-sandbox` make S1/S2 usable as

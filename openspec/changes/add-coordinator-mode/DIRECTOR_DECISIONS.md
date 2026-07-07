@@ -370,10 +370,11 @@ spend present once v1 lands.
 Rule: extend for **observation** and **user-channel parity** only; never new runtime
 powers. Additions stay additive ops.
 
-1. **`mission_events since=<seq>`** — sequenced transition journal, likely an in-memory
-   ring buffer per mission. This removes the polling-race class that forced S2 to accept
-   ready/running/completed convergence snapshots; once landed, the harness can assert the
-   exact transition order and power run bundles / `--watch`.
+1. **`mission_events since=<seq>`** — sequenced in-memory transition journal per mission
+   (Swift-side, published from Coordinator snapshot changes). This removes the polling-race
+   class that forced S2 to accept ready/running/completed convergence snapshots; the harness
+   now asserts exact ready → running → completed transition order whenever this op is
+   available.
 2. **User-action parity: `set_pace` / `set_autonomy`** — route through the same
    `missionPlanUpdater` path as the dials: same revision bump and same user-actor
    decision labels. **Actor-integrity gate required:** hide these ops from

@@ -84,6 +84,7 @@ class RunArtifacts:
     features: dict[str, dict[str, Any]] = field(default_factory=dict)
     timings: dict[str, str] = field(default_factory=dict)
     violations: list[dict[str, Any]] = field(default_factory=list)
+    mission_events: list[dict[str, Any]] = field(default_factory=list)
     event_since_seq: int = 0
     report: dict[str, Any] = field(default_factory=dict)
 
@@ -139,6 +140,7 @@ class RunArtifacts:
         return bool(current.get("available"))
 
     def record_event(self, event: dict[str, Any]) -> None:
+        self.mission_events.append(event)
         append_jsonl(self.root / "events.jsonl", event)
 
     def record_violation(self, violation: dict[str, Any]) -> None:
@@ -898,6 +900,69 @@ def assert_s2(observations: list[Observation], approved_by_runner: bool) -> None
     assert_common_status_integrity(observations)
 
 
+def s2_event_convergence_node(event: dict[str, Any]) -> dict[str, Any] | None:
+    nodes = [node for node in (event.get("nodes") or []) if isinstance(node, dict)]
+    candidates = [node for node in nodes if len(node.get("depends_on") or []) >= 2]
+    if candidates:
+        return candidates[0]
+    for node in nodes:
+        if "summary" in str(node.get("title") or "").lower():
+            return node
+    return None
+
+
+def s2_event_dependencies_completed(event: dict[str, Any], node: dict[str, Any]) -> bool:
+    nodes = [candidate for candidate in (event.get("nodes") or []) if isinstance(candidate, dict)]
+    by_id = {str(candidate.get("id")): candidate for candidate in nodes}
+    return all((by_id.get(str(dep)) or {}).get("status") == "completed" for dep in (node.get("depends_on") or []))
+
+
+def s2_event_convergence_mode(event: dict[str, Any]) -> str | None:
+    node = s2_event_convergence_node(event)
+    if not node or not s2_event_dependencies_completed(event, node):
+        return None
+    node_id = str(node.get("id") or "")
+    ready_ids = [str(item) for item in (event.get("ready_node_ids") or [])]
+    status = str(node.get("status") or "")
+    if status == "pending" and node_id in ready_ids:
+        return "ready"
+    if status == "running":
+        return "running"
+    if status == "completed":
+        return "completed"
+    return None
+
+
+def assert_s2_mission_event_sequence(events: list[dict[str, Any]]) -> None:
+    ordered = sorted(
+        [event for event in events if isinstance(event.get("seq"), int)],
+        key=lambda event: int(event["seq"]),
+    )
+    if not ordered:
+        raise E2EFailure("S2 mission_events were available but no sequenced events were recorded")
+    if not any(
+        (node := s2_event_convergence_node(event)) is not None
+        and not s2_event_dependencies_completed(event, node)
+        for event in ordered
+    ):
+        raise E2EFailure("S2 mission_events did not show convergence node waiting on dependencies")
+
+    modes: list[str] = []
+    for event in ordered:
+        mode = s2_event_convergence_mode(event)
+        if mode and (not modes or modes[-1] != mode):
+            modes.append(mode)
+    cursor = 0
+    for expected in ["ready", "running", "completed"]:
+        try:
+            cursor = modes.index(expected, cursor) + 1
+        except ValueError as exc:
+            raise E2EFailure(
+                "S2 mission_events did not show exact convergence order "
+                f"ready -> running -> completed; observed {modes}"
+            ) from exc
+
+
 def s1_message() -> str:
     return (
         "Run this as a scoped Director mission. Record a visible Mission Plan with "
@@ -992,6 +1057,8 @@ def run_s2(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
     )
     artifacts.add_checkpoint("completed")
     assert_s2(artifacts.observations, approved_by_runner=True)
+    if artifacts.feature_available("mission_events") is True:
+        assert_s2_mission_event_sequence(artifacts.mission_events)
     assert_exact_marker_files(sandbox_root)
     capture_receipt(client, artifacts, session_id, args.receipt_mode)
     artifacts.finalize(True, "s2", {

@@ -235,6 +235,86 @@ Loaded roots: demo → /repo/fallback
         director_e2e.assert_s2(observations, approved_by_runner=True)
         self.assertEqual(director_e2e.first_s2_convergence_mode(observations), "running")
 
+    def test_s2_mission_events_require_exact_convergence_order(self) -> None:
+        a = "a"
+        b = "b"
+        c = "c"
+        events = [
+            {
+                "seq": 1,
+                "nodes": [
+                    {"id": a, "status": "running", "depends_on": []},
+                    {"id": b, "status": "running", "depends_on": []},
+                    {"id": c, "title": "Write SUMMARY.md", "status": "pending", "depends_on": [a, b]},
+                ],
+                "ready_node_ids": [],
+            },
+            {
+                "seq": 2,
+                "nodes": [
+                    {"id": a, "status": "completed", "depends_on": []},
+                    {"id": b, "status": "completed", "depends_on": []},
+                    {"id": c, "title": "Write SUMMARY.md", "status": "pending", "depends_on": [a, b]},
+                ],
+                "ready_node_ids": [c],
+            },
+            {
+                "seq": 3,
+                "nodes": [
+                    {"id": a, "status": "completed", "depends_on": []},
+                    {"id": b, "status": "completed", "depends_on": []},
+                    {"id": c, "title": "Write SUMMARY.md", "status": "running", "depends_on": [a, b]},
+                ],
+                "ready_node_ids": [],
+            },
+            {
+                "seq": 4,
+                "nodes": [
+                    {"id": a, "status": "completed", "depends_on": []},
+                    {"id": b, "status": "completed", "depends_on": []},
+                    {"id": c, "title": "Write SUMMARY.md", "status": "completed", "depends_on": [a, b]},
+                ],
+                "ready_node_ids": [],
+            },
+        ]
+        director_e2e.assert_s2_mission_event_sequence(events)
+
+    def test_s2_mission_events_reject_fast_launch_without_ready_event(self) -> None:
+        a = "a"
+        b = "b"
+        c = "c"
+        events = [
+            {
+                "seq": 1,
+                "nodes": [
+                    {"id": a, "status": "running", "depends_on": []},
+                    {"id": b, "status": "running", "depends_on": []},
+                    {"id": c, "title": "Write SUMMARY.md", "status": "pending", "depends_on": [a, b]},
+                ],
+                "ready_node_ids": [],
+            },
+            {
+                "seq": 2,
+                "nodes": [
+                    {"id": a, "status": "completed", "depends_on": []},
+                    {"id": b, "status": "completed", "depends_on": []},
+                    {"id": c, "title": "Write SUMMARY.md", "status": "running", "depends_on": [a, b]},
+                ],
+                "ready_node_ids": [],
+            },
+            {
+                "seq": 3,
+                "nodes": [
+                    {"id": a, "status": "completed", "depends_on": []},
+                    {"id": b, "status": "completed", "depends_on": []},
+                    {"id": c, "title": "Write SUMMARY.md", "status": "completed", "depends_on": [a, b]},
+                ],
+                "ready_node_ids": [],
+            },
+        ]
+        with self.assertRaises(director_e2e.E2EFailure):
+            director_e2e.assert_s2_mission_event_sequence(events)
+
     def test_s2_rejects_missing_convergence_after_parent_completion(self) -> None:
         a = "a"
         b = "b"
