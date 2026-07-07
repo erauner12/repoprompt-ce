@@ -79,9 +79,10 @@ only on state; terminal calm (single action, muted history).
 ## Packaging
 Ship as a skill (`.agents/skills/rpce-director-e2e/`): one runner with scenario switches
 emitting a pass/fail report **plus the mission's own receipt-ready summary** as the
-artifact — the receipt is half the evidence by design. Timeouts: 90s per boundary via
-`wait_for_update`; on timeout, capture mission_status and report the visual checkpoint
-where computer-use should take a screenshot before failing.
+artifact — the receipt is half the evidence by design. The runner uses progress-aware
+deadlines: a generous hard ceiling plus a shorter no-progress window. Slow-but-alive
+work can continue; idle missions with no running work fail with the last compact/full
+status, warnings, and artifact path.
 
 ## Expansions (from the first live S2 runs, 2026-07-06)
 
@@ -123,3 +124,17 @@ failure mid-recovery.
    event, marks the node blocked/cancelled with reason, re-steers or asks per policy,
    never silently stalls. **S11** app restart mid-mission → follow-through state and
    mission_status reconstruct ("the mission survives the worker" gets its test).
+
+## Harness slice accepted (2026-07-07)
+
+The first extension-ready runner pass keeps today's snapshot contract but adds adapters
+for future `coordinator_chat` ops:
+
+- `--events-mode auto|snapshot|required`: current builds derive `status_history.jsonl`
+  from `mission_status`; future `mission_events since_seq` writes `events.jsonl` and
+  lets S2 tighten from ready/running/completed tolerance to exact transition ordering.
+- `--receipt-mode auto|summary|required`: current builds retain
+  `receipt_ready_summary.json`; future `receipt format=markdown` writes `receipt.md`.
+- `--idle-timeout-seconds`, `--repeat`, and `--clean-sandbox` make S1/S2 usable as
+  repeatable diagnostics without hiding stalls as model slowness.
+- Each run emits capability, timing, status-history, and invariant-violation artifacts.

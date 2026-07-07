@@ -307,3 +307,27 @@ presentation-policy tests.
 - Soft dependency edges, node priority, mission backlog tiers, `failed` node status
   (decode-compat), `CoordinatorMissionRoutingOperation` closed-enum forward-compat
   strategy before any new operation is added.
+
+## 8. coordinator_chat extension roadmap (2026-07-07, harness-driven)
+
+Rule: extend for **observation** and **user-channel parity** only; never new runtime
+powers. Additions stay additive ops.
+
+1. **`mission_events since=<seq>`** — sequenced transition journal, likely an in-memory
+   ring buffer per mission. This removes the polling-race class that forced S2 to accept
+   ready/running/completed convergence snapshots; once landed, the harness can assert the
+   exact transition order and power run bundles / `--watch`.
+2. **User-action parity: `set_pace` / `set_autonomy`** — route through the same
+   `missionPlanUpdater` path as the dials: same revision bump and same user-actor
+   decision labels. **Actor-integrity gate required:** hide these ops from
+   coordinator-role sessions via advertisement policy and block them at execution in
+   `AgentModeMCPToolPolicy`; the runtime must not be able to forge user-actor records.
+3. **`receipt format=markdown`** — expose the existing pure receipt projection so the
+   harness can write `receipt.md` without UI copying.
+4. **Lifecycle: `list_missions` / `archive_mission`** — support harness setup/teardown
+   and scenario isolation.
+5. **`doctor`** (later) — app-level pulse: supervisor alive, pending events, last
+   fingerprint age, connected clients.
+
+Not doing: `mission_status` field selectors, which fragment the contract; any
+plan-structure mutation outside the existing mission-plan path.
