@@ -681,6 +681,104 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(plan.events.last?.nodeID, planID)
     }
 
+    func testCompletesRunningPlanNodesBoundToCompletedChildSessions() throws {
+        let workstreamID = UUID()
+        let firstID = UUID()
+        let secondID = UUID()
+        let dependentID = UUID()
+        let firstChildID = UUID()
+        let secondChildID = UUID()
+        let date = Date(timeIntervalSince1970: 20)
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 7,
+            objective: "DAG smoke",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Fanout",
+                    purpose: "Create two files before summary.",
+                    defaultPolicy: .freshWorktree,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: firstID,
+                    title: "Create A",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .running,
+                    boundSessionID: firstChildID
+                ),
+                CoordinatorMissionPlanNode(
+                    id: secondID,
+                    title: "Create B",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .running,
+                    boundSessionID: secondChildID
+                ),
+                CoordinatorMissionPlanNode(
+                    id: dependentID,
+                    title: "Summarize",
+                    workstreamID: workstreamID,
+                    dependsOn: [firstID, secondID],
+                    executionPolicy: .coordinatorOnly,
+                    status: .pending
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 10)
+        ))
+
+        XCTAssertTrue(state.completeTerminalBoundRunningMissionPlanNodes(
+            completedSessionIDs: [firstChildID, secondChildID],
+            at: date
+        ))
+
+        let plan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(plan.revision, 8)
+        XCTAssertEqual(plan.status, .running)
+        XCTAssertEqual(plan.nodes.map(\.status), [.completed, .completed, .pending])
+        XCTAssertEqual(plan.events.suffix(3).map(\.kind), [.revised, .nodeCompleted, .nodeCompleted])
+        XCTAssertEqual(Set(plan.events.suffix(2).compactMap(\.sessionID)), [firstChildID, secondChildID])
+    }
+
+    func testDoesNotCompleteRunningPlanNodesBoundToCancelledOrUnknownChildSessions() {
+        let workstreamID = UUID()
+        let childID = UUID()
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 2,
+            objective: "DAG smoke",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Fanout",
+                    purpose: "Create files.",
+                    defaultPolicy: .freshWorktree,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    title: "Create A",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .running,
+                    boundSessionID: childID
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 10)
+        ))
+
+        XCTAssertFalse(state.completeTerminalBoundRunningMissionPlanNodes(completedSessionIDs: [UUID()]))
+        XCTAssertEqual(state.missionPlan?.revision, 2)
+        XCTAssertEqual(state.missionPlan?.nodes.first?.status, .running)
+    }
+
     func testMissionPolicyBuiltInsAndFixedDecisionLabelsStayStable() {
         XCTAssertEqual(
             CoordinatorMissionPolicySnapshot.builtInPolicies.map(\.name),

@@ -48,6 +48,42 @@ final class CoordinatorModeViewModel: ObservableObject {
         case startSmaller
         case stopHere
 
+        init?(checkpointActionID: String) {
+            switch checkpointActionID {
+            case "proceed":
+                self = .proceed
+            case "gather_evidence":
+                self = .runLightweightDiscovery
+            case "deepen_plan":
+                self = .runDeepPlan
+            case "independent_critique":
+                self = .runDesignCritique
+            case "start_smaller":
+                self = .startSmaller
+            case "stop":
+                self = .stopHere
+            default:
+                return nil
+            }
+        }
+
+        var checkpointActionID: String {
+            switch self {
+            case .proceed:
+                "proceed"
+            case .runLightweightDiscovery:
+                "gather_evidence"
+            case .runDeepPlan:
+                "deepen_plan"
+            case .runDesignCritique:
+                "independent_critique"
+            case .startSmaller:
+                "start_smaller"
+            case .stopHere:
+                "stop"
+            }
+        }
+
         static let runtimeLedgerInstruction = """
         Runtime ledger rule: append only Director-owned decisions (actor:"director") and evidence records through coordinator_chat op=mission_plan. Judge from the bounded Mission ledger and any judgment_bundle/probe_answer evidence, not the full transcript. If evidence is thin, use a narrow read-only agent_explore.start probe and record the probe answer as evidence before deciding. Do not record user decisions; the app/MCP submit path owns user-actor checkpoint decisions. Auto decisions are visible and contestable; if the user overrules one, treat it as a user decision plus correction steer, preserve the original record, and link the Director correction with overruled_decision_id/overrule_reason/correction_reason/correction_steer_text when useful.
         """
@@ -985,12 +1021,24 @@ final class CoordinatorModeViewModel: ObservableObject {
     @discardableResult
     private func appendMissionUserDecision(_ pendingDecision: PendingMissionUserDecision) -> Bool {
         do {
+            var update = CoordinatorMissionPlanUpdate(
+                decisions: [pendingDecision.record],
+                updatedAt: pendingDecision.record.timestamp
+            )
+            if pendingDecision.record.label == CoordinatorMissionUserDecisionLabel.approvedMissionPlan.rawValue {
+                update.status = .running
+                update.approvalState = .approved
+                update.events = [
+                    CoordinatorMissionPlanEvent(
+                        kind: .approved,
+                        timestamp: pendingDecision.record.timestamp,
+                        summary: "Mission plan approved by user."
+                    )
+                ]
+            }
             try missionPlanUpdater(
                 pendingDecision.coordinatorSessionID,
-                CoordinatorMissionPlanUpdate(
-                    decisions: [pendingDecision.record],
-                    updatedAt: pendingDecision.record.timestamp
-                )
+                update
             )
             refresh()
             return true
@@ -1996,6 +2044,10 @@ extension AgentModeViewModel {
             var latest = session.coordinatorFollowThroughState ?? state
             latest.updateObservedPhases(from: ownedRows)
             persistCoordinatorFollowThroughState(latest, tabID: tabID, session: session)
+        }
+        if state.completeTerminalBoundRunningMissionPlanNodes(from: ownedRows) {
+            persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+            coordinatorModeViewModel.refreshIfVisible()
         }
 
         if case .gateCleared = trigger {

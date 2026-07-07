@@ -98,6 +98,30 @@ Loaded roots: demo → /repo/fallback
         self.assertTrue(director_e2e.sandbox_is_visible_from_roots(Path("/repo/fallback/tmp/e2e"), roots))
         self.assertFalse(director_e2e.sandbox_is_visible_from_roots(Path("/outside/e2e"), roots))
 
+    def test_sandbox_context_binding_uses_matching_repo_tab(self) -> None:
+        class FakeClient:
+            window = 1
+            cli = "rpce-cli-debug"
+            bound_context_id = None
+
+            def run(self, label, argv, timeout=120):
+                return """
+## Tab Context Binding ✅
+- Window `1` [current] • workspace: homelab-garden
+  • Scratch — context_id: `11111111-1111-4111-8111-111111111111`
+    repo: `/repo/other`
+  • T1 — context_id: `22222222-2222-4222-8222-222222222222`
+    repo: `/repo/main`
+"""
+
+            def bind_context(self, context_id):
+                self.bound_context_id = context_id
+
+        client = FakeClient()
+        director_e2e.bind_visible_context_for_sandbox(client, Path("/repo/main/tmp/director-e2e-sandbox"))
+
+        self.assertEqual(client.bound_context_id, "22222222-2222-4222-8222-222222222222")
+
     def test_s1_accepts_single_runner_approval_with_node_evidence(self) -> None:
         obs = observation(
             "f1",
@@ -278,6 +302,7 @@ Loaded roots: demo → /repo/fallback
             },
         ]
         director_e2e.assert_s2_mission_event_sequence(events)
+        self.assertTrue(director_e2e.s2_event_convergence_sequence_is_complete(events))
 
     def test_s2_mission_events_reject_fast_launch_without_ready_event(self) -> None:
         a = "a"
@@ -314,6 +339,56 @@ Loaded roots: demo → /repo/fallback
         ]
         with self.assertRaises(director_e2e.E2EFailure):
             director_e2e.assert_s2_mission_event_sequence(events)
+        self.assertFalse(director_e2e.s2_event_convergence_sequence_is_complete(events))
+
+    def test_s2_terminal_grace_warranted_by_observed_convergence(self) -> None:
+        a = "a"
+        b = "b"
+        c = "c"
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = director_e2e.RunArtifacts(Path(tmp) / "artifacts")
+            artifacts.observations.append(
+                observation(
+                    "f1",
+                    "running",
+                    [
+                        {"id": a, "status": "completed", "depends_on": []},
+                        {"id": b, "status": "completed", "depends_on": []},
+                        {"id": c, "title": "Write SUMMARY.md", "status": "running", "depends_on": [a, b]},
+                    ],
+                    running=1,
+                )
+            )
+
+            self.assertTrue(director_e2e.s2_terminal_grace_is_warranted(artifacts, Path(tmp) / "sandbox"))
+
+    def test_s2_terminal_grace_warranted_by_marker_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sandbox = Path(tmp) / "sandbox"
+            sandbox.mkdir()
+            for name in ["A.md", "B.md", "SUMMARY.md"]:
+                (sandbox / name).write_text(name, encoding="utf-8")
+            artifacts = director_e2e.RunArtifacts(Path(tmp) / "artifacts")
+
+            self.assertTrue(director_e2e.s2_terminal_grace_is_warranted(artifacts, sandbox))
+
+    def test_s2_terminal_grace_rejects_uninteresting_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = director_e2e.RunArtifacts(Path(tmp) / "artifacts")
+
+            self.assertFalse(director_e2e.s2_terminal_grace_is_warranted(artifacts, Path(tmp) / "sandbox"))
+
+    def test_timeout_failure_classification_for_terminal_grace(self) -> None:
+        self.assertTrue(director_e2e.timeout_failure_may_be_terminal_graced(Exception("Condition was not reached within 900s")))
+        self.assertTrue(director_e2e.timeout_failure_may_be_terminal_graced(Exception("Condition made no observable progress for 120s.")))
+        self.assertFalse(director_e2e.timeout_failure_may_be_terminal_graced(Exception("S2 expected completed mission, got running")))
+
+    def test_s2_message_guides_canonical_marker_shell_ops(self) -> None:
+        message = director_e2e.s2_message(Path("/tmp/director-e2e-sandbox"))
+
+        self.assertIn("direct shell checks/writes", message)
+        self.assertIn("exact absolute paths", message)
+        self.assertIn("After writing the assigned marker file, report the result and stop", message)
 
     def test_s2_rejects_missing_convergence_after_parent_completion(self) -> None:
         a = "a"
@@ -418,6 +493,29 @@ Loaded roots: demo → /repo/fallback
         tracker.update(director_e2e.observation_signature(obs), now=0)
 
         self.assertFalse(tracker.should_fail_idle(obs, now=120))
+
+    def test_progress_tracker_idle_fails_when_bound_row_already_done(self) -> None:
+        obs = observation(
+            "f1",
+            "running",
+            [{"id": "n1", "status": "running"}],
+            running=1,
+            active_nodes=[
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "execution_policy": "fresh_worktree",
+                    "bound_session_id": "session",
+                    "bound_row_run_state": "completed",
+                    "bound_row_status_group": "done",
+                }
+            ],
+        )
+        tracker = director_e2e.ProgressTracker(idle_timeout_seconds=10, start_time=0)
+
+        tracker.update(director_e2e.observation_signature(obs), now=0)
+
+        self.assertTrue(tracker.should_fail_idle(obs, now=120))
 
     def test_capability_fallback_records_unsupported_events(self) -> None:
         class FakeClient:

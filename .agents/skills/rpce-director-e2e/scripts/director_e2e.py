@@ -217,6 +217,12 @@ class RpcClient:
     def coordinator(self, payload: dict[str, Any], timeout: int = 120) -> dict[str, Any]:
         return self.call("coordinator_chat", payload, timeout=timeout)
 
+    def bind_context(self, context_id: str) -> None:
+        self.run(
+            "bind_context:bind",
+            [self.cli, "-w", str(self.window), "-c", "bind_context", "-j", json.dumps({"op": "bind", "context_id": context_id})],
+        )
+
     def try_coordinator(self, payload: dict[str, Any], timeout: int = 120) -> tuple[bool, dict[str, Any]]:
         try:
             return True, self.coordinator(payload, timeout=timeout)
@@ -306,19 +312,44 @@ def ensure_workspace(client: RpcClient, workspace: str) -> None:
             raise
 
 
+def bind_visible_context_for_sandbox(client: RpcClient, sandbox_root: Path) -> None:
+    windows = client.run("windows for context bind", [client.cli, "-w", str(client.window), "-c", "bind_context", "-j", json.dumps({"op": "list"})])
+    resolved = sandbox_root.expanduser().resolve()
+    pending_context_id: str | None = None
+    for line in windows.splitlines():
+        context_match = re.search(r"context_id:\s*`([0-9A-Fa-f-]+)`", line)
+        if context_match:
+            pending_context_id = context_match.group(1)
+            continue
+        repo_match = re.search(r"repo:\s*`([^`]+)`", line)
+        if not repo_match or pending_context_id is None:
+            continue
+        repo = Path(repo_match.group(1)).expanduser().resolve()
+        if resolved == repo or repo in resolved.parents:
+            client.bind_context(pending_context_id)
+            return
+
+
 def tree_roots_text(client: RpcClient) -> str:
     return client.exec_text("tree roots", "tree --type roots")
 
 
 def visible_workspace_roots(tree_roots_output: str) -> list[Path]:
     roots: list[Path] = []
+    seen: set[Path] = set()
     for line in tree_roots_output.splitlines():
-        candidate = line.strip()
-        if "→" in candidate:
-            candidate = candidate.rsplit("→", 1)[1].strip()
-        if not candidate.startswith("/"):
-            continue
-        roots.append(Path(candidate).expanduser().resolve())
+        candidates = [match.group(1).rstrip(";,") for match in re.finditer(r"(/[^\s`;]+)", line)]
+        if not candidates:
+            candidate = line.strip()
+            if "→" in candidate:
+                candidate = candidate.rsplit("→", 1)[1].strip()
+            candidates = [candidate] if candidate.startswith("/") else []
+        for candidate in candidates:
+            root = Path(candidate).expanduser().resolve()
+            if root in seen:
+                continue
+            seen.add(root)
+            roots.append(root)
     return roots
 
 
@@ -608,6 +639,13 @@ def wait_until(
     raise E2EFailure(f"Condition was not reached within {timeout_seconds}s; artifacts={artifacts.root}")
 
 
+def timeout_failure_may_be_terminal_graced(error: Exception) -> bool:
+    message = str(error)
+    return message.startswith("Condition was not reached within ") or message.startswith(
+        "Condition made no observable progress for "
+    )
+
+
 def capture_mission_events(client: RpcClient, artifacts: RunArtifacts, session_id: str, mode: str) -> None:
     if mode == "snapshot":
         artifacts.record_feature("mission_events", False, "snapshot mode selected")
@@ -706,12 +744,16 @@ def approve_initial_plan(client: RpcClient, artifacts: RunArtifacts, session_id:
         message = proceed.get("submit_message")
         if not message:
             raise E2EFailure(f"Proceed checkpoint action is missing submit_message: {proceed}")
-        response = client.coordinator({
+        submit_payload = {
             "op": "submit",
             "coordinator_session_id": session_id,
             "message": message,
             "compact": True,
-        }, timeout=180)
+        }
+        checkpoint_action = proceed.get("checkpoint_action")
+        if isinstance(checkpoint_action, str) and checkpoint_action.strip():
+            submit_payload["checkpoint_action"] = checkpoint_action.strip()
+        response = client.coordinator(submit_payload, timeout=180)
         if response.get("accepted") is not False:
             artifacts.add_checkpoint("plan-approved")
             return
@@ -756,7 +798,11 @@ def has_running_work_that_could_still_complete(obs: Observation) -> bool:
     if not running_active:
         return True
     for node in running_active:
-        if node.get("bound_session_id") or node.get("bound_row_run_state") or node.get("bound_row_status_group"):
+        bound_row_run_state = str(node.get("bound_row_run_state") or "")
+        bound_row_status_group = str(node.get("bound_row_status_group") or "")
+        if bound_row_run_state in TERMINAL_STATUSES or bound_row_status_group == "done":
+            continue
+        if node.get("bound_session_id") or bound_row_run_state or bound_row_status_group:
             return True
         if str(node.get("execution_policy") or "") != "coordinator_only":
             return True
@@ -982,9 +1028,57 @@ def s2_message(sandbox_root: Path) -> str:
         f"create `{sandbox_root}/A.md` and `{sandbox_root}/B.md` in parallel-capable isolated "
         f"work, then a third step that depends on both, verifies both files exist, and writes "
         f"`{sandbox_root}/SUMMARY.md`. Keep the mission tight: do not create other files, do "
-        "not commit, push, open PRs, merge, or run cluster-mutating validation. Record evidence "
-        "for every completed node and close with a receipt."
+        "not commit, push, open PRs, merge, or run cluster-mutating validation. For these marker "
+        "files, use direct shell checks/writes against the exact absolute paths if file tools "
+        "remap paths into isolated worktrees. After writing the assigned marker file, report the "
+        "result and stop; do not keep polling. Record evidence for every completed node and close "
+        "with a receipt."
     )
+
+
+def s2_event_convergence_sequence_is_complete(events: list[dict[str, Any]]) -> bool:
+    try:
+        assert_s2_mission_event_sequence(events)
+        return True
+    except E2EFailure:
+        return False
+
+
+def s2_terminal_grace_is_warranted(artifacts: RunArtifacts, sandbox_root: Path) -> bool:
+    if first_s2_convergence_mode(artifacts.observations):
+        return True
+    if artifacts.feature_available("mission_events") is True and s2_event_convergence_sequence_is_complete(artifacts.mission_events):
+        return True
+    marker_state = marker_paths(sandbox_root, {"A.md", "B.md", "SUMMARY.md"})
+    return all(marker_state.get(name) for name in ["A.md", "B.md", "SUMMARY.md"])
+
+
+def wait_for_s2_terminal_grace(
+    client: RpcClient,
+    artifacts: RunArtifacts,
+    session_id: str,
+    args: argparse.Namespace,
+    watcher: InvariantWatcher,
+) -> Observation | None:
+    grace_seconds = max(int(getattr(args, "terminal_grace_seconds", 0) or 0), 0)
+    if grace_seconds <= 0:
+        return None
+    artifacts.add_checkpoint("terminal-grace")
+    deadline = time.monotonic() + grace_seconds
+    last_obs = artifacts.observations[-1] if artifacts.observations else observe(client, artifacts, session_id)
+    while time.monotonic() < deadline:
+        capture_mission_events(client, artifacts, session_id, args.events_mode)
+        obs = observe(client, artifacts, session_id)
+        watcher.check(obs)
+        last_obs = obs
+        if terminal_completed(obs):
+            artifacts.add_checkpoint("completed-after-grace")
+            return obs
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            break
+        wait_for_update(client, session_id, obs.fingerprint or last_obs.fingerprint, remaining)
+    return None
 
 
 def run_s1(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> None:
@@ -1023,10 +1117,12 @@ def run_s2(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
     if args.clean_sandbox:
         clean_sandbox(sandbox_root, client.repo_root, args.allow_clean_outside_tmp)
     assert_clean_git(sandbox_root)
+    bind_visible_context_for_sandbox(client, sandbox_root)
     if not sandbox_is_visible(client, sandbox_root):
         raise E2EFailure(f"S2 sandbox root is not visible in the selected app workspace: {sandbox_root}")
     session_id = start_mission(client, "Director E2E S2 convergence", s2_message(sandbox_root), "s2")
     approve_initial_plan(client, artifacts, session_id, args)
+    watcher = InvariantWatcher(artifacts)
     saw_fanout = False
     convergence_mode = None
 
@@ -1044,17 +1140,25 @@ def run_s2(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
             artifacts.add_checkpoint(f"convergence-{mode}")
         return terminal_completed(obs)
 
-    final = wait_until(
-        client,
-        artifacts,
-        session_id,
-        done_or_interesting,
-        args.timeout_seconds,
-        idle_timeout_seconds=args.idle_timeout_seconds,
-        max_updates=90,
-        progress_probe=marker_probe,
-        events_mode=args.events_mode,
-    )
+    try:
+        final = wait_until(
+            client,
+            artifacts,
+            session_id,
+            done_or_interesting,
+            args.timeout_seconds,
+            idle_timeout_seconds=args.idle_timeout_seconds,
+            max_updates=90,
+            progress_probe=marker_probe,
+            events_mode=args.events_mode,
+            watcher=watcher,
+        )
+    except E2EFailure as exc:
+        if not timeout_failure_may_be_terminal_graced(exc) or not s2_terminal_grace_is_warranted(artifacts, sandbox_root):
+            raise
+        final = wait_for_s2_terminal_grace(client, artifacts, session_id, args, watcher)
+        if final is None:
+            raise
     artifacts.add_checkpoint("completed")
     assert_s2(artifacts.observations, approved_by_runner=True)
     if artifacts.feature_available("mission_events") is True:
@@ -1098,6 +1202,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--window", type=int, default=1)
     parser.add_argument("--timeout-seconds", type=int, default=900)
     parser.add_argument("--idle-timeout-seconds", type=int, default=120)
+    parser.add_argument(
+        "--terminal-grace-seconds",
+        type=int,
+        default=240,
+        help="Extra S2-only terminal wait after convergence/artifacts are observed but the main deadline expires.",
+    )
     parser.add_argument("--output-dir", default="tmp/director-e2e-runs")
     parser.add_argument("--sandbox-root", default=os.environ.get("RPCE_DIRECTOR_E2E_SANDBOX"))
     parser.add_argument("--clean-sandbox", action="store_true", help="Clean the throwaway sandbox before each writable scenario.")

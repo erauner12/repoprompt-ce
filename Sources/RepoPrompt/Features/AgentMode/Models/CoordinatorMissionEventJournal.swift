@@ -74,29 +74,16 @@ final class CoordinatorMissionEventJournal {
                 continue
             }
 
-            let nextSeq = (nextSequenceByMissionID[option.sessionID] ?? 0) + 1
-            nextSequenceByMissionID[option.sessionID] = nextSeq
-            lastFingerprintByMissionID[option.sessionID] = candidate.fingerprint
-            let entry = Entry(
-                seq: nextSeq,
-                observedAt: candidate.observedAt,
-                coordinatorSessionID: candidate.coordinatorSessionID,
-                fingerprint: candidate.fingerprint,
-                title: candidate.title,
-                selected: candidate.selected,
-                runState: candidate.runState,
-                hasPlan: candidate.hasPlan,
-                plan: candidate.plan,
-                nodeCounts: candidate.nodeCounts,
-                readyNodeIDs: candidate.readyNodeIDs,
-                activeNodeIDs: candidate.activeNodeIDs,
-                nodes: candidate.nodes,
-                recentEventIDs: candidate.recentEventIDs,
-                routingDecisionIDs: candidate.routingDecisionIDs,
-                livenessWarnings: candidate.livenessWarnings
-            )
-
             var missionEntries = entriesByMissionID[option.sessionID] ?? []
+            if let interlude = readyInterlude(previous: missionEntries.last, candidate: candidate) {
+                let interludeSeq = nextSequence(for: option.sessionID)
+                missionEntries.append(entry(interlude, seq: interludeSeq))
+            }
+
+            let nextSeq = nextSequence(for: option.sessionID)
+            lastFingerprintByMissionID[option.sessionID] = candidate.fingerprint
+            let entry = entry(candidate, seq: nextSeq)
+
             missionEntries.append(entry)
             if missionEntries.count > capacity {
                 missionEntries.removeFirst(missionEntries.count - capacity)
@@ -124,6 +111,98 @@ final class CoordinatorMissionEventJournal {
         entriesByMissionID.removeAll()
         nextSequenceByMissionID.removeAll()
         lastFingerprintByMissionID.removeAll()
+    }
+
+    private func nextSequence(for coordinatorSessionID: UUID) -> Int {
+        let nextSeq = (nextSequenceByMissionID[coordinatorSessionID] ?? 0) + 1
+        nextSequenceByMissionID[coordinatorSessionID] = nextSeq
+        return nextSeq
+    }
+
+    private func entry(_ source: Entry, seq: Int) -> Entry {
+        Entry(
+            seq: seq,
+            observedAt: source.observedAt,
+            coordinatorSessionID: source.coordinatorSessionID,
+            fingerprint: source.fingerprint,
+            title: source.title,
+            selected: source.selected,
+            runState: source.runState,
+            hasPlan: source.hasPlan,
+            plan: source.plan,
+            nodeCounts: source.nodeCounts,
+            readyNodeIDs: source.readyNodeIDs,
+            activeNodeIDs: source.activeNodeIDs,
+            nodes: source.nodes,
+            recentEventIDs: source.recentEventIDs,
+            routingDecisionIDs: source.routingDecisionIDs,
+            livenessWarnings: source.livenessWarnings
+        )
+    }
+
+    private func readyInterlude(previous: Entry?, candidate: Entry) -> Entry? {
+        guard let previous, candidate.hasPlan else { return nil }
+        let previousNodesByID = Dictionary(uniqueKeysWithValues: previous.nodes.map { ($0.id, $0) })
+        let missingReadyIDs = candidate.nodes.compactMap { node -> UUID? in
+            guard node.status == "running" || node.status == "completed",
+                  node.depsSatisfied,
+                  !node.dependsOn.isEmpty,
+                  !candidate.readyNodeIDs.contains(node.id),
+                  !previous.readyNodeIDs.contains(node.id),
+                  let previousNode = previousNodesByID[node.id],
+                  previousNode.status == "pending",
+                  previousNode.depsSatisfied == false
+            else { return nil }
+            return node.id
+        }
+        guard !missingReadyIDs.isEmpty else { return nil }
+
+        let missingReadyIDSet = Set(missingReadyIDs)
+        let interludeNodes = candidate.nodes.map { node in
+            guard missingReadyIDSet.contains(node.id) else { return node }
+            return NodeSummary(
+                id: node.id,
+                title: node.title,
+                status: "pending",
+                executionPolicy: node.executionPolicy,
+                workstreamID: node.workstreamID,
+                dependsOn: node.dependsOn,
+                depsSatisfied: true,
+                boundSessionID: nil,
+                boundInteractionID: nil
+            )
+        }
+        let readyIDSet = Set(previous.readyNodeIDs).union(missingReadyIDSet)
+        let readyNodeIDs = candidate.nodes.compactMap { readyIDSet.contains($0.id) ? $0.id : nil }
+        let activeNodeIDs = candidate.activeNodeIDs.filter { !missingReadyIDSet.contains($0) }
+        let nodeCounts = Dictionary(grouping: interludeNodes, by: { $0.status }).mapValues(\.count)
+        let fingerprint = stableFingerprint([
+            "coordinator",
+            candidate.coordinatorSessionID.uuidString,
+            "ready-interlude",
+            previous.fingerprint,
+            candidate.fingerprint,
+            missingReadyIDs.map(\.uuidString).joined(separator: ",")
+        ])
+
+        return Entry(
+            seq: 0,
+            observedAt: candidate.observedAt,
+            coordinatorSessionID: candidate.coordinatorSessionID,
+            fingerprint: fingerprint,
+            title: candidate.title,
+            selected: candidate.selected,
+            runState: candidate.runState,
+            hasPlan: candidate.hasPlan,
+            plan: candidate.plan,
+            nodeCounts: nodeCounts,
+            readyNodeIDs: readyNodeIDs,
+            activeNodeIDs: activeNodeIDs,
+            nodes: interludeNodes,
+            recentEventIDs: candidate.recentEventIDs,
+            routingDecisionIDs: candidate.routingDecisionIDs,
+            livenessWarnings: candidate.livenessWarnings
+        )
     }
 
     private func makeCandidate(

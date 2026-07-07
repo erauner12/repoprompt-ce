@@ -12,6 +12,7 @@ struct CoordinatorChatMCPToolService {
         var startNewCoordinatorRun: () -> Void
         var stopSelectedCoordinatorMission: () async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var submitDirective: (_ text: String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
+        var submitContinuation: (_ action: CoordinatorModeViewModel.ContinuationAction) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var activePendingChildInteractionRow: () -> CoordinatorModeRow?
         var submitPendingChildInteractionResponse: (_ submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission, _ row: CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var updateMissionPlan: (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
@@ -49,6 +50,7 @@ struct CoordinatorChatMCPToolService {
                 startNewCoordinatorRun: { coordinatorViewModel.startNewCoordinatorRun() },
                 stopSelectedCoordinatorMission: { await coordinatorViewModel.stopSelectedCoordinatorMission() },
                 submitDirective: { await coordinatorViewModel.submitCoordinatorDirective($0) },
+                submitContinuation: { await coordinatorViewModel.submitCoordinatorContinuation($0) },
                 activePendingChildInteractionRow: { coordinatorViewModel.activePendingChildInteractionRow() },
                 submitPendingChildInteractionResponse: { await coordinatorViewModel.submitPendingChildInteractionResponse($0, to: $1) },
                 updateMissionPlan: { try coordinatorViewModel.updateMissionPlan(coordinatorSessionID: $0, update: $1) },
@@ -202,10 +204,14 @@ struct CoordinatorChatMCPToolService {
 
         case "submit":
             let message = normalizedString(args["message"] ?? args["response"])
+            let continuationAction = try parseCheckpointContinuationAction(args)
             let newParent = AgentMCPToolHelpers.parseBool(args["new_parent"]) ?? false
             let compact = AgentMCPToolHelpers.parseBool(args["compact"]) ?? true
             if newParent, message == nil {
                 throw MCPError.invalidParams("message is required.")
+            }
+            if newParent, continuationAction != nil {
+                throw MCPError.invalidParams("checkpoint_action is only valid for existing Coordinator Missions.")
             }
             if newParent {
                 try validateExternalMissionCreation(metadata)
@@ -228,11 +234,16 @@ struct CoordinatorChatMCPToolService {
                 result = await environment.submitPendingChildInteractionResponse(submission, pendingChildRow)
                 routedToChildInteraction = true
             } else {
-                guard let message, !message.isEmpty else {
-                    throw MCPError.invalidParams("message is required.")
+                if let continuationAction {
+                    result = await environment.submitContinuation(continuationAction)
+                    routedToChildInteraction = false
+                } else {
+                    guard let message, !message.isEmpty else {
+                        throw MCPError.invalidParams("message is required.")
+                    }
+                    result = await environment.submitDirective(message)
+                    routedToChildInteraction = false
                 }
-                result = await environment.submitDirective(message)
-                routedToChildInteraction = false
             }
             environment.refresh()
 
@@ -446,6 +457,19 @@ struct CoordinatorChatMCPToolService {
             events: events,
             updatedAt: parseOptionalDate(args["updated_at"] ?? args["updatedAt"], name: "updated_at") ?? Date()
         )
+    }
+
+    private func parseCheckpointContinuationAction(_ args: [String: Value]) throws -> CoordinatorModeViewModel.ContinuationAction? {
+        guard let raw = normalizedString(
+            args["checkpoint_action"]
+                ?? args["checkpointAction"]
+                ?? args["checkpoint_action_id"]
+                ?? args["checkpointActionID"]
+        ) else { return nil }
+        guard let action = CoordinatorModeViewModel.ContinuationAction(checkpointActionID: raw) else {
+            throw MCPError.invalidParams("checkpoint_action must be one of: proceed, gather_evidence, deepen_plan, independent_critique, start_smaller, stop.")
+        }
+        return action
     }
 
     private func parseMissionPredecessorUpdate(_ args: [String: Value]) throws -> (
@@ -2219,6 +2243,7 @@ struct CoordinatorChatMCPToolService {
             "actions": .array([
                 compactMissionCheckpointAction(
                     label: "Proceed",
+                    action: .proceed,
                     message: CoordinatorModeViewModel.ContinuationAction.proceed.directiveText
                 ),
                 compactMissionCheckpointAction(
@@ -2227,37 +2252,50 @@ struct CoordinatorChatMCPToolService {
                 ),
                 compactMissionCheckpointAction(
                     label: "Gather evidence",
+                    action: .runLightweightDiscovery,
                     message: CoordinatorModeViewModel.ContinuationAction.runLightweightDiscovery.directiveText
                 ),
                 compactMissionCheckpointAction(
                     label: "Deepen plan",
+                    action: .runDeepPlan,
                     message: CoordinatorModeViewModel.ContinuationAction.runDeepPlan.directiveText
                 ),
                 compactMissionCheckpointAction(
                     label: "Get independent critique",
+                    action: .runDesignCritique,
                     message: CoordinatorModeViewModel.ContinuationAction.runDesignCritique.directiveText
                 ),
                 compactMissionCheckpointAction(
                     label: "Start smaller",
+                    action: .startSmaller,
                     message: CoordinatorModeViewModel.ContinuationAction.startSmaller.directiveText
                 ),
                 compactMissionCheckpointAction(
                     label: "Stop",
+                    action: .stopHere,
                     message: CoordinatorModeViewModel.ContinuationAction.stopHere.directiveText
                 )
             ])
         ])
     }
 
-    private func compactMissionCheckpointAction(label: String, message: String) -> Value {
+    private func compactMissionCheckpointAction(
+        label: String,
+        action: CoordinatorModeViewModel.ContinuationAction? = nil,
+        message: String
+    ) -> Value {
         let guidance = CoordinatorModeViewModel.ContinuationAction.runtimeLedgerInstruction
         let submitMessage = message.contains(guidance) ? message : "\(message)\n\n\(guidance)"
-        return .object([
+        var object: [String: Value] = [
             "label": .string(label),
             "submit_op": .string("submit"),
             "submit_message": .string(submitMessage),
             "mission_plan_append_guidance": .string(guidance)
-        ])
+        ]
+        if let action {
+            object["checkpoint_action"] = .string(action.checkpointActionID)
+        }
+        return .object(object)
     }
 
     /// Builds compact liveness warnings for runtime telemetry.

@@ -671,6 +671,9 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(decisions.map(\.checkpointID), ["plan-approval", "plan-approval"])
         XCTAssertEqual(decisions.first?.checkpointInstanceID, "coordinator:\(coordinatorID.uuidString):plan-approval:r3")
         XCTAssertEqual(decisions.last?.checkpointInstanceID, "coordinator:\(coordinatorID.uuidString):plan-approval:r4")
+        XCTAssertEqual(state.missionPlan?.approvalState, .approved)
+        XCTAssertEqual(state.missionPlan?.status, .running)
+        XCTAssertEqual(state.missionPlan?.events.last?.kind, .approved)
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.missionSummary?.decisions.userCount, 2)
     }
 

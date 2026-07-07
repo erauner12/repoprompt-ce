@@ -1609,6 +1609,90 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(events[3].plan?.status, "completed")
     }
 
+    func testMissionEventJournalSynthesizesReadyInterludeForCollapsedLaunch() {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let firstID = UUID()
+        let secondID = UUID()
+        let summaryID = UUID()
+        let journal = CoordinatorMissionEventJournal(capacity: 16)
+
+        func plan(
+            firstStatus: CoordinatorMissionPlanNodeStatus,
+            secondStatus: CoordinatorMissionPlanNodeStatus,
+            summaryStatus: CoordinatorMissionPlanNodeStatus,
+            revision: Int
+        ) -> CoordinatorMissionPlan {
+            CoordinatorMissionPlan(
+                revision: revision,
+                objective: "S2 collapsed transition",
+                status: summaryStatus == .completed ? .completed : .running,
+                approvalState: .approved,
+                nodes: [
+                    CoordinatorMissionPlanNode(
+                        id: firstID,
+                        title: "A",
+                        workstreamID: workstreamID,
+                        executionPolicy: .freshWorktree,
+                        status: firstStatus
+                    ),
+                    CoordinatorMissionPlanNode(
+                        id: secondID,
+                        title: "B",
+                        workstreamID: workstreamID,
+                        executionPolicy: .freshWorktree,
+                        status: secondStatus
+                    ),
+                    CoordinatorMissionPlanNode(
+                        id: summaryID,
+                        title: "Summary",
+                        workstreamID: workstreamID,
+                        dependsOn: [firstID, secondID],
+                        executionPolicy: .freshWorktree,
+                        status: summaryStatus
+                    )
+                ]
+            )
+        }
+
+        journal.record(snapshot: Self.snapshot(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            coordinatorRunState: .running,
+            missionPlans: [
+                coordinatorID: plan(firstStatus: .running, secondStatus: .running, summaryStatus: .pending, revision: 1)
+            ]
+        ))
+        journal.record(snapshot: Self.snapshot(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            coordinatorRunState: .running,
+            missionPlans: [
+                coordinatorID: plan(firstStatus: .completed, secondStatus: .completed, summaryStatus: .running, revision: 2)
+            ]
+        ))
+        journal.record(snapshot: Self.snapshot(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            coordinatorRunState: .completed,
+            missionPlans: [
+                coordinatorID: plan(firstStatus: .completed, secondStatus: .completed, summaryStatus: .completed, revision: 3)
+            ]
+        ))
+
+        let events = journal.events(for: coordinatorID, sinceSeq: 0, limit: 10).events
+        let summaryStates = events.compactMap { event in
+            event.nodes.first { $0.id == summaryID }
+        }
+
+        XCTAssertEqual(events.map(\.seq), [1, 2, 3, 4])
+        XCTAssertEqual(summaryStates.map(\.status), ["pending", "pending", "running", "completed"])
+        XCTAssertEqual(events[1].readyNodeIDs, [summaryID])
+        XCTAssertEqual(events[1].activeNodeIDs, [])
+        XCTAssertEqual(events[2].readyNodeIDs, [])
+        XCTAssertEqual(events[2].activeNodeIDs, [summaryID])
+    }
+
     func testCompactMissionStatusFingerprintMovesForReadySetDeltaAndEdgeOnlyRevision() async throws {
         let coordinatorID = UUID()
         let workstreamID = UUID()
@@ -1824,6 +1908,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertTrue(labels.contains("Get independent critique"))
         let proceed = try XCTUnwrap(actions.first { $0["label"]?.stringValue == "Proceed" })
         XCTAssertEqual(proceed["submit_op"]?.stringValue, "submit")
+        XCTAssertEqual(proceed["checkpoint_action"]?.stringValue, "proceed")
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("Approved to proceed") == true)
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("actor:\"director\"") == true)
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("Do not record user decisions") == true)
@@ -2408,6 +2493,36 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(object["accepted"]?.boolValue, true)
     }
 
+    func testSubmitWithCheckpointActionUsesContinuationRoute() async throws {
+        let coordinatorID = UUID()
+        var submittedMessages: [String] = []
+        var submittedActions: [CoordinatorModeViewModel.ContinuationAction] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submit: {
+                submittedMessages.append($0)
+                return .accepted
+            },
+            submitContinuation: {
+                submittedActions.append($0)
+                return .accepted
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("submit"),
+            "coordinator_session_id": .string(coordinatorID.uuidString),
+            "checkpoint_action": .string("proceed"),
+            "compact": .bool(true)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertTrue(submittedMessages.isEmpty)
+        XCTAssertEqual(submittedActions, [.proceed])
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+    }
+
     func testSubmitRoutesToPendingChildInteractionWhenSelectedCoordinatorNeedsInput() async throws {
         let coordinatorID = UUID()
         let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
@@ -2577,6 +2692,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         startNew: @escaping () -> Void = {},
         stopMission: @escaping () async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { .accepted },
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
+        submitContinuation: @escaping (CoordinatorModeViewModel.ContinuationAction) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
         submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
         counts: CoordinatorModeCounts = .empty,
@@ -2598,6 +2714,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             startNew: startNew,
             stopMission: stopMission,
             submit: submit,
+            submitContinuation: submitContinuation,
             pendingChild: pendingChild,
             submitPendingChild: submitPendingChild,
             counts: counts,
@@ -2622,6 +2739,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         startNew: @escaping () -> Void = {},
         stopMission: @escaping () async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { .accepted },
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
+        submitContinuation: @escaping (CoordinatorModeViewModel.ContinuationAction) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
         submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
         counts: CoordinatorModeCounts = .empty,
@@ -2658,6 +2776,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 startNewCoordinatorRun: startNew,
                 stopSelectedCoordinatorMission: stopMission,
                 submitDirective: submit,
+                submitContinuation: submitContinuation,
                 activePendingChildInteractionRow: pendingChild,
                 submitPendingChildInteractionResponse: submitPendingChild,
                 updateMissionPlan: updateMissionPlan,

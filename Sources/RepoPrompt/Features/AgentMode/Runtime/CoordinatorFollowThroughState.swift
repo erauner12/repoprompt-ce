@@ -274,6 +274,64 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         return true
     }
 
+    @discardableResult
+    mutating func completeTerminalBoundRunningMissionPlanNodes(
+        from rows: [CoordinatorModeRow],
+        at date: Date = Date()
+    ) -> Bool {
+        let completedSessionIDs = Set(rows.compactMap { row -> UUID? in
+            guard row.statusGroup == .done || row.runState == .completed else { return nil }
+            return row.sessionID
+        })
+        return completeTerminalBoundRunningMissionPlanNodes(
+            completedSessionIDs: completedSessionIDs,
+            at: date
+        )
+    }
+
+    @discardableResult
+    mutating func completeTerminalBoundRunningMissionPlanNodes(
+        completedSessionIDs: Set<UUID>,
+        at date: Date = Date()
+    ) -> Bool {
+        guard let plan = missionPlan,
+              plan.status != .completed,
+              plan.status != .stopped,
+              !plan.nodes.isEmpty,
+              !completedSessionIDs.isEmpty
+        else { return false }
+
+        var nodes = plan.nodes
+        var completedNodes: [CoordinatorMissionPlanNode] = []
+        for index in nodes.indices {
+            let node = nodes[index]
+            guard node.status == .running,
+                  let boundSessionID = node.boundSessionID,
+                  completedSessionIDs.contains(boundSessionID)
+            else { continue }
+            nodes[index].status = .completed
+            completedNodes.append(nodes[index])
+        }
+        guard !completedNodes.isEmpty else { return false }
+
+        let status: CoordinatorMissionPlanStatus = nodes.allSatisfy(\.status.isTerminal) ? .completed : plan.status
+        updateMissionPlan(CoordinatorMissionPlanUpdate(
+            status: status,
+            nodes: nodes,
+            events: completedNodes.map { node in
+                CoordinatorMissionPlanEvent(
+                    kind: .nodeCompleted,
+                    nodeID: node.id,
+                    sessionID: node.boundSessionID,
+                    timestamp: date,
+                    summary: "\(node.title) node completed."
+                )
+            },
+            updatedAt: date
+        ))
+        return true
+    }
+
     mutating func updateObservedPhases(from rows: [CoordinatorModeRow]) {
         for row in rows {
             guard row.parentCoordinator != nil else { continue }
