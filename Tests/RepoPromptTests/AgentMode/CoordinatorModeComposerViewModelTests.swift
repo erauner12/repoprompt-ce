@@ -422,6 +422,13 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(plan.approvalState, .awaitingApproval)
         XCTAssertEqual(plan.decisions.last?.label, CoordinatorMissionUserDecisionLabel.routedChildQuestionsToDirector.rawValue)
         XCTAssertEqual(plan.decisions.last?.actor, .user)
+
+        let result = viewModel.setCoordinatorMissionPace(coordinatorSessionID: coordinatorID, pace: .step)
+        XCTAssertEqual(result, .accepted)
+        plan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(plan.policySnapshot?.defaultPace, .step)
+        XCTAssertEqual(plan.decisions.last?.label, CoordinatorMissionUserDecisionLabel.setPaceToStep.rawValue)
+        XCTAssertEqual(plan.decisions.last?.actor, .user)
     }
 
     func testMissionPlanUpdaterRefreshesSelectedCoordinatorSnapshot() throws {

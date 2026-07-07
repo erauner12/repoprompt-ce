@@ -17,6 +17,7 @@ struct CoordinatorChatMCPToolService {
         var submitPendingChildInteractionResponse: (_ submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission, _ row: CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var updateMissionPlan: (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
         var missionEvents: (_ coordinatorSessionID: UUID, _ sinceSeq: Int, _ limit: Int) -> CoordinatorMissionEventJournal.Batch
+        var setMissionPace: (_ coordinatorSessionID: UUID, _ pace: CoordinatorMissionPolicyPace) -> CoordinatorModeViewModel.DirectiveSubmissionResult
     }
 
     private let toolName: String
@@ -54,7 +55,8 @@ struct CoordinatorChatMCPToolService {
                 activePendingChildInteractionRow: { coordinatorViewModel.activePendingChildInteractionRow() },
                 submitPendingChildInteractionResponse: { await coordinatorViewModel.submitPendingChildInteractionResponse($0, to: $1) },
                 updateMissionPlan: { try coordinatorViewModel.updateMissionPlan(coordinatorSessionID: $0, update: $1) },
-                missionEvents: { coordinatorViewModel.missionEvents(coordinatorSessionID: $0, sinceSeq: $1, limit: $2) }
+                missionEvents: { coordinatorViewModel.missionEvents(coordinatorSessionID: $0, sinceSeq: $1, limit: $2) },
+                setMissionPace: { coordinatorViewModel.setCoordinatorMissionPace(coordinatorSessionID: $0, pace: $1) }
             )
         }
     }
@@ -342,6 +344,38 @@ struct CoordinatorChatMCPToolService {
                 "markdown": .string(CoordinatorMissionReceiptProjection(plan: plan).markdown)
             ])
 
+        case "set_pace":
+            try validateExternalUserAction(metadata, action: "change Mission pace")
+            environment.refresh()
+            let snapshot = environment.snapshot()
+            let coordinatorSessionID = try resolveCoordinatorSessionID(args["coordinator_session_id"], in: snapshot)
+            try validateCoordinatorExists(coordinatorSessionID, in: snapshot)
+            let pace = try parseMissionPace(args["pace"] ?? args["default_pace"] ?? args["defaultPace"])
+            let result = environment.setMissionPace(coordinatorSessionID, pace)
+            environment.refresh()
+            let updatedSnapshot = environment.snapshot()
+            let missionStatus = compactMissionStatusValue(
+                coordinatorSessionID: coordinatorSessionID,
+                snapshot: updatedSnapshot
+            )
+            switch result {
+            case .accepted:
+                return compactStateResponse(updatedSnapshot, extra: [
+                    "accepted": .bool(true),
+                    "mission_status": missionStatus,
+                    "routed_to": .string("set_pace"),
+                    "pace": .string(pace.rawValue)
+                ])
+            case let .rejected(message):
+                return compactStateResponse(updatedSnapshot, extra: [
+                    "accepted": .bool(false),
+                    "mission_status": missionStatus,
+                    "routed_to": .string("set_pace"),
+                    "pace": .string(pace.rawValue),
+                    "error": .string(message)
+                ])
+            }
+
         case "wait_for_update":
             let timeout = try parseCoordinatorWaitTimeout(args["timeout_seconds"] ?? args["timeout"])
             let sinceFingerprint = normalizedString(args["since_fingerprint"] ?? args["sinceFingerprint"])
@@ -377,13 +411,19 @@ struct CoordinatorChatMCPToolService {
             } while true
 
         default:
-            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, ensure_mission, start_mission, stop_mission, submit, mission_plan, mission_status, mission_events, receipt, wait_for_update.")
+            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, ensure_mission, start_mission, stop_mission, submit, mission_plan, mission_status, mission_events, receipt, set_pace, wait_for_update.")
         }
     }
 
     private func validateExternalMissionCreation(_ metadata: RequestMetadata) throws {
         if metadata.isCoordinatorRuntime || metadata.taskLabelKind == .coordinator || metadata.runPurpose == .agentModeRun {
             throw MCPError.invalidParams("Coordinator runtime sessions cannot create other Coordinator Missions. Record a follow-up recommendation in the current Mission and wait for an external user or CLI driver to start it.")
+        }
+    }
+
+    private func validateExternalUserAction(_ metadata: RequestMetadata, action: String) throws {
+        if metadata.isCoordinatorRuntime || metadata.taskLabelKind == .coordinator || metadata.runPurpose == .agentModeRun {
+            throw MCPError.invalidParams("Coordinator runtime sessions cannot \(action). User-action parity operations must be driven by an external user or CLI driver.")
         }
     }
 
@@ -578,6 +618,15 @@ struct CoordinatorChatMCPToolService {
                 name: "policy_snapshot.pinned_context_ids"
             ) ?? []
         )
+    }
+
+    private func parseMissionPace(_ value: Value?) throws -> CoordinatorMissionPolicyPace {
+        let raw = try AgentMCPToolHelpers.requireNonEmptyString(value, name: "pace")
+            .lowercased()
+        guard let pace = CoordinatorMissionPolicyPace(rawValue: raw) else {
+            throw MCPError.invalidParams("pace must be one of: \(CoordinatorMissionPolicyPace.allCases.map(\.rawValue).joined(separator: ", ")).")
+        }
+        return pace
     }
 
     private func parseMissionAutonomyMap(_ value: Value?, name: String) throws -> [String: CoordinatorMissionAutonomyMode] {

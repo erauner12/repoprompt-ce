@@ -306,6 +306,143 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         }
     }
 
+    func testSetPaceRoutesThroughExternalUserActionPath() async throws {
+        let coordinatorID = UUID()
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [
+            coordinatorID: CoordinatorMissionPlan(
+                objective: "Run a live Mission.",
+                status: .running,
+                approvalState: .approved,
+                policySnapshot: .defaultPolicy,
+                autonomy: CoordinatorMissionPolicySnapshot.defaultAutonomy
+            )
+        ]
+        var setPaceCalls: [(UUID, CoordinatorMissionPolicyPace)] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            pendingChild: {
+                XCTFail("set_pace should not route through pending child interactions")
+                return Self.pendingChildRow(parentCoordinatorID: coordinatorID)
+            },
+            missionPlans: { missionPlans },
+            setMissionPace: { sessionID, pace in
+                setPaceCalls.append((sessionID, pace))
+                var policy = missionPlans[sessionID]?.policySnapshot ?? CoordinatorMissionPolicySnapshot.defaultPolicy
+                policy.defaultPace = pace
+                let record = CoordinatorMissionDecisionRecord(
+                    userDecision: pace == .auto ? .setPaceToAuto : .setPaceToStep,
+                    decisionClass: .advance,
+                    checkpointInstanceID: "mission-policy:\(sessionID.uuidString):pace:test",
+                    sessionID: sessionID,
+                    checkpointID: "mission-policy-override"
+                )
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+                    policySnapshot: policy,
+                    decisions: [record],
+                    updatedAt: record.timestamp
+                ))
+                missionPlans[sessionID] = state.missionPlan
+                return .accepted
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("set_pace"),
+            "coordinator_session_id": .string(coordinatorID.uuidString),
+            "pace": .string("auto")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+        let status = try XCTUnwrap(object["mission_status"]?.objectValue)
+        let plan = try XCTUnwrap(status["plan"]?.objectValue)
+        let policy = try XCTUnwrap(plan["policy_snapshot"]?.objectValue)
+
+        XCTAssertEqual(setPaceCalls.count, 1)
+        XCTAssertEqual(setPaceCalls.first?.0, coordinatorID)
+        XCTAssertEqual(setPaceCalls.first?.1, .auto)
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "set_pace")
+        XCTAssertEqual(object["pace"]?.stringValue, "auto")
+        XCTAssertEqual(policy["default_pace"]?.stringValue, "auto")
+        XCTAssertEqual(status["decision_counts_by_actor"]?.objectValue?["user"]?.intValue, 1)
+    }
+
+    func testSetPaceRejectsCoordinatorRuntimeCaller() async throws {
+        let coordinatorID = UUID()
+        var didSetPace = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Runtime-gated Mission.",
+                    status: .running,
+                    approvalState: .approved,
+                    policySnapshot: .defaultPolicy
+                )]
+            },
+            setMissionPace: { _, _ in
+                didSetPace = true
+                return .accepted
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("set_pace"),
+                "pace": .string("auto")
+            ])
+            XCTFail("Coordinator runtime callers must not be allowed to forge user-action parity.")
+        } catch {
+            XCTAssertFalse(didSetPace)
+            XCTAssertTrue(String(describing: error).contains("cannot change Mission pace"))
+            XCTAssertTrue(String(describing: error).contains("external user or CLI driver"))
+        }
+    }
+
+    func testSetPaceRejectsUnknownPace() async throws {
+        let coordinatorID = UUID()
+        var didSetPace = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Invalid pace Mission.",
+                    status: .running,
+                    approvalState: .approved,
+                    policySnapshot: .defaultPolicy
+                )]
+            },
+            setMissionPace: { _, _ in
+                didSetPace = true
+                return .accepted
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("set_pace"),
+                "pace": .string("turbo")
+            ])
+            XCTFail("Expected invalid pace to be rejected.")
+        } catch {
+            XCTAssertFalse(didSetPace)
+            XCTAssertTrue(String(describing: error).contains("pace must be one of: step, auto"))
+        }
+    }
+
     func testEnsureMissionSelectsExistingMissionByKey() async throws {
         let firstID = UUID()
         let secondID = UUID()
@@ -2782,6 +2919,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         missionEvents: @escaping (UUID, Int, Int) -> CoordinatorMissionEventJournal.Batch = { _, sinceSeq, _ in
             CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
         },
+        setMissionPace: @escaping (UUID, CoordinatorMissionPolicyPace) -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
         initialMissionPlanTimeoutSeconds: TimeInterval = 0,
         initialMissionPlanPollIntervalSeconds: TimeInterval = 0.01,
         sleep: @escaping (UInt64) async -> Void = { _ in }
@@ -2802,6 +2940,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             missionPlans: missionPlans,
             updateMissionPlan: updateMissionPlan,
             missionEvents: missionEvents,
+            setMissionPace: setMissionPace,
             initialMissionPlanTimeoutSeconds: initialMissionPlanTimeoutSeconds,
             initialMissionPlanPollIntervalSeconds: initialMissionPlanPollIntervalSeconds,
             sleep: sleep
@@ -2829,6 +2968,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         missionEvents: @escaping (UUID, Int, Int) -> CoordinatorMissionEventJournal.Batch = { _, sinceSeq, _ in
             CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
         },
+        setMissionPace: @escaping (UUID, CoordinatorMissionPolicyPace) -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
         initialMissionPlanTimeoutSeconds: TimeInterval = 0,
         initialMissionPlanPollIntervalSeconds: TimeInterval = 0.01,
         sleep: @escaping (UInt64) async -> Void = { _ in }
@@ -2860,7 +3000,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 activePendingChildInteractionRow: pendingChild,
                 submitPendingChildInteractionResponse: submitPendingChild,
                 updateMissionPlan: updateMissionPlan,
-                missionEvents: missionEvents
+                missionEvents: missionEvents,
+                setMissionPace: setMissionPace
             )
         }
     }

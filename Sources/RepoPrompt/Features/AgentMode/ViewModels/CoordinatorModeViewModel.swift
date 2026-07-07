@@ -443,6 +443,34 @@ final class CoordinatorModeViewModel: ObservableObject {
         refresh()
     }
 
+    @discardableResult
+    func setCoordinatorMissionPace(
+        coordinatorSessionID: UUID,
+        pace: CoordinatorMissionPolicyPace
+    ) -> DirectiveSubmissionResult {
+        guard let option = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == coordinatorSessionID }) else {
+            let message = "Coordinator session \(coordinatorSessionID.uuidString) is not available in this window."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        guard let plan = option.missionPlan else {
+            let message = "Coordinator session \(coordinatorSessionID.uuidString) does not have a Mission Plan yet."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        guard !plan.status.isTerminal else {
+            let message = "Mission pace cannot be changed after the Mission is \(plan.status.rawValue)."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+
+        selectCoordinator(sessionID: coordinatorSessionID)
+        refresh()
+        setMissionPaceSelection(pace)
+        composerNotice = nil
+        return .accepted
+    }
+
     private func recordFreshMissionPolicySnapshotIfNeeded(
         _ policySnapshot: CoordinatorMissionPolicySnapshot?,
         objective: String,

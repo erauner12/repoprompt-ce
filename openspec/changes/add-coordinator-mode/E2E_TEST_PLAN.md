@@ -52,10 +52,14 @@ names to use. Run twice: **Me** → pending interaction appears, queue = 1, answ
 child proceeds, no ⚙ for the answer; **Director** → runtime answers, ⚙ decision with
 question+answer evidence, queue stays 0.
 
-**S6 — Mid-run dial flip.** Start Step; flip pace → Auto mid-mission.
+**S6 — Dial flip does not act.** Start Step; flip pace → Auto through the user-channel
+parity op.
+Current executable `s6` covers the pending approval checkpoint because it is deterministic:
+drive the flip headlessly through `coordinator_chat set_pace`, before approval.
 Invariants: snapshot pace mutated, revision bumped, fingerprint advanced; user-actor
 "set pace to Auto" decision recorded; **a pending checkpoint is not consumed** by the
-flip; later boundaries auto-continue. UI: `Policy · … · edited` marker appears.
+flip. Future `s6b` should use a deterministic post-approval step boundary to assert
+later boundaries auto-continue. UI: `Policy · … · edited` marker appears.
 
 **S7 — Stop semantics.** Stop mid-run.
 Invariants: user-actor stop decision; cancel routing decision(s) for active children;

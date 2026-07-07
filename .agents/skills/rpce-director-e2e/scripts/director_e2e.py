@@ -831,6 +831,32 @@ def user_decision_count(status: dict[str, Any]) -> int:
     return int(counts.get("user") or 0)
 
 
+def plan_revision(status: dict[str, Any]) -> int:
+    plan = status.get("plan") or {}
+    value = plan.get("revision") or plan.get("plan_revision") or 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def plan_default_pace(status: dict[str, Any]) -> str:
+    plan = status.get("plan") or {}
+    policy = plan.get("policy_snapshot") or plan.get("policySnapshot") or {}
+    return str(policy.get("default_pace") or policy.get("defaultPace") or "").lower()
+
+
+def plan_approval_state(status: dict[str, Any]) -> str:
+    plan = status.get("plan") or {}
+    return str(plan.get("approval_state") or plan.get("approvalState") or "").lower()
+
+
+def has_checkpoint_action(status: dict[str, Any], label: str) -> bool:
+    checkpoint = status.get("checkpoint") or {}
+    actions = checkpoint.get("actions") or []
+    return any(str(action.get("label") or "") == label for action in actions if isinstance(action, dict))
+
+
 def routing_decision_count(full: dict[str, Any]) -> int:
     return len(full.get("routing_decisions_recent") or ((full.get("plan") or {}).get("routing_decisions") or []))
 
@@ -946,6 +972,29 @@ def assert_s2(observations: list[Observation], approved_by_runner: bool) -> None
     assert_common_status_integrity(observations)
 
 
+def assert_s6_pace_flip(before: Observation, after: Observation) -> None:
+    if plan_default_pace(before.compact) != "step":
+        raise E2EFailure(f"S6 expected initial Step pace, got {plan_default_pace(before.compact)!r}")
+    if plan_default_pace(after.compact) != "auto":
+        raise E2EFailure(f"S6 expected Auto pace after set_pace, got {plan_default_pace(after.compact)!r}")
+    if not before.fingerprint or after.fingerprint == before.fingerprint:
+        raise E2EFailure("S6 expected compact fingerprint to advance after set_pace")
+    if plan_revision(after.compact) <= plan_revision(before.compact):
+        raise E2EFailure(
+            f"S6 expected revision bump after set_pace, got before={plan_revision(before.compact)} "
+            f"after={plan_revision(after.compact)}"
+        )
+    if user_decision_count(after.compact) != user_decision_count(before.compact) + 1:
+        raise E2EFailure(
+            "S6 expected exactly one user decision for set_pace; "
+            f"before={user_decision_count(before.compact)} after={user_decision_count(after.compact)}"
+        )
+    if plan_approval_state(after.compact) != "awaiting_approval":
+        raise E2EFailure(f"S6 expected approval checkpoint to remain awaiting_approval, got {plan_approval_state(after.compact)!r}")
+    if not has_checkpoint_action(after.compact, "Proceed"):
+        raise E2EFailure("S6 expected pending approval checkpoint to keep its Proceed action after set_pace")
+
+
 def s2_event_convergence_node(event: dict[str, Any]) -> dict[str, Any] | None:
     nodes = [node for node in (event.get("nodes") or []) if isinstance(node, dict)]
     candidates = [node for node in nodes if len(node.get("depends_on") or []) >= 2]
@@ -1033,6 +1082,16 @@ def s2_message(sandbox_root: Path) -> str:
         "remap paths into isolated worktrees. After writing the assigned marker file, report the "
         "result and stop; do not keep polling. Record evidence for every completed node and close "
         "with a receipt."
+    )
+
+
+def s6_message() -> str:
+    return (
+        "Run this as a scoped Director mission for a Step/Auto dial smoke test. Record a "
+        'visible Mission Plan with approval_state:"awaiting_approval" before child sessions. '
+        "Keep the plan tiny: one coordinator-only verification node that would inspect status "
+        "after approval, but do not start any child sessions until approved. Do not edit files, "
+        "run validation, commit, push, open PRs, merge, or start a follow-up Mission."
     )
 
 
@@ -1174,11 +1233,51 @@ def run_s2(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
     })
 
 
+def run_s6(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> None:
+    artifacts.record_timing("started")
+    session_id = start_mission(client, "Director E2E S6 pace flip", s6_message(), "s6")
+    before = wait_until(
+        client,
+        artifacts,
+        session_id,
+        lambda item: plan_approval_state(item.compact) == "awaiting_approval" and has_checkpoint_action(item.compact, "Proceed"),
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("plan-visible")
+    response = client.coordinator({
+        "op": "set_pace",
+        "coordinator_session_id": session_id,
+        "pace": "auto",
+        "compact": True,
+    }, timeout=180)
+    write_json(artifacts.root / "set_pace_response.json", response)
+    if response.get("accepted") is False:
+        raise E2EFailure(f"S6 set_pace rejected: {response.get('error') or response}")
+    if response.get("routed_to") != "set_pace":
+        raise E2EFailure(f"S6 set_pace response did not report routed_to=set_pace: {response}")
+    after = observe(client, artifacts, session_id)
+    capture_mission_events(client, artifacts, session_id, args.events_mode)
+    assert_s6_pace_flip(before, after)
+    artifacts.add_checkpoint("pace-set-auto")
+    artifacts.finalize(True, "s6", {
+        "coordinator_session_id": session_id,
+        "final_status": after.status,
+        "approval_state": plan_approval_state(after.compact),
+        "default_pace": plan_default_pace(after.compact),
+        "revision_before": plan_revision(before.compact),
+        "revision_after": plan_revision(after.compact),
+    })
+
+
 def run_scenario(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> None:
     if args.scenario == "s1":
         run_s1(client, artifacts, args)
     elif args.scenario == "s2":
         run_s2(client, artifacts, args)
+    elif args.scenario == "s6":
+        run_s6(client, artifacts, args)
     elif args.scenario == "smoke":
         s1_artifacts = RunArtifacts(artifacts.root / "s1")
         s1_client = RpcClient(client.cli, client.window, client.repo_root, s1_artifacts)
@@ -1197,7 +1296,7 @@ def run_scenario(client: RpcClient, artifacts: RunArtifacts, args: argparse.Name
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run live Director mission E2E scenarios.")
-    parser.add_argument("--scenario", choices=["s1", "s2", "smoke"], default="s1")
+    parser.add_argument("--scenario", choices=["s1", "s2", "s6", "smoke"], default="s1")
     parser.add_argument("--workspace", default="homelab-garden")
     parser.add_argument("--window", type=int, default=1)
     parser.add_argument("--timeout-seconds", type=int, default=900)

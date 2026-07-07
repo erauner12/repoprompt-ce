@@ -25,6 +25,9 @@ def observation(
     status: str,
     nodes: list[dict],
     *,
+    approval_state: str | None = None,
+    default_pace: str = "step",
+    revision: int = 1,
     running: int = 0,
     ready: list[str] | None = None,
     user_decisions: int = 1,
@@ -38,7 +41,9 @@ def observation(
         "fingerprint": fingerprint,
         "plan": {
             "status": status,
-            "policy_snapshot": {"max_concurrent": 3},
+            "revision": revision,
+            "approval_state": approval_state,
+            "policy_snapshot": {"max_concurrent": 3, "default_pace": default_pace},
         },
         "node_counts": {
             "running": running,
@@ -432,6 +437,80 @@ Loaded roots: demo → /repo/fallback
         )
         with self.assertRaises(director_e2e.E2EFailure):
             director_e2e.assert_s2([obs], approved_by_runner=True)
+
+    def test_s6_accepts_pace_flip_without_consuming_approval_checkpoint(self) -> None:
+        before = observation(
+            "f1",
+            "draft",
+            [{"id": "n1", "status": "pending"}],
+            approval_state="awaiting_approval",
+            default_pace="step",
+            revision=4,
+            user_decisions=0,
+        )
+        before.compact["checkpoint"] = {"actions": [{"label": "Proceed"}]}
+        after = observation(
+            "f2",
+            "draft",
+            [{"id": "n1", "status": "pending"}],
+            approval_state="awaiting_approval",
+            default_pace="auto",
+            revision=5,
+            user_decisions=1,
+        )
+        after.compact["checkpoint"] = {"actions": [{"label": "Proceed"}]}
+
+        director_e2e.assert_s6_pace_flip(before, after)
+
+    def test_s6_rejects_consumed_approval_checkpoint(self) -> None:
+        before = observation(
+            "f1",
+            "draft",
+            [{"id": "n1", "status": "pending"}],
+            approval_state="awaiting_approval",
+            default_pace="step",
+            revision=4,
+            user_decisions=0,
+        )
+        before.compact["checkpoint"] = {"actions": [{"label": "Proceed"}]}
+        after = observation(
+            "f2",
+            "running",
+            [{"id": "n1", "status": "running"}],
+            approval_state="approved",
+            default_pace="auto",
+            revision=5,
+            user_decisions=1,
+        )
+        after.compact["checkpoint"] = {"actions": []}
+
+        with self.assertRaises(director_e2e.E2EFailure):
+            director_e2e.assert_s6_pace_flip(before, after)
+
+    def test_s6_rejects_missing_user_decision(self) -> None:
+        before = observation(
+            "f1",
+            "draft",
+            [{"id": "n1", "status": "pending"}],
+            approval_state="awaiting_approval",
+            default_pace="step",
+            revision=4,
+            user_decisions=0,
+        )
+        before.compact["checkpoint"] = {"actions": [{"label": "Proceed"}]}
+        after = observation(
+            "f2",
+            "draft",
+            [{"id": "n1", "status": "pending"}],
+            approval_state="awaiting_approval",
+            default_pace="auto",
+            revision=5,
+            user_decisions=0,
+        )
+        after.compact["checkpoint"] = {"actions": [{"label": "Proceed"}]}
+
+        with self.assertRaises(director_e2e.E2EFailure):
+            director_e2e.assert_s6_pace_flip(before, after)
 
     def test_progress_tracker_resets_on_signature_change(self) -> None:
         first = observation("f1", "running", [], running=0)

@@ -21,6 +21,12 @@ For the writable convergence scenario, pass a sandbox repo that is already visib
 .agents/skills/rpce-director-e2e/scripts/director_e2e.py --scenario s2 --workspace homelab-garden --window 1 --sandbox-root /path/to/director-e2e-sandbox --clean-sandbox --events-mode required --receipt-mode required
 ```
 
+For the Step/Auto user-action parity check:
+
+```bash
+.agents/skills/rpce-director-e2e/scripts/director_e2e.py --scenario s6 --workspace homelab-garden --window 1 --events-mode required
+```
+
 Use `--scenario smoke` to run S1 then S2. The smoke command requires `--sandbox-root` because S2 writes marker files.
 
 Useful knobs:
@@ -43,6 +49,7 @@ Useful knobs:
 
 - `s1`: read-only investigation. Expects a completed mission, route/evidence records, receipt readiness, no post-approval user decisions, and a clean optional sandbox.
 - `s2`: parallel fan-out and convergence. Expects two parents to run concurrently, a dependent summary node to wait until parents complete, then observes convergence as ready/running/completed depending on polling speed, no extra human submit after approval, cap discipline, completion, and exactly `A.md`, `B.md`, `SUMMARY.md` in the sandbox.
+- `s6`: Step/Auto user-action parity. Starts a tiny Step mission at approval, drives `coordinator_chat set_pace`, and expects revision/fingerprint/user-decision movement while the pending approval checkpoint remains pending.
 - `smoke`: runs `s1` then `s2` with the same options.
 
 ## Visual Checkpoints
@@ -52,4 +59,5 @@ The runner does not make screenshots pass/fail in v1. It prints checkpoint names
 - `plan-visible`
 - `running-fanout`
 - `convergence-ready` / `convergence-running` / `convergence-completed`
+- `pace-set-auto`
 - `completed`
