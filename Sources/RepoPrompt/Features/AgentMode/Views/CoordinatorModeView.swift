@@ -140,6 +140,7 @@ struct CoordinatorModeView: View {
     @State private var coordinatorTextFieldResetTrigger = false
     @State private var coordinatorTextFieldHeight = ResizableTextField.height(forPresetIndex: 0, preset: .normal)
     @State private var coordinatorComposerChromeOcclusion: CGFloat = 0
+    @State private var expandedTerminalComposerPlanID: UUID?
     @State private var missionPlanComposerChromeOcclusion: CGFloat = 0
     @State private var missionPlanComposerTextFieldResetTrigger = false
     @State private var missionPlanComposerTextFieldHeight = ResizableTextField.height(forPresetIndex: 0, preset: .normal)
@@ -152,6 +153,7 @@ struct CoordinatorModeView: View {
     @State private var isSortMenuOpen = false
     @State private var areArchivedMissionsExpanded = false
     @State private var copiedMissionReceiptPlanID: UUID?
+    @State private var expandedCompletedEvidenceNodeIDs: Set<UUID> = []
     @State private var coordinatorColumnVisibility: NavigationSplitViewVisibility = .all
     @FocusState private var isCoordinatorComposerFocused: Bool
     @FocusState private var isMissionPlanComposerFocused: Bool
@@ -160,6 +162,10 @@ struct CoordinatorModeView: View {
 
     private var visualMetrics: CoordinatorVisualMetrics {
         CoordinatorVisualMetrics(fontPreset: fontScale.preset)
+    }
+
+    private func collapseTerminalCoordinatorComposer() {
+        expandedTerminalComposerPlanID = nil
     }
 
     var body: some View {
@@ -195,6 +201,14 @@ struct CoordinatorModeView: View {
         .onChange(of: viewModel.snapshot) { _, _ in
             reconcileSelection()
             reconcilePlanSelection()
+        }
+        .onChange(of: viewModel.snapshot.coordinatorRail.coordinatorSessionID) { _, _ in
+            collapseTerminalCoordinatorComposer()
+            expandedCompletedEvidenceNodeIDs.removeAll()
+        }
+        .onChange(of: viewModel.snapshot.coordinatorRail.missionPlan?.id) { _, _ in
+            collapseTerminalCoordinatorComposer()
+            expandedCompletedEvidenceNodeIDs.removeAll()
         }
     }
 
@@ -1310,6 +1324,7 @@ struct CoordinatorModeView: View {
     ) -> some View {
         Button {
             viewModel.startNewCoordinatorRun()
+            collapseTerminalCoordinatorComposer()
             isMissionPlanPaneVisible = true
         } label: {
             HStack(alignment: .center, spacing: metrics.smallSpacing) {
@@ -1342,6 +1357,7 @@ struct CoordinatorModeView: View {
         .hoverTooltip("Prepare a fresh mission")
         .accessibilityAction {
             viewModel.startNewCoordinatorRun()
+            collapseTerminalCoordinatorComposer()
             isMissionPlanPaneVisible = true
         }
     }
@@ -1350,10 +1366,11 @@ struct CoordinatorModeView: View {
         _ option: CoordinatorModeCoordinatorOption,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        let status = coordinatorMissionStatus(for: option)
+        let signal = coordinatorMissionStatusSignal(for: option)
 
         return Button {
             viewModel.selectCoordinator(sessionID: option.sessionID)
+            collapseTerminalCoordinatorComposer()
             isMissionPlanPaneVisible = true
         } label: {
             HStack(alignment: .center, spacing: metrics.smallSpacing) {
@@ -1382,9 +1399,7 @@ struct CoordinatorModeView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if let status {
-                    coordinatorMissionStatusPill(status, metrics: metrics)
-                }
+                coordinatorMissionStatusSignal(signal, metrics: metrics)
             }
             .contentShape(Rectangle())
             .padding(.horizontal, metrics.pendingPadding)
@@ -1403,7 +1418,32 @@ struct CoordinatorModeView: View {
         .hoverTooltip("Switch mission to \(option.title)")
         .accessibilityAction {
             viewModel.selectCoordinator(sessionID: option.sessionID)
+            collapseTerminalCoordinatorComposer()
             isMissionPlanPaneVisible = true
+        }
+    }
+
+    @ViewBuilder
+    private func coordinatorMissionStatusSignal(
+        _ signal: CoordinatorMissionPresentationPolicy.RailRowSignal,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        switch signal {
+        case let .filledBadge(kind):
+            let tint: Color = switch kind {
+            case .live:
+                .green
+            case .activeRun:
+                .blue
+            }
+            coordinatorMissionStatusPill((kind.title, tint), metrics: metrics)
+        case let .mutedTerminalStatus(status):
+            Text(status.displayName)
+                .font(metrics.microMedium)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        case .none:
+            EmptyView()
         }
     }
 
@@ -1426,21 +1466,14 @@ struct CoordinatorModeView: View {
         .overlay(Capsule(style: .continuous).stroke(status.color.opacity(0.18), lineWidth: 0.5))
     }
 
-    private func coordinatorMissionStatus(for option: CoordinatorModeCoordinatorOption) -> (text: String, color: Color)? {
-        if let missionPlan = option.missionPlan,
-           missionPlan.status.isTerminal
-        {
-            return (missionPlan.status.displayName, missionPlan.status.tint)
-        }
-        if let runState = option.runState, runState.isActive {
-            return (runState.coordinatorMissionDisplayName, .blue)
-        }
-        if option.isLiveInCurrentWindow,
-           CoordinatorMissionPresentationPolicy.shouldShowLiveBadge(for: option.missionPlan)
-        {
-            return ("Live", .green)
-        }
-        return nil
+    private func coordinatorMissionStatusSignal(
+        for option: CoordinatorModeCoordinatorOption
+    ) -> CoordinatorMissionPresentationPolicy.RailRowSignal {
+        CoordinatorMissionPresentationPolicy.railRowSignal(
+            for: option.missionPlan,
+            activeRunTitle: option.runState?.isActive == true ? option.runState?.coordinatorMissionDisplayName : nil,
+            isLiveInCurrentWindow: option.isLiveInCurrentWindow
+        )
     }
 
     private enum SidebarTitlebarControlPlacement {
@@ -1961,7 +1994,9 @@ struct CoordinatorModeView: View {
         childCounts: CoordinatorModeCoordinatorChildCounts,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        VStack(alignment: .leading, spacing: metrics.smallSpacing) {
+        let paneEmphasis = CoordinatorMissionPresentationPolicy.paneEmphasis(for: plan)
+
+        return VStack(alignment: .leading, spacing: metrics.smallSpacing) {
             mutedMetadataLine(
                 CoordinatorMissionPresentationPolicy.missionPlanMetadataParts(for: plan),
                 metrics: metrics
@@ -1974,7 +2009,7 @@ struct CoordinatorModeView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            missionStatusStrip(plan, childCounts: childCounts, metrics: metrics)
+            missionStatusStrip(plan, childCounts: childCounts, paneEmphasis: paneEmphasis, metrics: metrics)
                 .padding(.top, metrics.tightSpacing)
 
             missionIdleReadyLine(plan, metrics: metrics)
@@ -2010,17 +2045,18 @@ struct CoordinatorModeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .fill(Color.accentColor.opacity(0.045))
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.18))
         )
         .overlay(
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .stroke(Color.accentColor.opacity(0.12), lineWidth: 0.75)
+                .stroke(CoordinatorTheme.Palette.hairline.opacity(0.85), lineWidth: 0.75)
         )
     }
 
     private func missionStatusStrip(
         _ plan: CoordinatorMissionPlan,
         childCounts _: CoordinatorModeCoordinatorChildCounts? = nil,
+        paneEmphasis: CoordinatorMissionPresentationPolicy.PaneEmphasis = .normal,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         let projection = MissionPlanReadinessProjection(plan: plan)
@@ -2042,6 +2078,8 @@ struct CoordinatorModeView: View {
         }
         let readinessTint: Color = if isOverCap || blockedNodeCount > 0 {
             .red
+        } else if paneEmphasis == .terminalQuiet {
+            .secondary
         } else if plan.status == .completed {
             .green
         } else if plan.status == .stopped {
@@ -2066,8 +2104,16 @@ struct CoordinatorModeView: View {
                 .truncationMode(.tail)
                 .layoutPriority(2)
             if userDecisionCount > 0 {
-                statusChip("needs you \(userDecisionCount)", color: .red, metrics: metrics)
-                    .layoutPriority(3)
+                if paneEmphasis.usesStateCapsulesInBody {
+                    statusChip("needs you \(userDecisionCount)", color: .red, metrics: metrics)
+                        .layoutPriority(3)
+                } else {
+                    Text("Needed you \(userDecisionCount)")
+                        .font(metrics.microMedium)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .layoutPriority(3)
+                }
             }
             if let policySnapshot = plan.policySnapshot {
                 Text(CoordinatorMissionPresentationPolicy.policyMetadataLine(for: policySnapshot))
@@ -2088,7 +2134,7 @@ struct CoordinatorModeView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: metrics.pendingCornerRadius, style: .continuous)
-                .stroke(Color.accentColor.opacity(0.12), lineWidth: 0.75)
+                .stroke(CoordinatorTheme.Palette.hairline.opacity(0.75), lineWidth: 0.75)
         )
     }
 
@@ -2233,6 +2279,7 @@ struct CoordinatorModeView: View {
                     nodes: nodes,
                     partIndex: partIndex,
                     partTotal: partTotal,
+                    paneEmphasis: CoordinatorMissionPresentationPolicy.paneEmphasis(for: plan),
                     metrics: metrics
                 )
             } else {
@@ -2240,6 +2287,7 @@ struct CoordinatorModeView: View {
                     nodes: nodes,
                     partIndex: partIndex,
                     partTotal: partTotal,
+                    paneEmphasis: CoordinatorMissionPresentationPolicy.paneEmphasis(for: plan),
                     metrics: metrics
                 )
             }
@@ -2303,11 +2351,14 @@ struct CoordinatorModeView: View {
         projection: MissionPlanReadinessProjection,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+        let paneEmphasis = CoordinatorMissionPresentationPolicy.paneEmphasis(for: plan)
+        let bandTint: Color = paneEmphasis == .terminalQuiet && band.kind == .done ? .secondary : band.kind.tint
+
+        return VStack(alignment: .leading, spacing: metrics.tightSpacing) {
             HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
                 Label(band.kind.title, systemImage: band.kind.systemImage)
                     .font(metrics.microMedium)
-                    .foregroundStyle(band.kind.tint)
+                    .foregroundStyle(bandTint)
                     .lineLimit(1)
                 Text("\(band.nodes.count) node\(band.nodes.count == 1 ? "" : "s")")
                     .font(metrics.micro)
@@ -2324,7 +2375,7 @@ struct CoordinatorModeView: View {
 
             HStack(alignment: .top, spacing: metrics.smallSpacing) {
                 Rectangle()
-                    .fill(band.kind.tint.opacity(0.20))
+                    .fill(bandTint.opacity(paneEmphasis == .terminalQuiet ? 0.12 : 0.20))
                     .frame(width: 2)
                     .padding(.vertical, metrics.tightSpacing)
                 VStack(alignment: .leading, spacing: metrics.tightSpacing) {
@@ -2347,9 +2398,14 @@ struct CoordinatorModeView: View {
         nodes: [CoordinatorMissionPlanNode],
         partIndex: Int,
         partTotal: Int,
+        paneEmphasis: CoordinatorMissionPresentationPolicy.PaneEmphasis = .normal,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            let completedNodeCount = missionPlanCompletedNodeCount(nodes)
+            let countTint: Color = paneEmphasis == .terminalQuiet
+                ? .secondary
+                : (completedNodeCount == nodes.count && !nodes.isEmpty ? .green : .secondary)
             HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
                 Text("Part \(partIndex) · \(workstream.title)")
                     .font(metrics.bodySemibold)
@@ -2363,9 +2419,9 @@ struct CoordinatorModeView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: metrics.controlSpacing)
-                Text("\(missionPlanCompletedNodeCount(nodes))/\(nodes.count) done")
+                Text("\(completedNodeCount)/\(nodes.count) done")
                     .font(metrics.microMedium)
-                    .foregroundStyle(missionPlanCompletedNodeCount(nodes) == nodes.count && !nodes.isEmpty ? .green : .secondary)
+                    .foregroundStyle(countTint)
                     .lineLimit(1)
                 Text("\(partIndex)/\(partTotal)")
                     .font(metrics.micro)
@@ -2397,16 +2453,22 @@ struct CoordinatorModeView: View {
         nodes: [CoordinatorMissionPlanNode],
         partIndex: Int,
         partTotal: Int,
+        paneEmphasis: CoordinatorMissionPresentationPolicy.PaneEmphasis = .normal,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
+        let completedNodeCount = missionPlanCompletedNodeCount(nodes)
+        let countTint: Color = paneEmphasis == .terminalQuiet
+            ? .secondary
+            : (completedNodeCount == nodes.count && !nodes.isEmpty ? .green : .secondary)
+
+        return HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
             Label("Part \(partIndex) · Unassigned nodes", systemImage: "questionmark.square.dashed")
                 .font(metrics.bodySemibold)
                 .foregroundStyle(.secondary)
             Spacer(minLength: metrics.controlSpacing)
-            Text("\(missionPlanCompletedNodeCount(nodes))/\(nodes.count) done")
+            Text("\(completedNodeCount)/\(nodes.count) done")
                 .font(metrics.microMedium)
-                .foregroundStyle(missionPlanCompletedNodeCount(nodes) == nodes.count && !nodes.isEmpty ? .green : .secondary)
+                .foregroundStyle(countTint)
                 .lineLimit(1)
             Text("\(partIndex)/\(partTotal)")
                 .font(metrics.micro)
@@ -2426,11 +2488,17 @@ struct CoordinatorModeView: View {
         projection: MissionPlanReadinessProjection,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+        let paneEmphasis = CoordinatorMissionPresentationPolicy.paneEmphasis(for: plan)
+        let nodeStatusTint: Color = paneEmphasis == .terminalQuiet && node.status == .completed ? .secondary : node.status.tint
+        let nodeEligibilityTint: Color = paneEmphasis == .terminalQuiet && node.status == .completed
+            ? .secondary
+            : missionPlanNodeEligibilityTint(node, projection: projection)
+
+        return VStack(alignment: .leading, spacing: metrics.tightSpacing) {
             HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
                 Image(systemName: node.status.systemImage)
                     .font(.system(size: metrics.smallIconSize, weight: .semibold))
-                    .foregroundStyle(node.status.tint)
+                    .foregroundStyle(nodeStatusTint)
                     .frame(width: metrics.smallIconSize)
                 Text(node.title)
                     .font(metrics.bodySemibold)
@@ -2441,7 +2509,7 @@ struct CoordinatorModeView: View {
                 if node.status == .completed {
                     Text(missionPlanNodeEligibilityText(node, plan: plan, projection: projection))
                         .font(metrics.microMedium)
-                        .foregroundStyle(missionPlanNodeEligibilityTint(node, projection: projection))
+                        .foregroundStyle(nodeEligibilityTint)
                         .lineLimit(1)
                 } else {
                     statusChip(
@@ -2452,7 +2520,13 @@ struct CoordinatorModeView: View {
                 }
             }
 
-            missionPlanNodeEligibilityLine(node, plan: plan, projection: projection, metrics: metrics)
+            missionPlanNodeEligibilityLine(
+                node,
+                plan: plan,
+                projection: projection,
+                paneEmphasis: paneEmphasis,
+                metrics: metrics
+            )
 
             mutedMetadataLine(
                 CoordinatorMissionPresentationPolicy.uniqueMetadataParts([
@@ -2481,11 +2555,21 @@ struct CoordinatorModeView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let completionEvidence = node.completionEvidence {
-                Label("Evidence: \(completionEvidence)", systemImage: "doc.text.magnifyingglass")
-                    .font(metrics.micro)
-                    .foregroundStyle(node.status == .completed ? .green : .secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                if node.status == .completed,
+                   paneEmphasis.collapsesCompletedEvidence
+                {
+                    missionPlanNodeEvidenceDisclosure(
+                        nodeID: node.id,
+                        evidence: completionEvidence,
+                        metrics: metrics
+                    )
+                } else {
+                    Label("Evidence: \(completionEvidence)", systemImage: "doc.text.magnifyingglass")
+                        .font(metrics.micro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(metrics.listRowHorizontalPadding)
@@ -2507,6 +2591,49 @@ struct CoordinatorModeView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Plan node \(node.title)")
+    }
+
+    private func missionPlanNodeEvidenceDisclosure(
+        nodeID: UUID,
+        evidence: String,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        let isExpanded = expandedCompletedEvidenceNodeIDs.contains(nodeID)
+
+        return VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    if isExpanded {
+                        expandedCompletedEvidenceNodeIDs.remove(nodeID)
+                    } else {
+                        expandedCompletedEvidenceNodeIDs.insert(nodeID)
+                    }
+                }
+            } label: {
+                HStack(spacing: metrics.tightSpacing) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.system(size: metrics.microIconSize, weight: .semibold))
+                    Text("Evidence ✓")
+                        .font(metrics.microMedium)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: metrics.microIconSize, weight: .semibold))
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Text(evidence)
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
     }
 
     private func missionPlanNodeEligibilityText(
@@ -2559,6 +2686,7 @@ struct CoordinatorModeView: View {
         _ node: CoordinatorMissionPlanNode,
         plan: CoordinatorMissionPlan,
         projection: MissionPlanReadinessProjection,
+        paneEmphasis: CoordinatorMissionPresentationPolicy.PaneEmphasis = .normal,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         Label(
@@ -2566,7 +2694,7 @@ struct CoordinatorModeView: View {
             systemImage: projection.isHeldByCap(node) ? "pause.circle" : node.status.systemImage
         )
         .font(metrics.micro)
-        .foregroundStyle(missionPlanNodeEligibilityTint(node, projection: projection))
+        .foregroundStyle(paneEmphasis == .terminalQuiet && node.status == .completed ? .secondary : missionPlanNodeEligibilityTint(node, projection: projection))
         .lineLimit(2)
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -2716,10 +2844,12 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics,
         minHeight: CGFloat
     ) -> some View {
-        VStack(alignment: .leading, spacing: metrics.columnSpacing) {
+        let emphasis = CoordinatorMissionPresentationPolicy.boardColumnEmphasis(isEmpty: section.rows.isEmpty)
+
+        return VStack(alignment: .leading, spacing: metrics.columnSpacing) {
             HStack(spacing: metrics.smallSpacing) {
                 Circle()
-                    .fill(section.group.accentColor.opacity(section.rows.isEmpty ? 0.55 : 0.9))
+                    .fill(section.group.accentColor.opacity(section.rows.isEmpty ? 0.5 : 0.9))
                     .frame(width: metrics.statusDotSize, height: metrics.statusDotSize)
 
                 Text(section.group.displayName)
@@ -2733,11 +2863,12 @@ struct CoordinatorModeView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, metrics.miniPillHorizontalPadding)
                     .padding(.vertical, metrics.miniPillVerticalPadding)
-                    .background(Capsule().fill(section.group.accentColor.opacity(section.rows.isEmpty ? 0.05 : 0.10)))
+                    .background(Capsule().fill(section.group.accentColor.opacity(emphasis.countFillOpacity)))
                     .overlay(
-                        Capsule().stroke(section.group.accentColor.opacity(section.rows.isEmpty ? 0.08 : 0.16), lineWidth: 0.5)
+                        Capsule().stroke(section.group.accentColor.opacity(emphasis.countStrokeOpacity), lineWidth: 0.5)
                     )
             }
+            .opacity(emphasis.contentOpacity)
             .padding(.bottom, metrics.tightSpacing)
 
             if section.rows.isEmpty {
@@ -2750,6 +2881,7 @@ struct CoordinatorModeView: View {
                     .onTapGesture {
                         clearSelectedRow()
                     }
+                    .opacity(emphasis.contentOpacity)
             } else {
                 ForEach(section.rows) { row in
                     sessionCard(row, boardScope: boardScope, metrics: metrics)
@@ -4195,7 +4327,10 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
-            statusChip(evidence.verdict, color: evidence.verdict == "meets" ? .green : .orange, metrics: metrics)
+            Text(evidence.verdict)
+                .font(metrics.microMedium)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             Text(evidence.summary)
                 .font(metrics.micro)
                 .foregroundStyle(.secondary)
@@ -5474,7 +5609,16 @@ struct CoordinatorModeView: View {
     private func coordinatorComposer(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
         let pendingChildRow = viewModel.activePendingChildInteractionRow()
         let pendingChildStructuredState = pendingChildRow.flatMap { coordinatorPendingAskUserState(for: $0) }
-        let placeholder = coordinatorComposerPlaceholder(rail, pendingChildRow: pendingChildRow)
+        let composerMode = CoordinatorMissionPresentationPolicy.composerMode(
+            for: rail.missionPlan,
+            hasPendingChildQuestion: pendingChildRow != nil
+        )
+        let placeholder: String = switch composerMode {
+        case .standard:
+            coordinatorComposerPlaceholder(rail, pendingChildRow: pendingChildRow)
+        case let .terminalPrompt(action):
+            action.placeholder
+        }
 
         return VStack(alignment: .leading, spacing: metrics.smallSpacing) {
             if let pendingChildRow, let pendingChildStructuredState {
@@ -5492,50 +5636,114 @@ struct CoordinatorModeView: View {
             }
 
             if pendingChildStructuredState == nil {
-                ComposerChrome(
-                    bottomOcclusion: $coordinatorComposerChromeOcclusion,
-                    mainContentHeight: max(coordinatorTextFieldHeight, metrics.composerTextMinHeight),
-                    highlightColor: canSubmitCoordinatorDirective ? Color.accentColor : nil,
-                    bubbleVerticalPaddingOverride: metrics.coordinatorComposerChromeVerticalPadding,
-                    bubbleInnerSpacingOverride: metrics.coordinatorComposerChromeInnerSpacing,
-                    controlStripHeightOverride: metrics.composerControlStripHeight,
-                    bubbleStroke: AgentModeSurfaceTheme.Palette.composerBubbleStroke,
-                    bubbleShadow: AgentModeSurfaceTheme.Palette.composerShadow,
-                    bubbleShadowRadius: 7,
-                    main: {
-                        ResizableTextField(
-                            text: $coordinatorDirectiveDraft,
-                            placeholder: placeholder,
-                            onReturn: submitCoordinatorDirective,
-                            resetTrigger: $coordinatorTextFieldResetTrigger,
-                            features: coordinatorComposerFeatures(),
-                            onHeightChange: { newHeight in
-                                coordinatorTextFieldHeight = newHeight
-                            }
-                        )
-                        .frame(height: max(coordinatorTextFieldHeight, metrics.composerTextMinHeight))
-                        .disabled(!canEditCoordinatorDirective(rail))
-                        .focused($isCoordinatorComposerFocused)
-                        .overlay(
-                            Text(placeholder)
-                                .font(metrics.body)
-                                .foregroundStyle(.secondary)
-                                .opacity(coordinatorDirectiveDraft.isEmpty ? 1 : 0)
-                                .padding(.leading, 5)
-                                .padding(.top, 8)
-                                .allowsHitTesting(false),
-                            alignment: .topLeading
-                        )
-                    },
-                    strip: {
-                        coordinatorComposerControlStrip(rail, metrics: metrics)
-                    }
-                )
+                switch composerMode {
+                case let .terminalPrompt(action)
+                    where expandedTerminalComposerPlanID != rail.missionPlan?.id:
+                    terminalCoordinatorComposerPrompt(
+                        action,
+                        planID: rail.missionPlan?.id,
+                        metrics: metrics
+                    )
+                case .standard, .terminalPrompt:
+                    coordinatorComposerChrome(
+                        rail,
+                        placeholder: placeholder,
+                        metrics: metrics
+                    )
+                }
             }
 
             Spacer()
                 .frame(height: metrics.composerFooterHeight)
         }
+    }
+
+    private func coordinatorComposerChrome(
+        _ rail: CoordinatorModeCoordinatorRail,
+        placeholder: String,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        ComposerChrome(
+            bottomOcclusion: $coordinatorComposerChromeOcclusion,
+            mainContentHeight: max(coordinatorTextFieldHeight, metrics.composerTextMinHeight),
+            highlightColor: canSubmitCoordinatorDirective ? Color.accentColor : nil,
+            bubbleVerticalPaddingOverride: metrics.coordinatorComposerChromeVerticalPadding,
+            bubbleInnerSpacingOverride: metrics.coordinatorComposerChromeInnerSpacing,
+            controlStripHeightOverride: metrics.composerControlStripHeight,
+            bubbleStroke: AgentModeSurfaceTheme.Palette.composerBubbleStroke,
+            bubbleShadow: AgentModeSurfaceTheme.Palette.composerShadow,
+            bubbleShadowRadius: 7,
+            main: {
+                ResizableTextField(
+                    text: $coordinatorDirectiveDraft,
+                    placeholder: placeholder,
+                    onReturn: submitCoordinatorDirective,
+                    resetTrigger: $coordinatorTextFieldResetTrigger,
+                    features: coordinatorComposerFeatures(),
+                    onHeightChange: { newHeight in
+                        coordinatorTextFieldHeight = newHeight
+                    }
+                )
+                .frame(height: max(coordinatorTextFieldHeight, metrics.composerTextMinHeight))
+                .disabled(!canEditCoordinatorDirective(rail))
+                .focused($isCoordinatorComposerFocused)
+                .overlay(
+                    Text(placeholder)
+                        .font(metrics.body)
+                        .foregroundStyle(.secondary)
+                        .opacity(coordinatorDirectiveDraft.isEmpty ? 1 : 0)
+                        .padding(.leading, 5)
+                        .padding(.top, 8)
+                        .allowsHitTesting(false),
+                    alignment: .topLeading
+                )
+            },
+            strip: {
+                coordinatorComposerControlStrip(rail, metrics: metrics)
+            }
+        )
+    }
+
+    private func terminalCoordinatorComposerPrompt(
+        _ action: CoordinatorMissionPresentationPolicy.TerminalComposerAction,
+        planID: UUID?,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                expandedTerminalComposerPlanID = planID
+            }
+            DispatchQueue.main.async {
+                isCoordinatorComposerFocused = true
+            }
+        } label: {
+            HStack(spacing: metrics.smallSpacing) {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.system(size: metrics.smallIconSize, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                Text(action.title)
+                    .font(metrics.bodySemibold)
+                    .foregroundStyle(.primary.opacity(0.88))
+                    .lineLimit(1)
+                Spacer(minLength: metrics.smallSpacing)
+                Image(systemName: "arrow.up.forward")
+                    .font(.system(size: metrics.microIconSize, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, metrics.composerControlHorizontalPadding)
+            .padding(.vertical, metrics.smallSpacing)
+            .frame(maxWidth: .infinity, minHeight: metrics.composerControlStripHeight, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.18))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: metrics.composerCornerRadius, style: .continuous)
+                    .stroke(CoordinatorTheme.Palette.hairline.opacity(0.85), lineWidth: 0.75)
+            )
+        }
+        .buttonStyle(.plain)
+        .hoverTooltip(action.placeholder)
     }
 
     private func coordinatorComposerPlaceholder(
@@ -5568,6 +5776,7 @@ struct CoordinatorModeView: View {
     private func coordinatorComposerControlStrip(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
         let pendingChildRow = viewModel.activePendingChildInteractionRow()
         let isChildReply = pendingChildRow != nil
+        let isTerminalMission = rail.missionPlan?.status.isTerminal == true
 
         return HStack(spacing: metrics.smallSpacing) {
             if !isChildReply {
@@ -5590,7 +5799,7 @@ struct CoordinatorModeView: View {
                 .hoverTooltip(isChildReply ? "Answer the child question." : policyEcho.tooltip)
 
             HStack(spacing: metrics.tightSpacing) {
-                if !isChildReply, viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission {
+                if !isChildReply, !isTerminalMission, viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission {
                     coordinatorComposerStopButton(metrics: metrics)
                 }
 
@@ -7786,11 +7995,13 @@ private extension CoordinatorModeStatusGroup {
     }
 
     func columnTint(isEmpty: Bool) -> Color {
-        accentColor.opacity(isEmpty ? 0.025 : (self == .done ? 0.055 : 0.075))
+        let emphasis = CoordinatorMissionPresentationPolicy.boardColumnEmphasis(isEmpty: isEmpty)
+        return Color(nsColor: .controlBackgroundColor).opacity(emphasis.backgroundOpacity)
     }
 
     func laneStroke(isEmpty: Bool) -> Color {
-        accentColor.opacity(isEmpty ? 0.07 : 0.16)
+        let emphasis = CoordinatorMissionPresentationPolicy.boardColumnEmphasis(isEmpty: isEmpty)
+        return CoordinatorTheme.Palette.hairline.opacity(emphasis.strokeOpacity)
     }
 }
 

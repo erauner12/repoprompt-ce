@@ -27,6 +27,117 @@ enum CoordinatorMissionPresentationPolicy {
         case terminalSummary(CoordinatorMissionPlanStatus)
     }
 
+    enum ComposerMode: Equatable {
+        case standard
+        case terminalPrompt(TerminalComposerAction)
+    }
+
+    enum TerminalComposerAction: Equatable {
+        case followUp
+        case restartOrRevise
+
+        var title: String {
+            switch self {
+            case .followUp:
+                "Start a follow-up Mission →"
+            case .restartOrRevise:
+                "Restart or revise Mission →"
+            }
+        }
+
+        var placeholder: String {
+            switch self {
+            case .followUp:
+                "Start a follow-up Mission..."
+            case .restartOrRevise:
+                "Restart or revise this Mission..."
+            }
+        }
+    }
+
+    enum PaneEmphasis: Equatable {
+        case normal
+        case terminalQuiet
+
+        var usesStateCapsulesInBody: Bool {
+            self == .normal
+        }
+
+        var collapsesCompletedEvidence: Bool {
+            self == .terminalQuiet
+        }
+    }
+
+    enum BoardColumnEmphasis: Equatable {
+        case occupied
+        case emptyDimmed
+
+        var contentOpacity: Double {
+            switch self {
+            case .occupied:
+                1.0
+            case .emptyDimmed:
+                0.62
+            }
+        }
+
+        var backgroundOpacity: Double {
+            switch self {
+            case .occupied:
+                0.12
+            case .emptyDimmed:
+                0.055
+            }
+        }
+
+        var strokeOpacity: Double {
+            switch self {
+            case .occupied:
+                0.12
+            case .emptyDimmed:
+                0.07
+            }
+        }
+
+        var countFillOpacity: Double {
+            switch self {
+            case .occupied:
+                0.10
+            case .emptyDimmed:
+                0.045
+            }
+        }
+
+        var countStrokeOpacity: Double {
+            switch self {
+            case .occupied:
+                0.16
+            case .emptyDimmed:
+                0.08
+            }
+        }
+    }
+
+    enum RailRowSignal: Equatable {
+        case filledBadge(RailRowBadgeKind)
+        case mutedTerminalStatus(CoordinatorMissionPlanStatus)
+        case none
+    }
+
+    enum RailRowBadgeKind: Equatable {
+        case live
+        case activeRun(String)
+
+        var title: String {
+            switch self {
+            case .live:
+                "Live"
+            case let .activeRun(title):
+                title
+            }
+        }
+    }
+
     static func signalShape(for factClass: SignalFactClass) -> SignalShape {
         switch factClass {
         case .state, .attention:
@@ -58,6 +169,51 @@ enum CoordinatorMissionPresentationPolicy {
             return .terminalSummary(plan.status)
         }
         return .planReference
+    }
+
+    static func composerMode(
+        for plan: CoordinatorMissionPlan?,
+        hasPendingChildQuestion: Bool
+    ) -> ComposerMode {
+        if hasPendingChildQuestion {
+            return .standard
+        }
+        switch plan?.status {
+        case .completed:
+            return .terminalPrompt(.followUp)
+        case .stopped:
+            return .terminalPrompt(.restartOrRevise)
+        case .draft, .approved, .running, .blocked, nil:
+            return .standard
+        }
+    }
+
+    static func paneEmphasis(for plan: CoordinatorMissionPlan?) -> PaneEmphasis {
+        guard plan?.status.isTerminal == true else { return .normal }
+        return .terminalQuiet
+    }
+
+    static func boardColumnEmphasis(isEmpty: Bool) -> BoardColumnEmphasis {
+        isEmpty ? .emptyDimmed : .occupied
+    }
+
+    static func railRowSignal(
+        for plan: CoordinatorMissionPlan?,
+        activeRunTitle: String?,
+        isLiveInCurrentWindow: Bool
+    ) -> RailRowSignal {
+        if let status = plan?.status,
+           status.isTerminal
+        {
+            return .mutedTerminalStatus(status)
+        }
+        if let activeRunTitle {
+            return .filledBadge(.activeRun(activeRunTitle))
+        }
+        if isLiveInCurrentWindow {
+            return .filledBadge(.live)
+        }
+        return .none
     }
 
     static func shouldShowLiveBadge(for plan: CoordinatorMissionPlan?) -> Bool {

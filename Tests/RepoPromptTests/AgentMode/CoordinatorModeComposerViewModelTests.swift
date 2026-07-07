@@ -1287,6 +1287,122 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(CoordinatorMissionPresentationPolicy.conversationMode(for: nil), .noPlan)
     }
 
+    func testPresentationPolicyUsesTerminalComposerPrompts() {
+        let completedPlan = CoordinatorMissionPlan(id: uuid(6900), status: .completed)
+        let stoppedPlan = CoordinatorMissionPlan(id: uuid(6901), status: .stopped)
+        let runningPlan = CoordinatorMissionPlan(id: uuid(6902), status: .running)
+
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.composerMode(
+                for: completedPlan,
+                hasPendingChildQuestion: false
+            ),
+            .terminalPrompt(.followUp)
+        )
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.composerMode(
+                for: stoppedPlan,
+                hasPendingChildQuestion: false
+            ),
+            .terminalPrompt(.restartOrRevise)
+        )
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.composerMode(
+                for: runningPlan,
+                hasPendingChildQuestion: false
+            ),
+            .standard
+        )
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.composerMode(
+                for: completedPlan,
+                hasPendingChildQuestion: true
+            ),
+            .standard
+        )
+    }
+
+    func testPresentationPolicyTerminalComposerActionCopy() {
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.TerminalComposerAction.followUp.title,
+            "Start a follow-up Mission →"
+        )
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.TerminalComposerAction.followUp.placeholder,
+            "Start a follow-up Mission..."
+        )
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.TerminalComposerAction.restartOrRevise.title,
+            "Restart or revise Mission →"
+        )
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.TerminalComposerAction.restartOrRevise.placeholder,
+            "Restart or revise this Mission..."
+        )
+    }
+
+    func testPresentationPolicyClassifiesTerminalPaneEmphasis() {
+        let completedPlan = CoordinatorMissionPlan(id: uuid(6903), status: .completed)
+        let stoppedPlan = CoordinatorMissionPlan(id: uuid(6904), status: .stopped)
+        let draftPlan = CoordinatorMissionPlan(id: uuid(6905), status: .draft)
+
+        XCTAssertEqual(CoordinatorMissionPresentationPolicy.paneEmphasis(for: completedPlan), .terminalQuiet)
+        XCTAssertEqual(CoordinatorMissionPresentationPolicy.paneEmphasis(for: stoppedPlan), .terminalQuiet)
+        XCTAssertEqual(CoordinatorMissionPresentationPolicy.paneEmphasis(for: draftPlan), .normal)
+        XCTAssertTrue(CoordinatorMissionPresentationPolicy.PaneEmphasis.terminalQuiet.collapsesCompletedEvidence)
+        XCTAssertFalse(CoordinatorMissionPresentationPolicy.PaneEmphasis.terminalQuiet.usesStateCapsulesInBody)
+        XCTAssertTrue(CoordinatorMissionPresentationPolicy.PaneEmphasis.normal.usesStateCapsulesInBody)
+    }
+
+    func testPresentationPolicyClassifiesBoardColumnEmphasis() {
+        let occupied = CoordinatorMissionPresentationPolicy.boardColumnEmphasis(isEmpty: false)
+        let empty = CoordinatorMissionPresentationPolicy.boardColumnEmphasis(isEmpty: true)
+
+        XCTAssertEqual(occupied, .occupied)
+        XCTAssertEqual(empty, .emptyDimmed)
+        XCTAssertGreaterThan(occupied.backgroundOpacity, empty.backgroundOpacity)
+        XCTAssertGreaterThan(occupied.contentOpacity, empty.contentOpacity)
+        XCTAssertGreaterThan(occupied.countFillOpacity, empty.countFillOpacity)
+    }
+
+    func testPresentationPolicyClassifiesRailRowSignals() {
+        let completedPlan = CoordinatorMissionPlan(id: uuid(6906), status: .completed)
+        let runningPlan = CoordinatorMissionPlan(id: uuid(6907), status: .running)
+
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.railRowSignal(
+                for: completedPlan,
+                activeRunTitle: "Running",
+                isLiveInCurrentWindow: true
+            ),
+            .mutedTerminalStatus(.completed)
+        )
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.railRowSignal(
+                for: runningPlan,
+                activeRunTitle: "Needs you",
+                isLiveInCurrentWindow: true
+            ),
+            .filledBadge(.activeRun("Needs you"))
+        )
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.railRowSignal(
+                for: runningPlan,
+                activeRunTitle: nil,
+                isLiveInCurrentWindow: true
+            ),
+            .filledBadge(.live)
+        )
+        XCTAssertEqual(
+            CoordinatorMissionPresentationPolicy.railRowSignal(
+                for: runningPlan,
+                activeRunTitle: nil,
+                isLiveInCurrentWindow: false
+            ),
+            .none
+        )
+    }
+
     func testPresentationPolicyClassifiesSignalShapes() {
         XCTAssertEqual(CoordinatorMissionPresentationPolicy.signalShape(for: .state), .filledCapsule)
         XCTAssertEqual(CoordinatorMissionPresentationPolicy.signalShape(for: .attention), .filledCapsule)
