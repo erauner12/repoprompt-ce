@@ -429,6 +429,18 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(plan.policySnapshot?.defaultPace, .step)
         XCTAssertEqual(plan.decisions.last?.label, CoordinatorMissionUserDecisionLabel.setPaceToStep.rawValue)
         XCTAssertEqual(plan.decisions.last?.actor, .user)
+
+        let autonomyResult = viewModel.setCoordinatorMissionAutonomy(
+            coordinatorSessionID: coordinatorID,
+            autonomyClassKey: CoordinatorMissionAutonomyClasses.childAsk.key,
+            mode: .ask
+        )
+        XCTAssertEqual(autonomyResult, .accepted)
+        plan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(plan.policySnapshot?.resolvedAutonomy(for: .childAsk), .ask)
+        XCTAssertEqual(plan.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key], .ask)
+        XCTAssertEqual(plan.decisions.last?.label, CoordinatorMissionUserDecisionLabel.routedChildQuestionsToMe.rawValue)
+        XCTAssertEqual(plan.decisions.last?.actor, .user)
     }
 
     func testMissionPlanUpdaterRefreshesSelectedCoordinatorSnapshot() throws {

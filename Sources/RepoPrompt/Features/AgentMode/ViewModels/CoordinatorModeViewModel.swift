@@ -471,6 +471,47 @@ final class CoordinatorModeViewModel: ObservableObject {
         return .accepted
     }
 
+    @discardableResult
+    func setCoordinatorMissionAutonomy(
+        coordinatorSessionID: UUID,
+        autonomyClassKey: String,
+        mode: CoordinatorMissionAutonomyMode
+    ) -> DirectiveSubmissionResult {
+        guard let option = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == coordinatorSessionID }) else {
+            let message = "Coordinator session \(coordinatorSessionID.uuidString) is not available in this window."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        guard CoordinatorMissionAutonomyClasses.definition(for: autonomyClassKey) != nil else {
+            let message = "Mission autonomy can only be changed for known autonomy classes."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        guard let plan = option.missionPlan else {
+            let message = "Coordinator session \(coordinatorSessionID.uuidString) does not have a Mission Plan yet."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        guard !plan.status.isTerminal else {
+            let message = "Mission autonomy cannot be changed after the Mission is \(plan.status.rawValue)."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+
+        selectCoordinator(sessionID: coordinatorSessionID)
+        refresh()
+        switch autonomyClassKey {
+        case CoordinatorMissionAutonomyClasses.childAsk.key:
+            setChildAskSelection(mode)
+        default:
+            let message = "Mission autonomy class \(autonomyClassKey) is not exposed as a live dial."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        composerNotice = nil
+        return .accepted
+    }
+
     private func recordFreshMissionPolicySnapshotIfNeeded(
         _ policySnapshot: CoordinatorMissionPolicySnapshot?,
         objective: String,

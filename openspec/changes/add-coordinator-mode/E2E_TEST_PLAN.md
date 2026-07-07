@@ -50,7 +50,10 @@ queue-item identity. UI: queue card anatomy; click-through lands at the checkpoi
 **S5 — childAsk both ways.** Directive instructs the worker to ask which of two marker
 names to use. Run twice: **Me** → pending interaction appears, queue = 1, answer flows,
 child proceeds, no ⚙ for the answer; **Director** → runtime answers, ⚙ decision with
-question+answer evidence, queue stays 0.
+question+answer evidence, queue stays 0. Drive Me/Director headlessly through
+`coordinator_chat set_autonomy` with `autonomy_class:"childAsk"` and `mode:"ask|auto"`;
+the op itself is a user-channel parity action and must record only the dial-change
+decision, not an answer to an already-raised child question.
 
 **S6 — Dial flip does not act.** Start Step; flip pace → Auto through the user-channel
 parity op.

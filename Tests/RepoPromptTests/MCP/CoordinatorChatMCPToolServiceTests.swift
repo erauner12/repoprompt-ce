@@ -443,6 +443,165 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         }
     }
 
+    func testSetAutonomyRoutesThroughExternalUserActionPath() async throws {
+        let coordinatorID = UUID()
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [
+            coordinatorID: CoordinatorMissionPlan(
+                objective: "Run a live Mission.",
+                status: .running,
+                approvalState: .approved,
+                policySnapshot: .defaultPolicy,
+                autonomy: CoordinatorMissionPolicySnapshot.defaultAutonomy
+            )
+        ]
+        var setAutonomyCalls: [(UUID, String, CoordinatorMissionAutonomyMode)] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            pendingChild: {
+                XCTFail("set_autonomy should not route through pending child interactions")
+                return Self.pendingChildRow(parentCoordinatorID: coordinatorID)
+            },
+            missionPlans: { missionPlans },
+            setMissionAutonomy: { sessionID, autonomyClassKey, mode in
+                setAutonomyCalls.append((sessionID, autonomyClassKey, mode))
+                var policy = missionPlans[sessionID]?.policySnapshot ?? CoordinatorMissionPolicySnapshot.defaultPolicy
+                var autonomy = missionPlans[sessionID]?.autonomy ?? policy.autonomy
+                policy.autonomy[autonomyClassKey] = mode
+                autonomy[autonomyClassKey] = mode
+                let record = CoordinatorMissionDecisionRecord(
+                    userDecision: mode == .auto ? .routedChildQuestionsToDirector : .routedChildQuestionsToMe,
+                    decisionClass: .childAsk,
+                    checkpointInstanceID: "mission-policy:\(sessionID.uuidString):childAsk:test",
+                    sessionID: sessionID,
+                    checkpointID: "mission-policy-override"
+                )
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+                    policySnapshot: policy,
+                    autonomy: autonomy,
+                    decisions: [record],
+                    updatedAt: record.timestamp
+                ))
+                missionPlans[sessionID] = state.missionPlan
+                return .accepted
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("set_autonomy"),
+            "coordinator_session_id": .string(coordinatorID.uuidString),
+            "autonomy_class": .string("childAsk"),
+            "mode": .string("auto")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+        let status = try XCTUnwrap(object["mission_status"]?.objectValue)
+        let plan = try XCTUnwrap(status["plan"]?.objectValue)
+        let policy = try XCTUnwrap(plan["policy_snapshot"]?.objectValue)
+        let autonomySummary = try XCTUnwrap(plan["autonomy_summary"]?.objectValue)
+        let autoClasses = try XCTUnwrap(autonomySummary["auto"]?.arrayValue)
+
+        XCTAssertEqual(setAutonomyCalls.count, 1)
+        XCTAssertEqual(setAutonomyCalls.first?.0, coordinatorID)
+        XCTAssertEqual(setAutonomyCalls.first?.1, CoordinatorMissionAutonomyClasses.childAsk.key)
+        XCTAssertEqual(setAutonomyCalls.first?.2, .auto)
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "set_autonomy")
+        XCTAssertEqual(object["autonomy_class"]?.stringValue, "childAsk")
+        XCTAssertEqual(object["mode"]?.stringValue, "auto")
+        XCTAssertTrue(autoClasses.contains(.string("childAsk")))
+        XCTAssertEqual(status["decision_counts_by_actor"]?.objectValue?["user"]?.intValue, 1)
+    }
+
+    func testSetAutonomyRejectsCoordinatorRuntimeCaller() async throws {
+        let coordinatorID = UUID()
+        var didSetAutonomy = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Runtime-gated Mission.",
+                    status: .running,
+                    approvalState: .approved,
+                    policySnapshot: .defaultPolicy
+                )]
+            },
+            setMissionAutonomy: { _, _, _ in
+                didSetAutonomy = true
+                return .accepted
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("set_autonomy"),
+                "autonomy_class": .string("childAsk"),
+                "mode": .string("auto")
+            ])
+            XCTFail("Coordinator runtime callers must not be allowed to forge user-action parity.")
+        } catch {
+            XCTAssertFalse(didSetAutonomy)
+            XCTAssertTrue(String(describing: error).contains("cannot change Mission autonomy"))
+            XCTAssertTrue(String(describing: error).contains("external user or CLI driver"))
+        }
+    }
+
+    func testSetAutonomyRejectsUnknownClassAndMode() async throws {
+        let coordinatorID = UUID()
+        var didSetAutonomy = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Invalid autonomy Mission.",
+                    status: .running,
+                    approvalState: .approved,
+                    policySnapshot: .defaultPolicy
+                )]
+            },
+            setMissionAutonomy: { _, _, _ in
+                didSetAutonomy = true
+                return .accepted
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("set_autonomy"),
+                "autonomy_class": .string("writes"),
+                "mode": .string("auto")
+            ])
+            XCTFail("Expected invalid autonomy class to be rejected.")
+        } catch {
+            XCTAssertFalse(didSetAutonomy)
+            XCTAssertTrue(String(describing: error).contains("autonomy_class must be one of: childAsk"))
+        }
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("set_autonomy"),
+                "autonomy_class": .string("childAsk"),
+                "mode": .string("delegate")
+            ])
+            XCTFail("Expected invalid autonomy mode to be rejected.")
+        } catch {
+            XCTAssertFalse(didSetAutonomy)
+            XCTAssertTrue(String(describing: error).contains("mode must be one of: ask, auto"))
+        }
+    }
+
     func testEnsureMissionSelectsExistingMissionByKey() async throws {
         let firstID = UUID()
         let secondID = UUID()
@@ -2920,6 +3079,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
         },
         setMissionPace: @escaping (UUID, CoordinatorMissionPolicyPace) -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
+        setMissionAutonomy: @escaping (UUID, String, CoordinatorMissionAutonomyMode) -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _ in .accepted },
         initialMissionPlanTimeoutSeconds: TimeInterval = 0,
         initialMissionPlanPollIntervalSeconds: TimeInterval = 0.01,
         sleep: @escaping (UInt64) async -> Void = { _ in }
@@ -2941,6 +3101,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             updateMissionPlan: updateMissionPlan,
             missionEvents: missionEvents,
             setMissionPace: setMissionPace,
+            setMissionAutonomy: setMissionAutonomy,
             initialMissionPlanTimeoutSeconds: initialMissionPlanTimeoutSeconds,
             initialMissionPlanPollIntervalSeconds: initialMissionPlanPollIntervalSeconds,
             sleep: sleep
@@ -2969,6 +3130,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
         },
         setMissionPace: @escaping (UUID, CoordinatorMissionPolicyPace) -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
+        setMissionAutonomy: @escaping (UUID, String, CoordinatorMissionAutonomyMode) -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _ in .accepted },
         initialMissionPlanTimeoutSeconds: TimeInterval = 0,
         initialMissionPlanPollIntervalSeconds: TimeInterval = 0.01,
         sleep: @escaping (UInt64) async -> Void = { _ in }
@@ -3001,7 +3163,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 submitPendingChildInteractionResponse: submitPendingChild,
                 updateMissionPlan: updateMissionPlan,
                 missionEvents: missionEvents,
-                setMissionPace: setMissionPace
+                setMissionPace: setMissionPace,
+                setMissionAutonomy: setMissionAutonomy
             )
         }
     }

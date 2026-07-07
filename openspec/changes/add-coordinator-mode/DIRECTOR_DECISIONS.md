@@ -375,15 +375,17 @@ powers. Additions stay additive ops.
    class that forced S2 to accept ready/running/completed convergence snapshots; the harness
    now asserts exact ready → running → completed transition order whenever this op is
    available.
-2. **User-action parity: `set_pace` / `set_autonomy`** — route through the same
-   `missionPlanUpdater` path as the dials: same revision bump and same user-actor
-   decision labels. `set_pace` is implemented first for the Step/Auto dial;
-   `set_autonomy` remains future work. **Actor-integrity gate required:** these
-   per-op user actions must be blocked at execution for coordinator/runtime-owned MCP
-   callers even though `coordinator_chat` remains advertised for runtime `mission_plan`
-   writes; the runtime must not be able to forge user-actor records. Harness `s6`
-   exercises `set_pace` at a pending approval checkpoint first: it must bump revision and
-   fingerprint, record exactly one user decision, and leave the checkpoint unconsumed.
+2. **User-action parity: `set_pace` / `set_autonomy`** — implemented for the two visible
+   dials. Both route through the same `missionPlanUpdater` path as the UI controls: same
+   revision bump and same user-actor decision labels. `set_pace` controls Step/Auto;
+   `set_autonomy` currently exposes `autonomy_class:"childAsk"` for the Me/Director dial.
+   **Actor-integrity gate required:** these per-op user actions must be blocked at
+   execution for coordinator/runtime-owned MCP callers even though `coordinator_chat`
+   remains advertised for runtime `mission_plan` writes; the runtime must not be able to
+   forge user-actor records. Harness `s6` exercises `set_pace` at a pending approval
+   checkpoint first: it must bump revision and fingerprint, record exactly one user
+   decision, and leave the checkpoint unconsumed. S5 can now drive childAsk mode
+   headlessly through `set_autonomy`.
 3. **`receipt format=markdown`** — implemented as the existing pure receipt projection;
    the harness can write `receipt.md` without UI copying.
 4. **Lifecycle: `list_missions` / `archive_mission`** — support harness setup/teardown

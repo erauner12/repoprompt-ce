@@ -18,6 +18,7 @@ struct CoordinatorChatMCPToolService {
         var updateMissionPlan: (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
         var missionEvents: (_ coordinatorSessionID: UUID, _ sinceSeq: Int, _ limit: Int) -> CoordinatorMissionEventJournal.Batch
         var setMissionPace: (_ coordinatorSessionID: UUID, _ pace: CoordinatorMissionPolicyPace) -> CoordinatorModeViewModel.DirectiveSubmissionResult
+        var setMissionAutonomy: (_ coordinatorSessionID: UUID, _ autonomyClassKey: String, _ mode: CoordinatorMissionAutonomyMode) -> CoordinatorModeViewModel.DirectiveSubmissionResult
     }
 
     private let toolName: String
@@ -56,7 +57,8 @@ struct CoordinatorChatMCPToolService {
                 submitPendingChildInteractionResponse: { await coordinatorViewModel.submitPendingChildInteractionResponse($0, to: $1) },
                 updateMissionPlan: { try coordinatorViewModel.updateMissionPlan(coordinatorSessionID: $0, update: $1) },
                 missionEvents: { coordinatorViewModel.missionEvents(coordinatorSessionID: $0, sinceSeq: $1, limit: $2) },
-                setMissionPace: { coordinatorViewModel.setCoordinatorMissionPace(coordinatorSessionID: $0, pace: $1) }
+                setMissionPace: { coordinatorViewModel.setCoordinatorMissionPace(coordinatorSessionID: $0, pace: $1) },
+                setMissionAutonomy: { coordinatorViewModel.setCoordinatorMissionAutonomy(coordinatorSessionID: $0, autonomyClassKey: $1, mode: $2) }
             )
         }
     }
@@ -376,6 +378,43 @@ struct CoordinatorChatMCPToolService {
                 ])
             }
 
+        case "set_autonomy":
+            try validateExternalUserAction(metadata, action: "change Mission autonomy")
+            environment.refresh()
+            let snapshot = environment.snapshot()
+            let coordinatorSessionID = try resolveCoordinatorSessionID(args["coordinator_session_id"], in: snapshot)
+            try validateCoordinatorExists(coordinatorSessionID, in: snapshot)
+            let autonomyClassKey = try parseMissionAutonomyClassKey(
+                args["autonomy_class"] ?? args["autonomyClass"] ?? args["decision_class"] ?? args["decisionClass"] ?? args["class"]
+            )
+            let mode = try parseMissionAutonomyMode(args["mode"] ?? args["autonomy"] ?? args["value"])
+            let result = environment.setMissionAutonomy(coordinatorSessionID, autonomyClassKey, mode)
+            environment.refresh()
+            let updatedSnapshot = environment.snapshot()
+            let missionStatus = compactMissionStatusValue(
+                coordinatorSessionID: coordinatorSessionID,
+                snapshot: updatedSnapshot
+            )
+            switch result {
+            case .accepted:
+                return compactStateResponse(updatedSnapshot, extra: [
+                    "accepted": .bool(true),
+                    "mission_status": missionStatus,
+                    "routed_to": .string("set_autonomy"),
+                    "autonomy_class": .string(autonomyClassKey),
+                    "mode": .string(mode.rawValue)
+                ])
+            case let .rejected(message):
+                return compactStateResponse(updatedSnapshot, extra: [
+                    "accepted": .bool(false),
+                    "mission_status": missionStatus,
+                    "routed_to": .string("set_autonomy"),
+                    "autonomy_class": .string(autonomyClassKey),
+                    "mode": .string(mode.rawValue),
+                    "error": .string(message)
+                ])
+            }
+
         case "wait_for_update":
             let timeout = try parseCoordinatorWaitTimeout(args["timeout_seconds"] ?? args["timeout"])
             let sinceFingerprint = normalizedString(args["since_fingerprint"] ?? args["sinceFingerprint"])
@@ -411,7 +450,7 @@ struct CoordinatorChatMCPToolService {
             } while true
 
         default:
-            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, ensure_mission, start_mission, stop_mission, submit, mission_plan, mission_status, mission_events, receipt, set_pace, wait_for_update.")
+            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, ensure_mission, start_mission, stop_mission, submit, mission_plan, mission_status, mission_events, receipt, set_pace, set_autonomy, wait_for_update.")
         }
     }
 
@@ -627,6 +666,29 @@ struct CoordinatorChatMCPToolService {
             throw MCPError.invalidParams("pace must be one of: \(CoordinatorMissionPolicyPace.allCases.map(\.rawValue).joined(separator: ", ")).")
         }
         return pace
+    }
+
+    private func parseMissionAutonomyMode(_ value: Value?) throws -> CoordinatorMissionAutonomyMode {
+        let raw = try AgentMCPToolHelpers.requireNonEmptyString(value, name: "mode")
+            .lowercased()
+        guard let mode = CoordinatorMissionAutonomyMode(rawValue: raw) else {
+            throw MCPError.invalidParams("mode must be one of: \(CoordinatorMissionAutonomyMode.allCases.map(\.rawValue).joined(separator: ", ")).")
+        }
+        return mode
+    }
+
+    private func parseMissionAutonomyClassKey(_ value: Value?) throws -> String {
+        let raw = try AgentMCPToolHelpers.requireNonEmptyString(value, name: "autonomy_class")
+        if let exact = CoordinatorMissionAutonomyClasses.definition(for: raw) {
+            return exact.key
+        }
+        if let folded = CoordinatorMissionAutonomyClasses.all.first(where: { $0.key.lowercased() == raw.lowercased() }) {
+            return folded.key
+        }
+        if raw.lowercased() == "child_ask" || raw.lowercased() == "child-ask" {
+            return CoordinatorMissionAutonomyClasses.childAsk.key
+        }
+        throw MCPError.invalidParams("autonomy_class must be one of: \(CoordinatorMissionAutonomyClasses.all.map(\.key).joined(separator: ", ")).")
     }
 
     private func parseMissionAutonomyMap(_ value: Value?, name: String) throws -> [String: CoordinatorMissionAutonomyMode] {

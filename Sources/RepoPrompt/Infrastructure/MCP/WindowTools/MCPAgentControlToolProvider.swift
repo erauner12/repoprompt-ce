@@ -233,9 +233,9 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             name: MCPWindowToolName.coordinatorChat,
             freshnessPolicy: .providerManaged,
             description: """
-            External test/control surface for Coordinator Mode. This mirrors the visible Coordinator UI: list parent threads, select a parent thread, start a fresh parent thread, idempotently ensure or atomically start a fresh Mission with an initial directive, stop the selected Mission, submit a directive to the selected parent, change the selected Mission pace as an external user action, or record/read/wait on the selected Mission Plan.
+            External test/control surface for Coordinator Mode. This mirrors the visible Coordinator UI: list parent threads, select a parent thread, start a fresh parent thread, idempotently ensure or atomically start a fresh Mission with an initial directive, stop the selected Mission, submit a directive to the selected parent, change selected Mission dials as external user actions, or record/read/wait on the selected Mission Plan.
 
-            **Operations**: list | select | new | ensure_mission | start_mission | stop_mission | submit | mission_plan | mission_status | mission_events | receipt | set_pace | wait_for_update
+            **Operations**: list | select | new | ensure_mission | start_mission | stop_mission | submit | mission_plan | mission_status | mission_events | receipt | set_pace | set_autonomy | wait_for_update
 
             - `list`: Return current Coordinator parent selection, available parents, and board counts.
             - `select`: Select an existing Coordinator parent by `coordinator_session_id`.
@@ -249,6 +249,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             - `mission_events`: Read a sequenced in-memory journal of compact Mission transitions since `since_seq`. This is for external observation and test harnesses; it does not mutate Mission state.
             - `receipt`: Read the completed Mission receipt using the same Markdown projection as the visible UI copy action.
             - `set_pace`: External user-action parity operation. Change the selected or requested live Mission pace to `step` or `auto` through the same path as the visible Step/Auto dial. Runtime sessions must not call this.
+            - `set_autonomy`: External user-action parity operation. Change the selected or requested live Mission autonomy class to `ask` or `auto` through the same path as the visible Me/Director dial. Currently only `autonomy_class:"childAsk"` is exposed. Runtime sessions must not call this.
             - `wait_for_update`: Long-poll the selected or requested Coordinator Mission until its compact status fingerprint changes, then return compact mission_status.
 
             Coordinator-role agents should use `mission_plan` to record concrete user-specific deliverables before delegating child Agent Mode sessions. Coordinator-role agents must not call `new`, `start_mission`, `ensure_mission`, or `submit` with `new_parent=true`; follow-up Missions must be proposed in the current Mission and started by an external user/CLI driver. Workflows such as Investigate, Deep Plan, Orchestrate, and Review belong in node workflow metadata only when the node is intended to run that real workflow. Workflow-less read-only probe nodes may be launched with `agent_explore.start`; workflow-bearing nodes should be launched or steered through `agent_run` with the same workflow, and `mission_status` reports planned/actual workflow matches for bound nodes.
@@ -270,11 +271,12 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 **mission_events**: coordinator_session_id?, since_seq?, limit?; returns sequenced compact transition events for external observers.
                 **receipt**: coordinator_session_id?, format?; returns completed Mission receipt Markdown when ready.
                 **set_pace**: coordinator_session_id?, pace (required: step|auto); external user-action parity for the visible Step/Auto dial.
+                **set_autonomy**: coordinator_session_id?, autonomy_class (required: childAsk), mode (required: ask|auto); external user-action parity for the visible Me/Director dial.
                 **wait_for_update**: coordinator_session_id?, since_fingerprint?, timeout_seconds?; waits until compact mission_status.fingerprint changes and returns compact status.
                 """,
                 properties: [
-                    "op": .string(description: "Operation.", enum: ["list", "select", "new", "ensure_mission", "start_mission", "stop_mission", "submit", "mission_plan", "mission_status", "mission_events", "receipt", "set_pace", "wait_for_update"]),
-                    "coordinator_session_id": .string(description: "[select, stop_mission, submit, mission_plan, mission_status, mission_events, receipt, set_pace, wait_for_update] Existing Coordinator parent session UUID. Defaults to the selected Coordinator for mission_plan/mission_status/mission_events/receipt/set_pace/wait_for_update."),
+                    "op": .string(description: "Operation.", enum: ["list", "select", "new", "ensure_mission", "start_mission", "stop_mission", "submit", "mission_plan", "mission_status", "mission_events", "receipt", "set_pace", "set_autonomy", "wait_for_update"]),
+                    "coordinator_session_id": .string(description: "[select, stop_mission, submit, mission_plan, mission_status, mission_events, receipt, set_pace, set_autonomy, wait_for_update] Existing Coordinator parent session UUID. Defaults to the selected Coordinator for mission_plan/mission_status/mission_events/receipt/set_pace/set_autonomy/wait_for_update."),
                     "message": .string(description: "[ensure_mission, start_mission, submit] Directive text to send to the fresh, selected, or requested Coordinator parent."),
                     "mission_key": .string(description: "[ensure_mission, start_mission, mission_plan] Stable external idempotency key for a Mission. External drivers should provide this when retrying mission creation."),
                     "new_parent": .boolean(description: "[submit] Start from a blank Coordinator parent before sending this directive. Default false."),
@@ -283,6 +285,8 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                     "limit": .number(description: "[mission_events] Maximum number of transition events to return. Default 200, max 500."),
                     "format": .string(description: "[receipt] Receipt output format. Only markdown is supported.", enum: ["markdown"]),
                     "pace": .string(description: "[set_pace] Mission pace to apply through the visible Step/Auto dial path.", enum: ["step", "auto"]),
+                    "autonomy_class": .string(description: "[set_autonomy] Mission autonomy class to apply through a visible autonomy dial.", enum: ["childAsk"]),
+                    "mode": .string(description: "[set_autonomy] Mission autonomy mode to apply.", enum: ["ask", "auto"]),
                     "since_fingerprint": .string(description: "[wait_for_update] Last compact mission_status.fingerprint observed by the caller. If omitted, returns immediately."),
                     "timeout_seconds": .number(description: "[wait_for_update] Maximum seconds to wait before returning the current compact status. Default 30, max 300."),
                     "objective": .string(description: "[mission_plan] User-specific Mission objective."),
