@@ -18,7 +18,7 @@ From the repo root:
 For the writable convergence scenario, pass a sandbox repo that is already visible to the selected workspace:
 
 ```bash
-.agents/skills/rpce-director-e2e/scripts/director_e2e.py --scenario s2 --workspace homelab-garden --window 1 --sandbox-root /path/to/director-e2e-sandbox --clean-sandbox
+.agents/skills/rpce-director-e2e/scripts/director_e2e.py --scenario s2 --workspace homelab-garden --window 1 --sandbox-root /path/to/director-e2e-sandbox --clean-sandbox --events-mode required --receipt-mode required
 ```
 
 Use `--scenario smoke` to run S1 then S2. The smoke command requires `--sandbox-root` because S2 writes marker files.
@@ -28,7 +28,7 @@ Useful knobs:
 - `--idle-timeout-seconds 120`: fail only after no observable progress and no running work.
 - `--repeat N`: produce per-attempt reports plus `repeat_report.json`.
 - `--events-mode auto|snapshot|required`: use Swift `mission_events` when available; default falls back to snapshot history.
-- `--receipt-mode auto|summary|required`: use future receipt markdown when available; default falls back to receipt-ready summary.
+- `--receipt-mode auto|summary|required`: use Swift `receipt format=markdown` when available; default falls back to receipt-ready summary.
 - `--clean-sandbox`: clean a known throwaway Director E2E sandbox before writable scenarios.
 
 ## Runtime Contract

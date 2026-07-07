@@ -1518,6 +1518,86 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(nodes[1]["depends_on"]?.arrayValue?.compactMap(\.stringValue), [parentID.uuidString])
     }
 
+    func testReceiptReturnsCompletedMissionMarkdown() async throws {
+        let coordinatorID = UUID()
+        let decisionID = UUID()
+        let evidenceID = UUID()
+        let plan = CoordinatorMissionPlan(
+            missionKey: "receipt-demo",
+            objective: "Prove the receipt op uses the app projection.",
+            status: .completed,
+            approvalState: .approved,
+            policySnapshot: .readOnly,
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    id: decisionID,
+                    decisionClass: CoordinatorMissionDecisionClass.plan.rawValue,
+                    actor: .user,
+                    label: "approved the Mission plan",
+                    timestamp: Date(timeIntervalSince1970: 10)
+                )
+            ],
+            evidence: [
+                CoordinatorMissionEvidenceRecord(
+                    id: evidenceID,
+                    verdict: .meets,
+                    summary: "The Mission completed with a durable receipt.",
+                    timestamp: Date(timeIntervalSince1970: 20)
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 30)
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("receipt"),
+            "format": .string("markdown")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+        let markdown = try XCTUnwrap(object["markdown"]?.stringValue)
+
+        XCTAssertEqual(object["receipt_ready"]?.boolValue, true)
+        XCTAssertEqual(object["format"]?.stringValue, "markdown")
+        XCTAssertEqual(object["receipt_ready_summary"]?.objectValue?["ready"]?.boolValue, true)
+        XCTAssertTrue(markdown.contains("# receipt-demo"))
+        XCTAssertTrue(markdown.contains("**Objective:** Prove the receipt op uses the app projection."))
+        XCTAssertTrue(markdown.contains("## Decisions"))
+        XCTAssertTrue(markdown.contains("- Total: 1"))
+        XCTAssertTrue(markdown.contains("## Evidence"))
+        XCTAssertTrue(markdown.contains("- [meets] The Mission completed with a durable receipt."))
+        XCTAssertTrue(markdown.contains("## Spend"))
+        XCTAssertTrue(markdown.contains(CoordinatorMissionReceiptProjection.spendReserveCopy))
+    }
+
+    func testReceiptReportsNotReadyBeforeMissionCompletes() async throws {
+        let coordinatorID = UUID()
+        let plan = CoordinatorMissionPlan(
+            missionKey: "receipt-demo",
+            objective: "Still running.",
+            status: .running,
+            approvalState: .approved
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("receipt"),
+            "format": .string("markdown")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(object["receipt_ready"]?.boolValue, false)
+        XCTAssertNil(object["markdown"]?.stringValue)
+        XCTAssertTrue(object["error"]?.stringValue?.contains("not ready") == true)
+    }
+
     func testMissionEventJournalRecordsReadyRunningCompletedTransitionOrder() {
         let coordinatorID = UUID()
         let workstreamID = UUID()

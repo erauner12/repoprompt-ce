@@ -551,6 +551,22 @@ Loaded roots: demo → /repo/fallback
             with self.assertRaises(director_e2e.E2EFailure):
                 director_e2e.capture_receipt(FakeClient(), artifacts, "session", "required")
 
+    def test_receipt_markdown_success_writes_artifact(self) -> None:
+        class FakeClient:
+            def try_coordinator(self, payload, timeout=120):
+                self.payload = payload
+                return True, {"markdown": "# Mission Receipt\n\n## Spend"}
+
+        client = FakeClient()
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = director_e2e.RunArtifacts(Path(tmp))
+            director_e2e.capture_receipt(client, artifacts, "session", "required")
+
+            self.assertEqual(client.payload["op"], "receipt")
+            self.assertEqual(client.payload["format"], "markdown")
+            self.assertTrue(artifacts.features["receipt_markdown"]["available"])
+            self.assertEqual((Path(tmp) / "receipt.md").read_text(encoding="utf-8"), "# Mission Receipt\n\n## Spend")
+
     def test_repeat_report_aggregates_attempts(self) -> None:
         report = director_e2e.repeat_report_for(
             "s2",

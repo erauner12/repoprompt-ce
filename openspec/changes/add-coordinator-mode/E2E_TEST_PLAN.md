@@ -133,8 +133,9 @@ for future `coordinator_chat` ops:
 - `--events-mode auto|snapshot|required`: builds without `mission_events` derive
   `status_history.jsonl` from `mission_status`; builds with `mission_events since_seq`
   write `events.jsonl` and make S2 assert exact ready → running → completed ordering.
-- `--receipt-mode auto|summary|required`: current builds retain
-  `receipt_ready_summary.json`; future `receipt format=markdown` writes `receipt.md`.
+- `--receipt-mode auto|summary|required`: current Swift builds can write `receipt.md`
+  through `receipt format=markdown`; `summary` preserves the lightweight
+  `receipt_ready_summary.json` fallback.
 - `--idle-timeout-seconds`, `--repeat`, and `--clean-sandbox` make S1/S2 usable as
   repeatable diagnostics without hiding stalls as model slowness.
 - Each run emits capability, timing, status-history, and invariant-violation artifacts.

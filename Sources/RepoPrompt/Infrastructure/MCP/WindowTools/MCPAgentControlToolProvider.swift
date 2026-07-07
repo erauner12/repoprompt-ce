@@ -235,7 +235,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             description: """
             External test/control surface for Coordinator Mode. This mirrors the visible Coordinator UI: list parent threads, select a parent thread, start a fresh parent thread, idempotently ensure or atomically start a fresh Mission with an initial directive, stop the selected Mission, submit a directive to the selected parent, or record/read/wait on the selected Mission Plan.
 
-            **Operations**: list | select | new | ensure_mission | start_mission | stop_mission | submit | mission_plan | mission_status | mission_events | wait_for_update
+            **Operations**: list | select | new | ensure_mission | start_mission | stop_mission | submit | mission_plan | mission_status | mission_events | receipt | wait_for_update
 
             - `list`: Return current Coordinator parent selection, available parents, and board counts.
             - `select`: Select an existing Coordinator parent by `coordinator_session_id`.
@@ -247,6 +247,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             - `mission_plan`: Create or update the selected Coordinator Mission's DAG-lite plan. Use this before delegated child starts. Workstream and node arrays are upserts by default: include only changed entries for existing IDs/titles; omitted entries are preserved. Use `replace_workstreams=true` or `replace_nodes=true` when rewriting that part of the plan of record. Routing decisions append/upsert by id.
             - `mission_status`: Read back the selected Coordinator Mission's current plan, node status, and newest 20 routing decisions. Use `compact=true` for polling from external automation.
             - `mission_events`: Read a sequenced in-memory journal of compact Mission transitions since `since_seq`. This is for external observation and test harnesses; it does not mutate Mission state.
+            - `receipt`: Read the completed Mission receipt using the same Markdown projection as the visible UI copy action.
             - `wait_for_update`: Long-poll the selected or requested Coordinator Mission until its compact status fingerprint changes, then return compact mission_status.
 
             Coordinator-role agents should use `mission_plan` to record concrete user-specific deliverables before delegating child Agent Mode sessions. Coordinator-role agents must not call `new`, `start_mission`, `ensure_mission`, or `submit` with `new_parent=true`; follow-up Missions must be proposed in the current Mission and started by an external user/CLI driver. Workflows such as Investigate, Deep Plan, Orchestrate, and Review belong in node workflow metadata only when the node is intended to run that real workflow. Workflow-less read-only probe nodes may be launched with `agent_explore.start`; workflow-bearing nodes should be launched or steered through `agent_run` with the same workflow, and `mission_status` reports planned/actual workflow matches for bound nodes.
@@ -266,17 +267,19 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 **mission_plan**: coordinator_session_id? plus one or more of mission_key, objective, predecessor context, status, approval_state, workstreams, nodes, routing_decisions, events. replace_workstreams/replace_nodes may be true for deliberate plan rewrites.
                 **mission_status**: coordinator_session_id?, compact?; returns current plan state and routing_decisions_recent newest-first, max 20. compact=true returns a smaller polling summary with liveness warnings, checkpoint submit hints, and short recent history.
                 **mission_events**: coordinator_session_id?, since_seq?, limit?; returns sequenced compact transition events for external observers.
+                **receipt**: coordinator_session_id?, format?; returns completed Mission receipt Markdown when ready.
                 **wait_for_update**: coordinator_session_id?, since_fingerprint?, timeout_seconds?; waits until compact mission_status.fingerprint changes and returns compact status.
                 """,
                 properties: [
-                    "op": .string(description: "Operation.", enum: ["list", "select", "new", "ensure_mission", "start_mission", "stop_mission", "submit", "mission_plan", "mission_status", "mission_events", "wait_for_update"]),
-                    "coordinator_session_id": .string(description: "[select, stop_mission, submit, mission_plan, mission_status, mission_events, wait_for_update] Existing Coordinator parent session UUID. Defaults to the selected Coordinator for mission_plan/mission_status/mission_events/wait_for_update."),
+                    "op": .string(description: "Operation.", enum: ["list", "select", "new", "ensure_mission", "start_mission", "stop_mission", "submit", "mission_plan", "mission_status", "mission_events", "receipt", "wait_for_update"]),
+                    "coordinator_session_id": .string(description: "[select, stop_mission, submit, mission_plan, mission_status, mission_events, receipt, wait_for_update] Existing Coordinator parent session UUID. Defaults to the selected Coordinator for mission_plan/mission_status/mission_events/receipt/wait_for_update."),
                     "message": .string(description: "[ensure_mission, start_mission, submit] Directive text to send to the fresh, selected, or requested Coordinator parent."),
                     "mission_key": .string(description: "[ensure_mission, start_mission, mission_plan] Stable external idempotency key for a Mission. External drivers should provide this when retrying mission creation."),
                     "new_parent": .boolean(description: "[submit] Start from a blank Coordinator parent before sending this directive. Default false."),
                     "compact": .boolean(description: "[submit, mission_status] For submit, return a compact automation response instead of the full Coordinator snapshot; default true. For mission_status, return a small polling summary with fingerprint, warnings, and checkpoint hints; default false."),
                     "since_seq": .number(description: "[mission_events] Last event sequence observed by the caller. Returns events with seq greater than this value."),
                     "limit": .number(description: "[mission_events] Maximum number of transition events to return. Default 200, max 500."),
+                    "format": .string(description: "[receipt] Receipt output format. Only markdown is supported.", enum: ["markdown"]),
                     "since_fingerprint": .string(description: "[wait_for_update] Last compact mission_status.fingerprint observed by the caller. If omitted, returns immediately."),
                     "timeout_seconds": .number(description: "[wait_for_update] Maximum seconds to wait before returning the current compact status. Default 30, max 300."),
                     "objective": .string(description: "[mission_plan] User-specific Mission objective."),

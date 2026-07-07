@@ -380,8 +380,8 @@ powers. Additions stay additive ops.
    decision labels. **Actor-integrity gate required:** hide these ops from
    coordinator-role sessions via advertisement policy and block them at execution in
    `AgentModeMCPToolPolicy`; the runtime must not be able to forge user-actor records.
-3. **`receipt format=markdown`** — expose the existing pure receipt projection so the
-   harness can write `receipt.md` without UI copying.
+3. **`receipt format=markdown`** — implemented as the existing pure receipt projection;
+   the harness can write `receipt.md` without UI copying.
 4. **Lifecycle: `list_missions` / `archive_mission`** — support harness setup/teardown
    and scenario isolation.
 5. **`doctor`** (later) — app-level pulse: supervisor alive, pending events, last

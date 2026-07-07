@@ -307,6 +307,41 @@ struct CoordinatorChatMCPToolService {
             let batch = environment.missionEvents(coordinatorSessionID, sinceSeq, min(limit, 500))
             return compactStateResponse(snapshot, extra: missionEventsResponseValue(batch))
 
+        case "receipt":
+            environment.refresh()
+            let snapshot = environment.snapshot()
+            let coordinatorSessionID = try resolveCoordinatorSessionID(args["coordinator_session_id"], in: snapshot)
+            try validateCoordinatorExists(coordinatorSessionID, in: snapshot)
+            let format = normalizedString(args["format"])?.lowercased() ?? "markdown"
+            guard format == "markdown" || format == "md" else {
+                throw MCPError.invalidParams("receipt format must be markdown.")
+            }
+            guard let option = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == coordinatorSessionID }),
+                  let plan = option.missionPlan
+            else {
+                return compactStateResponse(snapshot, extra: [
+                    "receipt_ready": .bool(false),
+                    "format": .string("markdown"),
+                    "error": .string("Mission receipt is not available because no Mission Plan is recorded.")
+                ])
+            }
+            guard plan.status == .completed else {
+                return compactStateResponse(snapshot, extra: [
+                    "receipt_ready": .bool(false),
+                    "format": .string("markdown"),
+                    "receipt_ready_summary": missionReceiptReadySummaryValue(plan),
+                    "error": .string("Mission receipt is not ready until the Mission is completed.")
+                ])
+            }
+            return compactStateResponse(snapshot, extra: [
+                "receipt_ready": .bool(true),
+                "format": .string("markdown"),
+                "coordinator_session_id": .string(coordinatorSessionID.uuidString),
+                "title": .string(option.title),
+                "receipt_ready_summary": missionReceiptReadySummaryValue(plan),
+                "markdown": .string(CoordinatorMissionReceiptProjection(plan: plan).markdown)
+            ])
+
         case "wait_for_update":
             let timeout = try parseCoordinatorWaitTimeout(args["timeout_seconds"] ?? args["timeout"])
             let sinceFingerprint = normalizedString(args["since_fingerprint"] ?? args["sinceFingerprint"])
@@ -342,7 +377,7 @@ struct CoordinatorChatMCPToolService {
             } while true
 
         default:
-            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, ensure_mission, start_mission, stop_mission, submit, mission_plan, mission_status, mission_events, wait_for_update.")
+            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, ensure_mission, start_mission, stop_mission, submit, mission_plan, mission_status, mission_events, receipt, wait_for_update.")
         }
     }
 
