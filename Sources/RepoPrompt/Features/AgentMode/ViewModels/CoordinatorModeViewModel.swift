@@ -2869,7 +2869,9 @@ extension AgentModeViewModel {
     private func ensureCoordinatorRuntimeDemoControl(tabID: UUID, sessionID: UUID) async throws {
         let session = await ensureSessionReady(tabID: tabID)
         session.isCoordinatorRuntime = true
-        if session.mcpControlContext?.sessionID != sessionID {
+        if session.mcpControlContext?.sessionID != sessionID ||
+            session.mcpControlContext?.taskLabelKind != .coordinator
+        {
             try await mcpActivateControlContext(
                 forTabID: tabID,
                 sessionID: sessionID,

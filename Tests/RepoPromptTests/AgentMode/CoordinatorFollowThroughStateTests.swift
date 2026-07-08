@@ -936,7 +936,115 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(plan.revision, 3)
         XCTAssertEqual(plan.status, .completed)
         XCTAssertEqual(plan.nodes.first?.status, .completed)
+        XCTAssertEqual(plan.nodes.first?.completionEvidence, "Director answered child question with Alpha.")
         XCTAssertEqual(plan.events.suffix(2).map(\.kind), [.revised, .nodeCompleted])
+    }
+
+    func testAutoCompletesTerminalBoundNodeWithFreshTerminalOutputEvidence() throws {
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let coordinatorID = UUID()
+        let childID = UUID()
+        let interactionID = UUID()
+        let decisionID = UUID()
+        let marker = "SCRIPTED_CHILD_V1 answer=Alpha marker_id=S5-ask-fixture"
+        let terminalOutput = marker + " " + String(repeating: "x", count: 560)
+        var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
+        autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 2,
+            objective: "Answer child ask as Director.",
+            status: .running,
+            approvalState: .approved,
+            autonomy: autonomy,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Smoke",
+                    purpose: "Ask a child question.",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Ask marker",
+                    completionEvidence: "Child session is waiting on interaction before completion.",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .running,
+                    boundSessionID: childID,
+                    boundInteractionID: interactionID
+                )
+            ],
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    id: decisionID,
+                    decisionClass: CoordinatorMissionDecisionClass.childAsk.rawValue,
+                    actor: .director,
+                    label: CoordinatorMissionUserDecisionLabel.answeredChildQuestion.rawValue,
+                    reason: "Director answered with Alpha.",
+                    sessionID: childID,
+                    interactionID: interactionID
+                )
+            ],
+            evidence: [
+                CoordinatorMissionEvidenceRecord(
+                    verdict: .meets,
+                    summary: "Director answered child question with Alpha.",
+                    sessionID: childID,
+                    interactionID: interactionID,
+                    decisionID: decisionID
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 10)
+        ))
+        let row = CoordinatorModeRow(
+            id: childID,
+            sessionID: childID,
+            tabID: nil,
+            title: "Scripted child",
+            providerName: "Codex CLI",
+            modelName: "__repoprompt_director_e2e_scripted_child_v1",
+            runState: .completed,
+            statusGroup: .done,
+            parentSessionID: coordinatorID,
+            parentCoordinator: .init(sessionID: coordinatorID, title: "Coordinator", isSelected: true),
+            childSessionIDs: [],
+            isMCPOriginated: true,
+            isPersistedOnly: false,
+            isCoordinator: false,
+            startedAt: nil,
+            updatedAt: Date(timeIntervalSince1970: 20),
+            priority: nil,
+            workstream: nil,
+            workstreamSummary: nil,
+            workflow: nil,
+            mergeAttention: nil,
+            pendingInteraction: nil,
+            openAgentChatRoute: nil,
+            statusReport: CoordinatorModeSessionStatusReport(
+                status: .completed,
+                statusText: nil,
+                assistantPreview: nil,
+                terminalOutput: terminalOutput,
+                failureReason: nil
+            ),
+            origin: .coordinatorFleet
+        )
+
+        XCTAssertTrue(state.completeTerminalBoundRunningMissionPlanNodes(
+            from: [row],
+            at: Date(timeIntervalSince1970: 21)
+        ))
+        let plan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(plan.status, .completed)
+        XCTAssertEqual(plan.nodes.first?.status, .completed)
+        let evidence = try XCTUnwrap(plan.nodes.first?.completionEvidence)
+        XCTAssertTrue(evidence.hasPrefix("Child final output: \(marker) "), evidence)
+        XCTAssertTrue(evidence.hasSuffix("..."), evidence)
+        XCTAssertEqual(evidence.count, "Child final output: ".count + 500 + 3)
     }
 
     func testAutoCompletesChildAskAutoBoundNodeAfterUserOverrideLedger() throws {

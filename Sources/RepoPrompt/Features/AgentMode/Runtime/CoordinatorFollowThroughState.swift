@@ -1,6 +1,8 @@
 import Foundation
 
 struct CoordinatorFollowThroughState: Codable, Equatable {
+    private static let terminalOutputEvidenceCharacterLimit = 500
+
     var originalObjectiveSummary: String?
     var missionTemplate: CoordinatorMissionTemplateSummary?
     var missionPlan: CoordinatorMissionPlan?
@@ -305,8 +307,18 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             guard row.statusGroup == .done || row.runState == .completed else { return nil }
             return row.sessionID
         })
+        let terminalOutputBySessionID = Dictionary(
+            uniqueKeysWithValues: rows.compactMap { row -> (UUID, String)? in
+                guard completedSessionIDs.contains(row.sessionID),
+                      let output = row.statusReport?.terminalOutput?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !output.isEmpty
+                else { return nil }
+                return (row.sessionID, output)
+            }
+        )
         return completeTerminalBoundRunningMissionPlanNodes(
             completedSessionIDs: completedSessionIDs,
+            terminalOutputBySessionID: terminalOutputBySessionID,
             at: date
         )
     }
@@ -315,6 +327,19 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
     mutating func completeTerminalBoundRunningMissionPlanNodes(
         completedSessionIDs: Set<UUID>,
         at date: Date = Date()
+    ) -> Bool {
+        completeTerminalBoundRunningMissionPlanNodes(
+            completedSessionIDs: completedSessionIDs,
+            terminalOutputBySessionID: [:],
+            at: date
+        )
+    }
+
+    @discardableResult
+    private mutating func completeTerminalBoundRunningMissionPlanNodes(
+        completedSessionIDs: Set<UUID>,
+        terminalOutputBySessionID: [UUID: String],
+        at date: Date
     ) -> Bool {
         guard let plan = missionPlan,
               plan.status != .completed,
@@ -332,8 +357,16 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
                   completedSessionIDs.contains(boundSessionID),
                   canAutoCompleteTerminalBoundNode(node, in: plan)
             else { continue }
-            nodes[index].status = .completed
-            completedNodes.append(nodes[index])
+            var completedNode = node
+            guard let completionEvidence = terminalCompletionEvidence(
+                for: node,
+                in: plan,
+                terminalOutput: terminalOutputBySessionID[boundSessionID]
+            ) else { continue }
+            completedNode.completionEvidence = completionEvidence
+            completedNode.status = .completed
+            nodes[index] = completedNode
+            completedNodes.append(completedNode)
         }
         guard !completedNodes.isEmpty else { return false }
 
@@ -353,6 +386,60 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             updatedAt: date
         ))
         return true
+    }
+
+    private func terminalCompletionEvidence(
+        for node: CoordinatorMissionPlanNode,
+        in plan: CoordinatorMissionPlan,
+        terminalOutput: String?
+    ) -> String? {
+        if let terminalOutput = terminalOutput?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !terminalOutput.isEmpty
+        {
+            // Runtime-observed terminal output is result evidence. Keep it bounded
+            // before persisting it into the Mission Plan/status/receipt surfaces.
+            return "Child final output: \(Self.boundedTerminalOutputEvidence(terminalOutput))"
+        }
+        if let currentEvidence = node.completionEvidence?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !currentEvidence.isEmpty,
+           !Self.isStaleCompletionEvidence(currentEvidence)
+        {
+            return currentEvidence
+        }
+        if let interactionID = node.boundInteractionID,
+           let evidence = plan.evidence.last(where: { $0.interactionID == interactionID })
+        {
+            return evidence.summary
+        }
+        if let boundSessionID = node.boundSessionID {
+            return "Child session \(boundSessionID.uuidString) reached terminal status."
+        }
+        return nil
+    }
+
+    private static func boundedTerminalOutputEvidence(_ output: String) -> String {
+        guard output.count > terminalOutputEvidenceCharacterLimit else { return output }
+        let prefix = output.prefix(terminalOutputEvidenceCharacterLimit)
+        return "\(prefix)..."
+    }
+
+    static func isStaleCompletionEvidence(_ evidence: String) -> Bool {
+        let lowercasedEvidence = evidence.lowercased()
+        let stalePhrases = [
+            "is waiting",
+            "waiting at",
+            "pending the external answer",
+            "pending external answer",
+            "before completion",
+            "pausing for",
+            "pause for external",
+            "will run",
+            "will start",
+            "needs answer",
+            "needs user",
+            "is bound"
+        ]
+        return stalePhrases.contains { lowercasedEvidence.contains($0) }
     }
 
     private func canAutoCompleteTerminalBoundNode(

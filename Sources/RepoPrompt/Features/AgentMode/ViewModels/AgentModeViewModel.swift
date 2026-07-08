@@ -13252,7 +13252,7 @@ final class AgentModeViewModel: ObservableObject {
         // Create agent message with system prompt for interactive assistance
         let systemPrompt = SystemPromptService.agentModePrompt(
             agentKind: session.selectedAgent,
-            taskLabelKind: session.mcpControlContext?.taskLabelKind,
+            taskLabelKind: session.effectiveMCPTaskLabelKind,
             allowsAgentExternalControlTools: session.mcpControlContext?.allowsAgentExternalControlTools ?? false,
             codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled(),
             coordinatorRuntimeDemo: session.isCoordinatorRuntimeDemo,

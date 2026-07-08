@@ -49,6 +49,8 @@ struct AgentModeMCPPolicyContext {
         self.taskLabelKind = taskLabelKind
         self.allowsAgentExternalControlTools = allowsAgentExternalControlTools
         self.requiresExpectedAgentPID = requiresExpectedAgentPID
+        // In Agent Mode, `.coordinator` is emitted only for Coordinator runtime
+        // sessions and becomes the durable marker used across MCP reconnects.
         self.isCoordinatorRuntime = isCoordinatorRuntime || taskLabelKind == .coordinator
     }
 }

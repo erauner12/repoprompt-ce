@@ -2571,6 +2571,32 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.sessions[next.tabID]?.isCoordinatorRuntime == true)
     }
 
+    func testSelectedCoordinatorRuntimeRefreshesStaleControlLabel() async throws {
+        let tabID = uuid(331)
+        let sessionID = uuid(332)
+        let tab = ComposeTabState(id: tabID, name: "Coordinator Runtime Demo", activeAgentSessionID: sessionID)
+        let fixture = makeAgentModeFixture(tabs: [tab], activeTabID: tabID)
+        let viewModel = fixture.viewModel
+        let session = await viewModel.ensureSessionReady(tabID: tabID)
+        _ = viewModel.test_installPersistentSessionBinding(sessionID: sessionID, on: session)
+        try await viewModel.mcpActivateControlContext(
+            forTabID: tabID,
+            sessionID: sessionID,
+            originatingConnectionID: nil,
+            taskLabelKind: .pair
+        )
+        XCTAssertEqual(session.mcpControlContext?.taskLabelKind, .pair)
+
+        let target = try await viewModel.test_resolveOrCreateCoordinatorRuntimeDemoTarget(
+            preferredSessionID: sessionID
+        )
+
+        XCTAssertEqual(target.tabID, tabID)
+        XCTAssertEqual(target.sessionID, sessionID)
+        XCTAssertTrue(session.isCoordinatorRuntime)
+        XCTAssertEqual(session.mcpControlContext?.taskLabelKind, .coordinator)
+    }
+
     func testResolverWithoutSelectedRuntimeCreatesInsteadOfGuessingByMarkerOrName() async throws {
         let oldTabID = uuid(201)
         let oldSessionID = uuid(202)

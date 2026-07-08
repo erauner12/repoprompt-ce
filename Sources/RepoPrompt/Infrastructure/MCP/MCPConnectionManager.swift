@@ -2902,6 +2902,11 @@ actor ServerNetworkManager {
         if let existing = runPolicyStateByRunID[runID], existing.updatedAt >= updatedAt {
             return
         }
+        // In Agent Mode, `.coordinator` is a runtime marker produced only by
+        // coordinator sessions (`effectiveMCPTaskLabelKind`). External
+        // coordinator_chat attribution still stays conservative unless this
+        // cached run-scoped policy marks the connection as Coordinator runtime.
+        let resolvedIsCoordinatorRuntime = isCoordinatorRuntime || taskLabelKind == .coordinator
         runPolicyStateByRunID[runID] = RunConnectionPolicyState(
             windowID: windowID,
             workspaceID: workspaceID,
@@ -2911,7 +2916,7 @@ actor ServerNetworkManager {
             purpose: purpose,
             taskLabelKind: taskLabelKind,
             allowsAgentExternalControlTools: allowsAgentExternalControlTools,
-            isCoordinatorRuntime: isCoordinatorRuntime,
+            isCoordinatorRuntime: resolvedIsCoordinatorRuntime,
             updatedAt: updatedAt
         )
         windowIDByRunID[runID] = windowID
@@ -6640,6 +6645,8 @@ actor ServerNetworkManager {
             purpose: purpose,
             taskLabelKind: taskLabelKind,
             allowsAgentExternalControlTools: allowsAgentExternalControlTools,
+            // `.coordinator` is not a cosmetic label; it is the durable
+            // Coordinator runtime marker for reconnect/handover policy.
             isCoordinatorRuntime: isCoordinatorRuntime || taskLabelKind == .coordinator,
             requiresExpectedAgentPID: requiresExpectedAgentPID,
             reservationConnectionID: nil
@@ -6994,6 +7001,8 @@ actor ServerNetworkManager {
             restrictedTools: Set<String>,
             additionalTools: Set<String>?,
             purpose: MCPRunPurpose,
+            taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
+            isCoordinatorRuntime: Bool = false,
             updatedAt: Date = Date()
         ) {
             seedRunPolicyState(
@@ -7004,6 +7013,8 @@ actor ServerNetworkManager {
                 restrictedTools: restrictedTools,
                 additionalTools: additionalTools,
                 purpose: purpose,
+                taskLabelKind: taskLabelKind,
+                isCoordinatorRuntime: isCoordinatorRuntime,
                 updatedAt: updatedAt
             )
         }
@@ -7072,13 +7083,14 @@ actor ServerNetworkManager {
             )
         }
 
-        func debugEffectivePolicyState(for connectionID: UUID) -> (restrictedTools: Set<String>, additionalTools: Set<String>, purpose: MCPRunPurpose, taskLabelKind: AgentModelCatalog.TaskLabelKind?) {
+        func debugEffectivePolicyState(for connectionID: UUID) -> (restrictedTools: Set<String>, additionalTools: Set<String>, purpose: MCPRunPurpose, taskLabelKind: AgentModelCatalog.TaskLabelKind?, isCoordinatorRuntime: Bool) {
             let policy = effectivePolicyState(for: connectionID)
             return (
                 restrictedTools: policy.restricted,
                 additionalTools: policy.additional,
                 purpose: policy.purpose,
-                taskLabelKind: policy.taskLabelKind
+                taskLabelKind: policy.taskLabelKind,
+                isCoordinatorRuntime: policy.isCoordinatorRuntime
             )
         }
 
@@ -10005,6 +10017,7 @@ actor ServerNetworkManager {
                 purpose: cached.purpose,
                 taskLabelKind: cached.taskLabelKind,
                 allowsAgentExternalControlTools: cached.allowsAgentExternalControlTools,
+                isCoordinatorRuntime: cached.isCoordinatorRuntime,
                 updatedAt: Date()
             )
         }
@@ -10063,6 +10076,7 @@ actor ServerNetworkManager {
                     purpose: cached.purpose,
                     taskLabelKind: cached.taskLabelKind,
                     allowsAgentExternalControlTools: cached.allowsAgentExternalControlTools,
+                    isCoordinatorRuntime: cached.isCoordinatorRuntime,
                     updatedAt: Date()
                 )
             }

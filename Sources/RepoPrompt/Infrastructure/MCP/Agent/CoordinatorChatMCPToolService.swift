@@ -1148,23 +1148,8 @@ struct CoordinatorChatMCPToolService {
         guard !evidence.isEmpty else {
             throw MCPError.invalidParams("nodes[].completion_evidence is required when nodes[].status is completed.")
         }
-        let lowercasedEvidence = evidence.lowercased()
-        let stalePhrases = [
-            "is waiting",
-            "waiting at",
-            "pending the external answer",
-            "pending external answer",
-            "before completion",
-            "pausing for",
-            "pause for external",
-            "will run",
-            "will start",
-            "needs answer",
-            "needs user",
-            "is bound"
-        ]
-        if let stalePhrase = stalePhrases.first(where: lowercasedEvidence.contains) {
-            throw MCPError.invalidParams("nodes[].completion_evidence for completed nodes must describe result evidence, not stale waiting/bound state such as \"\(stalePhrase)\".")
+        if CoordinatorFollowThroughState.isStaleCompletionEvidence(evidence) {
+            throw MCPError.invalidParams("nodes[].completion_evidence for completed nodes must describe result evidence, not stale waiting/bound state.")
         }
     }
 

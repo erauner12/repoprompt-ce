@@ -217,7 +217,7 @@ final class AgentModeRunService {
                 workspacePath: workspacePath,
                 resumeSessionID: session.providerSessionID,
                 attachments: attachments,
-                taskLabelKind: session.mcpControlContext?.taskLabelKind,
+                taskLabelKind: session.effectiveMCPTaskLabelKind,
                 sessionModeID: runtimePermission.acpSessionModeID,
                 autoApproveAllToolPermissions: runtimePermission.autoApproveAllACPToolPermissions
             )
@@ -229,7 +229,7 @@ final class AgentModeRunService {
         let mcpServerEnabler = dependencies.mcpServerEnabler
         let connectionPolicyInstaller = dependencies.connectionPolicyInstaller
         let expectedPIDPolicyArmer = dependencies.expectedPIDPolicyArmer
-        let taskLabelKind = session.mcpControlContext?.taskLabelKind
+        let taskLabelKind = session.effectiveMCPTaskLabelKind
         let allowsAgentExternalControlTools = session.mcpControlContext?.allowsAgentExternalControlTools ?? false
         let makeLease: (_ runID: UUID) -> MCPBootstrapLease = { runID in
             let leaseSpec = MCPBootstrapLeaseSpec.agentMode(
@@ -321,7 +321,7 @@ final class AgentModeRunService {
             workspacePath: workspacePath,
             resumeSessionID: session.providerSessionID,
             attachments: attachments,
-            taskLabelKind: session.mcpControlContext?.taskLabelKind,
+            taskLabelKind: session.effectiveMCPTaskLabelKind,
             sessionModeID: runtimePermission.acpSessionModeID,
             autoApproveAllToolPermissions: runtimePermission.autoApproveAllACPToolPermissions
         )

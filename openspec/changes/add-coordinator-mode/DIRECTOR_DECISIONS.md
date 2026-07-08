@@ -472,3 +472,10 @@ unfinished nodes skipped/cancelled with evidence. Receipts, terminal UI, and arc
 status all depend on this invariant. The guard lives at the MCP parse boundary and in the
 shared follow-through state merger, because non-MCP state updates can otherwise merge a
 stale pending node into a terminal plan.
+
+Coordinator runtime attribution (2026-07-08): `actor:user` on a Director-answered child
+question is fabricated user consent. `coordinator_chat` therefore stays conservative:
+ambiguous request metadata is user-authored, never Director-authored. The fix is durable
+role propagation, not permissive attribution: Coordinator runtime sessions must carry the
+runtime marker through reused/steered runs, run-policy re-seeding, and prompt/lease
+construction so Director answers arrive with explicit `isCoordinatorRuntime` metadata.

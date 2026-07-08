@@ -153,6 +153,10 @@ extension AgentModeViewModel {
             set { isCoordinatorRuntime = newValue }
         }
 
+        var effectiveMCPTaskLabelKind: AgentModelCatalog.TaskLabelKind? {
+            isCoordinatorRuntime ? .coordinator : mcpControlContext?.taskLabelKind
+        }
+
         /// Demo-only marker for Coordinator housekeeping children that should not be
         /// presented as supervised delegated work.
         var isCoordinatorInternalSession: Bool = false

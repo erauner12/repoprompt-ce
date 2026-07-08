@@ -3610,7 +3610,7 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
             }
         }
 
-        let currentTaskLabelKind = session.mcpControlContext?.taskLabelKind
+        let currentTaskLabelKind = session.effectiveMCPTaskLabelKind
         let runtimeWorkspacePath: String?
         do {
             runtimeWorkspacePath = try workspacePathProvider(session)
@@ -3823,7 +3823,7 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
             guard let lease = makeCodexRunLease(
                 tabID: session.tabID,
                 runID: runID,
-                taskLabelKind: session.mcpControlContext?.taskLabelKind,
+                taskLabelKind: session.effectiveMCPTaskLabelKind,
                 allowsAgentExternalControlTools: allowsAgentExternalControlTools
             ) else { return }
             let acquired = await lease.acquire()
@@ -3870,7 +3870,7 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
         let selection = effectiveCodexSelection(for: session)
         let basePrompt = SystemPromptService.agentModePrompt(
             agentKind: .codexExec,
-            taskLabelKind: session.mcpControlContext?.taskLabelKind,
+            taskLabelKind: session.effectiveMCPTaskLabelKind,
             allowsAgentExternalControlTools: session.mcpControlContext?.allowsAgentExternalControlTools ?? false,
             codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled(),
             coordinatorRuntimeDemo: session.isCoordinatorRuntimeDemo,
