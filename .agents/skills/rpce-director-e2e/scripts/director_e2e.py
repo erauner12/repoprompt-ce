@@ -940,6 +940,36 @@ def has_pending_child_question(obs: Observation) -> bool:
     return False
 
 
+def pending_child_question_or_failed(obs: Observation, scenario: str) -> bool:
+    if has_pending_child_question(obs):
+        return True
+    if obs.status in {"blocked", "completed", "stopped", "cancelled"}:
+        raise E2EFailure(
+            f"{scenario} reached {obs.status} before a visible pending child question appeared"
+        )
+    if obs.nodes and all(str(node.get("status") or "") not in {"pending", "running"} for node in obs.nodes):
+        raise E2EFailure(
+            f"{scenario} has no runnable child node left before a pending child question appeared"
+        )
+    return False
+
+
+def pending_child_question_with_interaction_or_failed(obs: Observation, scenario: str) -> bool:
+    if has_pending_child_question(obs):
+        if node_bound_interaction_ids(obs.full) or node_bound_interaction_ids(obs.compact):
+            return True
+        return False
+    if obs.status in {"blocked", "completed", "stopped", "cancelled"}:
+        raise E2EFailure(
+            f"{scenario} reached {obs.status} before a pending child interaction id appeared"
+        )
+    if obs.nodes and all(str(node.get("status") or "") not in {"pending", "running"} for node in obs.nodes):
+        raise E2EFailure(
+            f"{scenario} has no runnable child node left before a pending child interaction id appeared"
+        )
+    return False
+
+
 def mission_plan_payload(status: dict[str, Any]) -> dict[str, Any]:
     plan = status.get("plan")
     if isinstance(plan, dict):
@@ -1016,10 +1046,72 @@ def has_decision(
     actor: str | None = None,
     decision_class: str | None = None,
 ) -> bool:
-    return any(
-        decision_matches(decision, label=label, actor=actor, decision_class=decision_class)
+    return bool(matching_decisions(status, label=label, actor=actor, decision_class=decision_class))
+
+
+def matching_decisions(
+    status: dict[str, Any],
+    *,
+    label: str | None = None,
+    actor: str | None = None,
+    decision_class: str | None = None,
+    interaction_id: str | None = None,
+) -> list[dict[str, Any]]:
+    decisions = [
+        decision
         for decision in plan_decisions(status)
-    )
+        if decision_matches(decision, label=label, actor=actor, decision_class=decision_class)
+    ]
+    if interaction_id is not None:
+        decisions = [decision for decision in decisions if str(decision.get("interaction_id") or "") == interaction_id]
+    return decisions
+
+
+def decision_timestamp(decision: dict[str, Any]) -> str:
+    return str(decision.get("timestamp") or "")
+
+
+def node_bound_interaction_ids(status: dict[str, Any]) -> list[str]:
+    seen: set[str] = set()
+    ids: list[str] = []
+    for source in [status.get("nodes"), status.get("active_nodes")]:
+        if not isinstance(source, list):
+            continue
+        for node in source:
+            if not isinstance(node, dict):
+                continue
+            for key in ["bound_interaction_id", "interaction_id", "pending_interaction_id"]:
+                value = str(node.get(key) or "")
+                if value and value not in seen:
+                    seen.add(value)
+                    ids.append(value)
+            bound_row = node.get("bound_row")
+            if isinstance(bound_row, dict):
+                for key in ["bound_interaction_id", "interaction_id", "pending_interaction_id"]:
+                    value = str(bound_row.get(key) or "")
+                    if value and value not in seen:
+                        seen.add(value)
+                        ids.append(value)
+    return ids
+
+
+def max_event_seq(events: list[dict[str, Any]]) -> int:
+    seqs = [int(event.get("seq") or 0) for event in events if isinstance(event, dict)]
+    return max(seqs, default=0)
+
+
+def event_journal_has_bound_interaction_after(
+    events: list[dict[str, Any]],
+    interaction_id: str,
+    since_seq: int,
+) -> bool:
+    for event in events:
+        if int(event.get("seq") or 0) <= since_seq:
+            continue
+        for node in event.get("nodes") or []:
+            if isinstance(node, dict) and str(node.get("bound_interaction_id") or "") == interaction_id:
+                return True
+    return False
 
 
 def evidence_text(status: dict[str, Any]) -> str:
@@ -1248,6 +1340,72 @@ def assert_s6_pace_flip(before: Observation, after: Observation) -> None:
         raise E2EFailure("S6 expected pending approval checkpoint to keep its Proceed action after set_pace")
 
 
+def assert_s6_childask_flip(
+    observations: list[Observation],
+    events: list[dict[str, Any]],
+    *,
+    interaction_id: str,
+    seq_before_flip: int,
+    token: str | None = None,
+) -> dict[str, list[str]]:
+    final = observations[-1]
+    if final.status != "completed":
+        raise E2EFailure(f"S6 childAsk expected completed mission, got {final.status}")
+    if needs_you_count(final) != 0:
+        raise E2EFailure(f"S6 childAsk expected no pending Decisions at completion, got {needs_you_count(final)}")
+    if interaction_id not in node_bound_interaction_ids(final.full):
+        raise E2EFailure(f"S6 childAsk expected final node to keep interaction id {interaction_id}")
+
+    flip_decisions = matching_decisions(
+        final.full,
+        label="routed child questions to the Director",
+        actor="user",
+        decision_class="childAsk",
+    )
+    if not flip_decisions:
+        raise E2EFailure("S6 childAsk expected a user decision routing child questions to the Director")
+    director_decisions = matching_decisions(
+        final.full,
+        actor="director",
+        decision_class="childAsk",
+        interaction_id=interaction_id,
+    )
+    if len(director_decisions) != 1:
+        raise E2EFailure(
+            f"S6 childAsk expected exactly one Director childAsk answer for {interaction_id}, "
+            f"got {len(director_decisions)}"
+        )
+    user_answer_decisions = matching_decisions(
+        final.full,
+        label="answered a child question",
+        actor="user",
+        decision_class="childAsk",
+        interaction_id=interaction_id,
+    )
+    if user_answer_decisions:
+        raise E2EFailure("S6 childAsk expected the pending question to be answered by Director, not an extra user answer")
+
+    flip_timestamps = [decision_timestamp(decision) for decision in flip_decisions if decision_timestamp(decision)]
+    flip_ts = min(flip_timestamps) if flip_timestamps else ""
+    director_ts = decision_timestamp(director_decisions[0])
+    if not flip_ts or not director_ts or director_ts <= flip_ts:
+        raise E2EFailure(
+            "S6 childAsk expected the user dial-change decision to precede the Director childAsk answer; "
+            f"flip={flip_ts!r} director={director_ts!r}"
+        )
+    if not event_journal_has_bound_interaction_after(events, interaction_id, seq_before_flip):
+        raise E2EFailure("S6 childAsk mission_events did not show the same bound interaction after the flip")
+    if "alpha" not in evidence_text(final.full):
+        raise E2EFailure("S6 childAsk expected final evidence/completion text to mention Alpha")
+    if token:
+        assert_s5_variant_token(final.full, token, "childAsk flip")
+    refs = assert_s5_fresh_child_launch(observations, "childAsk flip")
+    if interaction_id not in refs["interactions"]:
+        raise E2EFailure(f"S6 childAsk expected fresh child refs to include interaction {interaction_id}")
+    assert_common_status_integrity(observations)
+    return refs
+
+
 def assert_s5_ask(observations: list[Observation], token: str | None = None) -> dict[str, list[str]]:
     final = observations[-1]
     if final.status != "completed":
@@ -1399,21 +1557,27 @@ def s6_message() -> str:
 
 def s5_message(mode: str, variant_token: str | None = None) -> str:
     token = variant_token or "S5-child-marker"
+    child_prompt = (
+        f"You are the S5/S6 marker child for token `{token}`. Call the RepoPrompt MCP tool named `ask_user` now. "
+        "Ask exactly one single-select question with id `marker_choice`, header `Marker`, question "
+        "`Which marker should this child use?`, options `Alpha` and `Beta`, and no auto-resolution. If `ask_user` "
+        "is not advertised, use `request_user_input` if that structured user-input tool is advertised. Do not answer "
+        "in plain text or finish until the tool has created a pending user question. After the interaction is answered, "
+        f"report the selected marker and token `{token}` in normal text. If neither `ask_user` nor `request_user_input` "
+        f"is advertised, report `S5_USER_INPUT_TOOL_UNAVAILABLE {token}` and stop."
+    )
     return (
         "Run this as a scoped Director mission for a Me/Director child-question smoke test. "
         'Record a visible Mission Plan with approval_state:"awaiting_approval" before child sessions. '
         "After approval, launch exactly one narrow read-only child Agent Mode session using `agent_run.start` "
-        "with `model_id:\"explore\"`, the planned `mission_node_id`, and no workflow_name or worktree. The child "
-        "must call the MCP tool named `ask_user` exactly once before it can complete; it must not merely print "
-        f"the question as its final answer. Use this structured request payload: title `S5 child marker choice {token}`; one "
-        "question with id `marker_choice`, question `Which marker should this child use?`, single-select "
-        "options `Alpha` and `Beta`, and `allows_custom:false`. The expected safe answer is `Alpha`. The child "
-        f"final output, plan evidence, and node completion evidence must include the exact token `{token}`. If the "
-        "child cannot call `ask_user`, it must report `S5_ASK_USER_UNAVAILABLE` and stop. If current "
-        "Mission Policy "
-        "routes child questions to Me, pause for the external answer. If current Mission Policy routes "
-        "child questions to the Director, answer `Alpha` yourself, then record a director child-question "
-        "decision and evidence explaining that answer. After the answer, wait for the child final output, then "
+        "with `model_id:\"explore\"`, the planned `mission_node_id`, and no workflow_name or worktree. Use this exact "
+        f"child prompt without adding Mission Policy, childAsk, Me/Director routing, Coordinator autonomy, or who will "
+        f"answer the question: {child_prompt} "
+        "The expected safe answer is `Alpha`. The child final output, plan evidence, and node completion evidence "
+        f"must include the exact token `{token}`. Parent/Director handling owns the route: if current Mission Policy routes child questions to Me, "
+        "pause for the external answer; if it routes child questions to the Director, wait for the pending child "
+        "interaction and answer `Alpha` through the Director path, then record a director child-question decision "
+        "and evidence explaining that answer. After the answer, wait for the child final output, then "
         "mark the node completed only after replacing `completion_evidence` with result evidence that includes "
         f"the exact selected marker `Alpha` and token `{token}`. The child should report the selected answer in normal text that "
         "includes `Alpha`, record evidence, and stop. Do not reuse any session_id, interaction_id, routing_decision, "
@@ -1643,24 +1807,11 @@ def run_s5_variant(
     approve_initial_plan(client, artifacts, session_id, args)
 
     if mode == "ask":
-        def pending_child_question_or_failed(obs: Observation) -> bool:
-            if has_pending_child_question(obs):
-                return True
-            if obs.status in {"blocked", "completed", "stopped", "cancelled"}:
-                raise E2EFailure(
-                    "S5 ask reached terminal/blocking state without a visible pending child question"
-                )
-            if obs.nodes and all(str(node.get("status") or "") not in {"pending", "running"} for node in obs.nodes):
-                raise E2EFailure(
-                    "S5 ask has no runnable child node left before a pending child question appeared"
-                )
-            return False
-
         wait_until(
             client,
             artifacts,
             session_id,
-            pending_child_question_or_failed,
+            lambda item: pending_child_question_or_failed(item, "S5 ask"),
             args.timeout_seconds,
             idle_timeout_seconds=args.idle_timeout_seconds,
             events_mode=args.events_mode,
@@ -1740,7 +1891,7 @@ def run_s5(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
     artifacts.finalize(True, "s5", {"variants": results})
 
 
-def run_s6(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> None:
+def run_s6_pace(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> dict[str, Any]:
     artifacts.record_timing("started")
     session_id = start_mission(client, "Director E2E S6 pace flip", s6_message(), "s6")
     before = wait_until(
@@ -1776,6 +1927,110 @@ def run_s6(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
         "revision_before": plan_revision(before.compact),
         "revision_after": plan_revision(after.compact),
     })
+    return {
+        "coordinator_session_id": session_id,
+        "final_status": after.status,
+        "approval_state": plan_approval_state(after.compact),
+        "default_pace": plan_default_pace(after.compact),
+        "revision_before": plan_revision(before.compact),
+        "revision_after": plan_revision(after.compact),
+    }
+
+
+def run_s6_childask_flip(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> dict[str, Any]:
+    artifacts.record_timing("started")
+    variant_token = f"S6-childask-{uuid.uuid4().hex[:8]}"
+    session_id = start_mission(
+        client,
+        f"Director E2E S6 childAsk flip {variant_token}",
+        s5_message("ask", variant_token),
+        "s6-childask",
+    )
+    wait_until(
+        client,
+        artifacts,
+        session_id,
+        lambda item: plan_approval_state(item.compact) == "awaiting_approval" and has_checkpoint_action(item.compact, "Proceed"),
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("plan-visible")
+    set_childask_mode(client, artifacts, session_id, "ask", args)
+    set_pace_auto_for_s5(client, artifacts, session_id, args)
+    approve_initial_plan(client, artifacts, session_id, args)
+
+    pending = wait_until(
+        client,
+        artifacts,
+        session_id,
+        lambda item: pending_child_question_with_interaction_or_failed(item, "S6 childAsk"),
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("child-question-visible")
+    interaction_ids = node_bound_interaction_ids(pending.full) or node_bound_interaction_ids(pending.compact)
+    if not interaction_ids:
+        raise E2EFailure("S6 childAsk could not identify the pending child interaction id before flip")
+    interaction_id = interaction_ids[0]
+    capture_mission_events(client, artifacts, session_id, args.events_mode)
+    seq_before_flip = max_event_seq(artifacts.mission_events)
+
+    set_childask_mode(client, artifacts, session_id, "auto", args)
+    artifacts.add_checkpoint("childask-auto-after-pending")
+
+    def completed_without_user_queue(obs: Observation) -> bool:
+        if obs.status in {"blocked", "stopped", "cancelled"}:
+            raise E2EFailure(f"S6 childAsk reached terminal/blocking state before completion: {obs.status}")
+        return terminal_completed(obs)
+
+    final = wait_until(
+        client,
+        artifacts,
+        session_id,
+        completed_without_user_queue,
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("completed")
+    refs = assert_s6_childask_flip(
+        artifacts.observations,
+        artifacts.mission_events,
+        interaction_id=interaction_id,
+        seq_before_flip=seq_before_flip,
+        token=variant_token,
+    )
+    capture_receipt(client, artifacts, session_id, args.receipt_mode)
+    result = {
+        "coordinator_session_id": session_id,
+        "final_status": final.status,
+        "variant_token": variant_token,
+        "interaction_id": interaction_id,
+        "child_refs": refs,
+    }
+    artifacts.finalize(True, "s6-childask", result)
+    return result
+
+
+def run_s6(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> None:
+    results: list[dict[str, Any]] = []
+    for name, runner in [
+        ("pace", run_s6_pace),
+        ("childask", run_s6_childask_flip),
+    ]:
+        variant_artifacts = RunArtifacts(artifacts.root / name)
+        variant_client = RpcClient(client.cli, client.window, client.repo_root, variant_artifacts)
+        result = runner(variant_client, variant_artifacts, args)
+        results.append({
+            "name": name,
+            "passed": True,
+            "artifact_dir": str(variant_artifacts.root),
+            "result": result,
+            "report": variant_artifacts.report,
+        })
+    artifacts.finalize(True, "s6", {"variants": results})
 
 
 def run_scenario(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> None:

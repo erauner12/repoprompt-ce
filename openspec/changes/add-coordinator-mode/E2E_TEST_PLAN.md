@@ -47,8 +47,14 @@ launches while pending; Proceed launches exactly the ready set and records a
 **user-actor** decision (deterministic ID); a plan revision at approval yields a **new**
 queue-item identity. UI: queue card anatomy; click-through lands at the checkpoint.
 
-**S5 — childAsk both ways.** Directive instructs a normal explore child Agent Mode session
-to ask via `ask_user` which of two marker names to use. Run twice: **Me** → pending
+**S5 — childAsk both ways.** Directive instructs the Coordinator to give a normal explore
+child Agent Mode session an exact, deliberately simple tool-level prompt: call its
+structured user-input MCP tool now (`ask_user` in RepoPrompt CE; `request_user_input` only
+if `ask_user` is not advertised in another environment), ask which of two marker names to
+use, wait for the pending interaction to be answered, report the selected marker, and stop.
+The child prompt must not explain Mission Policy or Me/Director routing; the
+parent/Director owns answer routing and attribution. Run twice:
+**Me** → pending
 interaction appears, queue = 1, answer flows, child proceeds, no ⚙ for the answer;
 **Director** → runtime answers, ⚙ decision with question+answer evidence, queue stays 0.
 Drive Me/Director headlessly through
@@ -63,14 +69,18 @@ childAsk decision plus Alpha evidence at completion. Each variant carries a uniq
 token, must show a fresh `agent_run.start` route and completed-node child binding, and the
 Ask/Auto child session and interaction IDs must be disjoint so copied evidence cannot pass.
 
-**S6 — Dial flip does not act.** Start Step; flip pace → Auto through the user-channel
-parity op.
-Current executable `s6` covers the pending approval checkpoint because it is deterministic:
-drive the flip headlessly through `coordinator_chat set_pace`, before approval.
+**S6 — Dial flip semantics.** Two slices. Pace is non-consuming: start Step; flip pace →
+Auto through `coordinator_chat set_pace` while approval is pending.
 Invariants: snapshot pace mutated, revision bumped, fingerprint advanced; user-actor
-"set pace to Auto" decision recorded; **a pending checkpoint is not consumed** by the
-flip. Future `s6b` should use a deterministic post-approval step boundary to assert
-later boundaries auto-continue. UI: `Policy · … · edited` marker appears.
+"set pace to Auto" decision recorded; **the pending approval checkpoint remains**. ChildAsk
+is immediate-reroute: start with `childAsk:ask`, wait for a real pending child question,
+flip `childAsk:auto` through `coordinator_chat set_autonomy`, then assert the same
+interaction is answered by Director. Invariants: same interaction id; flip user decision
+precedes Director childAsk decision; no Director answer predates the flip; exactly one
+childAsk answer/evidence pair lands; receipt actor chain reads user flip → Director answer.
+Runtime callers must be rejected from `set_pace`/`set_autonomy`; runtime child-interaction
+submits are rejected while resolved `childAsk` is `ask`. UI: `Policy · … · edited` marker
+appears.
 
 **S7 — Stop semantics.** Stop mid-run.
 Invariants: user-actor stop decision; cancel routing decision(s) for active children;

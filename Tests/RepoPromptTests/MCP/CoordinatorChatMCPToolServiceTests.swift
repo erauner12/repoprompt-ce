@@ -3676,6 +3676,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
     func testSubmitRuntimePendingChildInteractionRecordsDirectorActor() async throws {
         let coordinatorID = UUID()
         let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
+        var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
+        autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
         var actors: [CoordinatorMissionDecisionActor] = []
         let service = makeService(
             coordinatorIDs: [coordinatorID],
@@ -3694,6 +3696,15 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             submitPendingChild: { _, _, actor in
                 actors.append(actor)
                 return .accepted
+            },
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Director-routed child question.",
+                    status: .running,
+                    approvalState: .approved,
+                    policySnapshot: .defaultPolicy,
+                    autonomy: autonomy
+                )]
             }
         )
 
@@ -3706,6 +3717,50 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(object["accepted"]?.boolValue, true)
         XCTAssertEqual(object["routed_to"]?.stringValue, "child_interaction")
         XCTAssertEqual(actors, [.director])
+    }
+
+    func testSubmitRuntimePendingChildInteractionRejectsWhenChildAskRoutesToMe() async throws {
+        let coordinatorID = UUID()
+        let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
+        var didSubmitChild = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            pendingChild: { childRow },
+            submitPendingChild: { _, _, _ in
+                didSubmitChild = true
+                return .accepted
+            },
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "User-routed child question.",
+                    status: .running,
+                    approvalState: .approved,
+                    policySnapshot: .defaultPolicy
+                )]
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("submit"),
+                "message": .string("Alpha")
+            ])
+            XCTFail("Coordinator runtime must not answer child questions while childAsk routes to Me.")
+        } catch {
+            XCTAssertFalse(didSubmitChild)
+            XCTAssertTrue(String(describing: error).contains("routes child questions to Me"))
+        }
     }
 
     func testSubmitAgentModeNonCoordinatorPendingChildInteractionRecordsUserActor() async throws {

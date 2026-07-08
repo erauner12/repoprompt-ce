@@ -77,10 +77,11 @@ ephemeral run charters may stay in `docs/plans/` but must cite this record.
   `missionPlanUpdater` — never mutate the library policy, never re-send metadata. When a
   dial diverges from the named policy, the name must say so: echo becomes
   **"Policy · Default · edited (pace → Auto)"** — a preset name may never lie. ("Save as
-  policy" attaches here in Stage 2.) Application semantics, one rule stated in UI help and
-  here: **dial changes apply from the next boundary; a pending checkpoint is never
-  consumed** (toggles configure, buttons act). Every mid-run dial change posts a ledger
-  line ("You set pace → Auto for this mission") so scope is self-evident and audited.
+  policy" attaches here in Stage 2.) Application semantics: pace changes configure the
+  next step boundary and never consume a pending checkpoint; `Me|Director` childAsk changes
+  are route changes with the asymmetric pending-question semantics in §3c. Every mid-run
+  dial change posts a ledger line ("You set pace → Auto for this mission") so scope is
+  self-evident and audited.
   Current-code gap (recon 2026-07-06): pace exists _only_ inside the policy snapshot — no
   composer pace variable, no mission-level override channel; the dial must gain the
   override path rather than binding to the preset's field.
@@ -115,11 +116,13 @@ de-emphasize either dial. Any instruction that reads otherwise is a misreading.*
    "routed child questions to Me" / "routed child questions to the Director". Wave 2.5's
    ledger→transcript projection then renders the audit echo automatically; build nothing
    extra for display.
-4. **Semantics guardrails.** A dial change never consumes a pending checkpoint
+4. **Semantics guardrails.** A pace dial change never consumes a pending checkpoint
    (held-checkpoint invariant — add the test if absent). It sends no steer and no
    metadata; the runtime picks it up at the next boundary via `mission_status`
-   (fingerprint moves on mutation). **[verify]** `defaultPace` participates in the compact
-   policy fingerprint part; if absent, add it (one line + one test).
+   (fingerprint moves on mutation). `Me|Director` childAsk changes follow §3c because child
+   questions are their own standing route, not the generic step checkpoint. **[verify]**
+   `defaultPace` participates in the compact policy fingerprint part; if absent, add it
+   (one line + one test).
 5. **`edited` honesty marker.** Pure computed comparison of the snapshot's
    {pace, childAsk} against the library policy bearing `policySnapshot.id`. When they
    differ: composer echo and plan-pane policy chip render
@@ -153,6 +156,23 @@ prompts, policies, and ask-summary strings; it feeds grid copy, echo lines, the 
 editor, and the future boundary contract-preview. The general editing surface remains
 Stage 2's minimal editor, reached via "Save as policy" — from lived experience, never
 speculation.
+
+## 3c. Pending childAsk flip semantics (LOCKED 2026-07-07)
+
+`Me|Director` is a standing route for child questions, including one already pending.
+**Ask → Auto is immediate reroute:** the external dial flip is the consent record; after
+the user-actor "routed child questions to the Director" decision is written, the runtime
+may suppress that pending child question from the user queue, answer it as Director, and
+record a Director `childAsk` decision plus evidence for the same interaction id.
+**Auto → Ask is asymmetric escalation:** if the user flips back to Me while a Director
+answer is not yet committed, the pending question must become visible and a later runtime
+answer is rejected. Escalation to the human wins races.
+
+S6 invariants: interaction id is stable across the flip; the dial-change user decision
+precedes any Director childAsk decision; exactly one answer lands; losing user/Director
+race attempts reject loudly; receipts must read the actor chain honestly ("user flipped,
+then X answered"). `set_pace` / `set_autonomy` are external-user parity ops only:
+coordinator-runtime callers are blocked at execution, not merely hidden by advertisement.
 
 ## 4. Decisions queue doctrine + identity (LOCKED)
 
@@ -382,10 +402,9 @@ powers. Additions stay additive ops.
    **Actor-integrity gate required:** these per-op user actions must be blocked at
    execution for coordinator/runtime-owned MCP callers even though `coordinator_chat`
    remains advertised for runtime `mission_plan` writes; the runtime must not be able to
-   forge user-actor records. Harness `s6` exercises `set_pace` at a pending approval
-   checkpoint first: it must bump revision and fingerprint, record exactly one user
-   decision, and leave the checkpoint unconsumed. S5 can now drive childAsk mode
-   headlessly through `set_autonomy`.
+   forge user-actor records. Harness `s6` exercises both `set_pace` at a pending approval
+   checkpoint (revision/fingerprint advance, user decision recorded, checkpoint unconsumed)
+   and `set_autonomy` at a pending child question (the §3c immediate-reroute path).
 3. **`receipt format=markdown`** — implemented as the existing pure receipt projection;
    the harness can write `receipt.md` without UI copying.
 4. **Lifecycle: `list_missions` / `archive_mission`** — support harness setup/teardown

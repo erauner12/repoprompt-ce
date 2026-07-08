@@ -439,12 +439,18 @@ Loaded roots: demo → /repo/fallback
     def test_s5_message_requires_real_child_input_tool_call(self) -> None:
         message = director_e2e.s5_message("ask", "S5-ask-test")
 
-        self.assertIn("call the MCP tool named `ask_user`", message)
-        self.assertIn("must not merely print the question", message)
+        self.assertIn("Use this exact child prompt", message)
+        self.assertIn("Call the RepoPrompt MCP tool named `ask_user` now", message)
+        self.assertIn("If `ask_user` is not advertised, use `request_user_input`", message)
+        self.assertIn("`request_user_input`", message)
+        self.assertIn("`ask_user`", message)
+        self.assertIn("without adding Mission Policy", message)
+        self.assertIn("Do not answer in plain text or finish until the tool has created a pending user question", message)
+        self.assertIn("Parent/Director handling owns the route", message)
         self.assertIn("using `agent_run.start`", message)
         self.assertIn("with `model_id:\"explore\"`", message)
         self.assertIn("no workflow_name or worktree", message)
-        self.assertIn("S5_ASK_USER_UNAVAILABLE", message)
+        self.assertIn("S5_USER_INPUT_TOOL_UNAVAILABLE", message)
         self.assertIn("S5-ask-test", message)
         self.assertIn("Do not reuse any session_id", message)
 
@@ -565,6 +571,117 @@ Loaded roots: demo → /repo/fallback
         with self.assertRaises(director_e2e.E2EFailure):
             director_e2e.assert_s6_pace_flip(before, after)
 
+    def test_s6_childask_flip_accepts_director_reroute_after_user_dial_decision(self) -> None:
+        pending = observation(
+            "f1",
+            "running",
+            [
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "bound_session_id": "child-session",
+                    "bound_interaction_id": "interaction-1",
+                }
+            ],
+            running=1,
+            needs_you=1,
+            childask_mode="ask",
+        )
+        final = observation(
+            "f2",
+            "completed",
+            [
+                {
+                    "id": "n1",
+                    "status": "completed",
+                    "bound_session_id": "child-session",
+                    "bound_interaction_id": "interaction-1",
+                    "completion_evidence": "Selected Alpha for s6case.",
+                }
+            ],
+            childask_mode="auto",
+            user_decisions=4,
+            director_decisions=1,
+            decisions=[
+                {
+                    "label": "routed child questions to the Director",
+                    "actor": "user",
+                    "decision_class": "childAsk",
+                    "timestamp": "2026-07-08T01:00:00Z",
+                },
+                {
+                    "label": "answered a child question",
+                    "actor": "director",
+                    "decision_class": "childAsk",
+                    "interaction_id": "interaction-1",
+                    "timestamp": "2026-07-08T01:00:01Z",
+                },
+            ],
+            evidence_summaries=["Director answered Alpha for s6case."],
+            routing_decisions=[{"operation": "agent_run.start", "route_kind": "fresh_child"}],
+        )
+        events = [
+            {"seq": 8, "nodes": [{"id": "n1", "status": "running", "bound_interaction_id": "interaction-1"}]},
+            {"seq": 9, "nodes": [{"id": "n1", "status": "completed", "bound_interaction_id": "interaction-1"}]},
+        ]
+
+        self.assertEqual(
+            director_e2e.assert_s6_childask_flip(
+                [pending, final],
+                events,
+                interaction_id="interaction-1",
+                seq_before_flip=7,
+                token="s6case",
+            ),
+            {"sessions": ["child-session"], "interactions": ["interaction-1"]},
+        )
+
+    def test_s6_childask_flip_rejects_director_answer_before_dial_decision(self) -> None:
+        final = observation(
+            "f1",
+            "completed",
+            [
+                {
+                    "id": "n1",
+                    "status": "completed",
+                    "bound_session_id": "child-session",
+                    "bound_interaction_id": "interaction-1",
+                    "completion_evidence": "Selected Alpha for s6case.",
+                }
+            ],
+            childask_mode="auto",
+            director_decisions=1,
+            decisions=[
+                {
+                    "label": "answered a child question",
+                    "actor": "director",
+                    "decision_class": "childAsk",
+                    "interaction_id": "interaction-1",
+                    "timestamp": "2026-07-08T01:00:00Z",
+                },
+                {
+                    "label": "routed child questions to the Director",
+                    "actor": "user",
+                    "decision_class": "childAsk",
+                    "timestamp": "2026-07-08T01:00:01Z",
+                },
+            ],
+            evidence_summaries=["Director answered Alpha for s6case."],
+            routing_decisions=[{"operation": "agent_run.start", "route_kind": "fresh_child"}],
+        )
+        events = [
+            {"seq": 8, "nodes": [{"id": "n1", "status": "completed", "bound_interaction_id": "interaction-1"}]},
+        ]
+
+        with self.assertRaises(director_e2e.E2EFailure):
+            director_e2e.assert_s6_childask_flip(
+                [final],
+                events,
+                interaction_id="interaction-1",
+                seq_before_flip=7,
+                token="s6case",
+            )
+
     def test_childask_mode_reads_compact_autonomy_summary(self) -> None:
         ask = observation("f1", "draft", [], childask_mode="ask")
         auto = observation("f2", "draft", [], childask_mode="auto")
@@ -617,7 +734,7 @@ Loaded roots: demo → /repo/fallback
                 }
             ],
             evidence_summaries=["Child reported S5_CHILD_ANSWER=Alpha S5-ask-test"],
-            routing_decisions=[{"operation": "agent_run.start", "decision": "start_fresh_readonly_child"}],
+            routing_decisions=[{"operation": "agent_run.start", "route_kind": "fresh_child"}],
         )
 
         self.assertEqual(
@@ -646,7 +763,7 @@ Loaded roots: demo → /repo/fallback
                 }
             ],
             evidence_summaries=["Alpha"],
-            routing_decisions=[{"operation": "agent_run.start", "decision": "start_fresh_readonly_child"}],
+            routing_decisions=[{"operation": "agent_run.start", "route_kind": "fresh_child"}],
         )
 
         with self.assertRaises(director_e2e.E2EFailure):
@@ -677,7 +794,7 @@ Loaded roots: demo → /repo/fallback
                 }
             ],
             evidence_summaries=["Director answered Alpha for the child question S5-auto-test"],
-            routing_decisions=[{"operation": "agent_run.start", "decision": "start_fresh_readonly_child"}],
+            routing_decisions=[{"operation": "agent_run.start", "route_kind": "fresh_child"}],
         )
 
         self.assertEqual(
@@ -757,6 +874,49 @@ Loaded roots: demo → /repo/fallback
 
         self.assertFalse(director_e2e.has_pending_child_question(obs))
 
+    def test_pending_child_question_wait_rejects_blocked_child_before_idle_timeout(self) -> None:
+        obs = observation(
+            "f1",
+            "blocked",
+            [{"id": "n1", "status": "blocked"}],
+            running=0,
+            needs_you=0,
+        )
+
+        with self.assertRaisesRegex(director_e2e.E2EFailure, "S6 childAsk reached blocked"):
+            director_e2e.pending_child_question_or_failed(obs, "S6 childAsk")
+
+    def test_s6_child_question_wait_requires_interaction_id(self) -> None:
+        obs = observation(
+            "f1",
+            "running",
+            [{"id": "n1", "status": "running"}],
+            needs_you=1,
+        )
+
+        self.assertFalse(director_e2e.pending_child_question_with_interaction_or_failed(obs, "S6 childAsk"))
+
+    def test_s6_child_question_wait_accepts_bound_row_interaction_id(self) -> None:
+        obs = observation(
+            "f1",
+            "running",
+            [
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "bound_row": {
+                        "run_state": "waitingForQuestion",
+                        "status_group": "needsYou",
+                        "interaction_id": "interaction-1",
+                    },
+                }
+            ],
+            needs_you=1,
+        )
+
+        self.assertTrue(director_e2e.pending_child_question_with_interaction_or_failed(obs, "S6 childAsk"))
+        self.assertEqual(director_e2e.node_bound_interaction_ids(obs.full), ["interaction-1"])
+
     def test_s5_auto_rejects_observed_user_queue(self) -> None:
         pending = observation(
             "f1",
@@ -787,7 +947,7 @@ Loaded roots: demo → /repo/fallback
                 }
             ],
             evidence_summaries=["Alpha"],
-            routing_decisions=[{"operation": "agent_run.start", "decision": "start_fresh_readonly_child"}],
+            routing_decisions=[{"operation": "agent_run.start", "route_kind": "fresh_child"}],
         )
 
         with self.assertRaises(director_e2e.E2EFailure):

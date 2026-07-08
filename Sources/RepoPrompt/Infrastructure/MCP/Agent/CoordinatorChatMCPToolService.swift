@@ -235,15 +235,22 @@ struct CoordinatorChatMCPToolService {
                 environment.selectCoordinator(sessionID)
             }
 
+            let selectedSnapshot = environment.snapshot()
             let pendingChildRow = newParent ? nil : environment.activePendingChildInteractionRow()
             let result: CoordinatorModeViewModel.DirectiveSubmissionResult
             let routedToChildInteraction: Bool
             if let pendingChildRow {
+                let actor = decisionActor(for: metadata)
+                try validateRuntimeChildInteractionSubmitAllowed(
+                    actor: actor,
+                    row: pendingChildRow,
+                    snapshot: selectedSnapshot
+                )
                 let submission = try pendingChildSubmission(args: args, message: message)
                 result = await environment.submitPendingChildInteractionResponse(
                     submission,
                     pendingChildRow,
-                    decisionActor(for: metadata)
+                    actor
                 )
                 routedToChildInteraction = true
             } else {
@@ -480,6 +487,23 @@ struct CoordinatorChatMCPToolService {
             return .director
         }
         return .user
+    }
+
+    private func validateRuntimeChildInteractionSubmitAllowed(
+        actor: CoordinatorMissionDecisionActor,
+        row: CoordinatorModeRow,
+        snapshot: CoordinatorModeSnapshot
+    ) throws {
+        guard actor == .director else { return }
+        let coordinatorSessionID = row.parentCoordinator?.sessionID ?? snapshot.coordinatorRail.coordinatorSessionID
+        guard let coordinatorSessionID,
+              let plan = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == coordinatorSessionID })?.missionPlan
+        else {
+            throw MCPError.invalidParams("Coordinator runtime cannot answer child questions without a selected Mission Plan that routes child questions to Director.")
+        }
+        guard plan.resolvedAutonomy(for: .childAsk) == .auto else {
+            throw MCPError.invalidParams("Coordinator runtime cannot answer this child question because current Mission Policy routes child questions to Me. Wait for an external answer, or for an external user action to route child questions to Director.")
+        }
     }
 
     private func findReusableMissionID(missionKey: String, in snapshot: CoordinatorModeSnapshot) -> UUID? {
