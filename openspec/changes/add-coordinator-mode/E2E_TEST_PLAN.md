@@ -47,13 +47,21 @@ launches while pending; Proceed launches exactly the ready set and records a
 **user-actor** decision (deterministic ID); a plan revision at approval yields a **new**
 queue-item identity. UI: queue card anatomy; click-through lands at the checkpoint.
 
-**S5 — childAsk both ways.** Directive instructs the worker to ask which of two marker
-names to use. Run twice: **Me** → pending interaction appears, queue = 1, answer flows,
-child proceeds, no ⚙ for the answer; **Director** → runtime answers, ⚙ decision with
-question+answer evidence, queue stays 0. Drive Me/Director headlessly through
+**S5 — childAsk both ways.** Directive instructs a normal explore child Agent Mode session
+to ask via `ask_user` which of two marker names to use. Run twice: **Me** → pending
+interaction appears, queue = 1, answer flows, child proceeds, no ⚙ for the answer;
+**Director** → runtime answers, ⚙ decision with question+answer evidence, queue stays 0.
+Drive Me/Director headlessly through
 `coordinator_chat set_autonomy` with `autonomy_class:"childAsk"` and `mode:"ask|auto"`;
 the op itself is a user-channel parity action and must record only the dial-change
 decision, not an answer to an already-raised child question.
+Current executable `s5` runs both variants in sibling run bundles and flips pace to Auto
+before approval so the child can launch without a Step boundary. The Ask branch asserts the
+pending child question is observed and external submit routes to `child_interaction`; the
+Auto branch asserts no user-facing pending child question is observed and requires a director
+childAsk decision plus Alpha evidence at completion. Each variant carries a unique marker
+token, must show a fresh `agent_run.start` route and completed-node child binding, and the
+Ask/Auto child session and interaction IDs must be disjoint so copied evidence cannot pass.
 
 **S6 — Dial flip does not act.** Start Step; flip pace → Auto through the user-channel
 parity op.

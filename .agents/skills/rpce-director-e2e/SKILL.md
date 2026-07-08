@@ -27,6 +27,12 @@ For the Step/Auto user-action parity check:
 .agents/skills/rpce-director-e2e/scripts/director_e2e.py --scenario s6 --workspace homelab-garden --window 1 --events-mode required
 ```
 
+For the Me/Director child-question parity check:
+
+```bash
+.agents/skills/rpce-director-e2e/scripts/director_e2e.py --scenario s5 --workspace homelab-garden --window 1 --events-mode required --receipt-mode required
+```
+
 Use `--scenario smoke` to run S1 then S2. The smoke command requires `--sandbox-root` because S2 writes marker files.
 
 Useful knobs:
@@ -49,6 +55,7 @@ Useful knobs:
 
 - `s1`: read-only investigation. Expects a completed mission, route/evidence records, receipt readiness, no post-approval user decisions, and a clean optional sandbox.
 - `s2`: parallel fan-out and convergence. Expects two parents to run concurrently, a dependent summary node to wait until parents complete, then observes convergence as ready/running/completed depending on polling speed, no extra human submit after approval, cap discipline, completion, and exactly `A.md`, `B.md`, `SUMMARY.md` in the sandbox.
+- `s5`: Me/Director child-question parity. Runs the same normal explore child Agent Mode mission twice; the child must call `ask_user`, and the runner sets pace to Auto before approval so the child can launch. In Ask/Me mode it expects a visible pending child question, `coordinator_chat submit` routing to `child_interaction`, and a user childAsk answer decision. In Auto/Director mode it expects completion without a user-facing pending child question and a director childAsk decision/evidence record. Both variants require a fresh `agent_run.start`, bound child session/interaction IDs, unique marker evidence, and disjoint child refs.
 - `s6`: Step/Auto user-action parity. Starts a tiny Step mission at approval, drives `coordinator_chat set_pace`, and expects revision/fingerprint/user-decision movement while the pending approval checkpoint remains pending.
 - `smoke`: runs `s1` then `s2` with the same options.
 
@@ -59,5 +66,8 @@ The runner does not make screenshots pass/fail in v1. It prints checkpoint names
 - `plan-visible`
 - `running-fanout`
 - `convergence-ready` / `convergence-running` / `convergence-completed`
+- `childask-ask` / `childask-auto`
+- `child-question-visible`
+- `child-question-answered`
 - `pace-set-auto`
 - `completed`

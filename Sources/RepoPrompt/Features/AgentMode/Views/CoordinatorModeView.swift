@@ -8084,6 +8084,8 @@ private extension CoordinatorFollowThroughEvent {
         switch kind {
         case .childTerminal:
             "Delegated work reached a boundary"
+        case .childQuestion:
+            "Delegated child question"
         case .gateCleared:
             "Director gate cleared"
         }

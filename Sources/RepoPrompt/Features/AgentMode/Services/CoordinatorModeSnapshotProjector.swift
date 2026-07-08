@@ -288,6 +288,7 @@ struct CoordinatorModeSnapshotProjector {
                     ownerID: boardOwnerIDs[seed.id],
                     missionPlansByCoordinatorID: missionPlansByCoordinatorID
                 ),
+                parentMissionPlan: boardOwnerIDs[seed.id].flatMap { missionPlansByCoordinatorID[$0] },
                 origin: rowOrigin(for: seed, ownerIDs: boardOwnerIDs),
                 input: input,
                 routeBuilder: routeBuilder
@@ -304,6 +305,7 @@ struct CoordinatorModeSnapshotProjector {
                     ownerID: allCoordinatorOwnerIDs[seed.id],
                     missionPlansByCoordinatorID: missionPlansByCoordinatorID
                 ),
+                parentMissionPlan: allCoordinatorOwnerIDs[seed.id].flatMap { missionPlansByCoordinatorID[$0] },
                 origin: rowOrigin(for: seed, ownerIDs: boardOwnerIDs),
                 input: input,
                 routeBuilder: routeBuilder
@@ -504,17 +506,24 @@ struct CoordinatorModeSnapshotProjector {
         isCoordinator: Bool,
         parentCoordinator: CoordinatorModeRow.ParentCoordinator?,
         declaredWorkstream: CoordinatorMissionWorkstreamSummary?,
+        parentMissionPlan: CoordinatorMissionPlan?,
         origin: CoordinatorModeRowOrigin,
         input: Input,
         routeBuilder: RouteBuilder
     ) -> CoordinatorModeRow {
         let route = routeBuilder.route(tabID: seed.tabID, sessionID: seed.id)
         let mcpSnapshot = seed.isPersistedOnly ? nil : input.mcpSnapshotsBySessionID[seed.id]
-        let pendingInteraction = pendingInteractionSummary(
+        let rawPendingInteraction = pendingInteractionSummary(
             snapshot: mcpSnapshot,
             route: route
         )
-        let statusGroup = statusGroup(for: seed)
+        let directorRoutedChildQuestion = isDirectorRoutedChildQuestion(
+            seed: seed,
+            pendingInteraction: rawPendingInteraction,
+            parentMissionPlan: parentMissionPlan
+        )
+        let pendingInteraction = directorRoutedChildQuestion ? nil : rawPendingInteraction
+        let statusGroup = statusGroup(for: seed, directorRoutedChildQuestion: directorRoutedChildQuestion)
         let workstream = workstream(from: seed.worktreeBindingSummaries.first)
         let mergeAttention = mergeAttention(from: seed.activeWorktreeMergeSummaries)
         let workstreamSummary = workstreamSummary(
@@ -685,7 +694,10 @@ struct CoordinatorModeSnapshotProjector {
         )
     }
 
-    private func statusGroup(for seed: RowSeed) -> CoordinatorModeStatusGroup {
+    private func statusGroup(for seed: RowSeed, directorRoutedChildQuestion: Bool = false) -> CoordinatorModeStatusGroup {
+        if directorRoutedChildQuestion {
+            return .working
+        }
         if !seed.isPersistedOnly, isNeedsYou(seed.runState) {
             return .needsYou
         }
@@ -712,6 +724,19 @@ struct CoordinatorModeSnapshotProjector {
         case .waitingForUser, .waitingForQuestion, .waitingForApproval: true
         case .idle, .running, .completed, .cancelled, .failed: false
         }
+    }
+
+    private func isDirectorRoutedChildQuestion(
+        seed: RowSeed,
+        pendingInteraction: CoordinatorModePendingInteractionSummary?,
+        parentMissionPlan: CoordinatorMissionPlan?
+    ) -> Bool {
+        guard !seed.isCoordinatorInternal,
+              pendingInteraction?.kind == .question,
+              isNeedsYou(seed.runState),
+              parentMissionPlan?.resolvedAutonomy(for: .childAsk) == .auto
+        else { return false }
+        return true
     }
 
     private func canAcceptCoordinatorDirective(_ state: AgentSessionRunState) -> Bool {

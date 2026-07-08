@@ -441,6 +441,11 @@ def compact_status(client: RpcClient, session_id: str) -> dict[str, Any]:
     status = response.get("mission_status")
     if not isinstance(status, dict):
         raise E2EFailure("mission_status compact response did not include mission_status object")
+    status = dict(status)
+    if isinstance(response.get("counts"), dict):
+        status.setdefault("counts", response["counts"])
+    if response.get("selected_coordinator_session_id"):
+        status.setdefault("coordinator_session_id", response["selected_coordinator_session_id"])
     return status
 
 
@@ -504,6 +509,7 @@ def observation_signature(obs: Observation, extra: Any | None = None) -> dict[st
         "plan_status": str(compact_plan.get("status") or ""),
         "plan_revision": compact_plan.get("revision") or compact_plan.get("plan_revision"),
         "node_counts": obs.compact.get("node_counts") or {},
+        "surface_counts": obs.compact.get("counts") or {},
         "ready_node_ids": list(obs.compact.get("ready_node_ids") or []),
         "active_nodes": obs.compact.get("active_nodes") or [],
         "warnings": obs.compact.get("liveness_warnings") or obs.compact.get("warnings") or [],
@@ -736,6 +742,9 @@ def approve_initial_plan(client: RpcClient, artifacts: RunArtifacts, session_id:
     deadline = time.monotonic() + args.timeout_seconds
     last_error = ""
     while time.monotonic() < deadline:
+        if plan_advanced_past_initial_approval(obs.compact):
+            artifacts.add_checkpoint("plan-approved")
+            return
         checkpoint = obs.compact.get("checkpoint") or {}
         actions = checkpoint.get("actions") or []
         proceed = next((action for action in actions if action.get("label") == "Proceed"), None)
@@ -791,7 +800,28 @@ def running_count(obs: Observation) -> int:
 def has_running_work_that_could_still_complete(obs: Observation) -> bool:
     if running_count(obs) <= 0:
         return False
+    warnings = {str(item) for item in (obs.compact.get("liveness_warnings") or obs.compact.get("warnings") or [])}
     active_nodes = list(obs.compact.get("active_nodes") or [])
+
+    def has_bound_running_node() -> bool:
+        return any(
+            str(node.get("status") or "") == "running"
+            and (
+                node.get("bound_session_id")
+                or node.get("bound_row_run_state")
+                or node.get("bound_row_status_group")
+            )
+            for node in active_nodes
+            if isinstance(node, dict)
+        )
+
+    if (
+        "coordinator_run_state_is_not_active_but_plan_has_active_nodes" in warnings
+        and "running_delegated_nodes_without_bound_sessions" in warnings
+    ):
+        return has_bound_running_node()
+    if "running_delegated_nodes_without_bound_sessions" in warnings:
+        return has_bound_running_node()
     if not active_nodes:
         return True
     running_active = [node for node in active_nodes if str(node.get("status") or "") == "running"]
@@ -857,8 +887,231 @@ def has_checkpoint_action(status: dict[str, Any], label: str) -> bool:
     return any(str(action.get("label") or "") == label for action in actions if isinstance(action, dict))
 
 
+def plan_advanced_past_initial_approval(status: dict[str, Any]) -> bool:
+    approval_state = plan_approval_state(status)
+    return approval_state == "approved"
+
+
+def plan_childask_mode(status: dict[str, Any]) -> str:
+    plan = status.get("plan") or {}
+    autonomy_summary = plan.get("autonomy_summary") or {}
+    auto = {str(item) for item in (autonomy_summary.get("auto") or [])}
+    ask = {str(item) for item in (autonomy_summary.get("ask") or [])}
+    if "childAsk" in auto:
+        return "auto"
+    if "childAsk" in ask:
+        return "ask"
+    autonomy = plan.get("autonomy") or {}
+    value = str(autonomy.get("childAsk") or "").lower()
+    if value in {"ask", "auto"}:
+        return value
+    return "unknown"
+
+
+def needs_you_count(obs: Observation) -> int:
+    try:
+        return int((obs.compact.get("counts") or {}).get("needs_you") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def has_pending_child_question(obs: Observation) -> bool:
+    saw_node_shape = False
+    for node in obs.compact.get("active_nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        saw_node_shape = True
+        status_group = str(node.get("bound_row_status_group") or "")
+        if status_group == "needsYou":
+            return True
+        if str(node.get("bound_row_run_state") or "") == "waitingForQuestion" and status_group != "working":
+            return True
+    for node in obs.nodes:
+        bound_row = node.get("bound_row")
+        if isinstance(bound_row, dict) and bound_row:
+            saw_node_shape = True
+            status_group = str(bound_row.get("status_group") or "")
+            if status_group == "needsYou":
+                return True
+            if str(bound_row.get("run_state") or "") == "waitingForQuestion" and status_group != "working":
+                return True
+    if needs_you_count(obs) > 0 and not saw_node_shape:
+        return True
+    return False
+
+
+def mission_plan_payload(status: dict[str, Any]) -> dict[str, Any]:
+    plan = status.get("plan")
+    if isinstance(plan, dict):
+        return plan
+    nested = status.get("mission_status")
+    if isinstance(nested, dict) and isinstance(nested.get("plan"), dict):
+        return nested["plan"]
+    return {}
+
+
+def plan_decisions(status: dict[str, Any]) -> list[dict[str, Any]]:
+    plan = mission_plan_payload(status)
+    decisions = plan.get("decisions") or status.get("decisions") or []
+    return [decision for decision in decisions if isinstance(decision, dict)]
+
+
+def plan_evidence(status: dict[str, Any]) -> list[dict[str, Any]]:
+    plan = mission_plan_payload(status)
+    evidence = plan.get("evidence") or status.get("evidence") or []
+    return [item for item in evidence if isinstance(item, dict)]
+
+
+def plan_routing_decisions(status: dict[str, Any]) -> list[dict[str, Any]]:
+    plan = mission_plan_payload(status)
+    decisions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in [
+        status.get("routing_decisions_recent"),
+        status.get("routing_decisions"),
+        plan.get("routing_decisions"),
+    ]:
+        if isinstance(candidate, list):
+            for item in candidate:
+                if not isinstance(item, dict):
+                    continue
+                key = str(
+                    item.get("id")
+                    or item.get("routing_decision_id")
+                    or item.get("decision_id")
+                    or _stable_json(item)
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                decisions.append(item)
+    return decisions
+
+
+def decision_matches(
+    decision: dict[str, Any],
+    *,
+    label: str | None = None,
+    actor: str | None = None,
+    decision_class: str | None = None,
+) -> bool:
+    if label is not None and str(decision.get("label") or "") != label:
+        return False
+    if actor is not None and str(decision.get("actor") or "") != actor:
+        return False
+    if decision_class is not None:
+        classes = {
+            str(decision.get("decision_class") or ""),
+            str(decision.get("resolved_autonomy_class") or ""),
+        }
+        if decision_class not in classes:
+            return False
+    return True
+
+
+def has_decision(
+    status: dict[str, Any],
+    *,
+    label: str | None = None,
+    actor: str | None = None,
+    decision_class: str | None = None,
+) -> bool:
+    return any(
+        decision_matches(decision, label=label, actor=actor, decision_class=decision_class)
+        for decision in plan_decisions(status)
+    )
+
+
+def evidence_text(status: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for item in plan_evidence(status):
+        parts.extend(str(item.get(key) or "") for key in ["summary", "source", "details", "quote"])
+    for node in status.get("nodes") or []:
+        if isinstance(node, dict):
+            parts.append(str(node.get("completion_evidence") or ""))
+    return "\n".join(part for part in parts if part).lower()
+
+
 def routing_decision_count(full: dict[str, Any]) -> int:
-    return len(full.get("routing_decisions_recent") or ((full.get("plan") or {}).get("routing_decisions") or []))
+    return len(plan_routing_decisions(full))
+
+
+def routing_is_agent_run_start(decision: dict[str, Any]) -> bool:
+    values = " ".join(
+        str(decision.get(key) or "")
+        for key in [
+            "operation",
+            "operation_display_name",
+            "tool",
+            "label",
+            "decision",
+            "route",
+            "routed_to",
+            "command",
+        ]
+    ).lower()
+    return "agent_run.start" in values or "start_fresh_readonly_child" in values
+
+
+def observed_agent_run_start(observations: Iterable[Observation]) -> bool:
+    for obs in observations:
+        for status in [obs.compact, obs.full]:
+            if any(routing_is_agent_run_start(item) for item in plan_routing_decisions(status)):
+                return True
+    return False
+
+
+def bound_child_refs(status: dict[str, Any]) -> dict[str, list[str]]:
+    sessions: set[str] = set()
+    interactions: set[str] = set()
+    for node in status.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        for key in ["bound_session_id", "session_id", "agent_session_id"]:
+            value = str(node.get(key) or "")
+            if value:
+                sessions.add(value)
+        for key in ["bound_interaction_id", "interaction_id", "pending_interaction_id"]:
+            value = str(node.get(key) or "")
+            if value:
+                interactions.add(value)
+        bound_row = node.get("bound_row")
+        if isinstance(bound_row, dict):
+            for key in ["bound_session_id", "session_id", "agent_session_id"]:
+                value = str(bound_row.get(key) or "")
+                if value:
+                    sessions.add(value)
+            for key in ["bound_interaction_id", "interaction_id", "pending_interaction_id"]:
+                value = str(bound_row.get(key) or "")
+                if value:
+                    interactions.add(value)
+    return {"sessions": sorted(sessions), "interactions": sorted(interactions)}
+
+
+def assert_s5_fresh_child_launch(observations: list[Observation], mode: str) -> dict[str, list[str]]:
+    if not observed_agent_run_start(observations):
+        raise E2EFailure(f"S5 {mode} expected a fresh agent_run.start routing decision")
+    refs = bound_child_refs(observations[-1].full)
+    if not refs["sessions"]:
+        raise E2EFailure(f"S5 {mode} expected the completed node to retain a bound child session id")
+    if not refs["interactions"]:
+        raise E2EFailure(f"S5 {mode} expected the completed node to retain a bound child interaction id")
+    return refs
+
+
+def assert_s5_variant_token(status: dict[str, Any], token: str | None, mode: str) -> None:
+    if token and token.lower() not in evidence_text(status):
+        raise E2EFailure(f"S5 {mode} expected evidence/completion text to include variant token {token}")
+
+
+def assert_s5_variant_refs_disjoint(ask_refs: dict[str, list[str]], auto_refs: dict[str, list[str]]) -> None:
+    shared_sessions = sorted(set(ask_refs.get("sessions") or []) & set(auto_refs.get("sessions") or []))
+    shared_interactions = sorted(set(ask_refs.get("interactions") or []) & set(auto_refs.get("interactions") or []))
+    if shared_sessions or shared_interactions:
+        raise E2EFailure(
+            "S5 ask and auto variants reused child bindings: "
+            f"sessions={shared_sessions or 'none'} interactions={shared_interactions or 'none'}"
+        )
 
 
 def terminal_completed(obs: Observation) -> bool:
@@ -995,6 +1248,55 @@ def assert_s6_pace_flip(before: Observation, after: Observation) -> None:
         raise E2EFailure("S6 expected pending approval checkpoint to keep its Proceed action after set_pace")
 
 
+def assert_s5_ask(observations: list[Observation], token: str | None = None) -> dict[str, list[str]]:
+    final = observations[-1]
+    if final.status != "completed":
+        raise E2EFailure(f"S5 ask expected completed mission, got {final.status}")
+    if not any(has_pending_child_question(obs) for obs in observations):
+        raise E2EFailure("S5 ask never observed a pending child question / Decisions queue item")
+    if needs_you_count(final) != 0:
+        raise E2EFailure(f"S5 ask expected no pending Decisions at completion, got {needs_you_count(final)}")
+    if not has_decision(final.full, label="answered a child question", actor="user", decision_class="childAsk"):
+        raise E2EFailure("S5 ask expected a user actor childAsk decision for the external answer")
+    if "alpha" not in evidence_text(final.full):
+        raise E2EFailure("S5 ask expected final evidence/completion text to mention Alpha")
+    assert_s5_variant_token(final.full, token, "ask")
+    refs = assert_s5_fresh_child_launch(observations, "ask")
+    assert_common_status_integrity(observations)
+    return refs
+
+
+def assert_s5_auto(observations: list[Observation], token: str | None = None) -> dict[str, list[str]]:
+    final = observations[-1]
+    if final.status != "completed":
+        raise E2EFailure(f"S5 auto expected completed mission, got {final.status}")
+    if any(has_pending_child_question(obs) for obs in observations):
+        raise E2EFailure("S5 auto observed a user-facing pending child question")
+    if has_decision(final.full, label="answered a child question", actor="user", decision_class="childAsk"):
+        raise E2EFailure("S5 auto must not record a user actor child-answer decision")
+    director_child_decision = any(
+        decision_matches(decision, actor="director", decision_class="childAsk")
+        or (
+            str(decision.get("actor") or "") == "director"
+            and "child question" in " ".join(
+                str(decision.get(key) or "").lower()
+                for key in ["label", "reason", "checkpoint_id", "checkpoint_instance_id"]
+            )
+        )
+        for decision in plan_decisions(final.full)
+    )
+    if not director_child_decision:
+        raise E2EFailure("S5 auto expected a director child-question decision explaining the answer")
+    if "alpha" not in evidence_text(final.full):
+        raise E2EFailure("S5 auto expected final evidence/completion text to mention Alpha")
+    assert_s5_variant_token(final.full, token, "auto")
+    if needs_you_count(final) != 0:
+        raise E2EFailure(f"S5 auto expected no pending Decisions at completion, got {needs_you_count(final)}")
+    refs = assert_s5_fresh_child_launch(observations, "auto")
+    assert_common_status_integrity(observations)
+    return refs
+
+
 def s2_event_convergence_node(event: dict[str, Any]) -> dict[str, Any] | None:
     nodes = [node for node in (event.get("nodes") or []) if isinstance(node, dict)]
     candidates = [node for node in nodes if len(node.get("depends_on") or []) >= 2]
@@ -1092,6 +1394,31 @@ def s6_message() -> str:
         "Keep the plan tiny: one coordinator-only verification node that would inspect status "
         "after approval, but do not start any child sessions until approved. Do not edit files, "
         "run validation, commit, push, open PRs, merge, or start a follow-up Mission."
+    )
+
+
+def s5_message(mode: str, variant_token: str | None = None) -> str:
+    token = variant_token or "S5-child-marker"
+    return (
+        "Run this as a scoped Director mission for a Me/Director child-question smoke test. "
+        'Record a visible Mission Plan with approval_state:"awaiting_approval" before child sessions. '
+        "After approval, launch exactly one narrow read-only child Agent Mode session using `agent_run.start` "
+        "with `model_id:\"explore\"`, the planned `mission_node_id`, and no workflow_name or worktree. The child "
+        "must call the MCP tool named `ask_user` exactly once before it can complete; it must not merely print "
+        f"the question as its final answer. Use this structured request payload: title `S5 child marker choice {token}`; one "
+        "question with id `marker_choice`, question `Which marker should this child use?`, single-select "
+        "options `Alpha` and `Beta`, and `allows_custom:false`. The expected safe answer is `Alpha`. The child "
+        f"final output, plan evidence, and node completion evidence must include the exact token `{token}`. If the "
+        "child cannot call `ask_user`, it must report `S5_ASK_USER_UNAVAILABLE` and stop. If current "
+        "Mission Policy "
+        "routes child questions to Me, pause for the external answer. If current Mission Policy routes "
+        "child questions to the Director, answer `Alpha` yourself, then record a director child-question "
+        "decision and evidence explaining that answer. After the answer, wait for the child final output, then "
+        "mark the node completed only after replacing `completion_evidence` with result evidence that includes "
+        f"the exact selected marker `Alpha` and token `{token}`. The child should report the selected answer in normal text that "
+        "includes `Alpha`, record evidence, and stop. Do not reuse any session_id, interaction_id, routing_decision, "
+        "node_id, or evidence from another S5 variant or prior Mission. Do not edit files, run validation, commit, "
+        f"push, open PRs, merge, or start a follow-up Mission. This run is the `{mode}` variant."
     )
 
 
@@ -1233,6 +1560,186 @@ def run_s2(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
     })
 
 
+def set_childask_mode(
+    client: RpcClient,
+    artifacts: RunArtifacts,
+    session_id: str,
+    mode: str,
+    args: argparse.Namespace,
+) -> Observation:
+    response = client.coordinator({
+        "op": "set_autonomy",
+        "coordinator_session_id": session_id,
+        "autonomy_class": "childAsk",
+        "mode": mode,
+        "compact": True,
+    }, timeout=180)
+    write_json(artifacts.root / f"set_autonomy_{mode}_response.json", response)
+    if response.get("accepted") is False:
+        raise E2EFailure(f"S5 set_autonomy {mode} rejected: {response.get('error') or response}")
+    if response.get("routed_to") != "set_autonomy":
+        raise E2EFailure(f"S5 set_autonomy response did not report routed_to=set_autonomy: {response}")
+    obs = observe(client, artifacts, session_id)
+    capture_mission_events(client, artifacts, session_id, args.events_mode)
+    if plan_childask_mode(obs.compact) != mode:
+        raise E2EFailure(f"S5 expected childAsk mode {mode}, got {plan_childask_mode(obs.compact)!r}")
+    artifacts.add_checkpoint(f"childask-{mode}")
+    return obs
+
+
+def set_pace_auto_for_s5(
+    client: RpcClient,
+    artifacts: RunArtifacts,
+    session_id: str,
+    args: argparse.Namespace,
+) -> Observation:
+    if artifacts.observations and plan_default_pace(artifacts.observations[-1].compact) == "auto":
+        return artifacts.observations[-1]
+    response = client.coordinator({
+        "op": "set_pace",
+        "coordinator_session_id": session_id,
+        "pace": "auto",
+        "compact": True,
+    }, timeout=180)
+    write_json(artifacts.root / "set_pace_auto_response.json", response)
+    if response.get("accepted") is False:
+        raise E2EFailure(f"S5 set_pace auto rejected: {response.get('error') or response}")
+    if response.get("routed_to") != "set_pace":
+        raise E2EFailure(f"S5 set_pace response did not report routed_to=set_pace: {response}")
+    obs = observe(client, artifacts, session_id)
+    capture_mission_events(client, artifacts, session_id, args.events_mode)
+    if plan_default_pace(obs.compact) != "auto":
+        raise E2EFailure(f"S5 expected Auto pace, got {plan_default_pace(obs.compact)!r}")
+    artifacts.add_checkpoint("pace-set-auto")
+    return obs
+
+
+def run_s5_variant(
+    client: RpcClient,
+    artifacts: RunArtifacts,
+    args: argparse.Namespace,
+    mode: str,
+) -> dict[str, list[str]]:
+    artifacts.record_timing("started")
+    variant_token = f"S5-{mode}-{uuid.uuid4().hex[:8]}"
+    session_id = start_mission(
+        client,
+        f"Director E2E S5 childAsk {mode} {variant_token}",
+        s5_message(mode, variant_token),
+        f"s5-{mode}",
+    )
+    wait_until(
+        client,
+        artifacts,
+        session_id,
+        lambda item: plan_approval_state(item.compact) == "awaiting_approval" and has_checkpoint_action(item.compact, "Proceed"),
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("plan-visible")
+    set_childask_mode(client, artifacts, session_id, mode, args)
+    set_pace_auto_for_s5(client, artifacts, session_id, args)
+    approve_initial_plan(client, artifacts, session_id, args)
+
+    if mode == "ask":
+        def pending_child_question_or_failed(obs: Observation) -> bool:
+            if has_pending_child_question(obs):
+                return True
+            if obs.status in {"blocked", "completed", "stopped", "cancelled"}:
+                raise E2EFailure(
+                    "S5 ask reached terminal/blocking state without a visible pending child question"
+                )
+            if obs.nodes and all(str(node.get("status") or "") not in {"pending", "running"} for node in obs.nodes):
+                raise E2EFailure(
+                    "S5 ask has no runnable child node left before a pending child question appeared"
+                )
+            return False
+
+        wait_until(
+            client,
+            artifacts,
+            session_id,
+            pending_child_question_or_failed,
+            args.timeout_seconds,
+            idle_timeout_seconds=args.idle_timeout_seconds,
+            events_mode=args.events_mode,
+        )
+        artifacts.add_checkpoint("child-question-visible")
+        response = client.coordinator({
+            "op": "submit",
+            "coordinator_session_id": session_id,
+            "answers": {
+                "marker_choice": {
+                    "answers": ["Alpha"],
+                    "selected_options": ["Alpha"],
+                },
+            },
+            "compact": True,
+        }, timeout=180)
+        write_json(artifacts.root / "child_answer_response.json", response)
+        if response.get("accepted") is False:
+            raise E2EFailure(f"S5 child answer rejected: {response.get('error') or response}")
+        if response.get("routed_to") != "child_interaction":
+            raise E2EFailure(f"S5 child answer did not route to child_interaction: {response}")
+        artifacts.add_checkpoint("child-question-answered")
+        final = wait_until(
+            client,
+            artifacts,
+            session_id,
+            terminal_completed,
+            args.timeout_seconds,
+            idle_timeout_seconds=args.idle_timeout_seconds,
+            events_mode=args.events_mode,
+        )
+        child_refs = assert_s5_ask(artifacts.observations, variant_token)
+    else:
+        def done_without_user_queue(obs: Observation) -> bool:
+            if has_pending_child_question(obs):
+                raise E2EFailure("S5 auto observed a user-facing child question before completion")
+            return terminal_completed(obs)
+
+        final = wait_until(
+            client,
+            artifacts,
+            session_id,
+            done_without_user_queue,
+            args.timeout_seconds,
+            idle_timeout_seconds=args.idle_timeout_seconds,
+            events_mode=args.events_mode,
+        )
+        child_refs = assert_s5_auto(artifacts.observations, variant_token)
+
+    artifacts.add_checkpoint("completed")
+    capture_receipt(client, artifacts, session_id, args.receipt_mode)
+    artifacts.finalize(True, f"s5-{mode}", {
+        "coordinator_session_id": session_id,
+        "final_status": final.status,
+        "childask_mode": mode,
+        "variant_token": variant_token,
+        "child_refs": child_refs,
+        "observed_pending_child_question": any(has_pending_child_question(obs) for obs in artifacts.observations),
+    })
+    return child_refs
+
+
+def run_s5(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> None:
+    results: list[dict[str, Any]] = []
+    refs_by_mode: dict[str, dict[str, list[str]]] = {}
+    for mode in ["ask", "auto"]:
+        variant_artifacts = RunArtifacts(artifacts.root / mode)
+        variant_client = RpcClient(client.cli, client.window, client.repo_root, variant_artifacts)
+        refs_by_mode[mode] = run_s5_variant(variant_client, variant_artifacts, args, mode)
+        results.append({
+            "mode": mode,
+            "passed": True,
+            "artifact_dir": str(variant_artifacts.root),
+            "report": variant_artifacts.report,
+        })
+    assert_s5_variant_refs_disjoint(refs_by_mode["ask"], refs_by_mode["auto"])
+    artifacts.finalize(True, "s5", {"variants": results})
+
+
 def run_s6(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> None:
     artifacts.record_timing("started")
     session_id = start_mission(client, "Director E2E S6 pace flip", s6_message(), "s6")
@@ -1276,6 +1783,8 @@ def run_scenario(client: RpcClient, artifacts: RunArtifacts, args: argparse.Name
         run_s1(client, artifacts, args)
     elif args.scenario == "s2":
         run_s2(client, artifacts, args)
+    elif args.scenario == "s5":
+        run_s5(client, artifacts, args)
     elif args.scenario == "s6":
         run_s6(client, artifacts, args)
     elif args.scenario == "smoke":
@@ -1296,7 +1805,7 @@ def run_scenario(client: RpcClient, artifacts: RunArtifacts, args: argparse.Name
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run live Director mission E2E scenarios.")
-    parser.add_argument("--scenario", choices=["s1", "s2", "s6", "smoke"], default="s1")
+    parser.add_argument("--scenario", choices=["s1", "s2", "s5", "s6", "smoke"], default="s1")
     parser.add_argument("--workspace", default="homelab-garden")
     parser.add_argument("--window", type=int, default=1)
     parser.add_argument("--timeout-seconds", type=int, default=900)

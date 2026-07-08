@@ -947,6 +947,58 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertNil(missingRouteSnapshot.pendingInteractions.first?.openAgentChatRoute)
     }
 
+    func testChildAskAutoSuppressesUserFacingPendingInteraction() {
+        let coordinatorID = uuid(10)
+        let childID = uuid(1)
+        let childTabID = uuid(101)
+        var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
+        autonomy[CoordinatorMissionAutonomyClasses.childAsk.key] = .auto
+        let plan = CoordinatorMissionPlan(
+            objective: "Answer child questions as Director.",
+            status: .running,
+            approvalState: .approved,
+            autonomy: autonomy,
+            updatedAt: date(30)
+        )
+        let interaction = AgentRunMCPSnapshot.Interaction(
+            id: uuid(200),
+            kind: .question,
+            responseType: .structured,
+            title: "S5 child marker choice",
+            prompt: "Which marker should this child use?",
+            context: nil,
+            allowsMultiple: nil,
+            options: [],
+            fields: [],
+            details: []
+        )
+
+        let snapshot = projector.project(input(
+            live: [
+                live(id: coordinatorID, tab: uuid(110), title: "Coordinator Runtime Demo", updatedAt: date(40), state: .idle, coordinatorRuntime: true, missionPlan: plan),
+                live(id: childID, tab: childTabID, title: "Child", updatedAt: date(20), state: .waitingForQuestion, parent: coordinatorID)
+            ],
+            mcpSnapshots: [
+                childID: mcpSnapshot(
+                    sessionID: childID,
+                    tabID: childTabID,
+                    status: .waitingForInput,
+                    interaction: interaction,
+                    parent: coordinatorID
+                )
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        XCTAssertTrue(snapshot.pendingInteractions.isEmpty)
+        XCTAssertFalse(snapshot.decisionQueue.contains { $0.source == .interaction })
+        XCTAssertEqual(snapshot.counts.needsYou, 0)
+        XCTAssertEqual(snapshot.counts.working, 1)
+        XCTAssertEqual(rows(in: snapshot, group: .working).first?.sessionID, childID)
+        XCTAssertNil(rows(in: snapshot, group: .working).first?.pendingInteraction)
+    }
+
     func testSelectedCoordinatorOwnPendingInteractionProjectsToRail() {
         let coordinatorID = uuid(10)
         let tabID = uuid(110)

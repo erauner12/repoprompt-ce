@@ -172,6 +172,87 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(plan["nodes"]?.arrayValue?.count, 1)
     }
 
+    func testStartMissionTargetsFreshCoordinatorWhenPreviousSelectionExists() async throws {
+        let existingID = UUID()
+        let freshID = UUID()
+        var coordinatorIDs = [existingID]
+        var selectedID = existingID
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [
+            existingID: CoordinatorMissionPlan(
+                missionKey: "existing-mission",
+                objective: "Already completed Mission.",
+                status: .completed,
+                approvalState: .approved
+            )
+        ]
+        var updatedSessionIDs: [UUID] = []
+
+        let service = CoordinatorChatMCPToolService(
+            toolName: MCPWindowToolName.coordinatorChat,
+            initialMissionPlanTimeoutSeconds: 0,
+            initialMissionPlanPollIntervalSeconds: 0.01
+        ) {
+            CoordinatorChatMCPToolService.Environment(
+                snapshot: {
+                    Self.snapshot(
+                        coordinatorIDs: coordinatorIDs,
+                        selectedID: selectedID,
+                        missionPlans: missionPlans
+                    )
+                },
+                refresh: {},
+                selectCoordinator: { sessionID in
+                    selectedID = sessionID ?? existingID
+                },
+                startNewCoordinatorRun: {
+                    if !coordinatorIDs.contains(freshID) {
+                        coordinatorIDs.append(freshID)
+                    }
+                },
+                stopSelectedCoordinatorMission: { .accepted },
+                submitDirective: { _ in .accepted },
+                submitContinuation: { _ in .accepted },
+                activePendingChildInteractionRow: { nil },
+                submitPendingChildInteractionResponse: { _, _, _ in .accepted },
+                updateMissionPlan: { sessionID, update in
+                    updatedSessionIDs.append(sessionID)
+                    var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                    state.updateMissionPlan(update)
+                    missionPlans[sessionID] = state.missionPlan
+                },
+                missionEvents: { _, sinceSeq, _ in
+                    CoordinatorMissionEventJournal.Batch(
+                        events: [],
+                        nextSeq: sinceSeq,
+                        oldestSeq: nil,
+                        latestSeq: nil,
+                        truncated: false
+                    )
+                },
+                setMissionPace: { _, _ in .accepted },
+                setMissionAutonomy: { _, _, _ in .accepted }
+            )
+        }
+
+        let response = try await service.execute(args: [
+            "op": .string("start_mission"),
+            "mission_key": .string("fresh-mission"),
+            "message": .string("Start a fresh mission and publish the initial approval plan.")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+        let plan = try XCTUnwrap(object["mission_plan"]?.objectValue)
+
+        XCTAssertEqual(selectedID, freshID)
+        XCTAssertEqual(object["selected_coordinator_session_id"]?.stringValue, freshID.uuidString)
+        XCTAssertEqual(object["started_new_mission"]?.boolValue, true)
+        XCTAssertEqual(plan["mission_key"]?.stringValue, "fresh-mission")
+        XCTAssertEqual(plan["approval_state"]?.stringValue, "awaiting_approval")
+        XCTAssertEqual(plan["nodes"]?.arrayValue?.count, 1)
+        XCTAssertTrue(updatedSessionIDs.allSatisfy { $0 == freshID })
+        XCTAssertEqual(missionPlans[existingID]?.missionKey, "existing-mission")
+        XCTAssertEqual(missionPlans[freshID]?.missionKey, "fresh-mission")
+    }
+
     func testStartMissionReportsInitialPlanTimeoutWhenFallbackCannotPublish() async throws {
         let coordinatorID = UUID()
         let service = makeService(
@@ -819,6 +900,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         _ = try await service.execute(args: [
             "op": .string("mission_plan"),
             "objective": .string("Ship next PR"),
+            "approval_state": .string("approved"),
             "workstreams": .array([
                 .object([
                     "id": .string(staleWorkstreamID.uuidString),
@@ -951,6 +1033,662 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let events = try XCTUnwrap(plan["events"]?.arrayValue)
         XCTAssertEqual(events.last?.objectValue?["kind"]?.stringValue, "node_started")
         XCTAssertEqual(events.last?.objectValue?["node_id"]?.stringValue, nodeID.uuidString)
+    }
+
+    func testMissionPlanRejectsRunningDelegatedNodeWithoutBinding() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "objective": .string("Run S5 child ask"),
+                "status": .string("running"),
+                "approval_state": .string("approved"),
+                "workstreams": .array([
+                    .object([
+                        "id": .string(workstreamID.uuidString),
+                        "title": .string("Probe"),
+                        "purpose": .string("Ask one child question."),
+                        "default_policy": .string("fresh_readonly_child"),
+                        "worktree_strategy": .object(["mode": .string("noneReadOnly")])
+                    ])
+                ]),
+                "nodes": .array([
+                    .object([
+                        "id": .string(nodeID.uuidString),
+                        "title": .string("Ask marker question"),
+                        "workstream_title": .string("Probe"),
+                        "execution_policy": .string("fresh_readonly_child"),
+                        "status": .string("running")
+                    ])
+                ])
+            ])
+            XCTFail("Expected running delegated node without bound_session_id to be rejected.")
+        } catch {
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("requires bound_session_id"), message)
+            XCTAssertTrue(message.contains("agent_explore.start"), message)
+        }
+    }
+
+    func testMissionPlanRejectsRuntimeProgressBeforeInitialApproval() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let plan = CoordinatorMissionPlan(
+            missionKey: "awaiting-approval",
+            objective: "Ask before running.",
+            status: .draft,
+            approvalState: .awaitingApproval,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Probe",
+                    purpose: "Ask one child question.",
+                    role: "explore",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                        mode: .noneReadOnly,
+                        reason: "Read-only smoke."
+                    )
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Ask marker question",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild
+                )
+            ]
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "status": .string("completed"),
+                "nodes": .array([
+                    .object([
+                        "id": .string(nodeID.uuidString),
+                        "title": .string("Ask marker question"),
+                        "workstream_title": .string("Probe"),
+                        "execution_policy": .string("fresh_readonly_child"),
+                        "status": .string("completed"),
+                        "completion_evidence": .string("Stale child output says Alpha.")
+                    ])
+                ])
+            ])
+            XCTFail("Runtime mission_plan updates must not complete work before initial approval.")
+        } catch {
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("before approval_state is approved"), message)
+        }
+    }
+
+    func testMissionPlanRejectsApprovalDowngradeAfterApproval() async throws {
+        let coordinatorID = UUID()
+        let plan = CoordinatorMissionPlan(
+            missionKey: "approved-plan",
+            objective: "Already approved.",
+            status: .running,
+            approvalState: .approved
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "status": .string("draft"),
+                "approval_state": .string("awaiting_approval")
+            ])
+            XCTFail("Runtime mission_plan updates must not downgrade an approved plan.")
+        } catch {
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("cannot downgrade approval_state"), message)
+        }
+    }
+
+    func testMissionPlanAllowsRuntimeProgressWhenApprovalIsNotRequired() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { missionPlans },
+            updateMissionPlan: { sessionID, update in
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(update)
+                missionPlans[sessionID] = state.missionPlan
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "objective": .string("Legacy no-approval mission."),
+            "status": .string("running"),
+            "approval_state": .string("not_required"),
+            "workstreams": .array([
+                .object([
+                    "id": .string(workstreamID.uuidString),
+                    "title": .string("Probe"),
+                    "purpose": .string("Run without explicit approval."),
+                    "default_policy": .string("coordinator_only"),
+                    "worktree_strategy": .object(["mode": .string("noneReadOnly")])
+                ])
+            ]),
+            "nodes": .array([
+                .object([
+                    "id": .string(nodeID.uuidString),
+                    "title": .string("Inspect"),
+                    "workstream_id": .string(workstreamID.uuidString),
+                    "execution_policy": .string("coordinator_only"),
+                    "status": .string("running")
+                ])
+            ])
+        ])
+
+        let plan = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue)
+        XCTAssertEqual(plan["status"]?.stringValue, "running")
+        XCTAssertEqual(plan["approval_state"]?.stringValue, "not_required")
+    }
+
+    func testMissionPlanRejectsCompletedNodeWithStaleWaitingEvidence() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let childID = UUID()
+        let interactionID = UUID()
+        let plan = CoordinatorMissionPlan(
+            missionKey: "approved-s5",
+            objective: "Ask after approval.",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Probe",
+                    purpose: "Ask one child question.",
+                    role: "explore",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                        mode: .noneReadOnly,
+                        reason: "Read-only smoke."
+                    )
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Ask marker question",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .running,
+                    boundSessionID: childID,
+                    boundInteractionID: interactionID
+                )
+            ]
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "nodes": .array([
+                    .object([
+                        "id": .string(nodeID.uuidString),
+                        "title": .string("Ask marker question"),
+                        "workstream_title": .string("Probe"),
+                        "execution_policy": .string("fresh_readonly_child"),
+                        "status": .string("completed"),
+                        "bound_session_id": .string(childID.uuidString),
+                        "bound_interaction_id": .string(interactionID.uuidString),
+                        "completion_evidence": .string("Child is waiting at the required ask_user interaction before completion.")
+                    ])
+                ])
+            ])
+            XCTFail("Completed nodes must not keep stale waiting evidence.")
+        } catch {
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("stale waiting/bound state"), message)
+        }
+    }
+
+    func testMissionPlanRejectsChildAskAutoCompletionWithoutDirectorLedger() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let childID = UUID()
+        let interactionID = UUID()
+        var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
+        autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
+        let plan = CoordinatorMissionPlan(
+            missionKey: "auto-child-ask",
+            objective: "Answer child questions as Director.",
+            status: .running,
+            approvalState: .approved,
+            autonomy: autonomy,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Probe",
+                    purpose: "Ask one child question.",
+                    role: "explore",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                        mode: .noneReadOnly,
+                        reason: "Read-only smoke."
+                    )
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Ask marker question",
+                    completionEvidence: "Child is running.",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .running,
+                    boundSessionID: childID,
+                    boundInteractionID: interactionID
+                )
+            ]
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        do {
+            let args: [String: Value] = [
+                "op": .string("mission_plan"),
+                "status": .string("completed"),
+                "nodes": .array([
+                    .object([
+                        "id": .string(nodeID.uuidString),
+                        "title": .string("Ask marker question"),
+                        "workstream_title": .string("Probe"),
+                        "execution_policy": .string("fresh_readonly_child"),
+                        "status": .string("completed"),
+                        "bound_session_id": .string(childID.uuidString),
+                        "bound_interaction_id": .string(interactionID.uuidString),
+                        "completion_evidence": .string("Child final output selected marker Alpha.")
+                    ])
+                ])
+            ]
+            _ = try await service.execute(args: args)
+            XCTFail("childAsk:auto completion must include childAsk ledger records.")
+        } catch {
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("childAsk decision and evidence"), message)
+        }
+    }
+
+    func testMissionPlanRejectsPolicySnapshotChildAskAutoCompletionWithoutDirectorLedger() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let childID = UUID()
+        let interactionID = UUID()
+        var policySnapshot = CoordinatorMissionPolicySnapshot.defaultPolicy
+        policySnapshot.autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
+        let plan = CoordinatorMissionPlan(
+            missionKey: "auto-child-ask-policy",
+            objective: "Answer child questions as Director.",
+            status: .running,
+            approvalState: .approved,
+            policySnapshot: policySnapshot,
+            autonomy: policySnapshot.autonomy,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Probe",
+                    purpose: "Ask one child question.",
+                    role: "explore",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                        mode: .noneReadOnly,
+                        reason: "Read-only smoke."
+                    )
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Ask marker question",
+                    completionEvidence: "Child is running.",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .running,
+                    boundSessionID: childID,
+                    boundInteractionID: interactionID
+                )
+            ]
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "status": .string("completed"),
+                "nodes": .array([
+                    .object([
+                        "id": .string(nodeID.uuidString),
+                        "title": .string("Ask marker question"),
+                        "workstream_title": .string("Probe"),
+                        "execution_policy": .string("fresh_readonly_child"),
+                        "status": .string("completed"),
+                        "bound_session_id": .string(childID.uuidString),
+                        "bound_interaction_id": .string(interactionID.uuidString),
+                        "completion_evidence": .string("Child final output selected marker Alpha.")
+                    ])
+                ])
+            ])
+            XCTFail("childAsk:auto from policy_snapshot must require childAsk ledger records.")
+        } catch {
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("childAsk decision and evidence"), message)
+        }
+    }
+
+    func testMissionPlanChildAskDialOverridesPolicySnapshotWhenCompletingUserAnsweredNode() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let childID = UUID()
+        let interactionID = UUID()
+        var policySnapshot = CoordinatorMissionPolicySnapshot.defaultPolicy
+        policySnapshot.autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
+        var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
+        autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .ask
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [
+            coordinatorID: CoordinatorMissionPlan(
+                missionKey: "ask-overrides-policy-auto",
+                objective: "User answers child questions.",
+                status: .running,
+                approvalState: .approved,
+                policySnapshot: policySnapshot,
+                autonomy: autonomy,
+                workstreams: [
+                    CoordinatorMissionWorkstreamSummary(
+                        id: workstreamID,
+                        title: "Probe",
+                        purpose: "Ask one child question.",
+                        role: "explore",
+                        defaultPolicy: .freshReadOnlyChild,
+                        worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                            mode: .noneReadOnly,
+                            reason: "Read-only smoke."
+                        )
+                    )
+                ],
+                nodes: [
+                    CoordinatorMissionPlanNode(
+                        id: nodeID,
+                        title: "Ask marker question",
+                        completionEvidence: "Child is running.",
+                        workstreamID: workstreamID,
+                        executionPolicy: .freshReadOnlyChild,
+                        status: .running,
+                        boundSessionID: childID,
+                        boundInteractionID: interactionID
+                    )
+                ]
+            )
+        ]
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { missionPlans },
+            updateMissionPlan: { sessionID, update in
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(update)
+                missionPlans[sessionID] = state.missionPlan
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "status": .string("completed"),
+            "nodes": .array([
+                .object([
+                    "id": .string(nodeID.uuidString),
+                    "title": .string("Ask marker question"),
+                    "workstream_title": .string("Probe"),
+                    "execution_policy": .string("fresh_readonly_child"),
+                    "status": .string("completed"),
+                    "bound_session_id": .string(childID.uuidString),
+                    "bound_interaction_id": .string(interactionID.uuidString),
+                    "completion_evidence": .string("Child final output selected marker Alpha after the user answered.")
+                ])
+            ])
+        ])
+
+        let plan = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue)
+        XCTAssertEqual(plan["status"]?.stringValue, "completed")
+    }
+
+    func testMissionPlanAcceptsChildAskAutoCompletionWithDirectorLedger() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let childID = UUID()
+        let interactionID = UUID()
+        let decisionID = UUID()
+        let evidenceID = UUID()
+        var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
+        autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [
+            coordinatorID: CoordinatorMissionPlan(
+                missionKey: "auto-child-ask",
+                objective: "Answer child questions as Director.",
+                status: .running,
+                approvalState: .approved,
+                autonomy: autonomy,
+                workstreams: [
+                    CoordinatorMissionWorkstreamSummary(
+                        id: workstreamID,
+                        title: "Probe",
+                        purpose: "Ask one child question.",
+                        role: "explore",
+                        defaultPolicy: .freshReadOnlyChild,
+                        worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                            mode: .noneReadOnly,
+                            reason: "Read-only smoke."
+                        )
+                    )
+                ],
+                nodes: [
+                    CoordinatorMissionPlanNode(
+                        id: nodeID,
+                        title: "Ask marker question",
+                        completionEvidence: "Child is running.",
+                        workstreamID: workstreamID,
+                        executionPolicy: .freshReadOnlyChild,
+                        status: .running,
+                        boundSessionID: childID,
+                        boundInteractionID: interactionID
+                    )
+                ]
+            )
+        ]
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { missionPlans },
+            updateMissionPlan: { sessionID, update in
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(update)
+                missionPlans[sessionID] = state.missionPlan
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "status": .string("completed"),
+            "nodes": .array([
+                .object([
+                    "id": .string(nodeID.uuidString),
+                    "title": .string("Ask marker question"),
+                    "workstream_title": .string("Probe"),
+                    "execution_policy": .string("fresh_readonly_child"),
+                    "status": .string("completed"),
+                    "bound_session_id": .string(childID.uuidString),
+                    "bound_interaction_id": .string(interactionID.uuidString),
+                    "completion_evidence": .string("Child final output selected marker Alpha.")
+                ])
+            ]),
+            "decisions": .array([
+                .object([
+                    "id": .string(decisionID.uuidString),
+                    "actor": .string("director"),
+                    "decision_class": .string("childAsk"),
+                    "label": .string("answered a child question"),
+                    "reason": .string("Director answered with Alpha."),
+                    "session_id": .string(childID.uuidString),
+                    "interaction_id": .string(interactionID.uuidString),
+                    "checkpoint_id": .string("child-question")
+                ])
+            ]),
+            "evidence": .array([
+                .object([
+                    "id": .string(evidenceID.uuidString),
+                    "verdict": .string("meets"),
+                    "summary": .string("Director answered child question with Alpha."),
+                    "session_id": .string(childID.uuidString),
+                    "interaction_id": .string(interactionID.uuidString),
+                    "decision_id": .string(decisionID.uuidString)
+                ])
+            ])
+        ])
+
+        let plan = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue)
+        XCTAssertEqual(plan["status"]?.stringValue, "completed")
+        XCTAssertEqual(plan["decisions"]?.arrayValue?.last?.objectValue?["actor"]?.stringValue, "director")
+        XCTAssertEqual(plan["evidence"]?.arrayValue?.last?.objectValue?["interaction_id"]?.stringValue, interactionID.uuidString)
+    }
+
+    func testMissionPlanAcceptsChildAskAutoCompletionWithUserOverrideLedger() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let childID = UUID()
+        let interactionID = UUID()
+        let decisionID = UUID()
+        let evidenceID = UUID()
+        var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
+        autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [
+            coordinatorID: CoordinatorMissionPlan(
+                missionKey: "auto-child-ask-user-override",
+                objective: "User overrides a child question.",
+                status: .running,
+                approvalState: .approved,
+                autonomy: autonomy,
+                workstreams: [
+                    CoordinatorMissionWorkstreamSummary(
+                        id: workstreamID,
+                        title: "Probe",
+                        purpose: "Ask one child question.",
+                        role: "explore",
+                        defaultPolicy: .freshReadOnlyChild,
+                        worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                            mode: .noneReadOnly,
+                            reason: "Read-only smoke."
+                        )
+                    )
+                ],
+                nodes: [
+                    CoordinatorMissionPlanNode(
+                        id: nodeID,
+                        title: "Ask marker question",
+                        completionEvidence: "Child is running.",
+                        workstreamID: workstreamID,
+                        executionPolicy: .freshReadOnlyChild,
+                        status: .running,
+                        boundSessionID: childID,
+                        boundInteractionID: interactionID
+                    )
+                ],
+                decisions: [
+                    CoordinatorMissionDecisionRecord(
+                        id: decisionID,
+                        decisionClass: CoordinatorMissionDecisionClass.childAsk.rawValue,
+                        actor: .user,
+                        label: CoordinatorMissionUserDecisionLabel.answeredChildQuestion.rawValue,
+                        reason: "User supplied Alpha before Director answered.",
+                        sessionID: childID,
+                        interactionID: interactionID
+                    )
+                ],
+                evidence: [
+                    CoordinatorMissionEvidenceRecord(
+                        id: evidenceID,
+                        verdict: .meets,
+                        summary: "User answered child question with Alpha.",
+                        sessionID: childID,
+                        interactionID: interactionID,
+                        decisionID: decisionID
+                    )
+                ]
+            )
+        ]
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { missionPlans },
+            updateMissionPlan: { sessionID, update in
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(update)
+                missionPlans[sessionID] = state.missionPlan
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "status": .string("completed"),
+            "nodes": .array([
+                .object([
+                    "id": .string(nodeID.uuidString),
+                    "title": .string("Ask marker question"),
+                    "workstream_title": .string("Probe"),
+                    "execution_policy": .string("fresh_readonly_child"),
+                    "status": .string("completed"),
+                    "bound_session_id": .string(childID.uuidString),
+                    "bound_interaction_id": .string(interactionID.uuidString),
+                    "completion_evidence": .string("Child final output selected marker Alpha after the user override.")
+                ])
+            ])
+        ])
+
+        let plan = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue)
+        XCTAssertEqual(plan["status"]?.stringValue, "completed")
+        XCTAssertEqual(plan["decisions"]?.arrayValue?.last?.objectValue?["actor"]?.stringValue, "user")
     }
 
     func testMissionPlanAcceptsRoutingDecisionsAndUpsertsByID() async throws {
@@ -1362,7 +2100,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     "workstream_id": .string(discoveryWorkstreamID.uuidString),
                     "workflow_name": .string("Investigate"),
                     "execution_policy": .string("fresh_readonly_child"),
-                    "status": .string("completed")
+                    "status": .string("completed"),
+                    "completion_evidence": .string("Discovery mapped the cleanup entry points.")
                 ]),
                 .object([
                     "id": .string(implementationNodeID.uuidString),
@@ -2903,7 +3642,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let coordinatorID = UUID()
         let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
         var coordinatorSubmissions: [String] = []
-        var childResponses: [(submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission, rowID: UUID)] = []
+        var childResponses: [(submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission, rowID: UUID, actor: CoordinatorMissionDecisionActor)] = []
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
@@ -2912,8 +3651,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 return .accepted
             },
             pendingChild: { childRow },
-            submitPendingChild: { submission, row in
-                childResponses.append((submission, row.sessionID))
+            submitPendingChild: { submission, row, actor in
+                childResponses.append((submission, row.sessionID, actor))
                 return .accepted
             }
         )
@@ -2929,8 +3668,79 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(childResponses.first?.submission.text, "Stay involved at review checkpoints.")
         XCTAssertEqual(childResponses.first?.submission.displayText, "Stay involved at review checkpoints.")
         XCTAssertEqual(childResponses.first?.rowID, childRow.sessionID)
+        XCTAssertEqual(childResponses.first?.actor, .user)
         XCTAssertEqual(object["accepted"]?.boolValue, true)
         XCTAssertEqual(object["routed_to"]?.stringValue, "child_interaction")
+    }
+
+    func testSubmitRuntimePendingChildInteractionRecordsDirectorActor() async throws {
+        let coordinatorID = UUID()
+        let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
+        var actors: [CoordinatorMissionDecisionActor] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            pendingChild: { childRow },
+            submitPendingChild: { _, _, actor in
+                actors.append(actor)
+                return .accepted
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("submit"),
+            "message": .string("Alpha")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "child_interaction")
+        XCTAssertEqual(actors, [.director])
+    }
+
+    func testSubmitAgentModeNonCoordinatorPendingChildInteractionRecordsUserActor() async throws {
+        let coordinatorID = UUID()
+        let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
+        var actors: [CoordinatorMissionDecisionActor] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .pair,
+                    isCoordinatorRuntime: false
+                )
+            },
+            pendingChild: { childRow },
+            submitPendingChild: { _, _, actor in
+                actors.append(actor)
+                return .accepted
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("submit"),
+            "message": .string("Alpha")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "child_interaction")
+        XCTAssertEqual(actors, [.user])
     }
 
     func testSubmitRoutesStructuredAnswersToPendingChildInteraction() async throws {
@@ -2941,7 +3751,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
             pendingChild: { childRow },
-            submitPendingChild: { submission, _ in
+            submitPendingChild: { submission, _, _ in
                 childResponses.append(submission)
                 return .accepted
             }
@@ -3070,7 +3880,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         submitContinuation: @escaping (CoordinatorModeViewModel.ContinuationAction) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
-        submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
+        submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow, CoordinatorMissionDecisionActor) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _ in .accepted },
         counts: CoordinatorModeCounts = .empty,
         rows: [CoordinatorModeRow] = [],
         missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },
@@ -3121,7 +3931,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         submitContinuation: @escaping (CoordinatorModeViewModel.ContinuationAction) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
-        submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
+        submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow, CoordinatorMissionDecisionActor) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _ in .accepted },
         counts: CoordinatorModeCounts = .empty,
         rows: [CoordinatorModeRow] = [],
         missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },

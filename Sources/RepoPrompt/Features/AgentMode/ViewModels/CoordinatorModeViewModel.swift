@@ -1053,23 +1053,105 @@ final class CoordinatorModeViewModel: ObservableObject {
 
     private func childInteractionDecision(
         row: CoordinatorModeRow,
+        displayText: String,
+        actor: CoordinatorMissionDecisionActor,
         timestamp: Date
     ) -> PendingMissionUserDecision? {
         guard let coordinatorSessionID = row.parentCoordinator?.sessionID ?? snapshot.coordinatorRail.coordinatorSessionID,
               let interactionID = row.pendingInteraction?.id
         else { return nil }
-        return PendingMissionUserDecision(
-            coordinatorSessionID: coordinatorSessionID,
-            record: CoordinatorMissionDecisionRecord(
-                userDecision: .answeredChildQuestion,
+        let checkpointInstanceID = "child-interaction:\(interactionID.uuidString)"
+        let label = CoordinatorMissionUserDecisionLabel.answeredChildQuestion
+        let reason = childInteractionDecisionReason(displayText: displayText, actor: actor)
+        let record = if actor == .user {
+            CoordinatorMissionDecisionRecord(
+                userDecision: label,
                 decisionClass: .childAsk,
-                checkpointInstanceID: "child-interaction:\(interactionID.uuidString)",
+                checkpointInstanceID: checkpointInstanceID,
+                reason: reason,
                 timestamp: timestamp,
                 sessionID: row.sessionID,
                 interactionID: interactionID,
                 checkpointID: Self.childQuestionCheckpointID
             )
+        } else {
+            CoordinatorMissionDecisionRecord(
+                id: CoordinatorMissionStableIdentity.uuid(
+                    namespace: "coordinator-mission-director-decision",
+                    parts: [checkpointInstanceID, label.rawValue]
+                ),
+                decisionClass: CoordinatorMissionDecisionClass.childAsk.rawValue,
+                actor: actor,
+                label: label.rawValue,
+                reason: reason,
+                timestamp: timestamp,
+                sessionID: row.sessionID,
+                interactionID: interactionID,
+                checkpointID: Self.childQuestionCheckpointID,
+                checkpointInstanceID: checkpointInstanceID
+            )
+        }
+        return PendingMissionUserDecision(
+            coordinatorSessionID: coordinatorSessionID,
+            record: record
         )
+    }
+
+    private func childInteractionDecisionReason(
+        displayText: String,
+        actor: CoordinatorMissionDecisionActor
+    ) -> String? {
+        let trimmed = displayText.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch actor {
+        case .user:
+            guard !trimmed.isEmpty else { return nil }
+            return "Answered child question with: \(trimmed)"
+        case .director:
+            if trimmed.isEmpty {
+                return "Mission Policy routed this child question to Director."
+            }
+            return "Mission Policy routed this child question to Director. Answered with: \(trimmed)"
+        }
+    }
+
+    private func childInteractionEvidence(
+        row: CoordinatorModeRow,
+        displayText: String,
+        decisionID: UUID?,
+        actor: CoordinatorMissionDecisionActor,
+        timestamp: Date
+    ) -> CoordinatorMissionEvidenceRecord? {
+        guard let interactionID = row.pendingInteraction?.id else { return nil }
+        let actorName = childInteractionEvidenceActorName(actor)
+        let trimmedDisplayText = displayText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let evidenceText = trimmedDisplayText.isEmpty ? "No answer text recorded." : trimmedDisplayText
+        return CoordinatorMissionEvidenceRecord(
+            id: CoordinatorMissionStableIdentity.uuid(
+                namespace: "coordinator-mission-child-question-evidence",
+                parts: [interactionID.uuidString, actor.rawValue, evidenceText]
+            ),
+            verdict: .meets,
+            summary: "\(actorName) answered child question for \(row.title): \(evidenceText)",
+            timestamp: timestamp,
+            sessionID: row.sessionID,
+            interactionID: interactionID,
+            decisionID: decisionID,
+            source: CoordinatorMissionEvidenceSource(
+                kind: "child_question_answer",
+                sessionID: row.sessionID,
+                interactionID: interactionID,
+                summary: "\(actorName)-routed child question answer."
+            )
+        )
+    }
+
+    private func childInteractionEvidenceActorName(_ actor: CoordinatorMissionDecisionActor) -> String {
+        switch actor {
+        case .user:
+            "User"
+        case .director:
+            "Director"
+        }
     }
 
     private func stoppedMissionDecision(
@@ -1088,10 +1170,14 @@ final class CoordinatorModeViewModel: ObservableObject {
     }
 
     @discardableResult
-    private func appendMissionUserDecision(_ pendingDecision: PendingMissionUserDecision) -> Bool {
+    private func appendMissionUserDecision(
+        _ pendingDecision: PendingMissionUserDecision,
+        evidence: CoordinatorMissionEvidenceRecord? = nil
+    ) -> Bool {
         do {
             var update = CoordinatorMissionPlanUpdate(
                 decisions: [pendingDecision.record],
+                evidence: evidence.map { [$0] },
                 updatedAt: pendingDecision.record.timestamp
             )
             if pendingDecision.record.label == CoordinatorMissionUserDecisionLabel.approvedMissionPlan.rawValue {
@@ -1108,6 +1194,31 @@ final class CoordinatorModeViewModel: ObservableObject {
             try missionPlanUpdater(
                 pendingDecision.coordinatorSessionID,
                 update
+            )
+            refresh()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    @discardableResult
+    private func appendMissionChildInteractionDecision(
+        _ pendingDecision: PendingMissionUserDecision,
+        evidence: CoordinatorMissionEvidenceRecord?,
+        actor: CoordinatorMissionDecisionActor
+    ) -> Bool {
+        if actor == .user {
+            return appendMissionUserDecision(pendingDecision, evidence: evidence)
+        }
+        do {
+            try missionPlanUpdater(
+                pendingDecision.coordinatorSessionID,
+                CoordinatorMissionPlanUpdate(
+                    decisions: [pendingDecision.record],
+                    evidence: evidence.map { [$0] },
+                    updatedAt: pendingDecision.record.timestamp
+                )
             )
             refresh()
             return true
@@ -1249,7 +1360,8 @@ final class CoordinatorModeViewModel: ObservableObject {
     @discardableResult
     func submitPendingChildInteractionResponse(
         _ submission: ChildInteractionResponseSubmission,
-        to row: CoordinatorModeRow
+        to row: CoordinatorModeRow,
+        actor: CoordinatorMissionDecisionActor = .user
     ) async -> DirectiveSubmissionResult {
         let displayText = submission.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !displayText.isEmpty || submission.skip || submission.hasStructuredAnswers else {
@@ -1260,13 +1372,33 @@ final class CoordinatorModeViewModel: ObservableObject {
             composerNotice = message
             return .rejected(message: message)
         }
-        let pendingDecision = childInteractionDecision(row: row, timestamp: Date())
+        let timestamp = Date()
+        let pendingDecision = childInteractionDecision(
+            row: row,
+            displayText: displayText,
+            actor: actor,
+            timestamp: timestamp
+        )
+        guard let pendingDecision else {
+            let message = "This child answer could not be recorded because it is no longer linked to a Coordinator mission."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        let pendingEvidence = childInteractionEvidence(
+            row: row,
+            displayText: displayText,
+            decisionID: pendingDecision.record.id,
+            actor: actor,
+            timestamp: timestamp
+        )
         let result = await childInteractionResponseSubmitter(submission, row)
         switch result {
         case .accepted:
             composerNotice = nil
-            if let pendingDecision {
-                appendMissionUserDecision(pendingDecision)
+            if !appendMissionChildInteractionDecision(pendingDecision, evidence: pendingEvidence, actor: actor) {
+                let message = "The child answer was sent, but the Mission ledger could not record it."
+                composerNotice = message
+                return .rejected(message: message)
             }
             childInteractionResponseRecorder(displayText, row)
             appendChildInteractionResponseTranscriptEntry(row: row, text: displayText)
@@ -2166,7 +2298,7 @@ extension AgentModeViewModel {
             return
         }
 
-        if !session.runState.isActive, let pending = state.pendingEvents.first {
+        if Self.canAcceptCoordinatorDirective(runState: session.runState), let pending = state.pendingEvents.first {
             if shouldAutoSubmit {
                 await submitCoordinatorFollowThroughEvent(pending, tabID: tabID, session: session)
             }

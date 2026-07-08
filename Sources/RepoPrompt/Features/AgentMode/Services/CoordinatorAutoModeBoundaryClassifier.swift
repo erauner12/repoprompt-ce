@@ -35,12 +35,29 @@ struct CoordinatorAutoModeBoundaryClassifier {
         guard input.autoModeEnabled else { return .hold(.autoModeDisabled) }
         guard let coordinatorSessionID = input.coordinatorSessionID else { return .hold(.missingCoordinator) }
         guard input.state.originalObjectiveSummary?.isEmpty == false else { return .hold(.missingObjective) }
-        if input.coordinatorRunState?.isActive == true {
+        if isCoordinatorBusy(input.coordinatorRunState) {
             return .hold(.coordinatorActive)
         }
 
         let ownedRows = input.rows.filter { isOwnedByCoordinator($0, coordinatorSessionID: coordinatorSessionID) }
+        let childAskAuto = input.state.missionPlan?.resolvedAutonomy(for: .childAsk) == .auto
+        if childAskAuto,
+           let pendingQuestion = ownedRows.first(where: isWaitingForChildQuestion)
+        {
+            return childQuestionDecision(
+                coordinatorSessionID: coordinatorSessionID,
+                row: pendingQuestion,
+                state: input.state
+            )
+        }
         if let needsUser = ownedRows.first(where: { phase(for: $0) == .needsUser }) {
+            if childAskAuto, isWaitingForChildQuestion(needsUser) {
+                return childQuestionDecision(
+                    coordinatorSessionID: coordinatorSessionID,
+                    row: needsUser,
+                    state: input.state
+                )
+            }
             return .hold(.childNeedsUser(needsUser.sessionID))
         }
         if let blocked = ownedRows.first(where: { phase(for: $0) == .blocked }) {
@@ -107,6 +124,26 @@ struct CoordinatorAutoModeBoundaryClassifier {
         return .hold(.noResumableEvent)
     }
 
+    private func childQuestionDecision(
+        coordinatorSessionID: UUID,
+        row: CoordinatorModeRow,
+        state: CoordinatorFollowThroughState
+    ) -> Decision {
+        let fallbackInteractionID = "\(row.runState.rawValue):\(Int(row.updatedAt.timeIntervalSince1970 * 1000))"
+        let interactionID = row.pendingInteraction?.id.uuidString ?? fallbackInteractionID
+        let event = CoordinatorFollowThroughEvent(
+            id: "child:\(row.sessionID.uuidString):question:\(interactionID)",
+            kind: .childQuestion,
+            coordinatorSessionID: coordinatorSessionID,
+            childSessionID: row.sessionID,
+            childTitle: row.title,
+            gate: nil,
+            phase: .needsUser,
+            detail: "Delegated child is asking for direction and Mission Policy routes child questions to Director."
+        )
+        return deduped(event, state: state)
+    }
+
     private func gateClearedDecision(
         coordinatorSessionID: UUID,
         gate: CoordinatorContinuationGate,
@@ -148,6 +185,19 @@ struct CoordinatorAutoModeBoundaryClassifier {
     private func isOwnedByCoordinator(_ row: CoordinatorModeRow, coordinatorSessionID: UUID) -> Bool {
         row.workstreamSummary?.coordinatorSessionID == coordinatorSessionID
             || row.parentCoordinator?.sessionID == coordinatorSessionID
+    }
+
+    private func isWaitingForChildQuestion(_ row: CoordinatorModeRow) -> Bool {
+        row.runState == .waitingForQuestion || row.pendingInteraction?.kind == .question
+    }
+
+    private func isCoordinatorBusy(_ runState: AgentSessionRunState?) -> Bool {
+        switch runState {
+        case .running, .waitingForUser, .waitingForApproval:
+            true
+        case .idle, .waitingForQuestion, .completed, .cancelled, .failed, nil:
+            false
+        }
     }
 
     private func phase(for row: CoordinatorModeRow) -> CoordinatorFollowThroughChildPhase {

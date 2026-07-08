@@ -307,7 +307,8 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             let node = nodes[index]
             guard node.status == .running,
                   let boundSessionID = node.boundSessionID,
-                  completedSessionIDs.contains(boundSessionID)
+                  completedSessionIDs.contains(boundSessionID),
+                  canAutoCompleteTerminalBoundNode(node, in: plan)
             else { continue }
             nodes[index].status = .completed
             completedNodes.append(nodes[index])
@@ -330,6 +331,23 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             updatedAt: date
         ))
         return true
+    }
+
+    private func canAutoCompleteTerminalBoundNode(
+        _ node: CoordinatorMissionPlanNode,
+        in plan: CoordinatorMissionPlan
+    ) -> Bool {
+        guard plan.resolvedAutonomy(for: .childAsk) == .auto,
+              let interactionID = node.boundInteractionID
+        else { return true }
+        let hasChildAskDecision = plan.decisions.contains { decision in
+            decision.resolvedAutonomyClass == .childAsk
+                && decision.interactionID == interactionID
+        }
+        let hasEvidence = plan.evidence.contains { record in
+            record.interactionID == interactionID
+        }
+        return hasChildAskDecision && hasEvidence
     }
 
     mutating func updateObservedPhases(from rows: [CoordinatorModeRow]) {
@@ -1614,6 +1632,7 @@ enum CoordinatorFollowThroughResumeResult: String, Codable, Equatable {
 struct CoordinatorFollowThroughEvent: Codable, Equatable, Identifiable {
     enum Kind: String, Codable, Equatable {
         case childTerminal
+        case childQuestion
         case gateCleared
     }
 
@@ -1639,6 +1658,15 @@ struct CoordinatorFollowThroughEvent: Codable, Equatable, Identifiable {
         }
         if let gate {
             lines.append(contentsOf: gate.directiveLines)
+        }
+        if kind == .childQuestion {
+            lines.append(contentsOf: [
+                "",
+                "Mission Policy routes this child question to Director (`childAsk:auto`). Do not ask the user, do not create a user-actor decision, and do not leave the child waiting.",
+                "Inspect `coordinator_chat op=mission_status` with `compact:true`, then answer the active child interaction with `coordinator_chat op=submit` for `coordinator_session_id` \(coordinatorSessionID.uuidString).",
+                "Choose the answer supported by the Mission directive and the child's question. Record the answer as a Director childAsk decision and evidence in the Mission Plan before completing the related node.",
+                "If the child asks for unsafe, missing, or irreversible information, stop and explain the boundary instead of guessing."
+            ])
         }
         lines.append(contentsOf: [
             "",

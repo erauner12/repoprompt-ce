@@ -779,6 +779,181 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(state.missionPlan?.nodes.first?.status, .running)
     }
 
+    func testDoesNotAutoCompleteChildAskAutoBoundNodeWithoutDirectorLedger() {
+        let workstreamID = UUID()
+        let childID = UUID()
+        let interactionID = UUID()
+        var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
+        autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 2,
+            objective: "Answer child ask as Director.",
+            status: .running,
+            approvalState: .approved,
+            autonomy: autonomy,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Smoke",
+                    purpose: "Ask a child question.",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    title: "Ask marker",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .running,
+                    boundSessionID: childID,
+                    boundInteractionID: interactionID
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 10)
+        ))
+
+        XCTAssertFalse(state.completeTerminalBoundRunningMissionPlanNodes(completedSessionIDs: [childID]))
+        XCTAssertEqual(state.missionPlan?.revision, 2)
+        XCTAssertEqual(state.missionPlan?.status, .running)
+        XCTAssertEqual(state.missionPlan?.nodes.first?.status, .running)
+    }
+
+    func testAutoCompletesChildAskAutoBoundNodeAfterDirectorLedger() throws {
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let childID = UUID()
+        let interactionID = UUID()
+        let decisionID = UUID()
+        let date = Date(timeIntervalSince1970: 20)
+        var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
+        autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 2,
+            objective: "Answer child ask as Director.",
+            status: .running,
+            approvalState: .approved,
+            autonomy: autonomy,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Smoke",
+                    purpose: "Ask a child question.",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Ask marker",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .running,
+                    boundSessionID: childID,
+                    boundInteractionID: interactionID
+                )
+            ],
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    id: decisionID,
+                    decisionClass: CoordinatorMissionDecisionClass.childAsk.rawValue,
+                    actor: .director,
+                    label: CoordinatorMissionUserDecisionLabel.answeredChildQuestion.rawValue,
+                    reason: "Director answered with Alpha.",
+                    sessionID: childID,
+                    interactionID: interactionID
+                )
+            ],
+            evidence: [
+                CoordinatorMissionEvidenceRecord(
+                    verdict: .meets,
+                    summary: "Director answered child question with Alpha.",
+                    sessionID: childID,
+                    interactionID: interactionID,
+                    decisionID: decisionID
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 10)
+        ))
+
+        XCTAssertTrue(state.completeTerminalBoundRunningMissionPlanNodes(
+            completedSessionIDs: [childID],
+            at: date
+        ))
+        let plan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(plan.revision, 3)
+        XCTAssertEqual(plan.status, .completed)
+        XCTAssertEqual(plan.nodes.first?.status, .completed)
+        XCTAssertEqual(plan.events.suffix(2).map(\.kind), [.revised, .nodeCompleted])
+    }
+
+    func testAutoCompletesChildAskAutoBoundNodeAfterUserOverrideLedger() throws {
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let childID = UUID()
+        let interactionID = UUID()
+        let decisionID = UUID()
+        var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
+        autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 2,
+            objective: "Accept a user child-answer override.",
+            status: .running,
+            approvalState: .approved,
+            autonomy: autonomy,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Smoke",
+                    purpose: "Ask a child question.",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Ask marker",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .running,
+                    boundSessionID: childID,
+                    boundInteractionID: interactionID
+                )
+            ],
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    id: decisionID,
+                    decisionClass: CoordinatorMissionDecisionClass.childAsk.rawValue,
+                    actor: .user,
+                    label: CoordinatorMissionUserDecisionLabel.answeredChildQuestion.rawValue,
+                    reason: "User answered with Alpha.",
+                    sessionID: childID,
+                    interactionID: interactionID
+                )
+            ],
+            evidence: [
+                CoordinatorMissionEvidenceRecord(
+                    verdict: .meets,
+                    summary: "User answered child question with Alpha.",
+                    sessionID: childID,
+                    interactionID: interactionID,
+                    decisionID: decisionID
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 10)
+        ))
+
+        XCTAssertTrue(state.completeTerminalBoundRunningMissionPlanNodes(
+            completedSessionIDs: [childID],
+            at: Date(timeIntervalSince1970: 20)
+        ))
+        let plan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(plan.status, .completed)
+        XCTAssertEqual(plan.nodes.first?.status, .completed)
+    }
+
     func testMissionPolicyBuiltInsAndFixedDecisionLabelsStayStable() {
         XCTAssertEqual(
             CoordinatorMissionPolicySnapshot.builtInPolicies.map(\.name),

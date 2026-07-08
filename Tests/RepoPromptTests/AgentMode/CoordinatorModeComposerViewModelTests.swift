@@ -805,7 +805,167 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(decisions.map(\.label), ["continued past a step check-in", "answered a child question"])
         XCTAssertEqual(decisions.first?.checkpointInstanceID, "follow-through:event-continue-1")
         XCTAssertEqual(decisions.last?.checkpointInstanceID, "child-interaction:\(interactionID.uuidString)")
+        XCTAssertEqual(decisions.last?.reason, "Answered child question with: Continue with the safe option.")
+        let evidence = try XCTUnwrap(state.missionPlan?.evidence)
+        XCTAssertEqual(evidence.map(\.summary), [
+            "User answered child question for Child: Continue with the safe option."
+        ])
+        XCTAssertEqual(evidence.first?.decisionID, decisions.last?.id)
+        XCTAssertEqual(evidence.first?.interactionID, interactionID)
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.missionSummary?.decisions.userCount, 2)
+    }
+
+    func testEmptyChildInteractionResponseStillRecordsEvidence() async throws {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let interactionID = uuid(901)
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Answer child question.",
+            status: .running,
+            approvalState: .approved
+        ))
+        let childQuestion = pendingQuestionInteraction(
+            id: interactionID,
+            title: "Child checkpoint",
+            prompt: "Can this be skipped?"
+        )
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(40),
+                            state: .idle,
+                            coordinatorRuntime: true,
+                            missionPlan: state.missionPlan
+                        ),
+                        self.live(
+                            id: childID,
+                            tab: self.uuid(102),
+                            title: "Child",
+                            updatedAt: self.date(30),
+                            state: .waitingForQuestion,
+                            parent: coordinatorID
+                        )
+                    ],
+                    mcpSnapshots: [
+                        childID: self.mcpSnapshot(
+                            sessionID: childID,
+                            tabID: self.uuid(102),
+                            sessionName: "Child",
+                            status: .waitingForInput,
+                            statusText: "Waiting",
+                            assistantPreview: nil,
+                            parent: coordinatorID,
+                            interaction: childQuestion
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            childInteractionResponseSubmitter: { _, _ in .accepted },
+            missionPlanUpdater: { _, update in
+                state.updateMissionPlan(update)
+            }
+        )
+        viewModel.selectCoordinator(sessionID: coordinatorID)
+        let row = try XCTUnwrap(viewModel.activePendingChildInteractionRow())
+
+        let result = await viewModel.submitPendingChildInteractionResponse(
+            CoordinatorModeViewModel.ChildInteractionResponseSubmission(
+                text: nil,
+                skip: true,
+                answersByQuestionID: [:],
+                displayText: ""
+            ),
+            to: row,
+            actor: .director
+        )
+
+        XCTAssertEqual(result, .accepted)
+        let evidence = try XCTUnwrap(state.missionPlan?.evidence.first)
+        XCTAssertEqual(evidence.summary, "Director answered child question for Child: No answer text recorded.")
+        XCTAssertEqual(evidence.interactionID, interactionID)
+        XCTAssertEqual(evidence.decisionID, state.missionPlan?.decisions.first?.id)
+    }
+
+    func testChildInteractionResponseWithoutCoordinatorLedgerLinkRejectsBeforeSubmit() async {
+        let childID = uuid(2)
+        let interactionID = uuid(901)
+        let childQuestion = CoordinatorModePendingInteractionSummary(
+            id: interactionID,
+            sessionID: childID,
+            kind: .question,
+            responseType: .text,
+            title: "Child checkpoint",
+            prompt: "Can this be answered?",
+            context: nil,
+            options: [],
+            fields: [],
+            details: [],
+            openAgentChatRoute: nil
+        )
+        var submitted = false
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    autoSelectDemoCoordinator: false,
+                    sort: sortMode
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            childInteractionResponseSubmitter: { _, _ in
+                submitted = true
+                return .accepted
+            }
+        )
+        let row = CoordinatorModeRow(
+            id: childID,
+            sessionID: childID,
+            tabID: uuid(102),
+            title: "Child",
+            providerName: "codexExec",
+            modelName: "gpt-5.5",
+            runState: .waitingForQuestion,
+            statusGroup: .needsYou,
+            parentSessionID: nil,
+            parentCoordinator: nil,
+            childSessionIDs: [],
+            isMCPOriginated: true,
+            isPersistedOnly: false,
+            isCoordinator: false,
+            startedAt: nil,
+            updatedAt: date(30),
+            priority: nil,
+            workstream: nil,
+            workstreamSummary: nil,
+            workflow: nil,
+            mergeAttention: nil,
+            pendingInteraction: childQuestion,
+            openAgentChatRoute: nil,
+            statusReport: nil,
+            origin: .coordinatorFleet
+        )
+
+        let result = await viewModel.submitPendingChildInteractionResponse(.text("Alpha"), to: row, actor: .director)
+
+        XCTAssertEqual(
+            result,
+            CoordinatorModeViewModel.DirectiveSubmissionResult
+                .rejected(message: "This child answer could not be recorded because it is no longer linked to a Coordinator mission.")
+        )
+        XCTAssertFalse(submitted)
+        XCTAssertEqual(
+            viewModel.composerNotice,
+            "This child answer could not be recorded because it is no longer linked to a Coordinator mission."
+        )
     }
 
     func testRejectedDraftSendKeepsComposerNotice() async {

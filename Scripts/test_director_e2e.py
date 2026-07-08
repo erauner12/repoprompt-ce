@@ -33,10 +33,18 @@ def observation(
     user_decisions: int = 1,
     evidence: int = 1,
     structured_evidence_node_ids: list[str] | None = None,
+    evidence_summaries: list[str] | None = None,
+    decisions: list[dict] | None = None,
+    director_decisions: int = 0,
     routing: int = 1,
+    routing_decisions: list[dict] | None = None,
     needs_you: int = 0,
     active_nodes: list[dict] | None = None,
+    childask_mode: str | None = None,
+    warnings: list[str] | None = None,
 ):
+    auto_classes = ["childAsk"] if childask_mode == "auto" else []
+    ask_classes = ["childAsk"] if childask_mode == "ask" or childask_mode is None else []
     compact = {
         "fingerprint": fingerprint,
         "plan": {
@@ -44,6 +52,10 @@ def observation(
             "revision": revision,
             "approval_state": approval_state,
             "policy_snapshot": {"max_concurrent": 3, "default_pace": default_pace},
+            "autonomy_summary": {
+                "ask": ask_classes,
+                "auto": auto_classes,
+            },
         },
         "node_counts": {
             "running": running,
@@ -51,7 +63,7 @@ def observation(
         "ready_node_ids": ready or [],
         "decision_counts_by_actor": {
             "user": user_decisions,
-            "director": 0,
+            "director": director_decisions,
         },
         "evidence_counts": {
             "total": evidence,
@@ -63,6 +75,7 @@ def observation(
             "needs_you": needs_you,
         },
         "active_nodes": active_nodes or [],
+        "liveness_warnings": warnings or [],
     }
     full = {
         "nodes": nodes,
@@ -73,9 +86,17 @@ def observation(
                     "summary": "structured evidence",
                 }
                 for node_id in (structured_evidence_node_ids or [])
+            ] + [
+                {
+                    "node_id": None,
+                    "summary": summary,
+                }
+                for summary in (evidence_summaries or [])
             ],
+            "decisions": decisions or [],
+            "routing_decisions": routing_decisions if routing_decisions is not None else [{} for _ in range(routing)],
         },
-        "routing_decisions_recent": [{} for _ in range(routing)],
+        "routing_decisions_recent": routing_decisions if routing_decisions is not None else [{} for _ in range(routing)],
     }
     return director_e2e.Observation(index=0, compact=compact, full=full)
 
@@ -126,6 +147,26 @@ Loaded roots: demo → /repo/fallback
         director_e2e.bind_visible_context_for_sandbox(client, Path("/repo/main/tmp/director-e2e-sandbox"))
 
         self.assertEqual(client.bound_context_id, "22222222-2222-4222-8222-222222222222")
+
+    def test_compact_status_preserves_response_surface_counts(self) -> None:
+        class FakeClient:
+            def coordinator(self, payload, timeout=120):
+                return {
+                    "mission_status": {
+                        "fingerprint": "f1",
+                        "plan": {"status": "running"},
+                    },
+                    "counts": {
+                        "needs_you": 1,
+                        "working": 0,
+                    },
+                    "selected_coordinator_session_id": "session-1",
+                }
+
+        status = director_e2e.compact_status(FakeClient(), "session-1")
+
+        self.assertEqual(status["counts"]["needs_you"], 1)
+        self.assertEqual(status["coordinator_session_id"], "session-1")
 
     def test_s1_accepts_single_runner_approval_with_node_evidence(self) -> None:
         obs = observation(
@@ -395,6 +436,18 @@ Loaded roots: demo → /repo/fallback
         self.assertIn("exact absolute paths", message)
         self.assertIn("After writing the assigned marker file, report the result and stop", message)
 
+    def test_s5_message_requires_real_child_input_tool_call(self) -> None:
+        message = director_e2e.s5_message("ask", "S5-ask-test")
+
+        self.assertIn("call the MCP tool named `ask_user`", message)
+        self.assertIn("must not merely print the question", message)
+        self.assertIn("using `agent_run.start`", message)
+        self.assertIn("with `model_id:\"explore\"`", message)
+        self.assertIn("no workflow_name or worktree", message)
+        self.assertIn("S5_ASK_USER_UNAVAILABLE", message)
+        self.assertIn("S5-ask-test", message)
+        self.assertIn("Do not reuse any session_id", message)
+
     def test_s2_rejects_missing_convergence_after_parent_completion(self) -> None:
         a = "a"
         b = "b"
@@ -512,6 +565,245 @@ Loaded roots: demo → /repo/fallback
         with self.assertRaises(director_e2e.E2EFailure):
             director_e2e.assert_s6_pace_flip(before, after)
 
+    def test_childask_mode_reads_compact_autonomy_summary(self) -> None:
+        ask = observation("f1", "draft", [], childask_mode="ask")
+        auto = observation("f2", "draft", [], childask_mode="auto")
+
+        self.assertEqual(director_e2e.plan_childask_mode(ask.compact), "ask")
+        self.assertEqual(director_e2e.plan_childask_mode(auto.compact), "auto")
+
+    def test_initial_approval_helper_requires_approved_state(self) -> None:
+        waiting = observation("f1", "draft", [], approval_state="awaiting_approval")
+        approved = observation("f2", "draft", [], approval_state="approved")
+        completed = observation("f3", "completed", [], approval_state="awaiting_approval")
+
+        self.assertFalse(director_e2e.plan_advanced_past_initial_approval(waiting.compact))
+        self.assertTrue(director_e2e.plan_advanced_past_initial_approval(approved.compact))
+        self.assertFalse(director_e2e.plan_advanced_past_initial_approval(completed.compact))
+
+    def test_s5_ask_accepts_pending_question_and_user_answer_decision(self) -> None:
+        pending = observation(
+            "f1",
+            "running",
+            [
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "bound_row": {"run_state": "waitingForQuestion", "status_group": "needsYou"},
+                }
+            ],
+            running=1,
+            needs_you=1,
+            childask_mode="ask",
+        )
+        final = observation(
+            "f2",
+            "completed",
+            [
+                {
+                    "id": "n1",
+                    "status": "completed",
+                    "bound_session_id": "ask-session",
+                    "bound_interaction_id": "ask-interaction",
+                    "completion_evidence": "S5_CHILD_ANSWER=Alpha S5-ask-test",
+                }
+            ],
+            childask_mode="ask",
+            decisions=[
+                {
+                    "label": "answered a child question",
+                    "actor": "user",
+                    "decision_class": "childAsk",
+                }
+            ],
+            evidence_summaries=["Child reported S5_CHILD_ANSWER=Alpha S5-ask-test"],
+            routing_decisions=[{"operation": "agent_run.start", "decision": "start_fresh_readonly_child"}],
+        )
+
+        self.assertEqual(
+            director_e2e.assert_s5_ask([pending, final], "S5-ask-test"),
+            {"sessions": ["ask-session"], "interactions": ["ask-interaction"]},
+        )
+
+    def test_s5_ask_rejects_missing_pending_question(self) -> None:
+        final = observation(
+            "f1",
+            "completed",
+            [
+                {
+                    "id": "n1",
+                    "status": "completed",
+                    "bound_session_id": "ask-session",
+                    "bound_interaction_id": "ask-interaction",
+                    "completion_evidence": "S5_CHILD_ANSWER=Alpha",
+                }
+            ],
+            decisions=[
+                {
+                    "label": "answered a child question",
+                    "actor": "user",
+                    "decision_class": "childAsk",
+                }
+            ],
+            evidence_summaries=["Alpha"],
+            routing_decisions=[{"operation": "agent_run.start", "decision": "start_fresh_readonly_child"}],
+        )
+
+        with self.assertRaises(director_e2e.E2EFailure):
+            director_e2e.assert_s5_ask([final])
+
+    def test_s5_auto_accepts_director_decision_without_user_queue(self) -> None:
+        final = observation(
+            "f1",
+            "completed",
+            [
+                {
+                    "id": "n1",
+                    "status": "completed",
+                    "bound_session_id": "auto-session",
+                    "bound_interaction_id": "auto-interaction",
+                    "completion_evidence": "S5_CHILD_ANSWER=Alpha S5-auto-test",
+                }
+            ],
+            childask_mode="auto",
+            user_decisions=2,
+            director_decisions=1,
+            decisions=[
+                {
+                    "label": "answered child question as Director",
+                    "actor": "director",
+                    "decision_class": "childAsk",
+                    "reason": "Director selected Alpha.",
+                }
+            ],
+            evidence_summaries=["Director answered Alpha for the child question S5-auto-test"],
+            routing_decisions=[{"operation": "agent_run.start", "decision": "start_fresh_readonly_child"}],
+        )
+
+        self.assertEqual(
+            director_e2e.assert_s5_auto([final], "S5-auto-test"),
+            {"sessions": ["auto-session"], "interactions": ["auto-interaction"]},
+        )
+
+    def test_s5_auto_rejects_missing_fresh_child_launch(self) -> None:
+        final = observation(
+            "f1",
+            "completed",
+            [
+                {
+                    "id": "n1",
+                    "status": "completed",
+                    "bound_session_id": "auto-session",
+                    "bound_interaction_id": "auto-interaction",
+                    "completion_evidence": "S5_CHILD_ANSWER=Alpha S5-auto-test",
+                }
+            ],
+            childask_mode="auto",
+            director_decisions=1,
+            decisions=[
+                {
+                    "label": "answered child question as Director",
+                    "actor": "director",
+                    "decision_class": "childAsk",
+                }
+            ],
+            evidence_summaries=["Director answered Alpha S5-auto-test"],
+            routing_decisions=[],
+        )
+
+        with self.assertRaises(director_e2e.E2EFailure):
+            director_e2e.assert_s5_auto([final], "S5-auto-test")
+
+    def test_s5_rejects_cross_variant_child_binding_reuse(self) -> None:
+        refs = {"sessions": ["shared-session"], "interactions": ["shared-interaction"]}
+
+        with self.assertRaises(director_e2e.E2EFailure):
+            director_e2e.assert_s5_variant_refs_disjoint(refs, refs)
+
+    def test_s5_auto_running_bound_interaction_without_pending_row_is_not_user_queue(self) -> None:
+        obs = observation(
+            "f1",
+            "running",
+            [
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "bound_interaction_id": "interaction-1",
+                    "bound_row": {"run_state": "waitingForQuestion", "status_group": "working"},
+                }
+            ],
+            childask_mode="auto",
+            needs_you=0,
+        )
+
+        self.assertFalse(director_e2e.has_pending_child_question(obs))
+
+    def test_s5_auto_needs_you_count_without_question_shape_is_not_user_queue(self) -> None:
+        obs = observation(
+            "f1",
+            "running",
+            [{"id": "n1", "status": "running"}],
+            childask_mode="auto",
+            needs_you=1,
+            active_nodes=[
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "bound_row_run_state": "running",
+                    "bound_row_status_group": "working",
+                }
+            ],
+        )
+
+        self.assertFalse(director_e2e.has_pending_child_question(obs))
+
+    def test_s5_auto_rejects_observed_user_queue(self) -> None:
+        pending = observation(
+            "f1",
+            "running",
+            [{"id": "n1", "status": "running"}],
+            needs_you=1,
+            childask_mode="auto",
+        )
+        final = observation(
+            "f2",
+            "completed",
+            [
+                {
+                    "id": "n1",
+                    "status": "completed",
+                    "bound_session_id": "auto-session",
+                    "bound_interaction_id": "auto-interaction",
+                    "completion_evidence": "S5_CHILD_ANSWER=Alpha",
+                }
+            ],
+            childask_mode="auto",
+            director_decisions=1,
+            decisions=[
+                {
+                    "label": "answered child question as Director",
+                    "actor": "director",
+                    "decision_class": "childAsk",
+                }
+            ],
+            evidence_summaries=["Alpha"],
+            routing_decisions=[{"operation": "agent_run.start", "decision": "start_fresh_readonly_child"}],
+        )
+
+        with self.assertRaises(director_e2e.E2EFailure):
+            director_e2e.assert_s5_auto([pending, final])
+
+    def test_routing_decisions_dedupe_compact_and_plan_sources(self) -> None:
+        route = {"id": "route-1", "operation": "agent_run.start"}
+        obs = observation(
+            "f1",
+            "running",
+            [{"id": "n1", "status": "running"}],
+            routing_decisions=[route],
+        )
+
+        self.assertEqual(director_e2e.plan_routing_decisions(obs.full), [route])
+
     def test_progress_tracker_resets_on_signature_change(self) -> None:
         first = observation("f1", "running", [], running=0)
         second = observation("f2", "running", [], running=0)
@@ -531,6 +823,27 @@ Loaded roots: demo → /repo/fallback
 
         self.assertFalse(tracker.should_fail_idle(obs, now=120))
 
+    def test_running_work_still_completable_with_mixed_liveness_warnings_and_bound_node(self) -> None:
+        obs = observation(
+            "f1",
+            "running",
+            [{"id": "n1", "status": "running"}],
+            running=1,
+            warnings=[
+                "coordinator_run_state_is_not_active_but_plan_has_active_nodes",
+                "running_delegated_nodes_without_bound_sessions",
+            ],
+            active_nodes=[
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "bound_session_id": "session-1",
+                }
+            ],
+        )
+
+        self.assertTrue(director_e2e.has_running_work_that_could_still_complete(obs))
+
     def test_progress_tracker_idle_fails_unbound_coordinator_only_running_node(self) -> None:
         obs = observation(
             "f1",
@@ -545,6 +858,28 @@ Loaded roots: demo → /repo/fallback
                     "bound_session_id": None,
                 }
             ],
+        )
+        tracker = director_e2e.ProgressTracker(idle_timeout_seconds=10, start_time=0)
+
+        tracker.update(director_e2e.observation_signature(obs), now=0)
+
+        self.assertTrue(tracker.should_fail_idle(obs, now=120))
+
+    def test_progress_tracker_idle_fails_unbound_delegated_liveness_warning(self) -> None:
+        obs = observation(
+            "f1",
+            "running",
+            [{"id": "n1", "status": "running"}],
+            running=1,
+            active_nodes=[
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "execution_policy": "fresh_readonly_child",
+                    "bound_session_id": None,
+                }
+            ],
+            warnings=["running_delegated_nodes_without_bound_sessions"],
         )
         tracker = director_e2e.ProgressTracker(idle_timeout_seconds=10, start_time=0)
 
@@ -572,6 +907,31 @@ Loaded roots: demo → /repo/fallback
         tracker.update(director_e2e.observation_signature(obs), now=0)
 
         self.assertFalse(tracker.should_fail_idle(obs, now=120))
+
+    def test_progress_tracker_idle_fails_nonactive_unbound_delegated_node(self) -> None:
+        obs = observation(
+            "f1",
+            "running",
+            [{"id": "n1", "status": "running"}],
+            running=1,
+            active_nodes=[
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "execution_policy": "fresh_readonly_child",
+                    "bound_session_id": None,
+                }
+            ],
+            warnings=[
+                "coordinator_run_state_is_not_active_but_plan_has_active_nodes",
+                "running_delegated_nodes_without_bound_sessions",
+            ],
+        )
+        tracker = director_e2e.ProgressTracker(idle_timeout_seconds=10, start_time=0)
+
+        tracker.update(director_e2e.observation_signature(obs), now=0)
+
+        self.assertTrue(tracker.should_fail_idle(obs, now=120))
 
     def test_progress_tracker_idle_fails_when_bound_row_already_done(self) -> None:
         obs = observation(

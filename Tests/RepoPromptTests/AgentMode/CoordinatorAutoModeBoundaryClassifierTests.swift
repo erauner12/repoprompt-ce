@@ -16,6 +16,28 @@ final class CoordinatorAutoModeBoundaryClassifierTests: XCTestCase {
         XCTAssertEqual(decision, .hold(.coordinatorActive))
     }
 
+    func testWaitingForQuestionCoordinatorCanResumeGateCleared() {
+        let coordinatorID = uuid(1)
+        let gate = CoordinatorContinuationGate.actionApproval(
+            gateID: "approval:continue:mission-plan",
+            action: .continuePlan,
+            subjectID: "mission-plan",
+            subjectTitle: "Mission Plan"
+        )
+
+        let decision = classifier.classify(input(
+            coordinatorID: coordinatorID,
+            coordinatorRunState: .waitingForQuestion,
+            trigger: .gateCleared(gate)
+        ))
+
+        guard case let .resume(event) = decision else {
+            return XCTFail("Expected gate-cleared resume, got \(decision)")
+        }
+        XCTAssertEqual(event.kind, .gateCleared)
+        XCTAssertEqual(event.id, "gate:approval:continue:mission-plan:cleared")
+    }
+
     func testCompletedChildResumes() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
@@ -301,6 +323,144 @@ final class CoordinatorAutoModeBoundaryClassifierTests: XCTestCase {
             )),
             .hold(.childBlocked(blockedID))
         )
+    }
+
+    func testChildAskAutoResumesPendingChildQuestion() {
+        let coordinatorID = uuid(1)
+        let needsUserID = uuid(2)
+        var policy = CoordinatorMissionPolicySnapshot.defaultPolicy
+        policy.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key] = .auto
+        var state = baseState()
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            objective: "Answer routine child questions.",
+            status: .running,
+            approvalState: .approved,
+            policySnapshot: policy,
+            autonomy: policy.autonomy
+        ))
+
+        let decision = classifier.classify(input(
+            coordinatorID: coordinatorID,
+            rows: [
+                childRow(
+                    coordinatorID: coordinatorID,
+                    childID: needsUserID,
+                    statusGroup: .needsYou,
+                    runState: .waitingForQuestion
+                )
+            ],
+            state: state
+        ))
+
+        guard case let .resume(event) = decision else {
+            return XCTFail("Expected child question resume, got \(decision)")
+        }
+        XCTAssertEqual(event.kind, .childQuestion)
+        XCTAssertEqual(event.phase, .needsUser)
+        XCTAssertEqual(event.childSessionID, needsUserID)
+        XCTAssertTrue(event.resumeDirective.contains("childAsk:auto"))
+        XCTAssertTrue(event.resumeDirective.contains("Do not ask the user"))
+        XCTAssertTrue(event.resumeDirective.contains("coordinator_session_id"))
+    }
+
+    func testChildAskAutoDoesNotResumeGenericNeedsUserRow() {
+        let coordinatorID = uuid(1)
+        let needsUserID = uuid(2)
+        var policy = CoordinatorMissionPolicySnapshot.defaultPolicy
+        policy.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key] = .auto
+        var state = baseState()
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            objective: "Answer routine child questions.",
+            status: .running,
+            approvalState: .approved,
+            policySnapshot: policy,
+            autonomy: policy.autonomy
+        ))
+
+        let decision = classifier.classify(input(
+            coordinatorID: coordinatorID,
+            rows: [
+                childRow(
+                    coordinatorID: coordinatorID,
+                    childID: needsUserID,
+                    statusGroup: .needsYou,
+                    runState: .waitingForUser
+                )
+            ],
+            state: state
+        ))
+
+        XCTAssertEqual(decision, .hold(.childNeedsUser(needsUserID)))
+    }
+
+    func testChildAskAutoResumesSuppressedUserFacingQuestionRow() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        var policy = CoordinatorMissionPolicySnapshot.defaultPolicy
+        policy.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key] = .auto
+        var state = baseState()
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            objective: "Answer routine child questions.",
+            status: .running,
+            approvalState: .approved,
+            policySnapshot: policy,
+            autonomy: policy.autonomy
+        ))
+
+        let decision = classifier.classify(input(
+            coordinatorID: coordinatorID,
+            rows: [
+                childRow(
+                    coordinatorID: coordinatorID,
+                    childID: childID,
+                    statusGroup: .working,
+                    runState: .waitingForQuestion
+                )
+            ],
+            state: state
+        ))
+
+        guard case let .resume(event) = decision else {
+            return XCTFail("Expected child question resume, got \(decision)")
+        }
+        XCTAssertEqual(event.kind, .childQuestion)
+        XCTAssertEqual(event.childSessionID, childID)
+        XCTAssertTrue(event.resumeDirective.contains("childAsk:auto"))
+    }
+
+    func testChildAskAutoResumesWhenCoordinatorIsWaitingForQuestion() {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        var policy = CoordinatorMissionPolicySnapshot.defaultPolicy
+        policy.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key] = .auto
+        var state = baseState()
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            objective: "Answer routine child questions.",
+            status: .running,
+            approvalState: .approved,
+            policySnapshot: policy,
+            autonomy: policy.autonomy
+        ))
+
+        let decision = classifier.classify(input(
+            coordinatorID: coordinatorID,
+            coordinatorRunState: .waitingForQuestion,
+            rows: [
+                childRow(
+                    coordinatorID: coordinatorID,
+                    childID: childID,
+                    statusGroup: .working,
+                    runState: .waitingForQuestion
+                )
+            ],
+            state: state
+        ))
+
+        guard case let .resume(event) = decision else {
+            return XCTFail("Expected child question resume, got \(decision)")
+        }
+        XCTAssertEqual(event.kind, .childQuestion)
+        XCTAssertEqual(event.childSessionID, childID)
     }
 
     func testDuplicateEventHolds() {
