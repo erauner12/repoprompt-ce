@@ -91,6 +91,14 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             existing: missionPlan?.evidence ?? [],
             incoming: update.evidence
         )
+        let approvalState = update.approvalState ?? missionPlan?.approvalState ?? .notRequired
+        let requestedStatus = update.status ?? missionPlan?.status ?? .draft
+        let status = terminalHonestStatus(
+            requestedStatus,
+            approvalState: approvalState,
+            nodes: nodes
+        )
+
         missionPlan = CoordinatorMissionPlan(
             id: missionPlan?.id ?? UUID(),
             revision: (missionPlan?.revision ?? 0) + 1,
@@ -103,8 +111,8 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
                 ?? missionPlan?.predecessorTitle,
             predecessorSummary: update.predecessorSummary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                 ?? missionPlan?.predecessorSummary,
-            status: update.status ?? missionPlan?.status ?? .draft,
-            approvalState: update.approvalState ?? missionPlan?.approvalState ?? .notRequired,
+            status: status,
+            approvalState: approvalState,
             template: missionTemplate,
             shapeSummary: update.shapeSummary ?? missionPlan?.shapeSummary,
             policySnapshot: update.policySnapshot ?? missionPlan?.policySnapshot,
@@ -126,6 +134,20 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         if missionPlan?.status == .stopped {
             pendingEvents.removeAll()
         }
+    }
+
+    private func terminalHonestStatus(
+        _ status: CoordinatorMissionPlanStatus,
+        approvalState: CoordinatorMissionPlanApprovalState,
+        nodes: [CoordinatorMissionPlanNode]
+    ) -> CoordinatorMissionPlanStatus {
+        guard status == .completed,
+              nodes.contains(where: { !$0.status.isTerminal })
+        else { return status }
+        if approvalState == .approved || approvalState == .notRequired {
+            return .running
+        }
+        return missionPlan?.status == .completed ? .draft : (missionPlan?.status ?? .draft)
     }
 
     private func mergeWorkstreams(

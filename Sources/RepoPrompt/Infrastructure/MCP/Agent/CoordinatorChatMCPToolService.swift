@@ -24,6 +24,7 @@ struct CoordinatorChatMCPToolService {
     private let toolName: String
     private let makeEnvironment: () throws -> Environment
     private let captureRequestMetadata: () async -> RequestMetadata
+    private let resolveRuntimeCoordinatorSessionID: (RequestMetadata) async -> UUID?
     private let initialMissionPlanTimeoutSeconds: TimeInterval
     private let initialMissionPlanPollIntervalSeconds: TimeInterval
     private let sleep: (UInt64) async -> Void
@@ -32,6 +33,7 @@ struct CoordinatorChatMCPToolService {
         toolName: String,
         requireTargetWindow: @escaping MCPWindowToolDependencies.RequireTargetWindow,
         captureRequestMetadata: @escaping () async -> RequestMetadata,
+        resolveRuntimeCoordinatorSessionID: @escaping (RequestMetadata) async -> UUID? = { _ in nil },
         initialMissionPlanTimeoutSeconds: TimeInterval = 10,
         initialMissionPlanPollIntervalSeconds: TimeInterval = 0.25,
         sleep: @escaping (UInt64) async -> Void = { nanoseconds in
@@ -40,6 +42,7 @@ struct CoordinatorChatMCPToolService {
     ) {
         self.toolName = toolName
         self.captureRequestMetadata = captureRequestMetadata
+        self.resolveRuntimeCoordinatorSessionID = resolveRuntimeCoordinatorSessionID
         self.initialMissionPlanTimeoutSeconds = initialMissionPlanTimeoutSeconds
         self.initialMissionPlanPollIntervalSeconds = initialMissionPlanPollIntervalSeconds
         self.sleep = sleep
@@ -68,6 +71,7 @@ struct CoordinatorChatMCPToolService {
         captureRequestMetadata: @escaping () async -> RequestMetadata = {
             RequestMetadata(connectionID: nil, clientName: nil, windowID: nil)
         },
+        resolveRuntimeCoordinatorSessionID: @escaping (RequestMetadata) async -> UUID? = { _ in nil },
         initialMissionPlanTimeoutSeconds: TimeInterval = 10,
         initialMissionPlanPollIntervalSeconds: TimeInterval = 0.25,
         sleep: @escaping (UInt64) async -> Void = { nanoseconds in
@@ -77,6 +81,7 @@ struct CoordinatorChatMCPToolService {
     ) {
         self.toolName = toolName
         self.captureRequestMetadata = captureRequestMetadata
+        self.resolveRuntimeCoordinatorSessionID = resolveRuntimeCoordinatorSessionID
         self.initialMissionPlanTimeoutSeconds = initialMissionPlanTimeoutSeconds
         self.initialMissionPlanPollIntervalSeconds = initialMissionPlanPollIntervalSeconds
         self.sleep = sleep
@@ -236,7 +241,9 @@ struct CoordinatorChatMCPToolService {
             }
 
             let selectedSnapshot = environment.snapshot()
-            let pendingChildRow = newParent ? nil : environment.activePendingChildInteractionRow()
+            let pendingChildRow = newParent || continuationAction != nil
+                ? nil
+                : environment.activePendingChildInteractionRow()
             let result: CoordinatorModeViewModel.DirectiveSubmissionResult
             let routedToChildInteraction: Bool
             if let pendingChildRow {
@@ -290,7 +297,11 @@ struct CoordinatorChatMCPToolService {
         case "mission_plan":
             environment.refresh()
             let snapshot = environment.snapshot()
-            let coordinatorSessionID = try resolveCoordinatorSessionID(args["coordinator_session_id"], in: snapshot)
+            let coordinatorSessionID = try await resolveCoordinatorSessionID(
+                args["coordinator_session_id"],
+                in: snapshot,
+                metadata: metadata
+            )
             try validateCoordinatorExists(coordinatorSessionID, in: snapshot)
             let existingPlan = snapshot.coordinatorRail.availableCoordinators
                 .first(where: { $0.sessionID == coordinatorSessionID })?
@@ -298,15 +309,25 @@ struct CoordinatorChatMCPToolService {
             let update = try parseMissionPlanUpdate(args, existingPlan: existingPlan)
             try environment.updateMissionPlan(coordinatorSessionID, update)
             environment.refresh()
-            return stateResponse(environment.snapshot(), extra: [
+            let updatedSnapshot = environment.snapshot()
+            let updatedPlan = updatedSnapshot.coordinatorRail.availableCoordinators
+                .first(where: { $0.sessionID == coordinatorSessionID })?
+                .missionPlan
+            return stateResponse(updatedSnapshot, extra: [
                 "updated": .bool(true),
-                "routed_to": .string("mission_plan")
+                "routed_to": .string("mission_plan"),
+                "coordinator_session_id": .string(coordinatorSessionID.uuidString),
+                "mission_plan": missionPlanValue(updatedPlan)
             ])
 
         case "mission_status":
             environment.refresh()
             let snapshot = environment.snapshot()
-            let coordinatorSessionID = try resolveCoordinatorSessionID(args["coordinator_session_id"], in: snapshot)
+            let coordinatorSessionID = try await resolveCoordinatorSessionID(
+                args["coordinator_session_id"],
+                in: snapshot,
+                metadata: metadata
+            )
             try validateCoordinatorExists(coordinatorSessionID, in: snapshot)
             let compact = AgentMCPToolHelpers.parseBool(args["compact"] ?? args["summary"]) ?? false
             let statusValue = compact
@@ -320,7 +341,11 @@ struct CoordinatorChatMCPToolService {
         case "mission_events":
             environment.refresh()
             let snapshot = environment.snapshot()
-            let coordinatorSessionID = try resolveCoordinatorSessionID(args["coordinator_session_id"], in: snapshot)
+            let coordinatorSessionID = try await resolveCoordinatorSessionID(
+                args["coordinator_session_id"],
+                in: snapshot,
+                metadata: metadata
+            )
             try validateCoordinatorExists(coordinatorSessionID, in: snapshot)
             let sinceSeq = try parseOptionalNonNegativeInt(args["since_seq"] ?? args["sinceSeq"], name: "since_seq") ?? 0
             let limit = try parseOptionalPositiveInt(args["limit"], name: "limit") ?? 200
@@ -330,7 +355,11 @@ struct CoordinatorChatMCPToolService {
         case "receipt":
             environment.refresh()
             let snapshot = environment.snapshot()
-            let coordinatorSessionID = try resolveCoordinatorSessionID(args["coordinator_session_id"], in: snapshot)
+            let coordinatorSessionID = try await resolveCoordinatorSessionID(
+                args["coordinator_session_id"],
+                in: snapshot,
+                metadata: metadata
+            )
             try validateCoordinatorExists(coordinatorSessionID, in: snapshot)
             let format = normalizedString(args["format"])?.lowercased() ?? "markdown"
             guard format == "markdown" || format == "md" else {
@@ -366,7 +395,11 @@ struct CoordinatorChatMCPToolService {
             try validateExternalUserAction(metadata, action: "change Mission pace")
             environment.refresh()
             let snapshot = environment.snapshot()
-            let coordinatorSessionID = try resolveCoordinatorSessionID(args["coordinator_session_id"], in: snapshot)
+            let coordinatorSessionID = try await resolveCoordinatorSessionID(
+                args["coordinator_session_id"],
+                in: snapshot,
+                metadata: metadata
+            )
             try validateCoordinatorExists(coordinatorSessionID, in: snapshot)
             let pace = try parseMissionPace(args["pace"] ?? args["default_pace"] ?? args["defaultPace"])
             let result = environment.setMissionPace(coordinatorSessionID, pace)
@@ -398,7 +431,11 @@ struct CoordinatorChatMCPToolService {
             try validateExternalUserAction(metadata, action: "change Mission autonomy")
             environment.refresh()
             let snapshot = environment.snapshot()
-            let coordinatorSessionID = try resolveCoordinatorSessionID(args["coordinator_session_id"], in: snapshot)
+            let coordinatorSessionID = try await resolveCoordinatorSessionID(
+                args["coordinator_session_id"],
+                in: snapshot,
+                metadata: metadata
+            )
             try validateCoordinatorExists(coordinatorSessionID, in: snapshot)
             let autonomyClassKey = try parseMissionAutonomyClassKey(
                 args["autonomy_class"] ?? args["autonomyClass"] ?? args["decision_class"] ?? args["decisionClass"] ?? args["class"]
@@ -441,7 +478,11 @@ struct CoordinatorChatMCPToolService {
             repeat {
                 environment.refresh()
                 latestSnapshot = environment.snapshot()
-                latestCoordinatorSessionID = try resolveCoordinatorSessionID(args["coordinator_session_id"], in: latestSnapshot)
+                latestCoordinatorSessionID = try await resolveCoordinatorSessionID(
+                    args["coordinator_session_id"],
+                    in: latestSnapshot,
+                    metadata: metadata
+                )
                 try validateCoordinatorExists(latestCoordinatorSessionID, in: latestSnapshot)
                 latestStatus = compactMissionStatusValue(
                     coordinatorSessionID: latestCoordinatorSessionID,
@@ -596,6 +637,10 @@ struct CoordinatorChatMCPToolService {
             approvalState: approvalState,
             nodes: nodes
         )
+        try validateCompletedMissionPlanNodesAreTerminal(
+            status: status ?? existingPlan?.status,
+            nodes: effectiveNodes
+        )
         try validateChildAskAutoCompletionLedger(
             existingPlan: existingPlan,
             policySnapshot: policySnapshot,
@@ -649,6 +694,18 @@ struct CoordinatorChatMCPToolService {
         if let advancingNode = nodes?.first(where: { missionPlanNodeStatusRequiresApproval($0.status) }) {
             throw MCPError.invalidParams("nodes[].status \(advancingNode.status.rawValue) requires approval_state approved before runtime progress can be recorded.")
         }
+    }
+
+    private func validateCompletedMissionPlanNodesAreTerminal(
+        status: CoordinatorMissionPlanStatus?,
+        nodes: [CoordinatorMissionPlanNode]
+    ) throws {
+        guard status == .completed,
+              let incompleteNode = nodes.first(where: { !$0.status.isTerminal })
+        else { return }
+        throw MCPError.invalidParams(
+            "mission_plan status completed requires every node to be terminal; node \"\(incompleteNode.title)\" is \(incompleteNode.status.rawValue). Leave the Mission running until pending/running work completes, or mark the node skipped/cancelled with evidence before completing."
+        )
     }
 
     private func validateChildAskAutoCompletionLedger(
@@ -1661,9 +1718,19 @@ struct CoordinatorChatMCPToolService {
         return sessionID
     }
 
-    private func resolveCoordinatorSessionID(_ value: Value?, in snapshot: CoordinatorModeSnapshot) throws -> UUID {
+    private func resolveCoordinatorSessionID(
+        _ value: Value?,
+        in snapshot: CoordinatorModeSnapshot,
+        metadata: RequestMetadata
+    ) async throws -> UUID {
         if let value {
             return try requireCoordinatorSessionID(value)
+        }
+        if metadata.isCoordinatorRuntime {
+            if let runtimeCoordinatorID = await resolveRuntimeCoordinatorSessionID(metadata) {
+                return runtimeCoordinatorID
+            }
+            throw MCPError.invalidParams("coordinator_session_id is required for Coordinator runtime calls when RepoPrompt cannot resolve the caller Mission. Pass the current Coordinator Mission UUID explicitly.")
         }
         if let selectedID = snapshot.coordinatorRail.coordinatorSessionID {
             return selectedID

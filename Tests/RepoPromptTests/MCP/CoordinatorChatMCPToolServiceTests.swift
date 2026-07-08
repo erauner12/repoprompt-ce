@@ -824,6 +824,105 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(workstream["primary_session_id"]?.stringValue, childID.uuidString)
     }
 
+    func testMissionPlanRuntimeCallerDefaultsToCallerMissionNotSelectedMission() async throws {
+        let callerCoordinatorID = UUID()
+        let selectedCoordinatorID = UUID()
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [
+            callerCoordinatorID: CoordinatorMissionPlan(
+                missionKey: "caller",
+                objective: "Caller Mission",
+                status: .running,
+                approvalState: .approved
+            ),
+            selectedCoordinatorID: CoordinatorMissionPlan(
+                missionKey: "selected",
+                objective: "Selected Mission",
+                status: .running,
+                approvalState: .approved
+            )
+        ]
+        var updatedIDs: [UUID] = []
+        let service = makeService(
+            coordinatorIDs: [callerCoordinatorID, selectedCoordinatorID],
+            selectedID: selectedCoordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex-runtime",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            resolveRuntimeCoordinatorSessionID: { metadata in
+                metadata.isCoordinatorRuntime ? callerCoordinatorID : nil
+            },
+            missionPlans: { missionPlans },
+            updateMissionPlan: { sessionID, update in
+                updatedIDs.append(sessionID)
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(update)
+                missionPlans[sessionID] = state.missionPlan
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "objective": .string("Caller Mission updated")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+        let plan = try XCTUnwrap(object["mission_plan"]?.objectValue)
+
+        XCTAssertEqual(updatedIDs, [callerCoordinatorID])
+        XCTAssertEqual(plan["mission_key"]?.stringValue, "caller")
+        XCTAssertEqual(plan["objective"]?.stringValue, "Caller Mission updated")
+        XCTAssertEqual(missionPlans[callerCoordinatorID]?.objective, "Caller Mission updated")
+        XCTAssertEqual(missionPlans[selectedCoordinatorID]?.objective, "Selected Mission")
+    }
+
+    func testMissionPlanRuntimeCallerWithoutResolvedMissionDoesNotUseSelectedFallback() async throws {
+        let selectedCoordinatorID = UUID()
+        var didUpdate = false
+        let service = makeService(
+            coordinatorIDs: [selectedCoordinatorID],
+            selectedID: selectedCoordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex-runtime",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            missionPlans: {
+                [selectedCoordinatorID: CoordinatorMissionPlan(
+                    missionKey: "selected",
+                    objective: "Selected Mission",
+                    status: .running,
+                    approvalState: .approved
+                )]
+            },
+            updateMissionPlan: { _, _ in
+                didUpdate = true
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "objective": .string("Should not land on selected Mission")
+            ])
+            XCTFail("Coordinator runtime mission_plan without a resolvable caller Mission must reject instead of using selection fallback.")
+        } catch {
+            XCTAssertFalse(didUpdate)
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("cannot resolve the caller Mission"), message)
+        }
+    }
+
     func testMissionPlanPreservesWorktreeBaseOnPartialStrategyUpdate() async throws {
         let coordinatorID = UUID()
         let workstreamID = UUID()
@@ -1271,6 +1370,61 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         } catch {
             let message = String(describing: error)
             XCTAssertTrue(message.contains("stale waiting/bound state"), message)
+        }
+    }
+
+    func testMissionPlanRejectsCompletedStatusWithPendingNodes() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let pendingNodeID = UUID()
+        let completedNodeID = UUID()
+        let plan = CoordinatorMissionPlan(
+            missionKey: "mixed-terminal-state",
+            objective: "Do not complete until all nodes are terminal.",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Probe",
+                    purpose: "Keep pending work visible.",
+                    defaultPolicy: .coordinatorOnly,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: pendingNodeID,
+                    title: "Still pending",
+                    workstreamID: workstreamID,
+                    executionPolicy: .coordinatorOnly
+                ),
+                CoordinatorMissionPlanNode(
+                    id: completedNodeID,
+                    title: "Already done",
+                    completionEvidence: "Coordinator completed this node.",
+                    workstreamID: workstreamID,
+                    executionPolicy: .coordinatorOnly,
+                    status: .completed
+                )
+            ]
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "status": .string("completed")
+            ])
+            XCTFail("A Mission cannot become completed while any node is still pending.")
+        } catch {
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("status completed requires every node to be terminal"), message)
+            XCTAssertTrue(message.contains("Still pending"), message)
         }
     }
 
@@ -3737,6 +3891,40 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(object["accepted"]?.boolValue, true)
     }
 
+    func testSubmitWithCheckpointActionDoesNotAnswerPendingChildInteraction() async throws {
+        let coordinatorID = UUID()
+        let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
+        var submittedActions: [CoordinatorModeViewModel.ContinuationAction] = []
+        var childResponses: [CoordinatorModeViewModel.ChildInteractionResponseSubmission] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submitContinuation: {
+                submittedActions.append($0)
+                return .accepted
+            },
+            pendingChild: { childRow },
+            submitPendingChild: { submission, _, _ in
+                childResponses.append(submission)
+                return .accepted
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("submit"),
+            "coordinator_session_id": .string(coordinatorID.uuidString),
+            "checkpoint_action": .string("proceed"),
+            "message": .string("Approved to proceed with the plan."),
+            "compact": .bool(true)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(submittedActions, [.proceed])
+        XCTAssertTrue(childResponses.isEmpty)
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "coordinator")
+    }
+
     func testSubmitRoutesToPendingChildInteractionWhenSelectedCoordinatorNeedsInput() async throws {
         let coordinatorID = UUID()
         let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
@@ -4062,6 +4250,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         captureRequestMetadata: @escaping () async -> MCPServerViewModel.RequestMetadata = {
             MCPServerViewModel.RequestMetadata(connectionID: nil, clientName: nil, windowID: nil)
         },
+        resolveRuntimeCoordinatorSessionID: @escaping (MCPServerViewModel.RequestMetadata) async -> UUID? = { _ in nil },
         coordinatorRunState: AgentSessionRunState = .idle,
         startNew: @escaping () -> Void = {},
         stopMission: @escaping () async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { .accepted },
@@ -4086,6 +4275,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             coordinatorIDs: coordinatorIDs,
             selectedID: { selectedID },
             captureRequestMetadata: captureRequestMetadata,
+            resolveRuntimeCoordinatorSessionID: resolveRuntimeCoordinatorSessionID,
             coordinatorRunState: coordinatorRunState,
             startNew: startNew,
             stopMission: stopMission,
@@ -4112,6 +4302,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         captureRequestMetadata: @escaping () async -> MCPServerViewModel.RequestMetadata = {
             MCPServerViewModel.RequestMetadata(connectionID: nil, clientName: nil, windowID: nil)
         },
+        resolveRuntimeCoordinatorSessionID: @escaping (MCPServerViewModel.RequestMetadata) async -> UUID? = { _ in nil },
         coordinatorRunState: AgentSessionRunState = .idle,
         select: @escaping (UUID?) -> Void = { _ in },
         startNew: @escaping () -> Void = {},
@@ -4136,6 +4327,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         CoordinatorChatMCPToolService(
             toolName: MCPWindowToolName.coordinatorChat,
             captureRequestMetadata: captureRequestMetadata,
+            resolveRuntimeCoordinatorSessionID: resolveRuntimeCoordinatorSessionID,
             initialMissionPlanTimeoutSeconds: initialMissionPlanTimeoutSeconds,
             initialMissionPlanPollIntervalSeconds: initialMissionPlanPollIntervalSeconds,
             sleep: sleep

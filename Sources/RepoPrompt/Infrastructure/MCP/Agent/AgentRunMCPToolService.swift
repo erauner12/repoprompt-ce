@@ -695,6 +695,12 @@ struct AgentRunMCPToolService {
         let interactionID = try requireUUID(args["interaction_id"], name: "interaction_id")
         let workflow = try resolveWorkflow(args: args)
         let payload = try parseResponsePayload(args: args)
+        if let redirectMessage = await agentModeVM.mcpCoordinatorChildInteractionRespondRedirectMessage(
+            sessionID: sessionID,
+            interactionID: interactionID
+        ) {
+            throw MCPError.invalidParams(redirectMessage)
+        }
         let dispatch = try await agentModeVM.mcpResolvePendingInteraction(
             sessionID: sessionID,
             interactionID: interactionID,

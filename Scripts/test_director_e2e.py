@@ -228,6 +228,16 @@ Loaded roots: demo → /repo/fallback
         )
         director_e2e.assert_common_status_integrity([first, second])
 
+    def test_common_integrity_rejects_completed_mission_with_pending_node(self) -> None:
+        obs = observation(
+            "f1",
+            "completed",
+            [{"id": "n1", "title": "Still pending", "status": "pending"}],
+        )
+
+        with self.assertRaisesRegex(director_e2e.E2EFailure, "non-terminal nodes"):
+            director_e2e.assert_common_status_integrity([obs])
+
     def test_s2_accepts_convergence_sequence(self) -> None:
         a = "a"
         b = "b"
@@ -459,6 +469,29 @@ Loaded roots: demo → /repo/fallback
         self.assertIn("SCRIPTED_CHILD_V1 ask_marker token=S5-scripted-test options=Alpha,Beta", message)
         self.assertIn("SCRIPTED_CHILD_V1 answer=Alpha token=S5-scripted-test", message)
         self.assertNotIn("S5_USER_INPUT_TOOL_UNAVAILABLE", message)
+
+    def test_plan_or_nodes_mention_token_requires_current_scenario_plan(self) -> None:
+        stale = {
+            "plan": {
+                "objective": "Bootstrap approval plan",
+                "nodes": [
+                    {"title": "Approve the Mission Plan"},
+                ],
+            },
+            "nodes": [],
+        }
+        current = {
+            "plan": {
+                "objective": "Director E2E S5 childAsk auto",
+                "nodes": [
+                    {"title": "Ask scripted child", "detail": "Probe S5-auto-token"},
+                ],
+            },
+            "nodes": [],
+        }
+
+        self.assertFalse(director_e2e.plan_or_nodes_mention_token(stale, "S5-auto-token"))
+        self.assertTrue(director_e2e.plan_or_nodes_mention_token(current, "S5-auto-token"))
 
     def test_scripted_completion_marker_asserts_completion_form(self) -> None:
         status = {

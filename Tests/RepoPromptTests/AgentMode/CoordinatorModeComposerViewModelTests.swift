@@ -2978,6 +2978,190 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(evidence.decisionID, decision.id)
     }
 
+    func testMissionBoundChildQuestionsRedirectAgentRunRespondForMeAndDirectorRouting() throws {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let interactionID = uuid(900)
+
+        for mode in [CoordinatorMissionAutonomyMode.ask, .auto] {
+            var policy = CoordinatorMissionPolicySnapshot.defaultPolicy
+            policy.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key] = mode
+            let plan = CoordinatorMissionPlan(
+                objective: "Answer child question.",
+                status: .running,
+                approvalState: .approved,
+                policySnapshot: policy,
+                autonomy: policy.autonomy
+            )
+            let question = pendingQuestionInteraction(
+                id: interactionID,
+                title: "Child checkpoint",
+                prompt: "Choose Alpha or Beta."
+            )
+            let viewModel = CoordinatorModeViewModel(
+                inputProvider: { sortMode, selectedCoordinatorID in
+                    self.input(
+                        live: [
+                            self.live(
+                                id: coordinatorID,
+                                tab: self.uuid(101),
+                                title: "Coordinator mission",
+                                updatedAt: self.date(40),
+                                state: .idle,
+                                coordinatorRuntime: true,
+                                missionPlan: plan
+                            ),
+                            self.live(
+                                id: childID,
+                                tab: self.uuid(102),
+                                title: "Child",
+                                updatedAt: self.date(30),
+                                state: .waitingForQuestion,
+                                parent: coordinatorID
+                            )
+                        ],
+                        mcpSnapshots: [
+                            childID: self.mcpSnapshot(
+                                sessionID: childID,
+                                tabID: self.uuid(102),
+                                sessionName: "Child",
+                                status: .waitingForInput,
+                                statusText: "Waiting",
+                                assistantPreview: nil,
+                                parent: coordinatorID,
+                                interaction: question
+                            )
+                        ],
+                        selectedCoordinatorID: selectedCoordinatorID,
+                        sort: sortMode,
+                        demoCoordinatorIDs: [coordinatorID]
+                    )
+                },
+                dashboardVisibilityHandler: { _ in }
+            )
+            viewModel.selectCoordinator(sessionID: coordinatorID)
+
+            let redirect = try XCTUnwrap(viewModel.missionBoundChildInteractionRespondRedirectMessage(
+                sessionID: childID,
+                interactionID: interactionID
+            ))
+            XCTAssertTrue(redirect.contains("coordinator_chat op=submit"), redirect)
+            XCTAssertTrue(redirect.contains(coordinatorID.uuidString), redirect)
+            XCTAssertNil(viewModel.missionBoundChildInteractionRespondRedirectMessage(
+                sessionID: childID,
+                interactionID: uuid(901)
+            ))
+        }
+
+        var autoPolicy = CoordinatorMissionPolicySnapshot.defaultPolicy
+        autoPolicy.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key] = .auto
+        let planBoundCoordinatorID = uuid(11)
+        let planBoundChildID = uuid(12)
+        let planBoundInteractionID = uuid(902)
+        let workstreamID = uuid(20)
+        let planBoundPlan = CoordinatorMissionPlan(
+            objective: "Answer suppressed child question.",
+            status: .running,
+            approvalState: .approved,
+            policySnapshot: autoPolicy,
+            autonomy: autoPolicy.autonomy,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: uuid(30),
+                    title: "Ask scripted child",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .running,
+                    boundSessionID: planBoundChildID,
+                    boundInteractionID: planBoundInteractionID
+                )
+            ]
+        )
+        let planBoundViewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: planBoundCoordinatorID,
+                            tab: self.uuid(111),
+                            title: "Auto coordinator",
+                            updatedAt: self.date(40),
+                            state: .idle,
+                            coordinatorRuntime: true,
+                            missionPlan: planBoundPlan
+                        ),
+                        self.live(
+                            id: planBoundChildID,
+                            tab: self.uuid(112),
+                            title: "Suppressed child",
+                            updatedAt: self.date(30),
+                            state: .waitingForQuestion,
+                            parent: planBoundCoordinatorID
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [planBoundCoordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+        planBoundViewModel.selectCoordinator(sessionID: planBoundCoordinatorID)
+
+        let planBoundRedirect = try XCTUnwrap(planBoundViewModel.missionBoundChildInteractionRespondRedirectMessage(
+            sessionID: planBoundChildID,
+            interactionID: planBoundInteractionID
+        ))
+        XCTAssertTrue(planBoundRedirect.contains("coordinator_chat op=submit"), planBoundRedirect)
+        XCTAssertTrue(planBoundRedirect.contains(planBoundCoordinatorID.uuidString), planBoundRedirect)
+        XCTAssertNil(planBoundViewModel.missionBoundChildInteractionRespondRedirectMessage(
+            sessionID: uuid(13),
+            interactionID: uuid(903)
+        ))
+
+        let nonMissionViewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: childID,
+                            tab: self.uuid(102),
+                            title: "Ordinary child",
+                            updatedAt: self.date(30),
+                            state: .waitingForQuestion
+                        )
+                    ],
+                    mcpSnapshots: [
+                        childID: self.mcpSnapshot(
+                            sessionID: childID,
+                            tabID: self.uuid(102),
+                            sessionName: "Ordinary child",
+                            status: .waitingForInput,
+                            statusText: "Waiting",
+                            assistantPreview: nil,
+                            parent: nil,
+                            interaction: self.pendingQuestionInteraction(
+                                id: interactionID,
+                                title: "Ordinary question",
+                                prompt: "Choose Alpha or Beta."
+                            )
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    autoSelectDemoCoordinator: false,
+                    sort: sortMode
+                )
+            },
+            dashboardVisibilityHandler: { _ in }
+        )
+        nonMissionViewModel.refresh()
+
+        XCTAssertNil(nonMissionViewModel.missionBoundChildInteractionRespondRedirectMessage(
+            sessionID: childID,
+            interactionID: interactionID
+        ))
+    }
+
     func testPendingChildInteractionResponseForwardsToChildAndRecordsVisibleAnswer() async throws {
         let coordinatorID = uuid(1)
         let childID = uuid(2)

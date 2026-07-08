@@ -62,6 +62,57 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(state.missionPlan, plan)
     }
 
+    func testMissionPlanUpdateCannotCompleteWithMergedPendingNodes() throws {
+        let workstreamID = UUID()
+        let approvalNodeID = UUID()
+        let childNodeID = UUID()
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 5,
+            objective: "Run S5 auto smoke",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Smoke",
+                    purpose: "Validate terminal state.",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: approvalNodeID,
+                    title: "Approve scoped Mission Plan",
+                    workstreamID: workstreamID,
+                    executionPolicy: .askUser,
+                    status: .pending
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 10)
+        ))
+
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            status: .completed,
+            approvalState: .approved,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: childNodeID,
+                    title: "Run S5 auto scripted child",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .completed
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 20)
+        ))
+
+        let plan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(plan.status, .running)
+        XCTAssertEqual(plan.nodes.map(\.id), [approvalNodeID, childNodeID])
+        XCTAssertEqual(plan.nodes.map(\.status), [.pending, .completed])
+    }
+
     func testResumeDirectiveContainsMissionEligibilityCapAndIdempotencyClauses() {
         let event = CoordinatorFollowThroughEvent(
             id: "resume-1",

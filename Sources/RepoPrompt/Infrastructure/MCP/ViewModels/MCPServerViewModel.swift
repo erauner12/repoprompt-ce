@@ -571,7 +571,15 @@ final class MCPServerViewModel: ObservableObject {
         CoordinatorChatMCPToolService(
             toolName: MCPWindowToolName.coordinatorChat,
             requireTargetWindow: { [self] in try requireTargetWindow() },
-            captureRequestMetadata: { [self] in await captureRequestMetadata() }
+            captureRequestMetadata: { [self] in await captureRequestMetadata() },
+            resolveRuntimeCoordinatorSessionID: { [self] metadata in
+                guard metadata.isCoordinatorRuntime else { return nil }
+                let targetWindow = try? requireTargetWindow()
+                guard let sourceTabID = await resolveSpawnSourceTabIDForAgentSessionCreation(metadata: metadata) else {
+                    return nil
+                }
+                return targetWindow?.agentModeViewModel.mcpSpawnParentSessionID(sourceTabID: sourceTabID)
+            }
         )
     }
 

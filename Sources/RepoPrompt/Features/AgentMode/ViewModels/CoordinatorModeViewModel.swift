@@ -1365,6 +1365,50 @@ final class CoordinatorModeViewModel: ObservableObject {
             .first
     }
 
+    func missionBoundChildInteractionRespondRedirectMessage(
+        sessionID: UUID,
+        interactionID: UUID
+    ) -> String? {
+        let rows = coordinatorModeRowsForRouting(in: snapshot)
+        if let row = rows.first(where: { row in
+            row.sessionID == sessionID
+                && row.pendingInteraction?.id == interactionID
+                && row.parentCoordinator?.sessionID != nil
+                && !row.isPersistedOnly
+        }),
+            let coordinatorSessionID = row.parentCoordinator?.sessionID,
+            let plan = snapshot.coordinatorRail.availableCoordinators
+            .first(where: { $0.sessionID == coordinatorSessionID })?
+            .missionPlan,
+            !plan.status.isTerminal
+        {
+            return Self.missionBoundChildInteractionRespondRedirectMessage(coordinatorSessionID: coordinatorSessionID)
+        }
+
+        let boundCoordinator = snapshot.coordinatorRail.availableCoordinators.first { option in
+            guard let plan = option.missionPlan,
+                  !plan.status.isTerminal
+            else {
+                return false
+            }
+            return plan.nodes.contains { node in
+                node.boundSessionID == sessionID || node.boundInteractionID == interactionID
+            }
+        }
+
+        guard let coordinatorSessionID = boundCoordinator?.sessionID else {
+            return nil
+        }
+
+        return Self.missionBoundChildInteractionRespondRedirectMessage(coordinatorSessionID: coordinatorSessionID)
+    }
+
+    static func missionBoundChildInteractionRespondRedirectMessage(coordinatorSessionID: UUID) -> String {
+        """
+        This child question belongs to Coordinator Mission \(coordinatorSessionID.uuidString). Mission-bound child answers must use coordinator_chat op=submit so the Mission ledger records the actor decision and evidence. Retry with coordinator_chat op=submit, coordinator_session_id "\(coordinatorSessionID.uuidString)", and the same answer text.
+        """
+    }
+
     func coordinatorModeRowsForRouting(in snapshot: CoordinatorModeSnapshot) -> [CoordinatorModeRow] {
         snapshot.groups.flatMap(\.rows).map { row in
             guard row.pendingInteraction == nil,

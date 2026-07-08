@@ -10470,6 +10470,65 @@ final class AgentModeViewModel: ObservableObject {
         return ownerValidatedSessionIndex[sessionID]?.coordinatorMissionPlan
     }
 
+    private func mcpCoordinatorMissionID(
+        boundToChildSessionID sessionID: UUID,
+        interactionID: UUID
+    ) -> UUID? {
+        func planContainsBoundChild(_ plan: CoordinatorMissionPlan) -> Bool {
+            !plan.status.isTerminal && plan.nodes.contains { node in
+                node.boundSessionID == sessionID || node.boundInteractionID == interactionID
+            }
+        }
+
+        for session in sessions.values {
+            guard let coordinatorSessionID = session.activeAgentSessionID,
+                  let plan = session.coordinatorFollowThroughState?.missionPlan,
+                  planContainsBoundChild(plan)
+            else { continue }
+            return coordinatorSessionID
+        }
+
+        for (coordinatorSessionID, entry) in ownerValidatedSessionIndex {
+            guard let plan = entry.coordinatorMissionPlan,
+                  planContainsBoundChild(plan)
+            else { continue }
+            return coordinatorSessionID
+        }
+
+        return nil
+    }
+
+    func mcpCoordinatorChildInteractionRespondRedirectMessage(
+        sessionID: UUID,
+        interactionID: UUID
+    ) -> String? {
+        if let session = sessions.values.first(where: { $0.activeAgentSessionID == sessionID }),
+           session.pendingAskUser?.interaction.id == interactionID,
+           let coordinatorSessionID = session.parentSessionID,
+           let plan = mcpCoordinatorMissionPlan(sessionID: coordinatorSessionID),
+           !plan.status.isTerminal
+        {
+            return CoordinatorModeViewModel.missionBoundChildInteractionRespondRedirectMessage(
+                coordinatorSessionID: coordinatorSessionID
+            )
+        }
+        if let coordinatorSessionID = mcpCoordinatorMissionID(
+            boundToChildSessionID: sessionID,
+            interactionID: interactionID
+        ) {
+            return CoordinatorModeViewModel.missionBoundChildInteractionRespondRedirectMessage(
+                coordinatorSessionID: coordinatorSessionID
+            )
+        }
+
+        let coordinatorModeViewModel = coordinatorModeViewModel
+        coordinatorModeViewModel.refresh()
+        return coordinatorModeViewModel.missionBoundChildInteractionRespondRedirectMessage(
+            sessionID: sessionID,
+            interactionID: interactionID
+        )
+    }
+
     private func saveSession(for tabID: UUID) async {
         #if DEBUG
             let diagnosticsStartMS = AgentModePerfDiagnostics.timestampMSIfEnabled()

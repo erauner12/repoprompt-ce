@@ -445,3 +445,30 @@ model/backend negotiation samples. Tripwires: scripted must not become the only 
 must reuse the real session lifecycle, must not grow into a general interpreter, must not
 weaken harness assertions for scripted quirks, and must never leak into user-facing model
 selection.
+
+Mission-bound child response gate (2026-07-08): prompt guidance alone is insufficient for
+actor-integrity rules. Scripted S5 proved that the follow-through directive can say
+`coordinator_chat op=submit` while the live Coordinator still tries `agent_run.respond`.
+Generic Agent Mode response is therefore blocked for active Mission-bound child questions
+in both `childAsk:ask` and `childAsk:auto`; every Mission child answer must enter through
+`coordinator_chat op=submit`, the one path that records actor decision and evidence before
+resolving the child. Non-Mission child interactions keep normal `agent_run.respond`
+behavior. `coordinator_chat submit` also treats `checkpoint_action` as an explicit
+Coordinator continuation command; even if a child question is pending, a checkpoint
+action must not be consumed as a child answer.
+
+Runtime Mission routing guard (2026-07-08): the selected Coordinator Mission is a
+presentation/external-driver default, not a runtime write target. Coordinator-runtime
+`coordinator_chat` calls without an explicit `coordinator_session_id` resolve to the
+caller Mission via run-scoped tab context; if that cannot be resolved, the call fails
+closed instead of falling back to the selected Mission. This prevents stale child or
+Coordinator turns from writing ask/auto variant ledger state into whichever Mission the
+user currently has selected.
+
+Terminal-state honesty (2026-07-08): a Mission cannot publish `status:"completed"` while
+any planned node remains pending, running, or blocked. Runtime `mission_plan` writes must
+leave the Mission running until every node reaches a terminal state, or explicitly mark
+unfinished nodes skipped/cancelled with evidence. Receipts, terminal UI, and archived row
+status all depend on this invariant. The guard lives at the MCP parse boundary and in the
+shared follow-through state merger, because non-MCP state updates can otherwise merge a
+stale pending node into a terminal plan.

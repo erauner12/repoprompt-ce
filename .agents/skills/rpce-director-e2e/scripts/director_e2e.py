@@ -903,6 +903,24 @@ def has_checkpoint_action(status: dict[str, Any], label: str) -> bool:
     return any(str(action.get("label") or "") == label for action in actions if isinstance(action, dict))
 
 
+def plan_or_nodes_mention_token(status: dict[str, Any], token: str) -> bool:
+    token = token.strip().lower()
+    if not token:
+        return True
+    plan = mission_plan_payload(status)
+    fields: list[str] = []
+    for key in ["mission_key", "objective", "shape_summary", "predecessor_summary"]:
+        fields.append(str(plan.get(key) or ""))
+    for node in status.get("nodes") or plan.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        fields.extend(
+            str(node.get(key) or "")
+            for key in ["title", "detail", "completion_evidence", "done_criteria", "role"]
+        )
+    return token in "\n".join(fields).lower()
+
+
 def plan_advanced_past_initial_approval(status: dict[str, Any]) -> bool:
     approval_state = plan_approval_state(status)
     return approval_state == "approved"
@@ -1317,9 +1335,26 @@ def terminal_completed(obs: Observation) -> bool:
     return obs.status == "completed"
 
 
+def nonterminal_nodes_in_completed_mission(obs: Observation) -> list[dict[str, Any]]:
+    if obs.status != "completed":
+        return []
+    return [
+        node
+        for node in obs.nodes
+        if isinstance(node, dict) and str(node.get("status") or "") not in TERMINAL_STATUSES
+    ]
+
+
 def assert_common_status_integrity(observations: Iterable[Observation]) -> None:
     last_by_node: dict[str, str] = {}
     for obs in observations:
+        incomplete = nonterminal_nodes_in_completed_mission(obs)
+        if incomplete:
+            summary = ", ".join(
+                f"{node.get('title') or node.get('id')}: {node.get('status')}"
+                for node in incomplete
+            )
+            raise E2EFailure(f"Mission reported completed with non-terminal nodes: {summary}")
         for node in obs.nodes:
             node_id = str(node.get("id"))
             status = str(node.get("status") or "")
@@ -1510,6 +1545,7 @@ def assert_s5_ask(observations: list[Observation], token: str | None = None) -> 
     final = observations[-1]
     if final.status != "completed":
         raise E2EFailure(f"S5 ask expected completed mission, got {final.status}")
+    assert_common_status_integrity(observations)
     if not any(has_pending_child_question(obs) for obs in observations):
         raise E2EFailure("S5 ask never observed a pending child question / Decisions queue item")
     if needs_you_count(final) != 0:
@@ -1520,7 +1556,6 @@ def assert_s5_ask(observations: list[Observation], token: str | None = None) -> 
         raise E2EFailure("S5 ask expected final evidence/completion text to mention Alpha")
     assert_s5_variant_token(final.full, token, "ask")
     refs = assert_s5_fresh_child_launch(observations, "ask")
-    assert_common_status_integrity(observations)
     return refs
 
 
@@ -1528,6 +1563,7 @@ def assert_s5_auto(observations: list[Observation], token: str | None = None) ->
     final = observations[-1]
     if final.status != "completed":
         raise E2EFailure(f"S5 auto expected completed mission, got {final.status}")
+    assert_common_status_integrity(observations)
     if any(has_pending_child_question(obs) for obs in observations):
         raise E2EFailure("S5 auto observed a user-facing pending child question")
     if has_decision(final.full, label="answered a child question", actor="user", decision_class="childAsk"):
@@ -1551,7 +1587,6 @@ def assert_s5_auto(observations: list[Observation], token: str | None = None) ->
     if needs_you_count(final) != 0:
         raise E2EFailure(f"S5 auto expected no pending Decisions at completion, got {needs_you_count(final)}")
     refs = assert_s5_fresh_child_launch(observations, "auto")
-    assert_common_status_integrity(observations)
     return refs
 
 
@@ -1917,7 +1952,11 @@ def run_s5_variant(
         client,
         artifacts,
         session_id,
-        lambda item: plan_approval_state(item.compact) == "awaiting_approval" and has_checkpoint_action(item.compact, "Proceed"),
+        lambda item: (
+            plan_approval_state(item.compact) == "awaiting_approval"
+            and has_checkpoint_action(item.compact, "Proceed")
+            and plan_or_nodes_mention_token(item.full, variant_token)
+        ),
         args.timeout_seconds,
         idle_timeout_seconds=args.idle_timeout_seconds,
         events_mode=args.events_mode,
@@ -2073,7 +2112,11 @@ def run_s6_childask_flip(client: RpcClient, artifacts: RunArtifacts, args: argpa
         client,
         artifacts,
         session_id,
-        lambda item: plan_approval_state(item.compact) == "awaiting_approval" and has_checkpoint_action(item.compact, "Proceed"),
+        lambda item: (
+            plan_approval_state(item.compact) == "awaiting_approval"
+            and has_checkpoint_action(item.compact, "Proceed")
+            and plan_or_nodes_mention_token(item.full, variant_token)
+        ),
         args.timeout_seconds,
         idle_timeout_seconds=args.idle_timeout_seconds,
         events_mode=args.events_mode,
