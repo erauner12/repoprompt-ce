@@ -173,6 +173,11 @@ precedes any Director childAsk decision; exactly one answer lands; losing user/D
 race attempts reject loudly; receipts must read the actor chain honestly ("user flipped,
 then X answered"). `set_pace` / `set_autonomy` are external-user parity ops only:
 coordinator-runtime callers are blocked at execution, not merely hidden by advertisement.
+The `auto→ask` race is guarded at submit time, not by prompt wording: the child-interaction
+submit path re-resolves current `childAsk`, so a stale Director/runtime answer after the
+Me flip is rejected instead of being ledgered. The scripted S6 slice exercises the
+observable half of that contract by proving the hidden auto-routed interaction reappears
+for the user and completes with a user childAsk decision and no Director answer.
 
 ## 4. Decisions queue doctrine + identity (LOCKED)
 

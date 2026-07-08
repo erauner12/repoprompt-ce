@@ -779,6 +779,269 @@ Loaded roots: demo → /repo/fallback
                 token="s6case",
             )
 
+    def test_s6_childask_escalation_accepts_user_answer_after_me_reroute(self) -> None:
+        hidden = observation(
+            "f1",
+            "running",
+            [
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "bound_session_id": "child-session",
+                    "bound_interaction_id": "interaction-1",
+                    "bound_row": {"run_state": "waitingForQuestion", "status_group": "working"},
+                }
+            ],
+            running=1,
+            needs_you=0,
+            childask_mode="auto",
+        )
+        visible = observation(
+            "f2",
+            "running",
+            [
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "bound_session_id": "child-session",
+                    "bound_interaction_id": "interaction-1",
+                    "bound_row": {"run_state": "waitingForQuestion", "status_group": "needsYou"},
+                }
+            ],
+            running=1,
+            needs_you=1,
+            childask_mode="ask",
+            decisions=[
+                {
+                    "id": "flip-decision",
+                    "label": "routed child questions to Me",
+                    "actor": "user",
+                    "decision_class": "childAsk",
+                    "timestamp": "2026-07-08T01:00:00Z",
+                }
+            ],
+        )
+        final = observation(
+            "f3",
+            "completed",
+            [
+                {
+                    "id": "n1",
+                    "status": "completed",
+                    "bound_session_id": "child-session",
+                    "bound_interaction_id": "interaction-1",
+                    "completion_evidence": "Selected Alpha for s6case.",
+                }
+            ],
+            childask_mode="ask",
+            user_decisions=5,
+            decisions=[
+                {
+                    "id": "flip-decision",
+                    "label": "routed child questions to Me",
+                    "actor": "user",
+                    "decision_class": "childAsk",
+                    "timestamp": "2026-07-08T01:00:00Z",
+                },
+                {
+                    "id": "answer-decision",
+                    "label": "answered a child question",
+                    "actor": "user",
+                    "decision_class": "childAsk",
+                    "interaction_id": "interaction-1",
+                    "timestamp": "2026-07-08T01:00:01Z",
+                },
+            ],
+            evidence_summaries=["User answered Alpha for s6case."],
+            routing_decisions=[{"operation": "agent_run.start", "route_kind": "fresh_child"}],
+        )
+        events = [
+            {
+                "seq": 8,
+                "decision_ids": ["flip-decision"],
+                "nodes": [{"id": "n1", "status": "running", "bound_interaction_id": "interaction-1"}],
+            },
+            {
+                "seq": 9,
+                "decision_ids": ["flip-decision", "answer-decision"],
+                "nodes": [{"id": "n1", "status": "completed", "bound_interaction_id": "interaction-1"}],
+            },
+        ]
+
+        self.assertTrue(director_e2e.has_hidden_auto_child_question(hidden))
+        self.assertEqual(
+            director_e2e.assert_s6_childask_escalation(
+                [hidden, visible, final],
+                events,
+                interaction_id="interaction-1",
+                seq_before_flip=7,
+                token="s6case",
+            ),
+            {"sessions": ["child-session"], "interactions": ["interaction-1"]},
+        )
+
+    def test_s6_childask_escalation_rejects_director_answer_after_me_reroute(self) -> None:
+        hidden = observation(
+            "f1",
+            "running",
+            [
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "bound_session_id": "child-session",
+                    "bound_interaction_id": "interaction-1",
+                    "bound_row": {"run_state": "waitingForQuestion", "status_group": "working"},
+                }
+            ],
+            running=1,
+            childask_mode="auto",
+        )
+        visible = observation(
+            "f2",
+            "running",
+            [
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "bound_session_id": "child-session",
+                    "bound_interaction_id": "interaction-1",
+                    "bound_row": {"run_state": "waitingForQuestion", "status_group": "needsYou"},
+                }
+            ],
+            running=1,
+            needs_you=1,
+            childask_mode="ask",
+        )
+        final = observation(
+            "f3",
+            "completed",
+            [
+                {
+                    "id": "n1",
+                    "status": "completed",
+                    "bound_session_id": "child-session",
+                    "bound_interaction_id": "interaction-1",
+                    "completion_evidence": "Selected Alpha for s6case.",
+                }
+            ],
+            childask_mode="ask",
+            decisions=[
+                {
+                    "id": "flip-decision",
+                    "label": "routed child questions to Me",
+                    "actor": "user",
+                    "decision_class": "childAsk",
+                    "timestamp": "2026-07-08T01:00:00Z",
+                },
+                {
+                    "id": "director-decision",
+                    "label": "answered a child question",
+                    "actor": "director",
+                    "decision_class": "childAsk",
+                    "interaction_id": "interaction-1",
+                    "timestamp": "2026-07-08T01:00:01Z",
+                },
+            ],
+            evidence_summaries=["Director answered Alpha for s6case."],
+            routing_decisions=[{"operation": "agent_run.start", "route_kind": "fresh_child"}],
+        )
+
+        with self.assertRaisesRegex(director_e2e.E2EFailure, "exactly one user childAsk answer"):
+            director_e2e.assert_s6_childask_escalation(
+                [hidden, visible, final],
+                [],
+                interaction_id="interaction-1",
+                seq_before_flip=7,
+                token="s6case",
+            )
+
+    def test_s6_childask_escalation_rejects_answer_before_me_reroute_event(self) -> None:
+        hidden = observation(
+            "f1",
+            "running",
+            [
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "bound_session_id": "child-session",
+                    "bound_interaction_id": "interaction-1",
+                    "bound_row": {"run_state": "waitingForQuestion", "status_group": "working"},
+                }
+            ],
+            running=1,
+            childask_mode="auto",
+        )
+        visible = observation(
+            "f2",
+            "running",
+            [
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "bound_session_id": "child-session",
+                    "bound_interaction_id": "interaction-1",
+                    "bound_row": {"run_state": "waitingForQuestion", "status_group": "needsYou"},
+                }
+            ],
+            running=1,
+            needs_you=1,
+            childask_mode="ask",
+        )
+        final = observation(
+            "f3",
+            "completed",
+            [
+                {
+                    "id": "n1",
+                    "status": "completed",
+                    "bound_session_id": "child-session",
+                    "bound_interaction_id": "interaction-1",
+                    "completion_evidence": "Selected Alpha for s6case.",
+                }
+            ],
+            childask_mode="ask",
+            decisions=[
+                {
+                    "id": "answer-decision",
+                    "label": "answered a child question",
+                    "actor": "user",
+                    "decision_class": "childAsk",
+                    "interaction_id": "interaction-1",
+                    "timestamp": "2026-07-08T01:00:00Z",
+                },
+                {
+                    "id": "flip-decision",
+                    "label": "routed child questions to Me",
+                    "actor": "user",
+                    "decision_class": "childAsk",
+                    "timestamp": "2026-07-08T01:00:01Z",
+                },
+            ],
+            evidence_summaries=["User answered Alpha for s6case."],
+            routing_decisions=[{"operation": "agent_run.start", "route_kind": "fresh_child"}],
+        )
+        events = [
+            {
+                "seq": 8,
+                "decision_ids": ["answer-decision"],
+                "nodes": [{"id": "n1", "status": "completed", "bound_interaction_id": "interaction-1"}],
+            },
+            {
+                "seq": 9,
+                "decision_ids": ["answer-decision", "flip-decision"],
+                "nodes": [{"id": "n1", "status": "completed", "bound_interaction_id": "interaction-1"}],
+            },
+        ]
+
+        with self.assertRaisesRegex(director_e2e.E2EFailure, "Me dial-change"):
+            director_e2e.assert_s6_childask_escalation(
+                [hidden, visible, final],
+                events,
+                interaction_id="interaction-1",
+                seq_before_flip=7,
+                token="s6case",
+            )
+
     def test_s6_missing_childask_ledger_warning_fails_loudly(self) -> None:
         obs = observation(
             "f1",

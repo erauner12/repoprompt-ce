@@ -94,9 +94,13 @@ precedes Director childAsk decision; no Director answer predates the flip; exact
 childAsk answer/evidence pair lands; receipt actor chain reads user flip → Director answer.
 The third slice covers the asymmetric reverse: `auto→ask` escalates immediately and beats
 any in-flight Director answer; the pending interaction remains stable and user-visible.
+The executable scripted slice starts with a hidden auto-routed pending question, flips to
+Me, asserts the same interaction reappears in Decisions, answers through the external
+child-interaction path, and requires no Director childAsk decision for that interaction.
 Runtime callers must be rejected from `set_pace`/`set_autonomy`; runtime child-interaction
 submits are rejected while resolved `childAsk` is `ask`. UI: `Policy · … · edited` marker
-appears.
+appears. Backlog edge: ask→auto→ask→auto should re-fire only when a fresh pending child
+question still exists; do not let event dedup suppress a legitimate second auto reroute.
 
 **S7 — Stop semantics.** Stop mid-run.
 Invariants: user-actor stop decision; cancel routing decision(s) for active children;

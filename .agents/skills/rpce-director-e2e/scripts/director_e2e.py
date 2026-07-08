@@ -1041,6 +1041,43 @@ def pending_child_question_with_interaction_or_failed(obs: Observation, scenario
     return False
 
 
+def has_hidden_auto_child_question(obs: Observation) -> bool:
+    if plan_childask_mode(obs.compact) != "auto":
+        return False
+    if has_pending_child_question(obs):
+        raise E2EFailure("S6 childAsk escalation observed a user-facing question while childAsk was still Auto")
+    if not (node_bound_interaction_ids(obs.full) or node_bound_interaction_ids(obs.compact)):
+        return False
+    for node in obs.nodes:
+        if not isinstance(node, dict):
+            continue
+        bound_row = node.get("bound_row")
+        if isinstance(bound_row, dict):
+            if str(bound_row.get("run_state") or "") == "waitingForQuestion":
+                return str(bound_row.get("status_group") or "") == "working"
+    for node in obs.compact.get("active_nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("bound_row_run_state") or "") == "waitingForQuestion":
+            return str(node.get("bound_row_status_group") or "") == "working"
+    return False
+
+
+def hidden_auto_child_question_with_interaction_or_failed(obs: Observation, scenario: str) -> bool:
+    if has_hidden_auto_child_question(obs):
+        return True
+    raise_child_input_tool_unavailable_if_present(obs, scenario)
+    if obs.status in {"blocked", "completed", "stopped", "cancelled"}:
+        raise E2EFailure(
+            f"{scenario} reached {obs.status} before a hidden auto-routed child question appeared"
+        )
+    if obs.nodes and all(str(node.get("status") or "") not in {"pending", "running"} for node in obs.nodes):
+        raise E2EFailure(
+            f"{scenario} has no runnable child node left before a hidden auto-routed child question appeared"
+        )
+    return False
+
+
 def mission_plan_payload(status: dict[str, Any]) -> dict[str, Any]:
     plan = status.get("plan")
     if isinstance(plan, dict):
@@ -1223,6 +1260,37 @@ def assert_childask_flip_order(
         raise E2EFailure(
             "S6 childAsk expected the user dial-change decision to precede the Director childAsk answer; "
             f"flip={flip_ts!r} director={director_ts!r}"
+        )
+
+
+def assert_childask_escalation_order(
+    events: list[dict[str, Any]],
+    flip_decision: dict[str, Any],
+    user_answer_decision: dict[str, Any],
+) -> None:
+    flip_id = str(flip_decision.get("id") or "")
+    answer_id = str(user_answer_decision.get("id") or "")
+    if events and flip_id and answer_id:
+        flip_seq = event_seq_for_decision_id(events, flip_id)
+        answer_seq = event_seq_for_decision_id(events, answer_id)
+        if flip_seq is None or answer_seq is None:
+            raise E2EFailure(
+                "S6 childAsk escalation mission_events did not expose decision_ids for flip/user answer; "
+                f"flip_id={flip_id!r} answer_id={answer_id!r}"
+            )
+        if answer_seq <= flip_seq:
+            raise E2EFailure(
+                "S6 childAsk escalation expected the Me dial-change journal event to precede the user answer; "
+                f"flip_seq={flip_seq} answer_seq={answer_seq}"
+            )
+        return
+
+    flip_ts = decision_timestamp(flip_decision)
+    answer_ts = decision_timestamp(user_answer_decision)
+    if not flip_ts or not answer_ts or answer_ts <= flip_ts:
+        raise E2EFailure(
+            "S6 childAsk escalation expected the Me dial-change decision to precede the user childAsk answer; "
+            f"flip={flip_ts!r} answer={answer_ts!r}"
         )
 
 
@@ -1537,6 +1605,75 @@ def assert_s6_childask_flip(
     refs = assert_s5_fresh_child_launch(observations, "childAsk flip")
     if interaction_id not in refs["interactions"]:
         raise E2EFailure(f"S6 childAsk expected fresh child refs to include interaction {interaction_id}")
+    assert_common_status_integrity(observations)
+    return refs
+
+
+def assert_s6_childask_escalation(
+    observations: list[Observation],
+    events: list[dict[str, Any]],
+    *,
+    interaction_id: str,
+    seq_before_flip: int,
+    token: str | None = None,
+) -> dict[str, list[str]]:
+    final = observations[-1]
+    if final.status != "completed":
+        raise E2EFailure(f"S6 childAsk escalation expected completed mission, got {final.status}")
+    if needs_you_count(final) != 0:
+        raise E2EFailure(
+            f"S6 childAsk escalation expected no pending Decisions at completion, got {needs_you_count(final)}"
+        )
+    if interaction_id not in node_bound_interaction_ids(final.full):
+        raise E2EFailure(f"S6 childAsk escalation expected final node to keep interaction id {interaction_id}")
+    if not any(has_hidden_auto_child_question(obs) for obs in observations):
+        raise E2EFailure("S6 childAsk escalation never observed the hidden auto-routed pending question")
+    if not any(
+        has_pending_child_question(obs)
+        and interaction_id in (node_bound_interaction_ids(obs.full) or node_bound_interaction_ids(obs.compact))
+        for obs in observations
+    ):
+        raise E2EFailure("S6 childAsk escalation never observed the same interaction reappear for the user")
+
+    flip_decisions = matching_decisions(
+        final.full,
+        label="routed child questions to Me",
+        actor="user",
+        decision_class="childAsk",
+    )
+    if not flip_decisions:
+        raise E2EFailure("S6 childAsk escalation expected a user decision routing child questions to Me")
+    user_answer_decisions = matching_decisions(
+        final.full,
+        label="answered a child question",
+        actor="user",
+        decision_class="childAsk",
+        interaction_id=interaction_id,
+    )
+    if len(user_answer_decisions) != 1:
+        raise E2EFailure(
+            f"S6 childAsk escalation expected exactly one user childAsk answer for {interaction_id}, "
+            f"got {len(user_answer_decisions)}"
+        )
+    director_decisions = matching_decisions(
+        final.full,
+        actor="director",
+        decision_class="childAsk",
+        interaction_id=interaction_id,
+    )
+    if director_decisions:
+        raise E2EFailure("S6 childAsk escalation expected no Director answer after routing child questions to Me")
+
+    assert_childask_escalation_order(events, flip_decisions[0], user_answer_decisions[0])
+    if not event_journal_has_bound_interaction_after(events, interaction_id, seq_before_flip):
+        raise E2EFailure("S6 childAsk escalation mission_events did not show the same bound interaction after the flip")
+    if "alpha" not in evidence_text(final.full):
+        raise E2EFailure("S6 childAsk escalation expected final evidence/completion text to mention Alpha")
+    if token:
+        assert_s5_variant_token(final.full, token, "childAsk escalation")
+    refs = assert_s5_fresh_child_launch(observations, "childAsk escalation")
+    if interaction_id not in refs["interactions"]:
+        raise E2EFailure(f"S6 childAsk escalation expected fresh child refs to include interaction {interaction_id}")
     assert_common_status_integrity(observations)
     return refs
 
@@ -2181,11 +2318,119 @@ def run_s6_childask_flip(client: RpcClient, artifacts: RunArtifacts, args: argpa
     return result
 
 
+def run_s6_childask_escalation(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> dict[str, Any]:
+    artifacts.record_timing("started")
+    variant_token = f"S6-escalate-{uuid.uuid4().hex[:8]}"
+    session_id = start_mission(
+        client,
+        f"Director E2E S6 childAsk escalation {variant_token}",
+        s5_message("auto-to-ask", variant_token, args.child_model_id),
+        "s6-childask-escalation",
+    )
+    wait_until(
+        client,
+        artifacts,
+        session_id,
+        lambda item: (
+            plan_approval_state(item.compact) == "awaiting_approval"
+            and has_checkpoint_action(item.compact, "Proceed")
+            and plan_or_nodes_mention_token(item.full, variant_token)
+        ),
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("plan-visible")
+    set_childask_mode(client, artifacts, session_id, "auto", args)
+    set_pace_auto_for_s5(client, artifacts, session_id, args)
+    approve_initial_plan(client, artifacts, session_id, args)
+
+    hidden = wait_until(
+        client,
+        artifacts,
+        session_id,
+        lambda item: hidden_auto_child_question_with_interaction_or_failed(item, "S6 childAsk escalation"),
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("child-question-hidden-auto")
+    interaction_ids = node_bound_interaction_ids(hidden.full) or node_bound_interaction_ids(hidden.compact)
+    if not interaction_ids:
+        raise E2EFailure("S6 childAsk escalation could not identify hidden child interaction id before flip")
+    interaction_id = interaction_ids[0]
+    capture_mission_events(client, artifacts, session_id, args.events_mode)
+    seq_before_flip = max_event_seq(artifacts.mission_events)
+
+    set_childask_mode(client, artifacts, session_id, "ask", args)
+    wait_until(
+        client,
+        artifacts,
+        session_id,
+        lambda item: (
+            pending_child_question_with_interaction_or_failed(item, "S6 childAsk escalation")
+            and interaction_id in (node_bound_interaction_ids(item.full) or node_bound_interaction_ids(item.compact))
+        ),
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("child-question-escalated-to-user")
+
+    response = client.coordinator({
+        "op": "submit",
+        "coordinator_session_id": session_id,
+        "answers": {
+            "marker_choice": {
+                "answers": ["Alpha"],
+                "selected_options": ["Alpha"],
+            },
+        },
+        "compact": True,
+    }, timeout=180)
+    write_json(artifacts.root / "child_answer_response.json", response)
+    if response.get("accepted") is False:
+        raise E2EFailure(f"S6 childAsk escalation child answer rejected: {response.get('error') or response}")
+    if response.get("routed_to") != "child_interaction":
+        raise E2EFailure(f"S6 childAsk escalation child answer did not route to child_interaction: {response}")
+    artifacts.add_checkpoint("child-question-answered-by-user")
+
+    final = wait_until(
+        client,
+        artifacts,
+        session_id,
+        terminal_completed,
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("completed")
+    refs = assert_s6_childask_escalation(
+        artifacts.observations,
+        artifacts.mission_events,
+        interaction_id=interaction_id,
+        seq_before_flip=seq_before_flip,
+        token=variant_token,
+    )
+    assert_scripted_child_completion_marker(final.full, variant_token, "childAsk escalation", args.child_model_id)
+    capture_receipt(client, artifacts, session_id, args.receipt_mode)
+    result = {
+        "coordinator_session_id": session_id,
+        "final_status": final.status,
+        "variant_token": variant_token,
+        "interaction_id": interaction_id,
+        "child_refs": refs,
+    }
+    artifacts.finalize(True, "s6-childask-escalation", result)
+    return result
+
+
 def run_s6(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> None:
     results: list[dict[str, Any]] = []
     for name, runner in [
         ("pace", run_s6_pace),
         ("childask", run_s6_childask_flip),
+        ("childask-escalation", run_s6_childask_escalation),
     ]:
         variant_artifacts = RunArtifacts(artifacts.root / name)
         variant_client = RpcClient(client.cli, client.window, client.repo_root, variant_artifacts)
