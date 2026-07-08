@@ -4,20 +4,27 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / ".agents/skills/rpce-director-e2e/scripts/director_e2e.py"
+COMPACT_STATUS_FIXTURE = ROOT / "Scripts/Fixtures/director_e2e_compact_status.json"
 SPEC = importlib.util.spec_from_file_location("director_e2e", RUNNER)
 director_e2e = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 sys.modules["director_e2e"] = director_e2e
 SPEC.loader.exec_module(director_e2e)
+
+
+def compact_status_fixture() -> dict:
+    return json.loads(COMPACT_STATUS_FIXTURE.read_text(encoding="utf-8"))
 
 
 def observation(
@@ -45,38 +52,29 @@ def observation(
 ):
     auto_classes = ["childAsk"] if childask_mode == "auto" else []
     ask_classes = ["childAsk"] if childask_mode == "ask" or childask_mode is None else []
-    compact = {
-        "fingerprint": fingerprint,
-        "plan": {
-            "status": status,
-            "revision": revision,
-            "approval_state": approval_state,
-            "policy_snapshot": {"max_concurrent": 3, "default_pace": default_pace},
-            "autonomy_summary": {
-                "ask": ask_classes,
-                "auto": auto_classes,
-            },
-        },
-        "node_counts": {
-            "running": running,
-        },
-        "ready_node_ids": ready or [],
-        "decision_counts_by_actor": {
-            "user": user_decisions,
-            "director": director_decisions,
-        },
-        "evidence_counts": {
-            "total": evidence,
-        },
-        "receipt_ready_summary": {
-            "ready": status == "completed",
-        } if status == "completed" else None,
-        "counts": {
-            "needs_you": needs_you,
-        },
-        "active_nodes": active_nodes or [],
-        "liveness_warnings": warnings or [],
+    compact = deepcopy(compact_status_fixture())
+    compact["fingerprint"] = fingerprint
+    compact["plan"]["status"] = status
+    compact["plan"]["revision"] = revision
+    compact["plan"]["approval_state"] = approval_state
+    compact["plan"]["policy_snapshot"] = {"max_concurrent": 3, "default_pace": default_pace}
+    compact["plan"]["autonomy_summary"] = {
+        "ask": ask_classes,
+        "auto": auto_classes,
     }
+    compact["node_counts"] = {"running": running}
+    compact["ready_node_ids"] = ready or []
+    compact["decision_counts_by_actor"] = {
+        "user": user_decisions,
+        "director": director_decisions,
+    }
+    compact["evidence_counts"] = {"total": evidence}
+    compact["receipt_ready_summary"] = {
+        "ready": status == "completed",
+    } if status == "completed" else None
+    compact["counts"] = {"needs_you": needs_you}
+    compact["active_nodes"] = active_nodes or []
+    compact["liveness_warnings"] = warnings or []
     full = {
         "nodes": nodes,
         "plan": {
@@ -453,6 +451,51 @@ Loaded roots: demo → /repo/fallback
         self.assertIn("S5_USER_INPUT_TOOL_UNAVAILABLE", message)
         self.assertIn("S5-ask-test", message)
         self.assertIn("Do not reuse any session_id", message)
+
+    def test_s5_message_can_select_scripted_child_contract(self) -> None:
+        message = director_e2e.s5_message("ask", "S5-scripted-test", child_model_id="scripted")
+
+        self.assertIn("with `model_id:\"scripted\"`", message)
+        self.assertIn("SCRIPTED_CHILD_V1 ask_marker token=S5-scripted-test options=Alpha,Beta", message)
+        self.assertIn("SCRIPTED_CHILD_V1 answer=Alpha token=S5-scripted-test", message)
+        self.assertNotIn("S5_USER_INPUT_TOOL_UNAVAILABLE", message)
+
+    def test_scripted_completion_marker_asserts_completion_form(self) -> None:
+        status = {
+            "plan": {
+                "evidence": [
+                    {"summary": "SCRIPTED_CHILD_V1 answer=Alpha token=S5-scripted-test"},
+                ],
+            },
+            "nodes": [
+                {"completion_evidence": "SCRIPTED_CHILD_V1 answer=Alpha token=S5-scripted-test"},
+            ],
+        }
+
+        director_e2e.assert_scripted_child_completion_marker(
+            status,
+            "S5-scripted-test",
+            "ask",
+            "scripted",
+        )
+
+    def test_scripted_completion_marker_rejects_directive_echo_only(self) -> None:
+        status = {
+            "plan": {
+                "evidence": [
+                    {"summary": "SCRIPTED_CHILD_V1 ask_marker token=S5-scripted-test options=Alpha,Beta"},
+                ],
+            },
+            "nodes": [],
+        }
+
+        with self.assertRaises(director_e2e.E2EFailure):
+            director_e2e.assert_scripted_child_completion_marker(
+                status,
+                "S5-scripted-test",
+                "ask",
+                "scripted",
+            )
 
     def test_s2_rejects_missing_convergence_after_parent_completion(self) -> None:
         a = "a"

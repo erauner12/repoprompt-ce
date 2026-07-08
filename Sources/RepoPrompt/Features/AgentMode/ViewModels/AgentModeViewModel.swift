@@ -2012,6 +2012,12 @@ final class AgentModeViewModel: ObservableObject {
                 )
                     ?? AgentMessage(systemPrompt: "", userMessage: initialMessage)
             },
+            askUserInteraction: { [weak self] session, interaction in
+                guard let self else {
+                    throw MCPError.internalError("Agent Mode view model is unavailable.")
+                }
+                return try await askUser(in: session, interaction: interaction)
+            },
             finalizeStreamingItems: { [weak self] session in
                 self?.finalizeStreamingItems(in: session)
             },
@@ -3961,7 +3967,11 @@ final class AgentModeViewModel: ObservableObject {
             applySessionToBindings(session)
         }
 
-        if reconnectActiveProviders, session.selectedAgent == .codexExec, session.runState.isActive {
+        if reconnectActiveProviders,
+           session.selectedAgent == .codexExec,
+           !AgentScriptedChildModelID.isScriptedModelRaw(session.selectedModelRaw),
+           session.runState.isActive
+        {
             await codexCoordinator.ensureCodexNativeSession(session: session)
         }
         if reconnectActiveProviders, session.selectedAgent.usesClaudeNativeRuntime, session.runState.isActive {
@@ -5912,10 +5922,12 @@ final class AgentModeViewModel: ObservableObject {
         // tri-state policy's per-provider override never goes stale on an already-active
         // MCP-controlled session (sub-agent or top-level).
         _ = refreshMCPPermissionProfileIfNeeded(for: session)
-        codexCoordinator.normalizeCodexSelectionForSession(
-            session,
-            preservingExplicitEffort: reasoningEffortRaw != nil
-        )
+        if !AgentScriptedChildModelID.isScriptedModelRaw(session.selectedModelRaw) {
+            codexCoordinator.normalizeCodexSelectionForSession(
+                session,
+                preservingExplicitEffort: reasoningEffortRaw != nil
+            )
+        }
         // Record last-used effort for the MCP path so the in-memory fallback
         // used by `normalizeCodexSelectionForSession` stays current.  The UI path
         // records this via the `@Published selectedReasoningEffortRaw` didSet, but
@@ -14486,6 +14498,13 @@ final class AgentModeViewModel: ObservableObject {
         interaction: AgentAskUserInteraction
     ) async throws -> AgentAskUserResponse {
         let session = await ensureSessionReady(tabID: tabID, reconnectActiveProviders: true)
+        return try await askUser(in: session, interaction: interaction)
+    }
+
+    private func askUser(
+        in session: TabSession,
+        interaction: AgentAskUserInteraction
+    ) async throws -> AgentAskUserResponse {
         try interaction.validate()
         try rejectAskUserIfBlockingInteractionExists(in: session)
 

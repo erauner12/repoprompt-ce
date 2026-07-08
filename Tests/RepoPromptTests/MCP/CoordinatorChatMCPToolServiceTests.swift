@@ -4006,6 +4006,40 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         ))
     }
 
+    func testAgentModeChildrenAdvertiseStructuredUserInput() {
+        XCTAssertTrue(AgentModeMCPToolAdvertisementPolicy.shouldAdvertise(
+            toolName: MCPWindowToolName.askUser,
+            taskLabelKind: .explore
+        ))
+        XCTAssertTrue(AgentModeMCPToolAdvertisementPolicy.shouldAdvertise(
+            toolName: MCPWindowToolName.askUser,
+            taskLabelKind: .pair
+        ))
+        XCTAssertTrue(AgentModeMCPToolPolicy.grantedTools(forAgent: .codexExec).contains(MCPWindowToolName.askUser))
+    }
+
+    func testDirectorE2ECompactStatusFixtureMatchesCoreShape() throws {
+        let fixtureURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("Scripts/Fixtures/director_e2e_compact_status.json")
+        let data = try Data(contentsOf: fixtureURL)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let plan = try XCTUnwrap(root["plan"] as? [String: Any])
+
+        XCTAssertNotNil(root["fingerprint"])
+        XCTAssertNotNil(plan["status"])
+        XCTAssertNotNil(plan["revision"])
+        XCTAssertNotNil(plan["approval_state"])
+        XCTAssertNotNil(plan["policy_snapshot"])
+        XCTAssertNotNil(plan["autonomy_summary"])
+        XCTAssertNotNil(root["node_counts"])
+        XCTAssertNotNil(root["ready_node_ids"])
+        XCTAssertNotNil(root["decision_counts_by_actor"])
+        XCTAssertNotNil(root["evidence_counts"])
+        XCTAssertNotNil(root["counts"])
+        XCTAssertNotNil(root["active_nodes"])
+        XCTAssertNotNil(root["liveness_warnings"])
+    }
+
     private func compactFingerprint(
         service: CoordinatorChatMCPToolService,
         args: [String: Value]

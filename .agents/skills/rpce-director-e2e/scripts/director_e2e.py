@@ -25,6 +25,8 @@ from typing import Any, Callable, Iterable
 TERMINAL_STATUSES = {"completed", "stopped", "cancelled", "skipped"}
 MISSING_CHILDASK_LEDGER_WARNING = "completed_child_missing_childask_ledger"
 CHILD_INPUT_TOOL_UNAVAILABLE = "S5_USER_INPUT_TOOL_UNAVAILABLE"
+SCRIPTED_CHILD_SELECTOR = "scripted"
+SCRIPTED_CHILD_COMPLETION_PREFIX = "SCRIPTED_CHILD_V1 answer="
 STATUS_RANK = {
     "pending": 0,
     "running": 1,
@@ -1288,6 +1290,19 @@ def assert_s5_variant_token(status: dict[str, Any], token: str | None, mode: str
         raise E2EFailure(f"S5 {mode} expected evidence/completion text to include variant token {token}")
 
 
+def assert_scripted_child_completion_marker(
+    status: dict[str, Any],
+    token: str | None,
+    mode: str,
+    child_model_id: str,
+) -> None:
+    if child_model_id != SCRIPTED_CHILD_SELECTOR or not token:
+        return
+    expected = f"{SCRIPTED_CHILD_COMPLETION_PREFIX}Alpha token={token}"
+    if expected.lower() not in evidence_text(status):
+        raise E2EFailure(f"S5/S6 {mode} expected scripted completion marker {expected!r}")
+
+
 def assert_s5_variant_refs_disjoint(ask_refs: dict[str, list[str]], auto_refs: dict[str, list[str]]) -> None:
     shared_sessions = sorted(set(ask_refs.get("sessions") or []) & set(auto_refs.get("sessions") or []))
     shared_interactions = sorted(set(ask_refs.get("interactions") or []) & set(auto_refs.get("interactions") or []))
@@ -1640,22 +1655,43 @@ def s6_message() -> str:
     )
 
 
-def s5_message(mode: str, variant_token: str | None = None) -> str:
+def scripted_child_contract_line(token: str) -> str:
+    return f"SCRIPTED_CHILD_V1 ask_marker token={token} options=Alpha,Beta"
+
+
+def s5_message(
+    mode: str,
+    variant_token: str | None = None,
+    child_model_id: str = "explore",
+) -> str:
     token = variant_token or "S5-child-marker"
-    child_prompt = (
-        f"You are the S5/S6 marker child for token `{token}`. Call the RepoPrompt MCP tool named `ask_user` now. "
-        "Ask exactly one single-select question with id `marker_choice`, header `Marker`, question "
-        "`Which marker should this child use?`, options `Alpha` and `Beta`, and no auto-resolution. If `ask_user` "
-        "is not advertised, use `request_user_input` if that structured user-input tool is advertised. Do not answer "
-        "in plain text or finish until the tool has created a pending user question. After the interaction is answered, "
-        f"report the selected marker and token `{token}` in normal text. If neither `ask_user` nor `request_user_input` "
-        f"is advertised, report `S5_USER_INPUT_TOOL_UNAVAILABLE {token}` and stop."
-    )
+    if child_model_id == SCRIPTED_CHILD_SELECTOR:
+        child_prompt = (
+            "Use the scripted Director E2E child contract. Copy this exact line on its own line:\n"
+            f"{scripted_child_contract_line(token)}\n"
+            "After the scripted interaction is answered, report the exact completion marker "
+            f"`{SCRIPTED_CHILD_COMPLETION_PREFIX}Alpha token={token}` in normal text."
+        )
+        completion_requirement = (
+            f"the exact scripted completion marker `{SCRIPTED_CHILD_COMPLETION_PREFIX}Alpha token={token}` "
+            f"and the exact token `{token}`"
+        )
+    else:
+        child_prompt = (
+            f"You are the S5/S6 marker child for token `{token}`. Call the RepoPrompt MCP tool named `ask_user` now. "
+            "Ask exactly one single-select question with id `marker_choice`, header `Marker`, question "
+            "`Which marker should this child use?`, options `Alpha` and `Beta`, and no auto-resolution. If `ask_user` "
+            "is not advertised, use `request_user_input` if that structured user-input tool is advertised. Do not answer "
+            "in plain text or finish until the tool has created a pending user question. After the interaction is answered, "
+            f"report the selected marker and token `{token}` in normal text. If neither `ask_user` nor `request_user_input` "
+            f"is advertised, report `S5_USER_INPUT_TOOL_UNAVAILABLE {token}` and stop."
+        )
+        completion_requirement = f"the exact selected marker `Alpha` and token `{token}`"
     return (
         "Run this as a scoped Director mission for a Me/Director child-question smoke test. "
         'Record a visible Mission Plan with approval_state:"awaiting_approval" before child sessions. '
         "After approval, launch exactly one narrow read-only child Agent Mode session using `agent_run.start` "
-        "with `model_id:\"explore\"`, the planned `mission_node_id`, and no workflow_name or worktree. Use this exact "
+        f"with `model_id:\"{child_model_id}\"`, the planned `mission_node_id`, and no workflow_name or worktree. Use this exact "
         f"child prompt without adding Mission Policy, childAsk, Me/Director routing, Coordinator autonomy, or who will "
         f"answer the question: {child_prompt} "
         "The expected safe answer is `Alpha`. The child final output, plan evidence, and node completion evidence "
@@ -1664,7 +1700,7 @@ def s5_message(mode: str, variant_token: str | None = None) -> str:
         "interaction and answer `Alpha` through the Director path, then record a director child-question decision "
         "and evidence explaining that answer. After the answer, wait for the child final output, then "
         "mark the node completed only after replacing `completion_evidence` with result evidence that includes "
-        f"the exact selected marker `Alpha` and token `{token}`. The child should report the selected answer in normal text that "
+        f"{completion_requirement}. The child should report the selected answer in normal text that "
         "includes `Alpha`, record evidence, and stop. Do not reuse any session_id, interaction_id, routing_decision, "
         "node_id, or evidence from another S5 variant or prior Mission. Do not edit files, run validation, commit, "
         f"push, open PRs, merge, or start a follow-up Mission. This run is the `{mode}` variant."
@@ -1874,7 +1910,7 @@ def run_s5_variant(
     session_id = start_mission(
         client,
         f"Director E2E S5 childAsk {mode} {variant_token}",
-        s5_message(mode, variant_token),
+        s5_message(mode, variant_token, args.child_model_id),
         f"s5-{mode}",
     )
     wait_until(
@@ -1929,6 +1965,7 @@ def run_s5_variant(
             events_mode=args.events_mode,
         )
         child_refs = assert_s5_ask(artifacts.observations, variant_token)
+        assert_scripted_child_completion_marker(final.full, variant_token, mode, args.child_model_id)
     else:
         def done_without_user_queue(obs: Observation) -> bool:
             if has_pending_child_question(obs):
@@ -1945,6 +1982,7 @@ def run_s5_variant(
             events_mode=args.events_mode,
         )
         child_refs = assert_s5_auto(artifacts.observations, variant_token)
+        assert_scripted_child_completion_marker(final.full, variant_token, mode, args.child_model_id)
 
     artifacts.add_checkpoint("completed")
     capture_receipt(client, artifacts, session_id, args.receipt_mode)
@@ -2028,7 +2066,7 @@ def run_s6_childask_flip(client: RpcClient, artifacts: RunArtifacts, args: argpa
     session_id = start_mission(
         client,
         f"Director E2E S6 childAsk flip {variant_token}",
-        s5_message("ask", variant_token),
+        s5_message("ask", variant_token, args.child_model_id),
         "s6-childask",
     )
     wait_until(
@@ -2087,6 +2125,7 @@ def run_s6_childask_flip(client: RpcClient, artifacts: RunArtifacts, args: argpa
         seq_before_flip=seq_before_flip,
         token=variant_token,
     )
+    assert_scripted_child_completion_marker(final.full, variant_token, "childAsk flip", args.child_model_id)
     capture_receipt(client, artifacts, session_id, args.receipt_mode)
     result = {
         "coordinator_session_id": session_id,
@@ -2166,6 +2205,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--events-mode", choices=["auto", "snapshot", "required"], default="auto")
     parser.add_argument("--receipt-mode", choices=["auto", "summary", "required"], default="auto")
+    parser.add_argument(
+        "--child-model-id",
+        default="explore",
+        help="Child model_id used by S5/S6 childAsk scenarios; use 'scripted' for deterministic E2E child support.",
+    )
     parser.add_argument("--repeat", type=int, default=1, help="Run the scenario multiple times and aggregate reports.")
     parser.add_argument("--launch", action="store_true", help="Explicitly launch/relaunch the debug app before running.")
     return parser

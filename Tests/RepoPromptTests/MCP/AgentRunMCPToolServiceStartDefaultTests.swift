@@ -216,6 +216,22 @@ final class AgentRunMCPToolServiceStartDefaultTests: XCTestCase {
         XCTAssertEqual(resolved.modelRaw, "explicit-model")
     }
 
+    func testScriptedModelIDResolvesToHiddenDebugTarget() throws {
+        let resolved = try AgentMCPSelectionResolver.resolve(
+            modelID: "scripted",
+            availability: AgentModelCatalog.AvailabilityContext(codexAvailable: true)
+        )
+
+        XCTAssertNil(resolved.taskLabelKind)
+        XCTAssertEqual(resolved.agentRaw, AgentProviderKind.codexExec.rawValue)
+        XCTAssertEqual(resolved.modelRaw, AgentScriptedChildModelID.modelRaw)
+        XCTAssertFalse(AgentModelCatalog.discoveryAgents(availability: .current).contains { agent in
+            agent.models.contains { model in
+                model.id == AgentScriptedChildModelID.modelRaw || model.modelID?.contains(AgentScriptedChildModelID.modelRaw) == true
+            }
+        })
+    }
+
     func testCoordinatorRoleResolvesAsDedicatedLaunchRole() throws {
         let resolved = try AgentMCPSelectionResolver.resolve(
             modelID: "coordinator",

@@ -64,6 +64,13 @@ interaction appears, queue = 1, answer flows, child proceeds, no ⚙ for the ans
 If the child reports `S5_USER_INPUT_TOOL_UNAVAILABLE`, classify the run as a child-backend
 capability gap: the selected backend cannot create structured pending user input, so S5/S6
 must use a backend or scripted child that advertises `ask_user`/`request_user_input`.
+For deterministic correctness runs, pass `--child-model-id scripted`. The Coordinator must
+copy the exact scripted contract line into the child prompt; the hidden scripted child then
+creates a real `AgentAskUserInteraction` and completes with
+`SCRIPTED_CHILD_V1 answer=Alpha token=<TOKEN>`. The harness asserts that completion form,
+not just the directive echo. Default live-child S5 remains a model/backend negotiation
+sample and should only be treated as a Coordinator failure when the selected backend
+actually advertises structured input.
 Drive Me/Director headlessly through
 `coordinator_chat set_autonomy` with `autonomy_class:"childAsk"` and `mode:"ask|auto"`;
 the op itself is a user-channel parity action and must record only the dial-change
@@ -121,6 +128,14 @@ remaining live breadth is bounded: S4 (revision/remint identity), S7 (stop hones
 S6's auto→ask escalation slice. Tooling friction (`doctor`, `list_missions`,
 `archive_mission`) and the scripted child backend improve reliability but do not expand
 the doctrine surface.
+
+## Shared Contract Fixture
+
+Pure Python harness tests load `Scripts/Fixtures/director_e2e_compact_status.json` as the
+base compact-status shape, and Swift checks the fixture's core keys. The fixture is a
+contract skeleton, not a replacement projector: live runs still read `mission_status`
+directly from `coordinator_chat`, while unit tests stop hand-mirroring the response
+surface from scratch.
 
 ## Packaging
 Ship as a skill (`.agents/skills/rpce-director-e2e/`): one runner with scenario switches

@@ -432,3 +432,16 @@ blocked the node with explicit evidence instead of fabricating the requested `Al
 result. That is the anti-fabrication validator net working as intended. The remaining
 S5/S6 live blocker is environment/tooling, so the next reliability investment is
 capability `doctor` plus a scripted child backend; it is not more scenario breadth.
+
+Scripted-child reliability layer (2026-07-08): RepoPrompt's child tool policy treats
+structured user input as a product contract for Agent Mode children (`ask_user` is granted
+and advertised for explore/pair children). The scripted child exists only as hidden
+debug/E2E infrastructure for deterministic childAsk mechanics: `model_id:"scripted"`
+maps to a hidden Codex-exec test runner, is not exposed in normal model lists, requires the
+exact line `SCRIPTED_CHILD_V1 ask_marker token=<TOKEN> options=Alpha,Beta`, creates a real
+`AgentAskUserInteraction`, and must complete with `SCRIPTED_CHILD_V1 answer=Alpha
+token=<TOKEN>`. Scripted runs are the cheap correctness gate; live child runs remain
+model/backend negotiation samples. Tripwires: scripted must not become the only gate,
+must reuse the real session lifecycle, must not grow into a general interpreter, must not
+weaken harness assertions for scripted quirks, and must never leak into user-facing model
+selection.

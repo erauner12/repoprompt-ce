@@ -53,6 +53,16 @@ enum AgentMCPSelectionResolver {
             return ResolvedSelection(agentRaw: nil, modelRaw: nil, taskLabelKind: nil)
         }
 
+        #if DEBUG
+            if AgentScriptedChildModelID.isScriptedSelector(trimmed) {
+                return ResolvedSelection(
+                    agentRaw: AgentProviderKind.codexExec.rawValue,
+                    modelRaw: AgentScriptedChildModelID.modelRaw,
+                    taskLabelKind: nil
+                )
+            }
+        #endif
+
         // Try task label first (no colon = not a compound ID)
         if !trimmed.contains(":") {
             let lowered = trimmed.lowercased()
