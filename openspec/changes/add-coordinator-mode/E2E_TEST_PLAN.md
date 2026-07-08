@@ -9,8 +9,10 @@ shape — we test the machinery, not the model's coding); `wait_for_update` is t
 primitive (a hang = fingerprint regression, itself a finding); every scenario ends with
 teardown assertions (repo state exact, sessions cleaned, mission terminal).
 
-First automated slice: ship the reusable runner and automate **S1 + S2**. S3-S8 remain
-planned follow-ups until the harness/reporting shape is proven against live missions.
+First automated slice: ship the reusable runner and automate **S1 + S2**. Current live
+plateau targets S1, S2, S4, S5, S6 (pace, ask→auto, auto→ask), and S7. S3's cap promise
+is an always-on invariant watcher unless a future cap-specific bug justifies a standalone
+scenario; S8 restart durability is documented and deferred.
 
 ## Sandbox substrate
 A throwaway repo (`e2e-sandbox`) added as a workspace root. Tasks are trivial and
@@ -36,9 +38,11 @@ transition; running ≤ cap at every poll. Git: exactly A.md, B.md, SUMMARY.md i
 worktrees/branches. UI beats: `running 2/3`; the waiting-on line ticking `A ✓ · B …`;
 converged launch entry.
 
-**S3 — Cap discipline (Auto).** Four independent marker tasks, cap 3.
-Invariants: observed running never exceeds 3 at any poll; the fourth node launches only
-after a completion; total completions = 4.
+**S3 — Cap discipline (global invariant, not a default live scenario).**
+The standing watcher asserts observed running never exceeds cap at every poll. If a
+cap-specific regression appears, add a focused four-independent-node scenario; otherwise
+fold "the fourth launches only after a completion" into S2 or the watcher instead of
+minting another live run.
 
 **S4 — Step pace + checkpoint loop.** S2's directive at Step.
 Invariants: after plan approval, a boundary checkpoint exists; **Decisions badge = 1**
@@ -72,7 +76,7 @@ childAsk decision plus Alpha evidence at completion. Each variant carries a uniq
 token, must show a fresh `agent_run.start` route and completed-node child binding, and the
 Ask/Auto child session and interaction IDs must be disjoint so copied evidence cannot pass.
 
-**S6 — Dial flip semantics.** Two slices. Pace is non-consuming: start Step; flip pace →
+**S6 — Dial flip semantics.** Three slices. Pace is non-consuming: start Step; flip pace →
 Auto through `coordinator_chat set_pace` while approval is pending.
 Invariants: snapshot pace mutated, revision bumped, fingerprint advanced; user-actor
 "set pace to Auto" decision recorded; **the pending approval checkpoint remains**. ChildAsk
@@ -81,6 +85,8 @@ flip `childAsk:auto` through `coordinator_chat set_autonomy`, then assert the sa
 interaction is answered by Director. Invariants: same interaction id; flip user decision
 precedes Director childAsk decision; no Director answer predates the flip; exactly one
 childAsk answer/evidence pair lands; receipt actor chain reads user flip → Director answer.
+The third slice covers the asymmetric reverse: `auto→ask` escalates immediately and beats
+any in-flight Director answer; the pending interaction remains stable and user-visible.
 Runtime callers must be rejected from `set_pace`/`set_autonomy`; runtime child-interaction
 submits are rejected while resolved `childAsk` is `ask`. UI: `Policy · … · edited` marker
 appears.
@@ -90,8 +96,10 @@ Invariants: user-actor stop decision; cancel routing decision(s) for active chil
 status **Stopped**, never Failure styling; terminal UI shows the single follow-up action
 and no live composer/dials.
 
-**S8 (manual/optional) — Stall telemetry.** If reproducible, confirm
-`eligible_nodes_idle` appears in warnings and never in the Decisions queue.
+**S8 (deferred) — Restart durability.** Relaunch the app mid-mission with a pending
+checkpoint or pending child question. Invariants: mission reconstructs from durable state;
+pending ask remains pending; ledger/fingerprint history stays coherent; no duplicate
+follow-through event fires; queue does not consume or re-mint identity because of restart.
 
 ## The watch-for list (what "working" means)
 Ledger layer: plan recorded with policy snapshot **equal to what was sent**; node
@@ -103,6 +111,16 @@ Side-effect layer: only the artifacts the directive names; clean trees under Rea
 no pushes/PRs ever (sandbox has no remote by design).
 UI layer: strip rollup matches ledger counts; queue badge = pending asks only; capsules
 only on state; terminal calm (single action, muted history).
+
+## Scenario Governor
+
+Scenario count tracks doctrine count, not bug count. A new live scenario is added only
+when a new doctrine entry is pinned in `DIRECTOR_DECISIONS.md`; ordinary regressions found
+by live runs get deterministic flow-layer coverage at the lowest faithful layer. The
+remaining live breadth is bounded: S4 (revision/remint identity), S7 (stop honesty), and
+S6's auto→ask escalation slice. Tooling friction (`doctor`, `list_missions`,
+`archive_mission`) and the scripted child backend improve reliability but do not expand
+the doctrine surface.
 
 ## Packaging
 Ship as a skill (`.agents/skills/rpce-director-e2e/`): one runner with scenario switches
@@ -150,8 +168,7 @@ failure mid-recovery.
    beats become an optional `--ui` tier for release checks.
 8. **Chaos tier (later): S10** kill a child mid-run → coordinator observes the terminal
    event, marks the node blocked/cancelled with reason, re-steers or asks per policy,
-   never silently stalls. **S11** app restart mid-mission → follow-through state and
-   mission_status reconstruct ("the mission survives the worker" gets its test).
+   never silently stalls. Restart durability is tracked as deferred S8 above.
 
 ## Harness slice accepted (2026-07-07)
 

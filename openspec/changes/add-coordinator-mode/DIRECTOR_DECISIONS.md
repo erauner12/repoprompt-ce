@@ -414,3 +414,21 @@ powers. Additions stay additive ops.
 
 Not doing: `mission_status` field selectors, which fragment the contract; any
 plan-structure mutation outside the existing mission-plan path.
+
+## 15. E2E suite boundary and live evidence (2026-07-08)
+
+The live suite is bounded by doctrine, not by every bug found while running it. New live
+scenarios require a new pinned doctrine entry; ordinary regressions get deterministic
+flow-layer coverage at the lowest faithful layer. Current plateau: S1 read-only, S2
+fan-out/convergence with exact `mission_events` ordering, S4 checkpoint revision identity,
+S5 childAsk Me/Director parity, S6 dial semantics (pace, ask→auto, auto→ask), and S7 stop
+honesty. S3 cap discipline is a global invariant watcher, not a default live scenario.
+S8 restart durability is the declared deferred boundary: relaunch with a pending ask must
+reconstruct without consuming, duplicating, or re-minting the queue item.
+
+Live evidence from the July 8 S5 run: when the selected Codex CLI child backend lacked a
+structured user-input tool and returned `S5_USER_INPUT_TOOL_UNAVAILABLE`, the Coordinator
+blocked the node with explicit evidence instead of fabricating the requested `Alpha`
+result. That is the anti-fabrication validator net working as intended. The remaining
+S5/S6 live blocker is environment/tooling, so the next reliability investment is
+capability `doctor` plus a scripted child backend; it is not more scenario breadth.
