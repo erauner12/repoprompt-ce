@@ -604,12 +604,14 @@ Loaded roots: demo → /repo/fallback
             director_decisions=1,
             decisions=[
                 {
+                    "id": "flip-decision",
                     "label": "routed child questions to the Director",
                     "actor": "user",
                     "decision_class": "childAsk",
                     "timestamp": "2026-07-08T01:00:00Z",
                 },
                 {
+                    "id": "director-decision",
                     "label": "answered a child question",
                     "actor": "director",
                     "decision_class": "childAsk",
@@ -621,8 +623,16 @@ Loaded roots: demo → /repo/fallback
             routing_decisions=[{"operation": "agent_run.start", "route_kind": "fresh_child"}],
         )
         events = [
-            {"seq": 8, "nodes": [{"id": "n1", "status": "running", "bound_interaction_id": "interaction-1"}]},
-            {"seq": 9, "nodes": [{"id": "n1", "status": "completed", "bound_interaction_id": "interaction-1"}]},
+            {
+                "seq": 8,
+                "decision_ids": ["flip-decision"],
+                "nodes": [{"id": "n1", "status": "running", "bound_interaction_id": "interaction-1"}],
+            },
+            {
+                "seq": 9,
+                "decision_ids": ["flip-decision", "director-decision"],
+                "nodes": [{"id": "n1", "status": "completed", "bound_interaction_id": "interaction-1"}],
+            },
         ]
 
         self.assertEqual(
@@ -653,6 +663,7 @@ Loaded roots: demo → /repo/fallback
             director_decisions=1,
             decisions=[
                 {
+                    "id": "director-decision",
                     "label": "answered a child question",
                     "actor": "director",
                     "decision_class": "childAsk",
@@ -660,6 +671,7 @@ Loaded roots: demo → /repo/fallback
                     "timestamp": "2026-07-08T01:00:00Z",
                 },
                 {
+                    "id": "flip-decision",
                     "label": "routed child questions to the Director",
                     "actor": "user",
                     "decision_class": "childAsk",
@@ -670,7 +682,16 @@ Loaded roots: demo → /repo/fallback
             routing_decisions=[{"operation": "agent_run.start", "route_kind": "fresh_child"}],
         )
         events = [
-            {"seq": 8, "nodes": [{"id": "n1", "status": "completed", "bound_interaction_id": "interaction-1"}]},
+            {
+                "seq": 8,
+                "decision_ids": ["director-decision"],
+                "nodes": [{"id": "n1", "status": "completed", "bound_interaction_id": "interaction-1"}],
+            },
+            {
+                "seq": 9,
+                "decision_ids": ["director-decision", "flip-decision"],
+                "nodes": [{"id": "n1", "status": "completed", "bound_interaction_id": "interaction-1"}],
+            },
         ]
 
         with self.assertRaises(director_e2e.E2EFailure):
@@ -681,6 +702,19 @@ Loaded roots: demo → /repo/fallback
                 seq_before_flip=7,
                 token="s6case",
             )
+
+    def test_s6_missing_childask_ledger_warning_fails_loudly(self) -> None:
+        obs = observation(
+            "f1",
+            "running",
+            [{"id": "n1", "status": "running", "bound_interaction_id": "interaction-1"}],
+            running=1,
+            warnings=["completed_child_missing_childask_ledger"],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = director_e2e.RunArtifacts(Path(tmp))
+            with self.assertRaisesRegex(director_e2e.E2EFailure, "S6_MISSING_DIRECTOR_LEDGER_AFTER_CHILD_DONE"):
+                director_e2e.fail_missing_childask_ledger_warning(obs, artifacts)
 
     def test_childask_mode_reads_compact_autonomy_summary(self) -> None:
         ask = observation("f1", "draft", [], childask_mode="ask")
@@ -768,6 +802,28 @@ Loaded roots: demo → /repo/fallback
 
         with self.assertRaises(director_e2e.E2EFailure):
             director_e2e.assert_s5_ask([final])
+
+    def test_pending_child_question_failure_reports_child_input_tool_capability_gap(self) -> None:
+        obs = observation(
+            "f1",
+            "running",
+            [
+                {
+                    "id": "n1",
+                    "status": "blocked",
+                    "completion_evidence": (
+                        "Blocked: child final output was "
+                        "`S5_USER_INPUT_TOOL_UNAVAILABLE S5-ask-test`; no pending marker_choice interaction was created."
+                    ),
+                }
+            ],
+            childask_mode="ask",
+        )
+
+        with self.assertRaisesRegex(director_e2e.E2EFailure, "structured pending question"):
+            director_e2e.pending_child_question_or_failed(obs, "S5 ask")
+        with self.assertRaisesRegex(director_e2e.E2EFailure, "S5_USER_INPUT_TOOL_UNAVAILABLE S5-ask-test"):
+            director_e2e.pending_child_question_with_interaction_or_failed(obs, "S6 childAsk")
 
     def test_s5_auto_accepts_director_decision_without_user_queue(self) -> None:
         final = observation(

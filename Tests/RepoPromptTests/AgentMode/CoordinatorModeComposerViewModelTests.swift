@@ -358,8 +358,10 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(state.missionPlan?.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key], .auto)
     }
 
-    func testMissionDialsMutatePlanSnapshotAndRecordLedgerWithoutClearingApprovalCheckpoint() throws {
+    func testMissionDialsMutatePlanSnapshotAndRecordLedgerWithoutClearingApprovalCheckpoint() async throws {
         let coordinatorID = uuid(1)
+        let childAskAutoEvaluation = expectation(description: "childAsk auto re-evaluates follow-through")
+        var evaluatedCoordinatorIDs: [UUID] = []
         var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
             objective: "Smoke the platform layer",
             status: .running,
@@ -404,6 +406,10 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                         missionPlan: state.missionPlan
                     )
                 ]
+            },
+            followThroughEvaluationHandler: { sessionID in
+                evaluatedCoordinatorIDs.append(sessionID)
+                childAskAutoEvaluation.fulfill()
             }
         )
         viewModel.refresh()
@@ -422,6 +428,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(plan.approvalState, .awaitingApproval)
         XCTAssertEqual(plan.decisions.last?.label, CoordinatorMissionUserDecisionLabel.routedChildQuestionsToDirector.rawValue)
         XCTAssertEqual(plan.decisions.last?.actor, .user)
+        await fulfillment(of: [childAskAutoEvaluation], timeout: 1)
+        XCTAssertEqual(evaluatedCoordinatorIDs, [coordinatorID])
 
         let result = viewModel.setCoordinatorMissionPace(coordinatorSessionID: coordinatorID, pace: .step)
         XCTAssertEqual(result, .accepted)
@@ -2878,6 +2886,96 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(row?.sessionID, selectedChildID)
         XCTAssertEqual(row?.pendingInteraction?.id, selectedQuestion.id)
         XCTAssertEqual(row?.statusGroup, .needsYou)
+    }
+
+    func testDirectorRoutedChildInteractionRecoversSuppressedRowAndRecordsLedger() async throws {
+        let coordinatorID = uuid(1)
+        let childID = uuid(2)
+        let interactionID = uuid(900)
+        var policy = CoordinatorMissionPolicySnapshot.defaultPolicy
+        policy.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key] = .auto
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Answer child question.",
+            status: .running,
+            approvalState: .approved,
+            policySnapshot: policy,
+            autonomy: policy.autonomy
+        ))
+        let question = pendingQuestionInteraction(
+            id: interactionID,
+            title: "Child checkpoint",
+            prompt: "Choose Alpha or Beta."
+        )
+        var childSubmissions: [(submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission, row: CoordinatorModeRow)] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator mission",
+                            updatedAt: self.date(40),
+                            state: .idle,
+                            coordinatorRuntime: true,
+                            missionPlan: state.missionPlan
+                        ),
+                        self.live(
+                            id: childID,
+                            tab: self.uuid(102),
+                            title: "Child",
+                            updatedAt: self.date(30),
+                            state: .waitingForQuestion,
+                            parent: coordinatorID
+                        )
+                    ],
+                    mcpSnapshots: [
+                        childID: self.mcpSnapshot(
+                            sessionID: childID,
+                            tabID: self.uuid(102),
+                            sessionName: "Child",
+                            status: .waitingForInput,
+                            statusText: "Waiting",
+                            assistantPreview: nil,
+                            parent: coordinatorID,
+                            interaction: question
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            childInteractionResponseSubmitter: { submission, row in
+                childSubmissions.append((submission, row))
+                return .accepted
+            },
+            missionPlanUpdater: { _, update in
+                state.updateMissionPlan(update)
+            }
+        )
+        viewModel.selectCoordinator(sessionID: coordinatorID)
+
+        let visualChildRow = try XCTUnwrap(viewModel.snapshot.groups.flatMap(\.rows).first { $0.sessionID == childID })
+        XCTAssertNil(visualChildRow.pendingInteraction)
+        XCTAssertEqual(visualChildRow.statusGroup, .working)
+
+        let routingRow = try XCTUnwrap(viewModel.activePendingChildInteractionRow())
+        XCTAssertEqual(routingRow.sessionID, childID)
+        XCTAssertEqual(routingRow.pendingInteraction?.id, interactionID)
+
+        let result = await viewModel.submitPendingChildInteractionResponse(.text("Alpha"), to: routingRow, actor: .director)
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(childSubmissions.first?.row.pendingInteraction?.id, interactionID)
+        let decision = try XCTUnwrap(state.missionPlan?.decisions.first)
+        XCTAssertEqual(decision.actor, .director)
+        XCTAssertEqual(decision.resolvedAutonomyClass, .childAsk)
+        XCTAssertEqual(decision.interactionID, interactionID)
+        let evidence = try XCTUnwrap(state.missionPlan?.evidence.first)
+        XCTAssertEqual(evidence.interactionID, interactionID)
+        XCTAssertEqual(evidence.decisionID, decision.id)
     }
 
     func testPendingChildInteractionResponseForwardsToChildAndRecordsVisibleAnswer() async throws {

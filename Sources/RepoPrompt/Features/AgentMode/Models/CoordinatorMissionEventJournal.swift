@@ -26,6 +26,8 @@ final class CoordinatorMissionEventJournal {
         let nodes: [NodeSummary]
         let recentEventIDs: [UUID]
         let routingDecisionIDs: [UUID]
+        let decisionIDs: [UUID]
+        let evidenceIDs: [UUID]
         let livenessWarnings: [String]
     }
 
@@ -136,6 +138,8 @@ final class CoordinatorMissionEventJournal {
             nodes: source.nodes,
             recentEventIDs: source.recentEventIDs,
             routingDecisionIDs: source.routingDecisionIDs,
+            decisionIDs: source.decisionIDs,
+            evidenceIDs: source.evidenceIDs,
             livenessWarnings: source.livenessWarnings
         )
     }
@@ -201,6 +205,8 @@ final class CoordinatorMissionEventJournal {
             nodes: interludeNodes,
             recentEventIDs: candidate.recentEventIDs,
             routingDecisionIDs: candidate.routingDecisionIDs,
+            decisionIDs: candidate.decisionIDs,
+            evidenceIDs: candidate.evidenceIDs,
             livenessWarnings: candidate.livenessWarnings
         )
     }
@@ -236,6 +242,8 @@ final class CoordinatorMissionEventJournal {
                 nodes: [],
                 recentEventIDs: [],
                 routingDecisionIDs: [],
+                decisionIDs: [],
+                evidenceIDs: [],
                 livenessWarnings: []
             )
         }
@@ -278,6 +286,20 @@ final class CoordinatorMissionEventJournal {
             .prefix(10)
             .map(\.id)
         let routingDecisionIDs = plan.routingDecisions
+            .sorted { lhs, rhs in
+                if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
+                return lhs.timestamp > rhs.timestamp
+            }
+            .prefix(10)
+            .map(\.id)
+        let decisionIDs = plan.decisions
+            .sorted { lhs, rhs in
+                if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
+                return lhs.timestamp > rhs.timestamp
+            }
+            .prefix(10)
+            .map(\.id)
+        let evidenceIDs = plan.evidence
             .sorted { lhs, rhs in
                 if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
                 return lhs.timestamp > rhs.timestamp
@@ -354,6 +376,8 @@ final class CoordinatorMissionEventJournal {
             nodes: nodeSummaries,
             recentEventIDs: recentEventIDs,
             routingDecisionIDs: routingDecisionIDs,
+            decisionIDs: decisionIDs,
+            evidenceIDs: evidenceIDs,
             livenessWarnings: []
         )
     }

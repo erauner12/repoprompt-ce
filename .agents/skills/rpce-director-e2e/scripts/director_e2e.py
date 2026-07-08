@@ -23,6 +23,8 @@ from typing import Any, Callable, Iterable
 
 
 TERMINAL_STATUSES = {"completed", "stopped", "cancelled", "skipped"}
+MISSING_CHILDASK_LEDGER_WARNING = "completed_child_missing_childask_ledger"
+CHILD_INPUT_TOOL_UNAVAILABLE = "S5_USER_INPUT_TOOL_UNAVAILABLE"
 STATUS_RANK = {
     "pending": 0,
     "running": 1,
@@ -619,6 +621,7 @@ def wait_until(
     obs = observe(client, artifacts, session_id)
     watcher.check(obs)
     capture_mission_events(client, artifacts, session_id, events_mode)
+    fail_missing_childask_ledger_warning(obs, artifacts)
     tracker.update(observation_signature(obs, progress_probe_signature(progress_probe)), time.monotonic())
     if predicate(obs):
         return obs
@@ -630,6 +633,7 @@ def wait_until(
         obs = observe(client, artifacts, session_id)
         watcher.check(obs)
         capture_mission_events(client, artifacts, session_id, events_mode)
+        fail_missing_childask_ledger_warning(obs, artifacts)
         now = time.monotonic()
         tracker.update(observation_signature(obs, progress_probe_signature(progress_probe)), now)
         if predicate(obs):
@@ -643,6 +647,16 @@ def wait_until(
                 f"warnings={warnings} artifacts={artifacts.root}"
             )
     raise E2EFailure(f"Condition was not reached within {timeout_seconds}s; artifacts={artifacts.root}")
+
+
+def fail_missing_childask_ledger_warning(obs: Observation, artifacts: RunArtifacts) -> None:
+    warnings = {str(item) for item in (obs.compact.get("liveness_warnings") or obs.compact.get("warnings") or [])}
+    if MISSING_CHILDASK_LEDGER_WARNING not in warnings:
+        return
+    raise E2EFailure(
+        "S6_MISSING_DIRECTOR_LEDGER_AFTER_CHILD_DONE: child completed while the Mission node "
+        f"remained running without childAsk decision/evidence. artifacts={artifacts.root}"
+    )
 
 
 def timeout_failure_may_be_terminal_graced(error: Exception) -> bool:
@@ -940,9 +954,45 @@ def has_pending_child_question(obs: Observation) -> bool:
     return False
 
 
+def iter_status_strings(value: Any) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+        return
+    if isinstance(value, dict):
+        for nested in value.values():
+            yield from iter_status_strings(nested)
+        return
+    if isinstance(value, list):
+        for nested in value:
+            yield from iter_status_strings(nested)
+
+
+def child_input_tool_unavailable_token(obs: Observation) -> str | None:
+    for source in [obs.compact.get("active_nodes") or [], obs.nodes]:
+        for text in iter_status_strings(source):
+            if CHILD_INPUT_TOOL_UNAVAILABLE not in text:
+                continue
+            match = re.search(rf"{CHILD_INPUT_TOOL_UNAVAILABLE}\s+`?([A-Za-z0-9_.:-]+)", text)
+            return match.group(1) if match else "unknown"
+    return None
+
+
+def raise_child_input_tool_unavailable_if_present(obs: Observation, scenario: str) -> None:
+    token = child_input_tool_unavailable_token(obs)
+    if not token:
+        return
+    raise E2EFailure(
+        f"{scenario} child backend could not create a structured pending question: "
+        f"{CHILD_INPUT_TOOL_UNAVAILABLE} {token}. The selected child role did not advertise "
+        "`ask_user` or `request_user_input`; use a backend with structured user-input support "
+        "or a scripted child before running this live scenario."
+    )
+
+
 def pending_child_question_or_failed(obs: Observation, scenario: str) -> bool:
     if has_pending_child_question(obs):
         return True
+    raise_child_input_tool_unavailable_if_present(obs, scenario)
     if obs.status in {"blocked", "completed", "stopped", "cancelled"}:
         raise E2EFailure(
             f"{scenario} reached {obs.status} before a visible pending child question appeared"
@@ -959,6 +1009,7 @@ def pending_child_question_with_interaction_or_failed(obs: Observation, scenario
         if node_bound_interaction_ids(obs.full) or node_bound_interaction_ids(obs.compact):
             return True
         return False
+    raise_child_input_tool_unavailable_if_present(obs, scenario)
     if obs.status in {"blocked", "completed", "stopped", "cancelled"}:
         raise E2EFailure(
             f"{scenario} reached {obs.status} before a pending child interaction id appeared"
@@ -1112,6 +1163,47 @@ def event_journal_has_bound_interaction_after(
             if isinstance(node, dict) and str(node.get("bound_interaction_id") or "") == interaction_id:
                 return True
     return False
+
+
+def event_seq_for_decision_id(events: list[dict[str, Any]], decision_id: str) -> int | None:
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        decision_ids = {str(item) for item in (event.get("decision_ids") or [])}
+        if decision_id in decision_ids:
+            return int(event.get("seq") or 0)
+    return None
+
+
+def assert_childask_flip_order(
+    events: list[dict[str, Any]],
+    flip_decision: dict[str, Any],
+    director_decision: dict[str, Any],
+) -> None:
+    flip_id = str(flip_decision.get("id") or "")
+    director_id = str(director_decision.get("id") or "")
+    if events and flip_id and director_id:
+        flip_seq = event_seq_for_decision_id(events, flip_id)
+        director_seq = event_seq_for_decision_id(events, director_id)
+        if flip_seq is None or director_seq is None:
+            raise E2EFailure(
+                "S6 childAsk mission_events did not expose decision_ids for flip/director answer; "
+                f"flip_id={flip_id!r} director_id={director_id!r}"
+            )
+        if director_seq <= flip_seq:
+            raise E2EFailure(
+                "S6 childAsk expected the user dial-change journal event to precede the Director answer; "
+                f"flip_seq={flip_seq} director_seq={director_seq}"
+            )
+        return
+
+    flip_ts = decision_timestamp(flip_decision)
+    director_ts = decision_timestamp(director_decision)
+    if not flip_ts or not director_ts or director_ts <= flip_ts:
+        raise E2EFailure(
+            "S6 childAsk expected the user dial-change decision to precede the Director childAsk answer; "
+            f"flip={flip_ts!r} director={director_ts!r}"
+        )
 
 
 def evidence_text(status: dict[str, Any]) -> str:
@@ -1385,14 +1477,7 @@ def assert_s6_childask_flip(
     if user_answer_decisions:
         raise E2EFailure("S6 childAsk expected the pending question to be answered by Director, not an extra user answer")
 
-    flip_timestamps = [decision_timestamp(decision) for decision in flip_decisions if decision_timestamp(decision)]
-    flip_ts = min(flip_timestamps) if flip_timestamps else ""
-    director_ts = decision_timestamp(director_decisions[0])
-    if not flip_ts or not director_ts or director_ts <= flip_ts:
-        raise E2EFailure(
-            "S6 childAsk expected the user dial-change decision to precede the Director childAsk answer; "
-            f"flip={flip_ts!r} director={director_ts!r}"
-        )
+    assert_childask_flip_order(events, flip_decisions[0], director_decisions[0])
     if not event_journal_has_bound_interaction_after(events, interaction_id, seq_before_flip):
         raise E2EFailure("S6 childAsk mission_events did not show the same bound interaction after the flip")
     if "alpha" not in evidence_text(final.full):

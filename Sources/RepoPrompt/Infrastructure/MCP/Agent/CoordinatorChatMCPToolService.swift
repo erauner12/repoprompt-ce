@@ -2072,6 +2072,22 @@ struct CoordinatorChatMCPToolService {
             guard let boundSessionID = node.boundSessionID else { return false }
             return rowsBySessionID[boundSessionID] == nil && !node.status.isTerminal
         }
+        let completedChildMissingChildAskLedgerNodes = plan.nodes.filter { node in
+            guard plan.resolvedAutonomy(for: .childAsk) == .auto,
+                  node.status == .running,
+                  let interactionID = node.boundInteractionID,
+                  let boundSessionID = node.boundSessionID,
+                  compactMissionRunStateIsTerminal(rowsBySessionID[boundSessionID]?.runState) == true
+            else { return false }
+            let hasChildAskDecision = plan.decisions.contains { decision in
+                decision.resolvedAutonomyClass == .childAsk
+                    && decision.interactionID == interactionID
+            }
+            let hasEvidence = plan.evidence.contains { evidence in
+                evidence.interactionID == interactionID
+            }
+            return !(hasChildAskDecision && hasEvidence)
+        }
         let routingWarnings = compactMissionRoutingWarnings(plan: plan, rowsBySessionID: rowsBySessionID)
         let warnings = compactMissionStatusWarnings(
             option: option,
@@ -2079,6 +2095,7 @@ struct CoordinatorChatMCPToolService {
             activeNodes: activeNodes,
             runningDelegatedNodesWithoutBoundSessions: runningDelegatedNodesWithoutBoundSessions,
             missingBoundRows: missingBoundRows,
+            completedChildMissingChildAskLedgerNodes: completedChildMissingChildAskLedgerNodes,
             readyNodeIDs: readyNodeIDs
         ) + routingWarnings
         let runStateSummary = option.runState?.rawValue ?? "unknown"
@@ -2220,6 +2237,8 @@ struct CoordinatorChatMCPToolService {
             "nodes": .array(entry.nodes.map(missionEventNodeSummaryValue)),
             "recent_event_ids": .array(entry.recentEventIDs.map { .string($0.uuidString) }),
             "routing_decision_ids": .array(entry.routingDecisionIDs.map { .string($0.uuidString) }),
+            "decision_ids": .array(entry.decisionIDs.map { .string($0.uuidString) }),
+            "evidence_ids": .array(entry.evidenceIDs.map { .string($0.uuidString) }),
             "liveness_warnings": .array(entry.livenessWarnings.map(Value.string))
         ])
     }
@@ -2674,6 +2693,7 @@ struct CoordinatorChatMCPToolService {
         activeNodes: [CoordinatorMissionPlanNode],
         runningDelegatedNodesWithoutBoundSessions: [CoordinatorMissionPlanNode],
         missingBoundRows: [CoordinatorMissionPlanNode],
+        completedChildMissingChildAskLedgerNodes: [CoordinatorMissionPlanNode],
         readyNodeIDs: [UUID]
     ) -> [String] {
         var warnings: [String] = []
@@ -2696,7 +2716,19 @@ struct CoordinatorChatMCPToolService {
         if !missingBoundRows.isEmpty {
             warnings.append("bound_sessions_missing_from_board_rows")
         }
+        if !completedChildMissingChildAskLedgerNodes.isEmpty {
+            warnings.append("completed_child_missing_childask_ledger")
+        }
         return warnings
+    }
+
+    private func compactMissionRunStateIsTerminal(_ runState: AgentSessionRunState?) -> Bool {
+        switch runState {
+        case .completed, .cancelled, .failed:
+            true
+        case .idle, .running, .waitingForUser, .waitingForQuestion, .waitingForApproval, nil:
+            false
+        }
     }
 
     private func compactMissionStatusNodeValue(

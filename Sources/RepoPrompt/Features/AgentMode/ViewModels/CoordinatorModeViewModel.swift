@@ -224,6 +224,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias PendingFollowThroughEventProvider = @MainActor (_ coordinatorSessionID: UUID?) -> CoordinatorFollowThroughEvent?
     typealias FollowThroughEventSubmitter = @MainActor (_ event: CoordinatorFollowThroughEvent) async -> DirectiveSubmissionResult
     typealias FollowThroughEventResolver = @MainActor (_ event: CoordinatorFollowThroughEvent) async -> Void
+    typealias FollowThroughEvaluationHandler = @MainActor (_ coordinatorSessionID: UUID) async -> Void
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
     @Published private(set) var railTranscriptEntries: [CoordinatorModeRailTranscriptEntry] = []
@@ -290,9 +291,11 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let pendingFollowThroughEventProvider: PendingFollowThroughEventProvider
     private let followThroughEventSubmitter: FollowThroughEventSubmitter
     private let followThroughEventResolver: FollowThroughEventResolver
+    private let followThroughEvaluationHandler: FollowThroughEvaluationHandler
     private let missionEventJournal: CoordinatorMissionEventJournal
     private let projector: CoordinatorModeSnapshotProjector
     private let userDefaults: UserDefaults
+    private var lastProjectionInput: CoordinatorModeSnapshotProjector.Input?
     private var coordinatorSelectionByWorkspaceID: [UUID: CoordinatorSelectionState] = [:]
     private var lastPublishedFingerprint: CoordinatorModeSnapshotFingerprint?
     private var displayedTranscriptCoordinatorSessionID: UUID?
@@ -338,6 +341,7 @@ final class CoordinatorModeViewModel: ObservableObject {
             .rejected(message: "Coordinator follow-through is unavailable.")
         },
         followThroughEventResolver: @escaping FollowThroughEventResolver = { _ in },
+        followThroughEvaluationHandler: @escaping FollowThroughEvaluationHandler = { _ in },
         missionEventJournal: CoordinatorMissionEventJournal? = nil,
         projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector(),
         userDefaults: UserDefaults = .standard
@@ -360,6 +364,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.pendingFollowThroughEventProvider = pendingFollowThroughEventProvider
         self.followThroughEventSubmitter = followThroughEventSubmitter
         self.followThroughEventResolver = followThroughEventResolver
+        self.followThroughEvaluationHandler = followThroughEvaluationHandler
         self.missionEventJournal = missionEventJournal ?? .shared
         self.projector = projector
         self.userDefaults = userDefaults
@@ -392,6 +397,7 @@ final class CoordinatorModeViewModel: ObservableObject {
             input.selectedCoordinatorID = selectionState.selectedCoordinatorID
         }
         input.boardScope = boardScope
+        lastProjectionInput = input
         let projected = projector.project(input)
         let isNewDraft = selectionState == .newDraft
         isFreshCoordinatorRunPending = isNewDraft
@@ -797,7 +803,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         policySnapshot.autonomy[key] = mode
         autonomy[key] = mode
         let timestamp = Date()
-        applyMissionDialOverride(
+        let applied = applyMissionDialOverride(
             coordinatorSessionID: coordinatorSessionID,
             plan: plan,
             policySnapshot: policySnapshot,
@@ -807,8 +813,14 @@ final class CoordinatorModeViewModel: ObservableObject {
             checkpointSubject: "childAsk",
             timestamp: timestamp
         )
+        if applied, mode == .auto {
+            Task { @MainActor [weak self] in
+                await self?.followThroughEvaluationHandler(coordinatorSessionID)
+            }
+        }
     }
 
+    @discardableResult
     private func applyMissionDialOverride(
         coordinatorSessionID: UUID,
         plan: CoordinatorMissionPlan,
@@ -818,7 +830,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         decisionClass: CoordinatorMissionDecisionClass,
         checkpointSubject: String,
         timestamp: Date
-    ) {
+    ) -> Bool {
         let checkpointInstanceID = [
             "mission-policy",
             coordinatorSessionID.uuidString,
@@ -846,8 +858,10 @@ final class CoordinatorModeViewModel: ObservableObject {
                 )
             )
             refresh()
+            return true
         } catch {
             composerNotice = "Mission policy could not be updated: \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -1335,12 +1349,11 @@ final class CoordinatorModeViewModel: ObservableObject {
 
     func activePendingChildInteractionRow() -> CoordinatorModeRow? {
         guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID else { return nil }
-        return snapshot.groups
-            .flatMap(\.rows)
+        return coordinatorModeRowsForRouting(in: snapshot)
             .filter { row in
                 row.parentCoordinator?.sessionID == coordinatorSessionID
                     && row.pendingInteraction != nil
-                    && row.statusGroup == .needsYou
+                    && row.runState == .waitingForQuestion
                     && !row.isPersistedOnly
             }
             .sorted { lhs, rhs in
@@ -1350,6 +1363,45 @@ final class CoordinatorModeViewModel: ObservableObject {
                 return lhs.updatedAt < rhs.updatedAt
             }
             .first
+    }
+
+    func coordinatorModeRowsForRouting(in snapshot: CoordinatorModeSnapshot) -> [CoordinatorModeRow] {
+        snapshot.groups.flatMap(\.rows).map { row in
+            guard row.pendingInteraction == nil,
+                  row.runState == .waitingForQuestion,
+                  !row.isPersistedOnly,
+                  let parentCoordinator = row.parentCoordinator,
+                  let plan = snapshot.coordinatorRail.availableCoordinators
+                  .first(where: { $0.sessionID == parentCoordinator.sessionID })?
+                  .missionPlan,
+                  plan.resolvedAutonomy(for: .childAsk) == .auto,
+                  let pendingInteraction = rawPendingInteractionSummary(for: row)
+            else { return row }
+
+            // Director-routed child questions are hidden from the Decisions UI, but
+            // service/routing code still needs the raw interaction id for ledgering.
+            return row.withPendingInteraction(pendingInteraction)
+        }
+    }
+
+    private func rawPendingInteractionSummary(for row: CoordinatorModeRow) -> CoordinatorModePendingInteractionSummary? {
+        guard let raw = lastProjectionInput?.mcpSnapshotsBySessionID[row.sessionID],
+              let interaction = raw.interaction,
+              interaction.kind == .question
+        else { return nil }
+        return CoordinatorModePendingInteractionSummary(
+            id: interaction.id,
+            sessionID: raw.sessionID,
+            kind: interaction.kind,
+            responseType: interaction.responseType,
+            title: interaction.title,
+            prompt: interaction.prompt,
+            context: interaction.context,
+            options: interaction.options,
+            fields: interaction.fields,
+            details: interaction.details,
+            openAgentChatRoute: row.openAgentChatRoute
+        )
     }
 
     @discardableResult
@@ -2066,6 +2118,14 @@ extension AgentModeViewModel {
             return await submitPendingCoordinatorFollowThroughEvent(event)
         } followThroughEventResolver: { [weak self] event in
             self?.resolvePendingCoordinatorFollowThroughEvent(event)
+        } followThroughEvaluationHandler: { [weak self] coordinatorSessionID in
+            guard let self else { return }
+            coordinatorModeViewModel.refreshIfVisible()
+            await evaluateCoordinatorFollowThrough(
+                coordinatorSessionID: coordinatorSessionID,
+                snapshot: coordinatorModeViewModel.snapshot,
+                trigger: .lifecycle
+            )
         }
     }
 
@@ -2476,7 +2536,7 @@ extension AgentModeViewModel {
     }
 
     private func coordinatorModeRows(in snapshot: CoordinatorModeSnapshot) -> [CoordinatorModeRow] {
-        snapshot.groups.flatMap(\.rows)
+        coordinatorModeViewModel.coordinatorModeRowsForRouting(in: snapshot)
     }
 
     @MainActor
@@ -2877,6 +2937,38 @@ extension AgentModeViewModel {
     private func coordinatorModeTabName(for tabID: UUID) -> String? {
         promptManager?.currentComposeTabs.first(where: { $0.id == tabID })?.name
             ?? workspaceManager?.composeTabName(with: tabID)
+    }
+}
+
+private extension CoordinatorModeRow {
+    func withPendingInteraction(_ pendingInteraction: CoordinatorModePendingInteractionSummary) -> CoordinatorModeRow {
+        CoordinatorModeRow(
+            id: id,
+            sessionID: sessionID,
+            tabID: tabID,
+            title: title,
+            providerName: providerName,
+            modelName: modelName,
+            runState: runState,
+            statusGroup: statusGroup,
+            parentSessionID: parentSessionID,
+            parentCoordinator: parentCoordinator,
+            childSessionIDs: childSessionIDs,
+            isMCPOriginated: isMCPOriginated,
+            isPersistedOnly: isPersistedOnly,
+            isCoordinator: isCoordinator,
+            startedAt: startedAt,
+            updatedAt: updatedAt,
+            priority: priority,
+            workstream: workstream,
+            workstreamSummary: workstreamSummary,
+            workflow: workflow,
+            mergeAttention: mergeAttention,
+            pendingInteraction: pendingInteraction,
+            openAgentChatRoute: openAgentChatRoute,
+            statusReport: statusReport,
+            origin: origin
+        )
     }
 }
 

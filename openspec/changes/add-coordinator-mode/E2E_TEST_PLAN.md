@@ -57,6 +57,9 @@ parent/Director owns answer routing and attribution. Run twice:
 **Me** → pending
 interaction appears, queue = 1, answer flows, child proceeds, no ⚙ for the answer;
 **Director** → runtime answers, ⚙ decision with question+answer evidence, queue stays 0.
+If the child reports `S5_USER_INPUT_TOOL_UNAVAILABLE`, classify the run as a child-backend
+capability gap: the selected backend cannot create structured pending user input, so S5/S6
+must use a backend or scripted child that advertises `ask_user`/`request_user_input`.
 Drive Me/Director headlessly through
 `coordinator_chat set_autonomy` with `autonomy_class:"childAsk"` and `mode:"ask|auto"`;
 the op itself is a user-channel parity action and must record only the dial-change

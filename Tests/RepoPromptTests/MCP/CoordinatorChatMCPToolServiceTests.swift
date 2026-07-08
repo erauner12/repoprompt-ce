@@ -2370,6 +2370,99 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertTrue(warnings.contains("running_delegated_nodes_without_bound_sessions"))
     }
 
+    func testMissionStatusCompactWarnsWhenCompletedChildAskNodeLacksLedgerAndAcceptsAnyActorLedger() async throws {
+        let coordinatorID = UUID()
+        let childID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let interactionID = UUID()
+        let decisionID = UUID()
+        let evidenceID = UUID()
+        var policy = CoordinatorMissionPolicySnapshot.defaultPolicy
+        policy.autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
+        func plan(decisions: [CoordinatorMissionDecisionRecord] = [], evidence: [CoordinatorMissionEvidenceRecord] = []) -> CoordinatorMissionPlan {
+            CoordinatorMissionPlan(
+                objective: "Answer child question.",
+                status: .running,
+                approvalState: .approved,
+                policySnapshot: policy,
+                autonomy: policy.autonomy,
+                workstreams: [
+                    CoordinatorMissionWorkstreamSummary(
+                        id: workstreamID,
+                        title: "Probe",
+                        purpose: "Ask a child question.",
+                        defaultPolicy: .freshReadOnlyChild,
+                        worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                    )
+                ],
+                nodes: [
+                    CoordinatorMissionPlanNode(
+                        id: nodeID,
+                        title: "Ask child",
+                        workstreamID: workstreamID,
+                        executionPolicy: .freshReadOnlyChild,
+                        status: .running,
+                        boundSessionID: childID,
+                        boundInteractionID: interactionID
+                    )
+                ],
+                decisions: decisions,
+                evidence: evidence
+            )
+        }
+        var missionPlan = plan()
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            rows: [
+                Self.childRow(
+                    id: childID,
+                    parentCoordinatorID: coordinatorID,
+                    title: "Child",
+                    runState: .completed,
+                    statusGroup: .done,
+                    workflow: nil
+                )
+            ],
+            missionPlans: { [coordinatorID: missionPlan] }
+        )
+
+        var warnings = try await compactWarnings(service: service, args: [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ])
+        XCTAssertTrue(warnings.contains("completed_child_missing_childask_ledger"))
+
+        missionPlan = plan(
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    id: decisionID,
+                    decisionClass: CoordinatorMissionDecisionClass.childAsk.rawValue,
+                    actor: .user,
+                    label: CoordinatorMissionUserDecisionLabel.answeredChildQuestion.rawValue,
+                    sessionID: childID,
+                    interactionID: interactionID
+                )
+            ],
+            evidence: [
+                CoordinatorMissionEvidenceRecord(
+                    id: evidenceID,
+                    verdict: .meets,
+                    summary: "User answered Alpha.",
+                    sessionID: childID,
+                    interactionID: interactionID,
+                    decisionID: decisionID
+                )
+            ]
+        )
+        warnings = try await compactWarnings(service: service, args: [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ])
+        XCTAssertFalse(warnings.contains("completed_child_missing_childask_ledger"))
+    }
+
     func testMissionStatusCompactIncludesDepsSatisfiedAndReadyNodeIDs() async throws {
         let coordinatorID = UUID()
         let workstreamID = UUID()
@@ -2457,6 +2550,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let workstreamID = UUID()
         let parentID = UUID()
         let childID = UUID()
+        let decisionID = UUID()
+        let evidenceID = UUID()
         let entry = CoordinatorMissionEventJournal.Entry(
             seq: 2,
             observedAt: Date(timeIntervalSince1970: 12),
@@ -2503,6 +2598,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             ],
             recentEventIDs: [UUID()],
             routingDecisionIDs: [UUID()],
+            decisionIDs: [decisionID],
+            evidenceIDs: [evidenceID],
             livenessWarnings: []
         )
         let plan = CoordinatorMissionPlan(
@@ -2549,6 +2646,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(first["fingerprint"]?.stringValue, "fp-2")
         XCTAssertEqual(first["plan"]?.objectValue?["revision"]?.intValue, 4)
         XCTAssertEqual(first["ready_node_ids"]?.arrayValue?.compactMap(\.stringValue), [childID.uuidString])
+        XCTAssertEqual(first["decision_ids"]?.arrayValue?.compactMap(\.stringValue), [decisionID.uuidString])
+        XCTAssertEqual(first["evidence_ids"]?.arrayValue?.compactMap(\.stringValue), [evidenceID.uuidString])
         XCTAssertEqual(nodes[1]["deps_satisfied"]?.boolValue, true)
         XCTAssertEqual(nodes[1]["depends_on"]?.arrayValue?.compactMap(\.stringValue), [parentID.uuidString])
     }
