@@ -92,6 +92,7 @@ class RunArtifacts:
     violations: list[dict[str, Any]] = field(default_factory=list)
     mission_events: list[dict[str, Any]] = field(default_factory=list)
     event_since_seq: int = 0
+    run_config: dict[str, Any] = field(default_factory=dict)
     report: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -139,6 +140,10 @@ class RunArtifacts:
         }
         write_json(self.root / "features.json", self.features)
 
+    def set_run_config(self, config: dict[str, Any]) -> None:
+        self.run_config = dict(config)
+        write_json(self.root / "run_config.json", self.run_config)
+
     def feature_available(self, name: str) -> bool | None:
         current = self.features.get(name)
         if current is None:
@@ -164,6 +169,7 @@ class RunArtifacts:
             "observation_count": len(self.observations),
             "checkpoints": self.checkpoints,
             "features": self.features,
+            "run_config": self.run_config,
             "timings": self.timings,
             "violation_count": len(self.violations),
             "violations": self.violations,
@@ -847,15 +853,24 @@ def archive_final_mission_if_requested(client: RpcClient, artifacts: RunArtifact
         capture_receipt(client, artifacts, session_id, args.receipt_mode)
 
 
-def start_mission(client: RpcClient, title: str, message: str, scenario: str) -> str:
+def start_mission(
+    client: RpcClient,
+    title: str,
+    message: str,
+    scenario: str,
+    coordinator_model_id: str | None = None,
+) -> str:
     key = f"director-e2e:{scenario}:{int(time.time())}:{uuid.uuid4().hex[:8]}"
-    response = client.coordinator({
+    payload: dict[str, Any] = {
         "op": "start_mission",
         "mission_key": key,
         "title": title,
         "message": message,
         "compact": True,
-    }, timeout=180)
+    }
+    if coordinator_model_id:
+        payload["coordinator_model_id"] = coordinator_model_id
+    response = client.coordinator(payload, timeout=180)
     session_id = response.get("selected_coordinator_session_id")
     if not session_id:
         status = response.get("mission_status") or {}
@@ -2291,7 +2306,7 @@ def run_s1(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
         if args.clean_sandbox:
             clean_sandbox(sandbox_root, client.repo_root, args.allow_clean_outside_tmp)
         assert_clean_git(sandbox_root)
-    session_id = start_mission(client, "Director E2E S1 read-only", s1_message(), "s1")
+    session_id = start_mission(client, "Director E2E S1 read-only", s1_message(), "s1", args.coordinator_model_id)
     approve_initial_plan(client, artifacts, session_id, args)
     final = wait_until(
         client,
@@ -2323,7 +2338,7 @@ def run_s2(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
     bind_visible_context_for_sandbox(client, sandbox_root)
     if not sandbox_is_visible(client, sandbox_root):
         raise E2EFailure(f"S2 sandbox root is not visible in the selected app workspace: {sandbox_root}")
-    session_id = start_mission(client, "Director E2E S2 convergence", s2_message(sandbox_root), "s2")
+    session_id = start_mission(client, "Director E2E S2 convergence", s2_message(sandbox_root), "s2", args.coordinator_model_id)
     approve_initial_plan(client, artifacts, session_id, args)
     watcher = InvariantWatcher(artifacts)
     saw_fanout = False
@@ -2385,6 +2400,7 @@ def run_s4(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
         f"Director E2E S4 checkpoint revision {variant_token}",
         s4_message(variant_token),
         "s4",
+        args.coordinator_model_id,
     )
     initial = wait_until(
         client,
@@ -2580,6 +2596,7 @@ def run_s5_variant(
         f"Director E2E S5 childAsk {mode} {variant_token}",
         s5_message(mode, variant_token, args.child_model_id),
         f"s5-{mode}",
+        args.coordinator_model_id,
     )
     wait_until(
         client,
@@ -2688,7 +2705,7 @@ def run_s5(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
 
 def run_s6_pace(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> dict[str, Any]:
     artifacts.record_timing("started")
-    session_id = start_mission(client, "Director E2E S6 pace flip", s6_message(), "s6")
+    session_id = start_mission(client, "Director E2E S6 pace flip", s6_message(), "s6", args.coordinator_model_id)
     before = wait_until(
         client,
         artifacts,
@@ -2763,6 +2780,7 @@ def run_s6_childask_flip(client: RpcClient, artifacts: RunArtifacts, args: argpa
         f"Director E2E S6 childAsk flip {variant_token}",
         s5_message("ask", variant_token, args.child_model_id),
         "s6-childask",
+        args.coordinator_model_id,
     )
     wait_until(
         client,
@@ -2845,6 +2863,7 @@ def run_s6_childask_escalation(client: RpcClient, artifacts: RunArtifacts, args:
         f"Director E2E S6 childAsk escalation {variant_token}",
         s5_message("auto-to-ask", variant_token, args.child_model_id),
         "s6-childask-escalation",
+        args.coordinator_model_id,
     )
     wait_until(
         client,
@@ -2972,6 +2991,7 @@ def run_s7(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
         f"Director E2E S7 stop semantics {variant_token}",
         s5_message("s7-stop", variant_token, args.child_model_id),
         "s7",
+        args.coordinator_model_id,
     )
     wait_until(
         client,
@@ -3103,12 +3123,38 @@ def build_parser() -> argparse.ArgumentParser:
         default="explore",
         help="Child model_id used by S5/S6/S7 childAsk scenarios; use 'scripted' for deterministic E2E child support.",
     )
+    parser.add_argument(
+        "--coordinator-model-id",
+        default=os.environ.get("RPCE_DIRECTOR_E2E_COORDINATOR_MODEL_ID"),
+        help=(
+            "Optional Coordinator runtime model_id/role shortcut for fresh Missions. "
+            "Use this for cheap regression-tier batches; omit it for the default headline negotiation tier."
+        ),
+    )
     parser.add_argument("--repeat", type=int, default=1, help="Run the scenario multiple times and aggregate reports.")
     parser.add_argument("--launch", action="store_true", help="Explicitly launch/relaunch the debug app before running.")
     return parser
 
 
+def run_config_for_args(args: argparse.Namespace) -> dict[str, Any]:
+    coordinator_model_id = args.coordinator_model_id or None
+    return {
+        "scenario": args.scenario,
+        "workspace": args.workspace,
+        "window": args.window,
+        "coordinator_model_id": coordinator_model_id,
+        "coordinator_tier": "cheap_regression" if coordinator_model_id else "default_negotiation",
+        "child_model_id": args.child_model_id,
+        "doctor_mode": args.doctor_mode,
+        "events_mode": args.events_mode,
+        "receipt_mode": args.receipt_mode,
+        "archive_on_success": bool(args.archive_on_success),
+        "repeat": args.repeat,
+    }
+
+
 def run_once(args: argparse.Namespace, repo_root: Path, artifacts: RunArtifacts, cli: str) -> None:
+    artifacts.set_run_config(run_config_for_args(args))
     client = RpcClient(cli, args.window, repo_root, artifacts)
     ensure_workspace(client, args.workspace)
     capture_doctor(client, artifacts, args.doctor_mode)
@@ -3116,8 +3162,13 @@ def run_once(args: argparse.Namespace, repo_root: Path, artifacts: RunArtifacts,
     archive_final_mission_if_requested(client, artifacts, args)
 
 
-def repeat_report_for(scenario: str, repeat: int, results: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
+def repeat_report_for(
+    scenario: str,
+    repeat: int,
+    results: list[dict[str, Any]],
+    run_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    report = {
         "scenario": scenario,
         "repeat": repeat,
         "passed": all(result["passed"] for result in results),
@@ -3125,6 +3176,9 @@ def repeat_report_for(scenario: str, repeat: int, results: list[dict[str, Any]])
         "fail_count": sum(1 for result in results if not result["passed"]),
         "attempts": results,
     }
+    if run_config is not None:
+        report["run_config"] = run_config
+    return report
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -3136,6 +3190,7 @@ def main(argv: list[str] | None = None) -> int:
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{args.scenario}-{uuid.uuid4().hex[:6]}"
     root = (repo_root / args.output_dir / run_id).resolve()
     artifacts = RunArtifacts(root)
+    artifacts.set_run_config(run_config_for_args(args))
     try:
         if args.launch:
             subprocess.run(["make", "dev-run"], cwd=repo_root, check=True)
@@ -3162,7 +3217,7 @@ def main(argv: list[str] | None = None) -> int:
                         "artifact_dir": str(attempt_artifacts.root),
                         "error": str(attempt_exc),
                     })
-            repeat_report = repeat_report_for(args.scenario, args.repeat, results)
+            repeat_report = repeat_report_for(args.scenario, args.repeat, results, run_config_for_args(args))
             write_json(root / "repeat_report.json", repeat_report)
             artifacts.report = repeat_report
             if not repeat_report["passed"]:

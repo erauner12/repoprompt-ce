@@ -869,6 +869,7 @@ final class AgentModeStopSubmitTargetTests: XCTestCase {
                 missionTemplate: CoordinatorMissionTemplateSummary(template),
                 missionPolicySnapshot: nil,
                 coordinatorSessionID: coordinatorSessionID,
+                coordinatorModelID: nil,
                 forceNewRuntime: false
             )
         )

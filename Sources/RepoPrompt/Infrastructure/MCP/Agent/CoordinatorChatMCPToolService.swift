@@ -9,7 +9,7 @@ struct CoordinatorChatMCPToolService {
         var snapshot: () -> CoordinatorModeSnapshot
         var refresh: () -> Void
         var selectCoordinator: (_ sessionID: UUID?) -> Void
-        var startNewCoordinatorRun: () -> Void
+        var startNewCoordinatorRun: (_ coordinatorModelID: String?) -> Void
         var stopSelectedCoordinatorMission: () async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var submitDirective: (_ text: String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var submitContinuation: (_ action: CoordinatorModeViewModel.ContinuationAction) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
@@ -73,7 +73,7 @@ struct CoordinatorChatMCPToolService {
                 snapshot: { coordinatorViewModel.snapshot },
                 refresh: { coordinatorViewModel.refresh() },
                 selectCoordinator: { coordinatorViewModel.selectCoordinator(sessionID: $0) },
-                startNewCoordinatorRun: { coordinatorViewModel.startNewCoordinatorRun() },
+                startNewCoordinatorRun: { coordinatorViewModel.startNewCoordinatorRun(coordinatorModelID: $0) },
                 stopSelectedCoordinatorMission: { await coordinatorViewModel.stopSelectedCoordinatorMission() },
                 submitDirective: { await coordinatorViewModel.submitCoordinatorDirective($0) },
                 submitContinuation: { await coordinatorViewModel.submitCoordinatorContinuation($0) },
@@ -167,10 +167,12 @@ struct CoordinatorChatMCPToolService {
 
         case "new":
             try validateExternalMissionCreation(metadata)
-            environment.startNewCoordinatorRun()
+            let coordinatorModelID = normalizedString(args["coordinator_model_id"] ?? args["coordinatorModelID"])
+            environment.startNewCoordinatorRun(coordinatorModelID)
             environment.refresh()
             return stateResponse(environment.snapshot(), extra: [
-                "new_parent_pending": .bool(true)
+                "new_parent_pending": .bool(true),
+                "coordinator_model_id": AgentMCPToolHelpers.stringOrNull(coordinatorModelID)
             ])
 
         case "ensure_mission", "start_mission":
@@ -184,6 +186,7 @@ struct CoordinatorChatMCPToolService {
             if op == "ensure_mission", missionKey == nil {
                 throw MCPError.invalidParams("mission_key is required for ensure_mission.")
             }
+            let coordinatorModelID = normalizedString(args["coordinator_model_id"] ?? args["coordinatorModelID"])
             let predecessorUpdate = try parseMissionPredecessorUpdate(args)
 
             environment.refresh()
@@ -199,7 +202,7 @@ struct CoordinatorChatMCPToolService {
                     "mission_key": .string(missionKey ?? "")
                 ])
             }
-            environment.startNewCoordinatorRun()
+            environment.startNewCoordinatorRun(coordinatorModelID)
             let result = await environment.submitDirective(message)
             environment.refresh()
 
@@ -235,7 +238,8 @@ struct CoordinatorChatMCPToolService {
                     "routed_to": .string("coordinator"),
                     "started_new_mission": .bool(true),
                     "selected_existing_mission": .bool(false),
-                    "mission_key": AgentMCPToolHelpers.stringOrNull(missionKey)
+                    "mission_key": AgentMCPToolHelpers.stringOrNull(missionKey),
+                    "coordinator_model_id": AgentMCPToolHelpers.stringOrNull(coordinatorModelID)
                 ].merging(waitResult.extra) { _, new in new })
             case let .rejected(message):
                 return stateResponse(environment.snapshot(), extra: [
@@ -244,6 +248,7 @@ struct CoordinatorChatMCPToolService {
                     "started_new_mission": .bool(true),
                     "selected_existing_mission": .bool(false),
                     "mission_key": AgentMCPToolHelpers.stringOrNull(missionKey),
+                    "coordinator_model_id": AgentMCPToolHelpers.stringOrNull(coordinatorModelID),
                     "error": .string(message)
                 ])
             }
@@ -306,6 +311,7 @@ struct CoordinatorChatMCPToolService {
             let continuationAction = try parseCheckpointContinuationAction(args)
             let expectedCheckpointInstanceID = try parseExpectedCheckpointInstanceID(args)
             let newParent = AgentMCPToolHelpers.parseBool(args["new_parent"]) ?? false
+            let coordinatorModelID = normalizedString(args["coordinator_model_id"] ?? args["coordinatorModelID"])
             let compact = AgentMCPToolHelpers.parseBool(args["compact"]) ?? true
             if newParent, message == nil {
                 throw MCPError.invalidParams("message is required.")
@@ -322,7 +328,7 @@ struct CoordinatorChatMCPToolService {
 
             environment.refresh()
             if newParent {
-                environment.startNewCoordinatorRun()
+                environment.startNewCoordinatorRun(coordinatorModelID)
             } else if let rawSessionID = args["coordinator_session_id"] {
                 let sessionID = try requireCoordinatorSessionID(rawSessionID)
                 try validateCoordinatorExists(sessionID, in: environment.snapshot())

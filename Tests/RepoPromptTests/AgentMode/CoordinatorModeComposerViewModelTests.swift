@@ -2571,6 +2571,40 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.sessions[next.tabID]?.isCoordinatorRuntime == true)
     }
 
+    func testCoordinatorRuntimeExplicitModelOverrideKeepsCoordinatorIdentity() async throws {
+        let fixture = makeAgentModeFixture(tabs: [], activeTabID: nil)
+        let viewModel = fixture.viewModel
+
+        let next = try await viewModel.test_resolveOrCreateCoordinatorRuntimeDemoTarget(
+            preferredSessionID: nil,
+            forceNewRuntime: true,
+            coordinatorModelID: "\(AgentProviderKind.codexExec.rawValue):\(AgentModel.gpt55CodexLow.rawValue)"
+        )
+        let session = try XCTUnwrap(viewModel.sessions[next.tabID])
+
+        XCTAssertTrue(session.isCoordinatorRuntime)
+        XCTAssertEqual(session.mcpControlContext?.taskLabelKind, .coordinator)
+        XCTAssertEqual(session.selectedAgent, .codexExec)
+        XCTAssertEqual(session.selectedModelRaw, "gpt-5.5")
+        XCTAssertEqual(session.selectedReasoningEffortRaw, CodexReasoningEffort.low.rawValue)
+    }
+
+    func testCoordinatorRuntimeRejectsScriptedModelOverride() async throws {
+        let fixture = makeAgentModeFixture(tabs: [], activeTabID: nil)
+        let viewModel = fixture.viewModel
+
+        do {
+            _ = try await viewModel.test_resolveOrCreateCoordinatorRuntimeDemoTarget(
+                preferredSessionID: nil,
+                forceNewRuntime: true,
+                coordinatorModelID: "scripted"
+            )
+            XCTFail("Coordinator runtimes must not accept scripted child model selectors.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("scripted"))
+        }
+    }
+
     func testSelectedCoordinatorRuntimeRefreshesStaleControlLabel() async throws {
         let tabID = uuid(331)
         let sessionID = uuid(332)

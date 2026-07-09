@@ -69,7 +69,16 @@ Useful knobs:
 - `--doctor-mode auto|required|off`: capture `coordinator_chat doctor` into `doctor.json`; `required` fails early on unsupported apps.
 - `--archive-on-success`: after a passing terminal scenario, call `list_missions`/`archive_mission` and verify mission status, events, and receipt remain readable by id.
 - `--child-model-id explore|scripted|...`: choose the child model used by S5/S6 childAsk scenarios. `scripted` is hidden debug/E2E infrastructure and must emit `SCRIPTED_CHILD_V1 answer=Alpha token=<TOKEN>`.
+- `--coordinator-model-id engineer|design|...`: choose the fresh Coordinator runtime's underlying model for a cheap regression-tier batch. Omit this for the default headline negotiation tier.
 - `--clean-sandbox`: clean a known throwaway Director E2E sandbox before writable scenarios.
+
+Cheap regression-tier batches should record their Coordinator model explicitly, for example:
+
+```bash
+.agents/skills/rpce-director-e2e/scripts/director_e2e.py --scenario s5 --workspace homelab-garden --window 1 --repeat 10 --doctor-mode required --events-mode required --receipt-mode required --archive-on-success --child-model-id scripted --coordinator-model-id design
+```
+
+Do not compare cheap-tier pass rates directly with default-tier pass rates; prompt/directive changes still need a default Coordinator validation batch.
 
 ## Runtime Contract
 

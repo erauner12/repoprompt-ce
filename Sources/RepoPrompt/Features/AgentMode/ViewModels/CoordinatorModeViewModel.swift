@@ -8,6 +8,7 @@ struct CoordinatorDirectiveSubmission: Equatable {
     let missionTemplate: CoordinatorMissionTemplateSummary?
     let missionPolicySnapshot: CoordinatorMissionPolicySnapshot?
     let coordinatorSessionID: UUID?
+    let coordinatorModelID: String?
     let forceNewRuntime: Bool
 }
 
@@ -319,6 +320,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private var lastDurableRailStatusEntryKey: String?
     private var displayedDelegateActionTargetIDs: Set<UUID> = []
     private var pendingAcceptedDirectiveDecision: PendingMissionUserDecision?
+    private var pendingFreshCoordinatorModelID: String?
     private var draftDialOverridesPolicy = false
     private(set) var isVisible = false
 
@@ -711,8 +713,10 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
     }
 
-    func startNewCoordinatorRun() {
+    func startNewCoordinatorRun(coordinatorModelID: String? = nil) {
         isFreshCoordinatorRunPending = true
+        let trimmedCoordinatorModelID = coordinatorModelID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        pendingFreshCoordinatorModelID = trimmedCoordinatorModelID?.isEmpty == false ? trimmedCoordinatorModelID : nil
         displayedTranscriptCoordinatorSessionID = nil
         lastDurableRailStatusEntryKey = nil
         displayedDelegateActionTargetIDs.removeAll()
@@ -944,12 +948,14 @@ final class CoordinatorModeViewModel: ObservableObject {
             missionTemplate: nil,
             missionPolicySnapshot: missionPolicySnapshot,
             coordinatorSessionID: coordinatorSessionID,
+            coordinatorModelID: forceNewRuntime ? pendingFreshCoordinatorModelID : nil,
             forceNewRuntime: forceNewRuntime
         )
         let result = await directiveSubmitter(submission)
         switch result {
         case .accepted:
             isFreshCoordinatorRunPending = false
+            pendingFreshCoordinatorModelID = nil
             composerNotice = nil
             if forceNewRuntime {
                 selectFreshCoordinatorRuntimeIfAvailable(
@@ -2299,6 +2305,7 @@ extension AgentModeViewModel {
                 missionTemplate: nil,
                 missionPolicySnapshot: nil,
                 coordinatorSessionID: coordinatorSessionID,
+                coordinatorModelID: nil,
                 forceNewRuntime: forceNewRuntime
             )
         )
@@ -2312,7 +2319,8 @@ extension AgentModeViewModel {
         do {
             runtime = try await resolveOrCreateCoordinatorRuntimeDemoTarget(
                 preferredSessionID: submission.coordinatorSessionID,
-                forceNewRuntime: submission.forceNewRuntime
+                forceNewRuntime: submission.forceNewRuntime,
+                coordinatorModelID: submission.coordinatorModelID
             )
         } catch {
             return .blocked(message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
@@ -2825,11 +2833,13 @@ extension AgentModeViewModel {
         @MainActor
         func test_resolveOrCreateCoordinatorRuntimeDemoTarget(
             preferredSessionID: UUID?,
-            forceNewRuntime: Bool = false
+            forceNewRuntime: Bool = false,
+            coordinatorModelID: String? = nil
         ) async throws -> (tabID: UUID, sessionID: UUID) {
             try await resolveOrCreateCoordinatorRuntimeDemoTarget(
                 preferredSessionID: preferredSessionID,
-                forceNewRuntime: forceNewRuntime
+                forceNewRuntime: forceNewRuntime,
+                coordinatorModelID: coordinatorModelID
             )
         }
 
@@ -2842,10 +2852,11 @@ extension AgentModeViewModel {
     @MainActor
     private func resolveOrCreateCoordinatorRuntimeDemoTarget(
         preferredSessionID: UUID?,
-        forceNewRuntime: Bool = false
+        forceNewRuntime: Bool = false,
+        coordinatorModelID: String? = nil
     ) async throws -> (tabID: UUID, sessionID: UUID) {
         if forceNewRuntime {
-            return try await createCoordinatorRuntimeDemoTarget()
+            return try await createCoordinatorRuntimeDemoTarget(coordinatorModelID: coordinatorModelID)
         }
 
         if let preferredSessionID,
@@ -2873,7 +2884,7 @@ extension AgentModeViewModel {
             return (target.tabID, sessionID)
         }
 
-        return try await createCoordinatorRuntimeDemoTarget()
+        return try await createCoordinatorRuntimeDemoTarget(coordinatorModelID: coordinatorModelID)
     }
 
     @MainActor
@@ -2986,19 +2997,19 @@ extension AgentModeViewModel {
     }
 
     @MainActor
-    private func createCoordinatorRuntimeDemoTarget() async throws -> (tabID: UUID, sessionID: UUID) {
+    private func createCoordinatorRuntimeDemoTarget(coordinatorModelID: String? = nil) async throws -> (tabID: UUID, sessionID: UUID) {
         let tabID = try await mcpCreateCoordinatorRuntimeTab(name: Self.coordinatorRuntimeDemoSessionName)
         let session = await ensureSessionReady(tabID: tabID)
         guard let sessionID = ensureSessionBoundToTab(session) else {
             throw MCPError.invalidParams("The Coordinator runtime tab could not be bound to an agent session.")
         }
         session.isCoordinatorRuntime = true
-        try await ensureCoordinatorRuntimeDemoControl(tabID: tabID, sessionID: sessionID)
+        try await ensureCoordinatorRuntimeDemoControl(tabID: tabID, sessionID: sessionID, coordinatorModelID: coordinatorModelID)
         return (tabID, sessionID)
     }
 
     @MainActor
-    private func ensureCoordinatorRuntimeDemoControl(tabID: UUID, sessionID: UUID) async throws {
+    private func ensureCoordinatorRuntimeDemoControl(tabID: UUID, sessionID: UUID, coordinatorModelID: String? = nil) async throws {
         let session = await ensureSessionReady(tabID: tabID)
         session.isCoordinatorRuntime = true
         if session.mcpControlContext?.sessionID != sessionID ||
@@ -3012,11 +3023,27 @@ extension AgentModeViewModel {
                 startPending: false
             )
         }
+        let modelSelection = try Self.resolvedCoordinatorRuntimeModelSelection(coordinatorModelID)
         try await mcpConfigureSession(
             tabID: tabID,
-            agentRaw: AgentProviderKind.codexExec.rawValue,
-            modelRaw: AgentModel.gpt55CodexHigh.rawValue,
+            agentRaw: modelSelection.agentRaw,
+            modelRaw: modelSelection.modelRaw,
             reasoningEffortRaw: nil
+        )
+    }
+
+    @MainActor
+    private static func resolvedCoordinatorRuntimeModelSelection(_ coordinatorModelID: String?) throws -> AgentMCPSelectionResolver.ResolvedSelection {
+        #if DEBUG
+            if let coordinatorModelID,
+               AgentScriptedChildModelID.isScriptedSelector(coordinatorModelID)
+            {
+                throw MCPError.invalidParams("coordinator_model_id 'scripted' is only available for child sessions; Coordinator runtimes must use a real model target.")
+            }
+        #endif
+        return try AgentMCPSelectionResolver.resolve(
+            modelID: coordinatorModelID,
+            defaultTaskLabel: .coordinator
         )
     }
 

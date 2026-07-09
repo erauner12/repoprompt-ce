@@ -52,12 +52,14 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let coordinatorID = UUID()
         let predecessorID = UUID()
         var events: [String] = []
+        var requestedCoordinatorModels: [String?] = []
         var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
-            startNew: {
+            startNew: { coordinatorModelID in
                 events.append("start_new")
+                requestedCoordinatorModels.append(coordinatorModelID)
             },
             submit: { message in
                 events.append("submit:\(message)")
@@ -88,6 +90,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             "start_new",
             "submit:Plan the next safe repo change."
         ])
+        XCTAssertEqual(requestedCoordinatorModels.count, 1)
+        XCTAssertNil(requestedCoordinatorModels.first ?? nil)
         XCTAssertEqual(object["accepted"]?.boolValue, true)
         XCTAssertEqual(object["started_new_mission"]?.boolValue, true)
         XCTAssertEqual(object["routed_to"]?.stringValue, "coordinator")
@@ -95,6 +99,56 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(plan["predecessor_mission_id"]?.stringValue, predecessorID.uuidString)
         XCTAssertEqual(plan["predecessor_title"]?.stringValue, "PR #6 Tooling UX")
         XCTAssertEqual(plan["predecessor_summary"]?.stringValue, "Doctor UX discovery found missing prerequisite guidance.")
+    }
+
+    func testStartMissionPassesCoordinatorModelOverrideToFreshRuntime() async throws {
+        let coordinatorID = UUID()
+        var requestedCoordinatorModels: [String?] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            startNew: { coordinatorModelID in
+                requestedCoordinatorModels.append(coordinatorModelID)
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("start_mission"),
+            "message": .string("Run the cheap coordinator regression tier."),
+            "coordinator_model_id": .string("engineer")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(requestedCoordinatorModels.count, 1)
+        XCTAssertEqual(requestedCoordinatorModels.first ?? nil, "engineer")
+        XCTAssertEqual(object["coordinator_model_id"]?.stringValue, "engineer")
+        XCTAssertEqual(object["started_new_mission"]?.boolValue, true)
+    }
+
+    func testSubmitNewParentPassesCoordinatorModelOverride() async throws {
+        let coordinatorID = UUID()
+        var requestedCoordinatorModels: [String?] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            startNew: { coordinatorModelID in
+                requestedCoordinatorModels.append(coordinatorModelID)
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("submit"),
+            "new_parent": .bool(true),
+            "message": .string("Start cheaper Coordinator parent."),
+            "coordinator_model_id": .string("design"),
+            "compact": .bool(true)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(requestedCoordinatorModels.count, 1)
+        XCTAssertEqual(requestedCoordinatorModels.first ?? nil, "design")
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "coordinator")
     }
 
     func testStartMissionWaitsForInitialAwaitingApprovalPlan() async throws {
@@ -204,7 +258,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 selectCoordinator: { sessionID in
                     selectedID = sessionID ?? existingID
                 },
-                startNewCoordinatorRun: {
+                startNewCoordinatorRun: { _ in
                     if !coordinatorIDs.contains(freshID) {
                         coordinatorIDs.append(freshID)
                     }
@@ -338,7 +392,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     isCoordinatorRuntime: true
                 )
             },
-            startNew: {
+            startNew: { _ in
                 didStartNew = true
             }
         )
@@ -370,7 +424,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     taskLabelKind: .pair
                 )
             },
-            startNew: {
+            startNew: { _ in
                 didStartNew = true
             }
         )
@@ -973,7 +1027,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             coordinatorIDs: [firstID, secondID],
             selectedID: { selectedID },
             select: { selectedID = $0 ?? firstID },
-            startNew: {
+            startNew: { _ in
                 didStartNew = true
             },
             missionPlans: {
@@ -4178,7 +4232,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
-            startNew: { startNewCount += 1 },
+            startNew: { _ in startNewCount += 1 },
             submit: {
                 submittedMessages.append($0)
                 return .accepted
@@ -4429,6 +4483,68 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(actors, [.director])
     }
 
+    func testCoordinatorModelOverrideKeepsRuntimeChildAnswerAttribution() async throws {
+        let coordinatorID = UUID()
+        let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
+        var requestMetadata = MCPServerViewModel.RequestMetadata(connectionID: nil, clientName: "external", windowID: 1)
+        var requestedCoordinatorModels: [String?] = []
+        var submittedDirectives: [String] = []
+        var actors: [CoordinatorMissionDecisionActor] = []
+        var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
+        autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
+        let plan = CoordinatorMissionPlan(
+            objective: "Director-routed child question.",
+            status: .running,
+            approvalState: .approved,
+            policySnapshot: .defaultPolicy,
+            autonomy: autonomy
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: { requestMetadata },
+            startNew: { requestedCoordinatorModels.append($0) },
+            submit: { message in
+                submittedDirectives.append(message)
+                return .accepted
+            },
+            pendingChild: { childRow },
+            submitPendingChild: { _, _, actor in
+                actors.append(actor)
+                return .accepted
+            },
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let startResponse = try await service.execute(args: [
+            "op": .string("start_mission"),
+            "message": .string("Use the cheap Coordinator regression tier."),
+            "coordinator_model_id": .string("engineer")
+        ])
+        let startObject = try XCTUnwrap(startResponse.objectValue)
+        XCTAssertEqual(startObject["accepted"]?.boolValue, true)
+        XCTAssertEqual(requestedCoordinatorModels, ["engineer"])
+        XCTAssertEqual(submittedDirectives, ["Use the cheap Coordinator regression tier."])
+
+        requestMetadata = MCPServerViewModel.RequestMetadata(
+            connectionID: UUID(),
+            clientName: "codex",
+            windowID: 1,
+            runPurpose: .agentModeRun,
+            taskLabelKind: .coordinator,
+            isCoordinatorRuntime: true
+        )
+        let answerResponse = try await service.execute(args: [
+            "op": .string("submit"),
+            "message": .string("Alpha")
+        ])
+        let answerObject = try XCTUnwrap(answerResponse.objectValue)
+
+        XCTAssertEqual(answerObject["accepted"]?.boolValue, true)
+        XCTAssertEqual(answerObject["routed_to"]?.stringValue, "child_interaction")
+        XCTAssertEqual(actors, [.director])
+    }
+
     func testSubmitRuntimePendingChildInteractionRejectsWhenChildAskRoutesToMe() async throws {
         let coordinatorID = UUID()
         let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
@@ -4549,7 +4665,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
-            startNew: { startNewCount += 1 },
+            startNew: { _ in startNewCount += 1 },
             submit: {
                 submittedMessages.append($0)
                 return .accepted
@@ -4675,7 +4791,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         },
         resolveRuntimeCoordinatorSessionID: @escaping (MCPServerViewModel.RequestMetadata) async -> UUID? = { _ in nil },
         coordinatorRunState: AgentSessionRunState = .idle,
-        startNew: @escaping () -> Void = {},
+        startNew: @escaping (String?) -> Void = { _ in },
         stopMission: @escaping () async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { .accepted },
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         submitContinuation: @escaping (CoordinatorModeViewModel.ContinuationAction) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
@@ -4736,7 +4852,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         resolveRuntimeCoordinatorSessionID: @escaping (MCPServerViewModel.RequestMetadata) async -> UUID? = { _ in nil },
         coordinatorRunState: AgentSessionRunState = .idle,
         select: @escaping (UUID?) -> Void = { _ in },
-        startNew: @escaping () -> Void = {},
+        startNew: @escaping (String?) -> Void = { _ in },
         stopMission: @escaping () async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { .accepted },
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         submitContinuation: @escaping (CoordinatorModeViewModel.ContinuationAction) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },

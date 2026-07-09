@@ -541,6 +541,13 @@ fix; model-negotiation, environment, and soak failures stay in the denominator b
 they are part of what the batch measures. Report raw pass counts only: 10/10 is useful
 evidence but not a broad statistical guarantee. Run S5/S6 scripted batches in one
 continuous app session so `--archive-on-success` also soaks mission cleanup and retention.
+Coordinator model tiers are part of the sample identity: cheap regression-tier batches may
+pass `coordinator_model_id` / `--coordinator-model-id` to use a lower-cost Coordinator for
+plumbing regression loops, while the default High Coordinator remains the headline
+negotiation tier. Every run bundle and repeat report must record the Coordinator model/tier.
+Pass rates are not comparable across tiers. Prompt or directive changes require default-tier
+validation before they are treated as presentable. The regression tier should be calibrated
+as the cheapest role that stays at least 9/10 on known-good code.
 
 Baseline sampling results (2026-07-09): first raw scripted batches ran against one visible
 debug app session with `--repeat 10 --doctor-mode required --events-mode required

@@ -168,6 +168,47 @@ Loaded roots: demo → /repo/fallback
         self.assertEqual(status["counts"]["needs_you"], 1)
         self.assertEqual(status["coordinator_session_id"], "session-1")
 
+    def test_start_mission_passes_coordinator_model_id_when_set(self) -> None:
+        class FakeClient:
+            payloads = []
+
+            def coordinator(self, payload, timeout=120):
+                self.payloads.append(payload)
+                return {"selected_coordinator_session_id": "session-1"}
+
+        client = FakeClient()
+        session_id = director_e2e.start_mission(
+            client,
+            "Cheap coordinator batch",
+            "Run the mission.",
+            "s5",
+            coordinator_model_id="engineer",
+        )
+
+        self.assertEqual(session_id, "session-1")
+        self.assertEqual(client.payloads[0]["coordinator_model_id"], "engineer")
+        self.assertEqual(client.payloads[0]["op"], "start_mission")
+
+    def test_run_config_records_coordinator_model_tier(self) -> None:
+        args = SimpleNamespace(
+            scenario="s5",
+            workspace="homelab-garden",
+            window=1,
+            coordinator_model_id="design",
+            child_model_id="scripted",
+            doctor_mode="required",
+            events_mode="required",
+            receipt_mode="required",
+            archive_on_success=True,
+            repeat=10,
+        )
+
+        config = director_e2e.run_config_for_args(args)
+
+        self.assertEqual(config["coordinator_model_id"], "design")
+        self.assertEqual(config["coordinator_tier"], "cheap_regression")
+        self.assertEqual(config["child_model_id"], "scripted")
+
     def test_approve_initial_plan_retries_stale_checkpoint_with_current_instance(self) -> None:
         def checkpoint_status(fingerprint: str, instance_id: str) -> dict:
             compact = compact_status_fixture()
@@ -2084,11 +2125,13 @@ Loaded roots: demo → /repo/fallback
                 {"attempt": 2, "passed": False},
                 {"attempt": 3, "passed": True},
             ],
+            run_config={"coordinator_tier": "cheap_regression"},
         )
 
         self.assertFalse(report["passed"])
         self.assertEqual(report["pass_count"], 2)
         self.assertEqual(report["fail_count"], 1)
+        self.assertEqual(report["run_config"]["coordinator_tier"], "cheap_regression")
 
     def test_sandbox_clean_safety_rejects_suspicious_path(self) -> None:
         repo = Path("/repo")

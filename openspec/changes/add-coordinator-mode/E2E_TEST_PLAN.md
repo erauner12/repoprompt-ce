@@ -72,6 +72,12 @@ creates a real `AgentAskUserInteraction` and completes with
 not just the directive echo. Default live-child S5 remains a model/backend negotiation
 sample and should only be treated as a Coordinator failure when the selected backend
 actually advertises structured input.
+For cheap plumbing-regression batches, pass `--coordinator-model-id <role-or-model>` to
+select a lower-cost underlying Coordinator model without changing Coordinator identity,
+prompt, MCP context, policy gates, or ledger semantics. Run bundles record
+`coordinator_model_id` and `coordinator_tier`; cheap regression-tier pass rates are not
+compared to default-tier pass rates. The presentable/headline baseline and any prompt or
+directive change still require the default Coordinator tier.
 Drive Me/Director headlessly through
 `coordinator_chat set_autonomy` with `autonomy_class:"childAsk"` and `mode:"ask|auto"`;
 the op itself is a user-channel parity action and must record only the dial-change
