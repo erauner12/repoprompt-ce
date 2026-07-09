@@ -1141,6 +1141,120 @@ Loaded roots: demo → /repo/fallback
         self.assertTrue(director_e2e.plan_advanced_past_initial_approval(approved.compact))
         self.assertFalse(director_e2e.plan_advanced_past_initial_approval(completed.compact))
 
+    def test_checkpoint_helpers_read_instance_and_actions(self) -> None:
+        obs = observation("f1", "draft", [], approval_state="awaiting_approval")
+        obs.compact["checkpoint"] = {
+            "checkpoint_instance_id": "coordinator:session:plan-approval:r2",
+            "actions": [
+                {"label": "Proceed", "checkpoint_action": "proceed"},
+                {"label": "Stop", "checkpoint_action": "stop"},
+            ],
+        }
+
+        self.assertEqual(
+            director_e2e.checkpoint_instance_id(obs.compact),
+            "coordinator:session:plan-approval:r2",
+        )
+        self.assertEqual(
+            director_e2e.checkpoint_action(obs.compact, "Proceed"),
+            {"label": "Proceed", "checkpoint_action": "proceed"},
+        )
+
+    def test_s4_checkpoint_revision_accepts_current_approval_only(self) -> None:
+        stale = "coordinator:session:plan-approval:r1"
+        current = "coordinator:session:plan-approval:r2"
+        token = "S4-checkpoint-unit"
+        revised = observation(
+            "f1",
+            "draft",
+            [{"id": "n1", "status": "pending"}],
+            approval_state="awaiting_approval",
+            revision=2,
+            decisions=[
+                {
+                    "id": "revise",
+                    "label": "requested plan revision",
+                    "actor": "user",
+                    "checkpoint_instance_id": stale,
+                }
+            ],
+        )
+        final = observation(
+            "f2",
+            "completed",
+            [{"id": "n1", "status": "completed", "completion_evidence": token}],
+            revision=2,
+            structured_evidence_node_ids=["n1"],
+            evidence_summaries=[token],
+            decisions=[
+                {
+                    "id": "revise",
+                    "label": "requested plan revision",
+                    "actor": "user",
+                    "checkpoint_instance_id": stale,
+                },
+                {
+                    "id": "approve",
+                    "label": "approved the Mission plan",
+                    "actor": "user",
+                    "checkpoint_instance_id": current,
+                },
+            ],
+        )
+
+        director_e2e.assert_s4_checkpoint_revision(
+            [revised, final],
+            stale_checkpoint_id=stale,
+            current_checkpoint_id=current,
+            decisions_before_stale_submit={"revise"},
+            decisions_after_stale_submit={"revise"},
+            token=token,
+        )
+
+    def test_s4_checkpoint_revision_rejects_stale_approval_decision(self) -> None:
+        stale = "coordinator:session:plan-approval:r1"
+        current = "coordinator:session:plan-approval:r2"
+        final = observation(
+            "f1",
+            "completed",
+            [{"id": "n1", "status": "completed", "completion_evidence": "done"}],
+            structured_evidence_node_ids=["n1"],
+            decisions=[
+                {
+                    "id": "approve",
+                    "label": "approved the Mission plan",
+                    "actor": "user",
+                    "checkpoint_instance_id": stale,
+                }
+            ],
+        )
+
+        with self.assertRaisesRegex(director_e2e.E2EFailure, "current checkpoint"):
+            director_e2e.assert_s4_checkpoint_revision(
+                [final],
+                stale_checkpoint_id=stale,
+                current_checkpoint_id=current,
+                decisions_before_stale_submit=set(),
+                decisions_after_stale_submit=set(),
+            )
+
+    def test_s4_checkpoint_revision_rejects_decision_from_stale_submit(self) -> None:
+        final = observation(
+            "f1",
+            "completed",
+            [{"id": "n1", "status": "completed", "completion_evidence": "done"}],
+            structured_evidence_node_ids=["n1"],
+        )
+
+        with self.assertRaisesRegex(director_e2e.E2EFailure, "unexpected decision"):
+            director_e2e.assert_s4_checkpoint_revision(
+                [final],
+                stale_checkpoint_id="coordinator:session:plan-approval:r1",
+                current_checkpoint_id="coordinator:session:plan-approval:r2",
+                decisions_before_stale_submit={"revise"},
+                decisions_after_stale_submit={"revise", "stale-approval"},
+            )
+
     def test_s5_ask_accepts_pending_question_and_user_answer_decision(self) -> None:
         pending = observation(
             "f1",

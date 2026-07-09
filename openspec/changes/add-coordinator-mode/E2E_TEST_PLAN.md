@@ -44,12 +44,13 @@ cap-specific regression appears, add a focused four-independent-node scenario; o
 fold "the fourth launches only after a completion" into S2 or the watcher instead of
 minting another live run.
 
-**S4 — Step pace + checkpoint loop.** S2's directive at Step.
-Invariants: after plan approval, a boundary checkpoint exists; **Decisions badge = 1**
-and the queue item's identity derives from `(missionID, kind, planRevision)`; nothing
-launches while pending; Proceed launches exactly the ready set and records a
-**user-actor** decision (deterministic ID); a plan revision at approval yields a **new**
-queue-item identity. UI: queue card anatomy; click-through lands at the checkpoint.
+**S4 — Step pace + checkpoint revision lock.** Coordinator-only mission.
+Invariants: awaiting-approval checkpoint exposes `checkpoint_instance_id`; directive-driven
+revision while still awaiting approval mints a new instance; stale consent-granting
+Proceed with the old expected id rejects and records no decision; current Proceed accepts
+and records one **user-actor** approval decision stamped with the current instance. Stale
+Stop remains accepted because it withdraws consent. UI adoption of explicit instance ids
+is deferred.
 
 **S5 — childAsk both ways.** Directive instructs the Coordinator to give a normal explore
 child Agent Mode session an exact, deliberately simple tool-level prompt: call its
@@ -108,7 +109,8 @@ status **Stopped**, never Failure styling; terminal UI shows the single follow-u
 and no live composer/dials. The executable scripted slice starts one child, waits for a
 real pending child question, calls `coordinator_chat stop_mission`, and requires no
 running/ready work, no pending decision row, at least one cancelled node, and an
-`agent_run.cancel` routing decision.
+`agent_run.cancel` routing decision. With `--receipt-mode required`, it must also capture
+the stopped Mission receipt artifact.
 
 **S8 (deferred) — Restart durability.** Relaunch the app mid-mission with a pending
 checkpoint or pending child question. Invariants: mission reconstructs from durable state;
@@ -131,10 +133,21 @@ only on state; terminal calm (single action, muted history).
 Scenario count tracks doctrine count, not bug count. A new live scenario is added only
 when a new doctrine entry is pinned in `DIRECTOR_DECISIONS.md`; ordinary regressions found
 by live runs get deterministic flow-layer coverage at the lowest faithful layer. The
-remaining live breadth is bounded: S4 (revision/remint identity), S7 (stop honesty), and
-S6's auto→ask escalation slice. Tooling friction (`doctor`, `list_missions`,
-`archive_mission`) and the scripted child backend improve reliability but do not expand
-the doctrine surface.
+plateau is closed: S1, S2, S4, S5, S6 (pace, ask→auto, auto→ask), and S7 are live-proven
+at the first-consumer boundary. Tooling friction (`doctor`, `list_missions`,
+`archive_mission`) and pass-rate sampling improve reliability but do not expand the
+doctrine surface. S8 restart durability and S9 recovery remain declared deferred
+boundaries.
+
+## Tooling Phase Notes
+
+`doctor` v1 should report app/CLI version, build SHA, supported `coordinator_chat` ops,
+native events/receipt support, and child backend/scripted availability. Lifecycle cleanup
+ops must preserve actor integrity: `archive_mission` is external/user-channel only, never
+callable by Coordinator runtime sessions, and archive is hide-not-delete. Receipts,
+decisions, evidence, and lineage remain retrievable after archive. The test-suite ledger is
+the only standing normalized-red validation surface; this phase should either repair it or
+explicitly descope it from Coordinator reliability gates.
 
 ## Shared Contract Fixture
 

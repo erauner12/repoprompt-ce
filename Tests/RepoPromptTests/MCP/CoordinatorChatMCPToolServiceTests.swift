@@ -2861,6 +2861,54 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertTrue(markdown.contains(CoordinatorMissionReceiptProjection.spendReserveCopy))
     }
 
+    func testReceiptReturnsStoppedMissionMarkdown() async throws {
+        let coordinatorID = UUID()
+        let plan = CoordinatorMissionPlan(
+            missionKey: "receipt-stopped-demo",
+            objective: "Stop safely and preserve the receipt.",
+            status: .stopped,
+            approvalState: .awaitingApproval,
+            decisions: [
+                CoordinatorMissionDecisionRecord(
+                    userDecision: .stoppedMission,
+                    decisionClass: .irreversible,
+                    checkpointInstanceID: "mission-stop:\(coordinatorID.uuidString):r1",
+                    timestamp: Date(timeIntervalSince1970: 10),
+                    sessionID: coordinatorID,
+                    checkpointID: "mission-stop"
+                )
+            ],
+            evidence: [
+                CoordinatorMissionEvidenceRecord(
+                    verdict: .meets,
+                    summary: "The Mission stopped without completing mutable work.",
+                    timestamp: Date(timeIntervalSince1970: 20)
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 30)
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("receipt"),
+            "format": .string("markdown")
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+        let markdown = try XCTUnwrap(object["markdown"]?.stringValue)
+
+        XCTAssertEqual(object["receipt_ready"]?.boolValue, true)
+        XCTAssertEqual(object["receipt_ready_summary"]?.objectValue?["ready"]?.boolValue, true)
+        XCTAssertTrue(markdown.contains("# receipt-stopped-demo"))
+        XCTAssertTrue(markdown.contains("**Objective:** Stop safely and preserve the receipt."))
+        XCTAssertTrue(markdown.contains("- User: 1"))
+        XCTAssertTrue(markdown.contains("irreversible 1"))
+        XCTAssertTrue(markdown.contains("- [meets] The Mission stopped without completing mutable work."))
+    }
+
     func testReceiptReportsNotReadyBeforeMissionCompletes() async throws {
         let coordinatorID = UUID()
         let plan = CoordinatorMissionPlan(
@@ -3286,6 +3334,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             proceed["expected_checkpoint_instance_id"]?.stringValue,
             "coordinator:\(coordinatorID.uuidString):plan-approval:r1"
         )
+        let stop = try XCTUnwrap(actions.first { $0["label"]?.stringValue == "Stop" })
+        XCTAssertEqual(stop["checkpoint_action"]?.stringValue, "stop")
+        XCTAssertNil(stop["expected_checkpoint_instance_id"])
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("Approved to proceed") == true)
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("actor:\"director\"") == true)
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("Do not record user decisions") == true)
@@ -3955,6 +4006,34 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let object = try XCTUnwrap(response.objectValue)
 
         XCTAssertEqual(submittedActions, [.proceed])
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "coordinator")
+    }
+
+    func testSubmitWithStopCheckpointActionAcceptsStaleExpectedCheckpointInstance() async throws {
+        let coordinatorID = UUID()
+        let plan = Self.approvalPlan(coordinatorID: coordinatorID, revision: 2)
+        var submittedActions: [CoordinatorModeViewModel.ContinuationAction] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submitContinuation: {
+                submittedActions.append($0)
+                return .accepted
+            },
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("submit"),
+            "coordinator_session_id": .string(coordinatorID.uuidString),
+            "checkpoint_action": .string("stop"),
+            "expected_checkpoint_instance_id": .string("coordinator:\(coordinatorID.uuidString):plan-approval:r1"),
+            "compact": .bool(true)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(submittedActions, [.stopHere])
         XCTAssertEqual(object["accepted"]?.boolValue, true)
         XCTAssertEqual(object["routed_to"]?.stringValue, "coordinator")
     }

@@ -266,7 +266,8 @@ struct CoordinatorChatMCPToolService {
                 routedToChildInteraction = true
             } else {
                 if let continuationAction {
-                    if let expectedCheckpointInstanceID,
+                    if shouldRejectStaleCheckpointSubmit(for: continuationAction),
+                       let expectedCheckpointInstanceID,
                        let message = checkpointInstanceMismatchMessage(
                            expected: expectedCheckpointInstanceID,
                            snapshot: selectedSnapshot
@@ -387,12 +388,12 @@ struct CoordinatorChatMCPToolService {
                     "error": .string("Mission receipt is not available because no Mission Plan is recorded.")
                 ])
             }
-            guard plan.status == .completed else {
+            guard plan.status.isTerminal else {
                 return compactStateResponse(snapshot, extra: [
                     "receipt_ready": .bool(false),
                     "format": .string("markdown"),
                     "receipt_ready_summary": missionReceiptReadySummaryValue(plan),
-                    "error": .string("Mission receipt is not ready until the Mission is completed.")
+                    "error": .string("Mission receipt is not ready until the Mission is completed or stopped.")
                 ])
             }
             return compactStateResponse(snapshot, extra: [
@@ -832,6 +833,12 @@ struct CoordinatorChatMCPToolService {
         )
         guard expected != current else { return nil }
         return "Stale checkpoint submit rejected: expected checkpoint_instance_id \(expected), but current checkpoint_instance_id is \(current). Refresh coordinator_chat op=mission_status and resubmit the current checkpoint action."
+    }
+
+    private func shouldRejectStaleCheckpointSubmit(for action: CoordinatorModeViewModel.ContinuationAction) -> Bool {
+        // Stale-check consent-granting actions only. Stop withdraws consent and must remain
+        // available even if a plan revision races the user's click.
+        action != .stopHere
     }
 
     private func planApprovalCheckpointInstanceID(coordinatorSessionID: UUID, revision: Int) -> String {
@@ -2765,8 +2772,7 @@ struct CoordinatorChatMCPToolService {
                 compactMissionCheckpointAction(
                     label: "Stop",
                     action: .stopHere,
-                    message: CoordinatorModeViewModel.ContinuationAction.stopHere.directiveText,
-                    checkpointInstanceID: checkpointInstanceID
+                    message: CoordinatorModeViewModel.ContinuationAction.stopHere.directiveText
                 )
             ])
         ])
@@ -3117,7 +3123,7 @@ struct CoordinatorChatMCPToolService {
     }
 
     private func missionReceiptReadySummaryValue(_ plan: CoordinatorMissionPlan) -> Value {
-        guard plan.status == .completed else { return .null }
+        guard plan.status.isTerminal else { return .null }
         return .object([
             "ready": .bool(true),
             "objective": AgentMCPToolHelpers.stringOrNull(plan.objective),

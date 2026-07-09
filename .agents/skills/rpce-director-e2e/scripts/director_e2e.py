@@ -801,6 +801,80 @@ def approve_initial_plan(client: RpcClient, artifacts: RunArtifacts, session_id:
     raise E2EFailure(f"Proceed submit never reached an ordinary turn boundary: {last_error}")
 
 
+def submit_with_midrun_retry(
+    client: RpcClient,
+    artifacts: RunArtifacts,
+    session_id: str,
+    payload: dict[str, Any],
+    args: argparse.Namespace,
+    action_label: str,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + args.timeout_seconds
+    last_error = ""
+    obs = observe(client, artifacts, session_id)
+    while time.monotonic() < deadline:
+        response = client.coordinator(payload, timeout=180)
+        if response.get("accepted") is not False:
+            return response
+        last_error = str(response.get("error") or "submit was rejected")
+        if "mid-run" not in last_error:
+            return response
+        if str(obs.compact.get("run_state") or "") == "waitingForQuestion":
+            raise E2EFailure(
+                f"{action_label} rejected as mid-run even though mission_status reports run_state=waitingForQuestion"
+            )
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            break
+        wait_for_update(client, session_id, obs.fingerprint, remaining)
+        obs = observe(client, artifacts, session_id)
+        capture_mission_events(client, artifacts, session_id, args.events_mode)
+    raise E2EFailure(f"{action_label} never reached an ordinary turn boundary: {last_error}")
+
+
+def submit_current_proceed_with_checkpoint_refresh(
+    client: RpcClient,
+    artifacts: RunArtifacts,
+    session_id: str,
+    obs: Observation,
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], str, Observation]:
+    deadline = time.monotonic() + args.timeout_seconds
+    attempts: list[dict[str, Any]] = []
+    current_obs = obs
+    while time.monotonic() < deadline:
+        current_checkpoint_id = checkpoint_instance_id(current_obs.compact)
+        if not current_checkpoint_id:
+            raise E2EFailure("S4 current checkpoint refresh did not expose checkpoint_instance_id")
+        proceed = checkpoint_action(current_obs.compact, "Proceed")
+        if not proceed:
+            raise E2EFailure("S4 current checkpoint refresh did not expose a Proceed action")
+        proceed_message = str(proceed.get("submit_message") or "Approved to proceed.")
+        checkpoint_action_id = str(proceed.get("checkpoint_action") or "proceed")
+        response = submit_with_midrun_retry(client, artifacts, session_id, {
+            "op": "submit",
+            "coordinator_session_id": session_id,
+            "message": proceed_message,
+            "checkpoint_action": checkpoint_action_id,
+            "expected_checkpoint_instance_id": current_checkpoint_id,
+            "compact": True,
+        }, args, "S4 current Proceed")
+        attempts.append({
+            "checkpoint_instance_id": current_checkpoint_id,
+            "response": response,
+        })
+        write_json(artifacts.root / "current_checkpoint_submit_attempts.json", attempts)
+        if response.get("accepted") is not False:
+            return response, current_checkpoint_id, current_obs
+        error = str(response.get("error") or "")
+        if "Stale checkpoint submit rejected" not in error:
+            raise E2EFailure(f"S4 current Proceed submit rejected: {error or response}")
+        current_obs = observe(client, artifacts, session_id)
+        capture_mission_events(client, artifacts, session_id, args.events_mode)
+        artifacts.add_checkpoint("current-checkpoint-refreshed")
+    raise E2EFailure("S4 current Proceed never accepted a refreshed checkpoint instance")
+
+
 def nodes_by_id(obs: Observation) -> dict[str, dict[str, Any]]:
     return {str(node.get("id")): node for node in obs.nodes if node.get("id")}
 
@@ -881,6 +955,18 @@ def checkpoint_action(status: dict[str, Any], label: str) -> dict[str, Any] | No
         if isinstance(action, dict) and str(action.get("label") or "") == label:
             return action
     return None
+
+
+def decision_id(decision: dict[str, Any]) -> str:
+    return str(decision.get("id") or decision.get("decision_id") or "").strip()
+
+
+def decision_checkpoint_instance_id(decision: dict[str, Any]) -> str:
+    return str(decision.get("checkpoint_instance_id") or decision.get("checkpointInstanceID") or "").strip()
+
+
+def decision_ids(status: dict[str, Any]) -> set[str]:
+    return {decision_id(decision) for decision in plan_decisions(status) if decision_id(decision)}
 
 
 def completed_node_evidence_missing(obs: Observation) -> list[str]:
@@ -1613,6 +1699,52 @@ def assert_s2(observations: list[Observation], approved_by_runner: bool) -> None
     assert_common_status_integrity(observations)
 
 
+def assert_s4_checkpoint_revision(
+    observations: list[Observation],
+    *,
+    stale_checkpoint_id: str,
+    current_checkpoint_id: str,
+    decisions_before_stale_submit: set[str],
+    decisions_after_stale_submit: set[str],
+    token: str | None = None,
+) -> None:
+    if not stale_checkpoint_id or not current_checkpoint_id:
+        raise E2EFailure("S4 expected non-empty stale and current checkpoint instance ids")
+    if stale_checkpoint_id == current_checkpoint_id:
+        raise E2EFailure(f"S4 expected checkpoint instance id to change after revision, got {current_checkpoint_id}")
+    if decisions_after_stale_submit != decisions_before_stale_submit:
+        added = sorted(decisions_after_stale_submit - decisions_before_stale_submit)
+        raise E2EFailure(f"S4 stale Proceed submit recorded unexpected decision ids: {added}")
+    final = observations[-1]
+    if final.status != "completed":
+        raise E2EFailure(f"S4 expected completed mission, got {final.status}")
+    approvals = matching_decisions(
+        final.full,
+        label="approved the Mission plan",
+        actor="user",
+    )
+    current_approvals = [
+        decision
+        for decision in approvals
+        if decision_checkpoint_instance_id(decision) == current_checkpoint_id
+    ]
+    stale_approvals = [
+        decision
+        for decision in approvals
+        if decision_checkpoint_instance_id(decision) == stale_checkpoint_id
+    ]
+    if len(current_approvals) != 1:
+        raise E2EFailure(
+            f"S4 expected exactly one approval decision stamped with current checkpoint {current_checkpoint_id}, "
+            f"got {len(current_approvals)}"
+        )
+    if stale_approvals:
+        raise E2EFailure(f"S4 found approval decision stamped with stale checkpoint {stale_checkpoint_id}")
+    if token and token not in evidence_text(final.full).lower() and token.lower() not in _stable_json(final.full).lower():
+        raise E2EFailure(f"S4 expected final evidence/status to include token {token}")
+    assert_common_status_integrity(observations)
+
+
 def assert_s6_pace_flip(before: Observation, after: Observation) -> None:
     if plan_default_pace(before.compact) != "step":
         raise E2EFailure(f"S6 expected initial Step pace, got {plan_default_pace(before.compact)!r}")
@@ -1913,6 +2045,19 @@ def s6_message() -> str:
     )
 
 
+def s4_message(token: str) -> str:
+    return (
+        "Run this as a scoped Director mission for checkpoint revision identity. Record a visible "
+        'Mission Plan with approval_state:"awaiting_approval" before child sessions. Keep the plan '
+        "tiny: one coordinator-only node titled `S4 checkpoint revision verifier` that records "
+        f"evidence containing token `{token}` after approval, then completes. Do not start child "
+        "sessions, edit files, run validation, commit, push, open PRs, merge, or start a follow-up "
+        "Mission. If you receive a directive containing `S4_REVISION_REQUEST`, revise the visible "
+        f"Mission Plan exactly once before approval, keep approval_state:\"awaiting_approval\", keep token `{token}`, "
+        "increment the plan revision, and wait for approval again."
+    )
+
+
 def scripted_child_contract_line(token: str) -> str:
     return f"SCRIPTED_CHILD_V1 ask_marker token={token} options=Alpha,Beta"
 
@@ -2100,6 +2245,142 @@ def run_s2(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
         "saw_running_fanout": saw_fanout,
         "convergence_observed_as": convergence_mode or first_s2_convergence_mode(artifacts.observations),
         "sandbox_root": str(sandbox_root),
+    })
+
+
+def run_s4(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> None:
+    artifacts.record_timing("started")
+    variant_token = f"S4-checkpoint-{uuid.uuid4().hex[:8]}"
+    session_id = start_mission(
+        client,
+        f"Director E2E S4 checkpoint revision {variant_token}",
+        s4_message(variant_token),
+        "s4",
+    )
+    initial = wait_until(
+        client,
+        artifacts,
+        session_id,
+        lambda item: (
+            plan_approval_state(item.compact) == "awaiting_approval"
+            and has_checkpoint_action(item.compact, "Proceed")
+            and checkpoint_instance_id(item.compact) is not None
+            and plan_or_nodes_mention_token(item.full, variant_token)
+        ),
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("plan-visible")
+    stale_checkpoint_id = checkpoint_instance_id(initial.compact)
+    if not stale_checkpoint_id:
+        raise E2EFailure("S4 initial checkpoint did not expose checkpoint_instance_id")
+    initial_revision = plan_revision(initial.compact)
+    revise_action = checkpoint_action(initial.compact, "Revise")
+    if not revise_action:
+        raise E2EFailure("S4 initial checkpoint did not expose a Revise action")
+    revision_marker = f"S4_REVISION_REQUEST {uuid.uuid4().hex[:8]}"
+    revise_message = str(revise_action.get("submit_message") or "Revise the plan:")
+    revise_response = submit_with_midrun_retry(client, artifacts, session_id, {
+        "op": "submit",
+        "coordinator_session_id": session_id,
+        "message": (
+            f"{revise_message}\n\n{revision_marker}: revise the plan now before approval. "
+            f"Keep approval_state:\"awaiting_approval\", keep token `{variant_token}`, "
+            "and do not approve or start work yet."
+        ),
+        "compact": True,
+    }, args, "S4 Revise")
+    write_json(artifacts.root / "revision_request_response.json", revise_response)
+    if revise_response.get("accepted") is False:
+        raise E2EFailure(f"S4 revision request rejected: {revise_response.get('error') or revise_response}")
+    artifacts.add_checkpoint("revision-requested")
+
+    revised = wait_until(
+        client,
+        artifacts,
+        session_id,
+        lambda item: (
+            plan_approval_state(item.compact) == "awaiting_approval"
+            and has_checkpoint_action(item.compact, "Proceed")
+            and (checkpoint_instance_id(item.compact) or "") != stale_checkpoint_id
+            and plan_revision(item.compact) > initial_revision
+            and plan_or_nodes_mention_token(item.full, variant_token)
+        ),
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("revision-visible")
+    revised_checkpoint_id = checkpoint_instance_id(revised.compact)
+    if not revised_checkpoint_id:
+        raise E2EFailure("S4 revised checkpoint did not expose checkpoint_instance_id")
+    proceed = checkpoint_action(revised.compact, "Proceed")
+    if not proceed:
+        raise E2EFailure("S4 revised checkpoint did not expose a Proceed action")
+    proceed_message = str(proceed.get("submit_message") or "Approved to proceed.")
+    checkpoint_action_id = str(proceed.get("checkpoint_action") or "proceed")
+    decisions_before_stale = decision_ids(revised.full)
+
+    stale_response = submit_with_midrun_retry(client, artifacts, session_id, {
+        "op": "submit",
+        "coordinator_session_id": session_id,
+        "message": proceed_message,
+        "checkpoint_action": checkpoint_action_id,
+        "expected_checkpoint_instance_id": stale_checkpoint_id,
+        "compact": True,
+    }, args, "S4 stale Proceed")
+    write_json(artifacts.root / "stale_checkpoint_submit_response.json", stale_response)
+    if stale_response.get("accepted") is not False:
+        raise E2EFailure(f"S4 stale Proceed submit unexpectedly accepted: {stale_response}")
+    stale_error = str(stale_response.get("error") or "")
+    if "Stale checkpoint submit rejected" not in stale_error or revised_checkpoint_id not in stale_error:
+        raise E2EFailure(f"S4 stale Proceed rejection did not name the current checkpoint: {stale_error}")
+    after_stale = observe(client, artifacts, session_id)
+    capture_mission_events(client, artifacts, session_id, args.events_mode)
+    decisions_after_stale = decision_ids(after_stale.full)
+    artifacts.add_checkpoint("stale-submit-rejected")
+
+    latest_after_stale_checkpoint_id = checkpoint_instance_id(after_stale.compact) or revised_checkpoint_id
+    if latest_after_stale_checkpoint_id != revised_checkpoint_id:
+        artifacts.add_checkpoint("post-stale-checkpoint-refreshed")
+    current_response, current_checkpoint_id, accepted_checkpoint_observation = submit_current_proceed_with_checkpoint_refresh(
+        client,
+        artifacts,
+        session_id,
+        after_stale,
+        args,
+    )
+    write_json(artifacts.root / "current_checkpoint_submit_response.json", current_response)
+    artifacts.add_checkpoint("current-submit-accepted")
+
+    final = wait_until(
+        client,
+        artifacts,
+        session_id,
+        terminal_completed,
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("completed")
+    assert_s4_checkpoint_revision(
+        artifacts.observations,
+        stale_checkpoint_id=stale_checkpoint_id,
+        current_checkpoint_id=current_checkpoint_id,
+        decisions_before_stale_submit=decisions_before_stale,
+        decisions_after_stale_submit=decisions_after_stale,
+        token=variant_token,
+    )
+    capture_receipt(client, artifacts, session_id, args.receipt_mode)
+    artifacts.finalize(True, "s4", {
+        "coordinator_session_id": session_id,
+        "final_status": final.status,
+        "variant_token": variant_token,
+        "revision_before": initial_revision,
+        "revision_after": plan_revision(accepted_checkpoint_observation.compact),
+        "stale_checkpoint_instance_id": stale_checkpoint_id,
+        "current_checkpoint_instance_id": current_checkpoint_id,
     })
 
 
@@ -2597,6 +2878,7 @@ def run_s7(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
     )
     artifacts.add_checkpoint("stopped")
     refs = assert_s7_stop(artifacts.observations, interaction_id=interaction_id)
+    capture_receipt(client, artifacts, session_id, args.receipt_mode)
     artifacts.finalize(True, "s7", {
         "coordinator_session_id": session_id,
         "final_status": final.status,
@@ -2611,6 +2893,8 @@ def run_scenario(client: RpcClient, artifacts: RunArtifacts, args: argparse.Name
         run_s1(client, artifacts, args)
     elif args.scenario == "s2":
         run_s2(client, artifacts, args)
+    elif args.scenario == "s4":
+        run_s4(client, artifacts, args)
     elif args.scenario == "s5":
         run_s5(client, artifacts, args)
     elif args.scenario == "s6":
@@ -2635,7 +2919,7 @@ def run_scenario(client: RpcClient, artifacts: RunArtifacts, args: argparse.Name
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run live Director mission E2E scenarios.")
-    parser.add_argument("--scenario", choices=["s1", "s2", "s5", "s6", "s7", "smoke"], default="s1")
+    parser.add_argument("--scenario", choices=["s1", "s2", "s4", "s5", "s6", "s7", "smoke"], default="s1")
     parser.add_argument("--workspace", default="homelab-garden")
     parser.add_argument("--window", type=int, default=1)
     parser.add_argument("--timeout-seconds", type=int, default=900)

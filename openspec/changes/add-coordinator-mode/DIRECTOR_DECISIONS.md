@@ -413,7 +413,11 @@ powers. Additions stay additive ops.
 3. **`receipt format=markdown`** — implemented as the existing pure receipt projection;
    the harness can write `receipt.md` without UI copying.
 4. **Lifecycle: `list_missions` / `archive_mission`** — support harness setup/teardown
-   and scenario isolation.
+   and scenario isolation. `archive_mission` is a user-channel lifecycle action, not a
+   runtime power: coordinator/runtime-owned MCP callers must be execution-gated from
+   archiving, because archive can hide a Mission from the rail after the fact. Archival is
+   retention-only: receipts, decisions, evidence, events, and lineage remain durable and
+   retrievable; archive only removes the Mission from ordinary live rail surfaces.
 5. **`doctor`** (later) — app-level pulse: supervisor alive, pending events, last
    fingerprint age, connected clients.
 
@@ -470,6 +474,16 @@ closed instead of falling back to the selected Mission. This prevents stale chil
 Coordinator turns from writing ask/auto variant ledger state into whichever Mission the
 user currently has selected.
 
+Checkpoint approval identity (2026-07-09): plan approval is a revision-bound consent
+grant. Compact `mission_status` exposes a `checkpoint_instance_id`, and
+`coordinator_chat submit` accepts `expected_checkpoint_instance_id` for checkpoint
+actions. Consent-granting stale submits (`proceed`, evidence/deepen/critique/start
+smaller lanes) reject and name the current checkpoint; stale `stop` still succeeds,
+because withdrawing consent is harm-reducing and must not be denied by a fast plan
+revision. Rejected stale grants record no user decision. The SwiftUI click path still
+binds implicitly to the rendered checkpoint and does not yet echo the instance id; that
+narrow render-to-click race is deliberately deferred for a UI follow-up.
+
 Terminal-state honesty (2026-07-08): a Mission cannot publish `status:"completed"` while
 any planned node remains pending, running, or blocked. Runtime `mission_plan` writes must
 leave the Mission running until every node reaches a terminal state, or explicitly mark
@@ -482,7 +496,29 @@ Stop honesty live proof (2026-07-09): S7 now exercises `coordinator_chat stop_mi
 after a scripted child has created a real pending child question. The accepted contract is
 terminal `status:"stopped"`, no running/ready work, no pending Decisions row, a user
 `stopped the Mission` irreversible decision, `agent_run.cancel` routing for active
-sessions, and cancelled node state rather than completed/failure styling.
+sessions, cancelled node state rather than completed/failure styling, and a terminal
+receipt available through `coordinator_chat receipt format=markdown`.
+
+E2E plateau closure (2026-07-09): the declared first-consumer suite is live-proven at the
+contract boundary: S1 read-only, S2 fan-out/convergence with exact `mission_events`
+ordering, S4 checkpoint revision identity, S5 childAsk Me/Director parity, S6 pace plus
+ask→auto plus auto→ask dial semantics, and S7 stop honesty with receipt. S3 remains a
+global cap invariant watcher rather than a separate live scenario; S8 restart durability
+and S9 recovery remain declared deferred boundaries.
+
+Validation rig note (2026-07-09): a previous push-time red gate across MCP
+lifecycle/watchdog/concurrency filters was observed once and not reproduced at the same
+HEAD. The app-up baseline run on July 9 was green for
+`MCPToolExecutionWatchdogIntegrationTests`, `PersistentMCPDistinctConnectionConcurrencyTests`,
+`AgentModeRunServiceLifecycleTests`, and `MCPToolExecutionContractTests`. The mechanism is
+unknown; the contention hypothesis is not confirmed. Treat future repeats as a fresh
+diagnostic with this baseline, not as a known product regression.
+
+Test-suite ledger status (2026-07-09): exact new E2E/checkpoint rows were added, but the
+global `verify-ledger` command remains a known-red repository maintenance item with
+pre-existing missing rows. The tooling phase must either repair that ledger so it can gate
+again, or explicitly descope it from Coordinator reliability preflight; it must not remain
+an ambient red footnote.
 
 Coordinator runtime attribution (2026-07-08): `actor:user` on a Director-answered child
 question is fabricated user consent. `coordinator_chat` therefore stays conservative:
