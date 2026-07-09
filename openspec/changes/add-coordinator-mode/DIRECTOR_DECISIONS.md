@@ -587,3 +587,7 @@ ambiguous request metadata is user-authored, never Director-authored. The fix is
 role propagation, not permissive attribution: Coordinator runtime sessions must carry the
 runtime marker through reused/steered runs, run-policy re-seeding, and prompt/lease
 construction so Director answers arrive with explicit `isCoordinatorRuntime` metadata.
+
+## 16. OpenSpec sync extraction (2026-07-09)
+
+The OpenSpec sync extracted current Director/Coordinator Mission norms into capability-scoped requirements under `openspec/changes/add-coordinator-mode/specs/`. Those specs are the current normative contract for implementation and validation. This file remains the append-only historical decision record and should continue to receive dated doctrine entries rather than thematic rewrites or digest replacements.

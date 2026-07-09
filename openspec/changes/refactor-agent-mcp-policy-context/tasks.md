@@ -1,29 +1,22 @@
-## 1. Characterize current behavior
+## 1. Named policy context
 
-- [x] 1.1 Identify existing tests or add focused characterization coverage for Agent Mode MCP policy installation behavior.
-- [x] 1.2 Cover restricted tools and granted/additional tools.
-- [x] 1.3 Cover task-label policy and advertisement-relevant fields.
-- [x] 1.4 Cover top-level-only external-control tool availability.
-- [x] 1.5 Cover expected-PID routing/enforcement behavior.
-- [x] 1.6 Cover Codex and non-Codex Agent Mode lease paths.
+- [x] 1.1 Keep Agent Mode MCP policy fields in a named context instead of positional privilege arguments.
+- [x] 1.2 Preserve existing tool restrictions, additional tools, run purpose, task-label context, external-control availability, expected-PID behavior, and Codex/non-Codex lease paths.
 
-## 2. Define named policy context
+## 2. Coordinator runtime marker propagation
 
-- [x] 2.1 Define a named Agent Mode MCP policy context or equivalent typed structure for current policy fields.
-- [x] 2.2 Include current client/window/run identity fields, tool policy fields, run purpose fields, task-label fields, external-control fields, and expected-PID fields.
-- [x] 2.3 Do not add Coordinator-specific marker or privilege fields in this prerequisite change.
+- [x] 2.1 Include durable `isCoordinatorRuntime` in Agent Mode MCP policy context.
+- [x] 2.2 Preserve the marker through pending connection policy and run-scoped policy cache.
+- [x] 2.3 Preserve the marker through reconnect/handover and request metadata capture.
+- [x] 2.4 Normalize `.coordinator` task-label context to the runtime marker only on trusted policy construction/cache paths.
 
-## 3. Migrate installer plumbing
+## 3. Spoofing and attribution invariants
 
-- [x] 3.1 Migrate `AgentModeMCPPolicyInstaller` and `AgentModeRunLease` call paths to the named context.
-- [x] 3.2 Migrate `MCPBootstrapLeaseSpec.agentMode` / `MCPBootstrapLease.agentModePolicyInstaller` paths to the named context or explicitly document why they are fully covered by the `AgentModeRunLease` migration.
-- [x] 3.3 Migrate `AgentModeViewModel.ConnectionPolicyInstaller` usage to the named context or adapter.
-- [x] 3.4 Migrate `CodexAgentModeCoordinator.ConnectionPolicyInstaller` usage to the named context or adapter.
-- [x] 3.5 Preserve `ServerNetworkManager.installClientConnectionPolicy` effective behavior.
+- [x] 3.1 Ensure caller-controlled strings, `model_id` arguments, session names, transcript text, client names, selected UI state, and demo booleans do not spoof Coordinator runtime context.
+- [x] 3.2 Ensure missing or ambiguous Coordinator context falls back to non-Coordinator behavior or fails closed.
+- [x] 3.3 Ensure runtime callers are attributed as Director/runtime actor only when verified by request metadata.
+- [x] 3.4 Ensure external user-action parity remains external-only and is not forged by runtime callers.
 
-## 4. Validate no behavior change
+## 4. Validation
 
-- [x] 4.1 Run `openspec validate refactor-agent-mcp-policy-context`.
-- [x] 4.2 Run focused policy/Agent Mode MCP tests identified in section 1.
-- [x] 4.3 Run the smallest relevant coordinated Swift build/test lane for touched Agent Mode/MCP files.
-- [x] 4.4 Confirm no Coordinator role marker, Coordinator tool policy, or `list_sessions` visibility behavior was added.
+- [x] 4.1 Run `openspec validate refactor-agent-mcp-policy-context` after reconciliation.

@@ -1,23 +1,24 @@
-## 1. Scope definition
+## 1. Mission inventory scope
 
-- [ ] 1.1 Confirm this change depends on `add-coordinator-role` and remains deferrable from launched-fleet-only Coordinator v1.
-- [ ] 1.1a Confirm broad visibility is gated by verified Coordinator role identity plus typed Coordinator policy context, not by the production-demo boolean marker.
-- [ ] 1.2 Define the first broad visibility scope as current-window active-workspace supervised sessions unless a later accepted design chooses another scope.
-- [ ] 1.3 Name the Coordinator mode projection/input that serves as the membership parity source.
-- [ ] 1.4 Define how Coordinator runtimes are excluded from returned rows through the accepted Coordinator identity/policy predicate.
+- [x] 1.1 Define `coordinator_chat list_missions` as the Mission fleet inventory surface for external callers.
+- [x] 1.2 Define `include_archived` behavior so archived/persisted-only Missions remain visible by default.
+- [x] 1.3 Define compact retained Mission rows as audit/cleanup inventory, not transcript-derived truth.
 
-## 2. `list_sessions` scope behavior
+## 2. Runtime scoping and archive retention
 
-- [ ] 2.1 Add or specify the Coordinator-policy visibility path in `AgentManageMCPToolService.executeListSessions`.
-- [ ] 2.2 Preserve existing spawn-parent / child-scoped behavior for ordinary in-app Agent callers.
-- [ ] 2.3 Ensure callers without verified Coordinator policy context cannot opt into Coordinator broad visibility by arguments alone.
-- [ ] 2.4 Keep cross-window listing out of scope unless a later accepted spec grants it.
+- [x] 2.1 Scope Coordinator runtime `list_missions` calls to the caller's own Mission.
+- [x] 2.2 Reject runtime attempts to list peer Missions or fall back to selected UI Mission when caller Mission resolution fails.
+- [x] 2.3 Define archive as external-only terminal retention cleanup that preserves receipt, status, events, decisions, evidence, lineage, and inventory access.
+- [x] 2.4 Reject runtime `archive_mission` attempts.
 
-## 3. Tests and validation
+## 3. Generic session listing boundaries
 
-- [ ] 3.1 Add leakage tests proving ordinary in-app Agent callers remain child-scoped.
-- [ ] 3.2 Add Coordinator broad-list tests proving sessions the Coordinator did not spawn are included when in scope.
-- [ ] 3.3 Add tests proving the Coordinator runtime itself is excluded from returned rows.
-- [ ] 3.4 Add parity tests against the named Coordinator mode projection/input, excluding ordering, pagination, and transient liveness differences.
-- [ ] 3.4a Add a parity assertion that the aggregate board does not display a broader supervised set than the Coordinator-visible `list_sessions` scope.
-- [ ] 3.5 Run `openspec validate add-coordinator-list-sessions-visibility`.
+- [x] 3.1 Preserve `agent_manage.list_sessions` as generic Agent Mode session listing, not Mission inventory.
+- [x] 3.2 Exclude Coordinator runtime sessions from generic `list_sessions` persisted/index/live rows.
+- [x] 3.3 Preserve ordinary in-app Agent spawn-parent / child scoping.
+- [x] 3.4 Defer broad Coordinator `agent_manage.list_sessions` visibility into unowned workspace sessions to a later accepted design.
+- [x] 3.5 Keep cross-window visibility out of scope unless a later accepted spec grants it.
+
+## 4. Validation
+
+- [x] 4.1 Run `openspec validate add-coordinator-list-sessions-visibility` after reconciliation.

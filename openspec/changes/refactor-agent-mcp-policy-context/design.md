@@ -1,50 +1,46 @@
 ## Context
 
-Agent Mode MCP policy state currently flows through several related seams:
+Agent Mode MCP policy state flows through run lease creation, connection-policy installation, pending policy admission, run-scoped policy cache, reconnect/handover restoration, and request metadata capture. These values are security-sensitive because they decide which tools are available, which run/window/tab owns a connection, and whether `coordinator_chat` should treat a caller as the Coordinator runtime/Director actor or as an external user/CLI caller.
 
-- `AgentModeMCPPolicyInstaller`
-- `AgentModeRunLease`
-- `MCPBootstrapLeaseSpec.agentMode`
-- `MCPBootstrapLease.agentModePolicyInstaller`
-- `AgentModeViewModel.ConnectionPolicyInstaller`
-- `CodexAgentModeCoordinator.ConnectionPolicyInstaller`
-- `ServerNetworkManager.installClientConnectionPolicy`
-
-The fields include client/window/run identity, restricted tools, additional tools, one-shot behavior, policy reason/TTL, run purpose, task label, external-control tool availability, and expected-PID enforcement. These are privilege-bearing values, so a positional call-site mismatch is high impact even when the compiler accepts it.
+The current branch has a named `AgentModeMCPPolicyContext` with `isCoordinatorRuntime`. `MCPConnectionManager` stores the marker in pending policies and run-scoped policy state, reapplies it on reconnect, and exposes it through request metadata. `CoordinatorChatMCPToolService` then uses request metadata to gate runtime callers, external-only user actions, Mission scoping, and Director actor attribution.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Replace the long positional Agent Mode MCP policy installer path with a named context or equivalent typed structure.
-- Preserve all current behavior exactly.
-- Establish characterization coverage or a concrete regression anchor before refactoring.
-- Make future Coordinator privilege additions named-field changes instead of positional-argument changes.
+- Preserve the named policy context shape and avoid positional privilege plumbing.
+- Preserve and normalize the durable `isCoordinatorRuntime` marker through every Agent Mode MCP policy hop.
+- Treat `.coordinator` task-label context as a Coordinator runtime marker only when produced by the trusted Agent Mode policy path.
+- Fail closed or fall back to non-Coordinator behavior when Coordinator runtime context is missing, stale, ambiguous, or unverified.
+- Keep run-scoped policy cache/reconnect behavior from dropping Coordinator runtime context.
 
 **Non-Goals:**
 
-- Adding the Coordinator role marker.
-- Changing granted or restricted tools.
-- Changing Agent Mode MCP advertisement policy.
-- Changing `agent_run` / `agent_manage` behavior.
-- Changing `list_sessions` visibility.
+- Defining Coordinator Mission Plan, childAsk, receipt, or lifecycle semantics; see `add-coordinator-mode`.
+- Granting additional Coordinator tools or broad session visibility.
+- Letting caller-provided tool arguments, session names, model prose, or UI demo booleans spoof Coordinator runtime policy.
 
 ## Decisions
 
-### 1. This is a no-behavior-change prerequisite
+### 1. `isCoordinatorRuntime` is typed policy context, not cosmetic metadata
 
-The refactor should be reviewed as plumbing fidelity, not as a Coordinator feature. It is valuable independently because the current policy installer carries security-sensitive fields through a fragile positional interface.
+The marker is privilege-bearing context. It must be carried in the Agent Mode policy context, pending connection policies, effective run policy state, and captured request metadata. It is used by Coordinator control surfaces to distinguish runtime calls from external user/CLI calls.
 
-### 2. Characterization comes before mutation
+### 2. Normalization is trusted-path-only
 
-Before replacing the installer shape, implementation should identify existing regression coverage or add focused characterization coverage that proves current policy behavior is preserved. The proof target includes restricted tools, additional/granted tools, task-label policy, top-level-only external-control tools, expected-PID routing, and Codex/non-Codex lease paths.
+A `.coordinator` task label emitted by a trusted Coordinator runtime launch/policy path may normalize to `isCoordinatorRuntime=true`. The same string arriving as an ordinary `model_id`, tool argument, session title, transcript text, or unverified metadata must not grant Coordinator runtime context.
 
-### 3. The context should cover current fields only
+### 3. Attribution is conservative
 
-The named context should initially carry the current effective policy fields. Coordinator-specific fields should be added by the later Coordinator role implementation after this prerequisite lands.
+Only request metadata with verified Coordinator runtime policy context may be treated as Director/runtime actor. If the runtime cannot be resolved to an owning Mission, runtime-scoped operations must fail closed rather than falling back to the selected UI Mission. External user-action parity operations remain external-only and must not be recorded by runtime callers as user decisions.
+
+### 4. Cache and reconnect preserve privilege context
+
+Run-scoped policy state exists so live Agent Mode reconnects and handovers keep their policy restrictions/additional tools and runtime context. Reapplying cached policy must preserve `isCoordinatorRuntime`; cache misses or stale policy must not infer Coordinator status from client names or labels alone.
 
 ## Risks / Trade-offs
 
-- **Silent privilege regression** → require characterization coverage before mutation.
-- **Scope creep** → do not add Coordinator marker or tool-policy changes in this refactor.
-- **Partial migration** → migrate Codex and non-Codex Agent Mode paths together so behavior remains consistent.
+- **Privilege widening through spoofing** → never trust caller-provided strings or demo markers as policy context.
+- **Privilege loss on reconnect** → include the marker in run-scoped policy state and request metadata rehydration.
+- **Actor ambiguity** → prefer non-Coordinator/default behavior or explicit rejection over guessing a runtime Mission.
+- **Overloading this change** → keep tool availability and Mission semantics in dependent changes.

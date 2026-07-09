@@ -1,60 +1,57 @@
 ## Context
 
-Coordinator v1 can coordinate its own launched delegated fleet without broad `list_sessions` visibility because `agent_run.start` returns stable session handles and `poll`, `wait`, and `steer` can operate on those handles.
+`add-coordinator-mode` defines Mission lifecycle operations. This supporting change owns the visibility boundary between Mission inventory (`coordinator_chat list_missions`) and generic Agent Mode session enumeration (`agent_manage.list_sessions`).
 
-Broad session visibility is still useful when the Coordinator should understand Agent Mode sessions it did not start. The current MCP `agent_manage.list_sessions` behavior has an important scope boundary: in-app Agent callers are normally scoped through spawn-parent resolution and see direct child sessions, while non-routed MCP caller behavior should be confirmed during implementation. Widening the in-app Coordinator boundary is security-relevant and must be gated by the typed Coordinator policy context introduced by `add-coordinator-role`, not by the production-demo boolean marker.
+Current implementation facts:
 
-Important seams:
-
-- `AgentManageMCPToolService.executeListSessions`
-- `resolveSpawnParentSessionID`
-- `mcpSpawnParentSessionID`
-- Coordinator mode projection source used for parity
+- `coordinator_chat list_missions` returns compact lifecycle inventory. External callers see the Mission fleet, including archived/persisted-only Missions by default. Coordinator runtime callers are scoped to their own Mission and cannot inspect peer Missions.
+- `coordinator_chat archive_mission` is external-only and terminal-only. It hides completed/stopped Missions from ordinary live rail surfaces but preserves receipt, status, events, decisions, evidence, lineage, and inventory access.
+- `agent_manage.list_sessions` is a session list, not a Mission inventory. It excludes Coordinator runtime sessions from persisted, index, and live rows; in-app Agent callers remain scoped through spawn-parent/child scoping.
+- Broad Coordinator `agent_manage.list_sessions` visibility into sessions the runtime did not spawn is not part of the current baseline.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Define a Coordinator-marked `list_sessions` visibility mode for sessions beyond the Coordinator's launched fleet.
-- Preserve ordinary in-app Agent child scoping.
-- Exclude the Coordinator runtime itself.
-- Define membership parity with the selected Coordinator mode projection/input for the same current-window active-workspace scope.
-- Keep the capability deferrable from `add-coordinator-role`.
+- Define external vs runtime visibility for `coordinator_chat list_missions`.
+- Preserve archived/terminal Mission retention visibility for receipts and cleanup.
+- Keep Coordinator runtime callers scoped to their own Mission for Mission inventory.
+- Keep generic `agent_manage.list_sessions` from returning Coordinator runtime sessions.
+- Preserve ordinary in-app Agent child-scoped session listing.
 
 **Non-Goals:**
 
-- Implementing the Coordinator role identity.
-- Changing Coordinator runtime creation or ownership.
-- Granting direct file/search/edit/worktree tools.
-- Granting `respond`, `cancel`, stop, cleanup, or approval actions.
-- Adding cross-window control.
+- Re-defining archive/stop mutation semantics already specified by `add-coordinator-mode`.
+- Adding a broad Coordinator-specific `agent_manage.list_sessions` mode in this baseline.
+- Granting cross-window or app-global session visibility.
+- Treating UI board membership parity as broader permission than accepted MCP visibility.
 
 ## Decisions
 
-### 1. This is a visibility-boundary change, not a role prerequisite
+### 1. `list_missions` is the Mission fleet inventory surface
 
-The role can ship without this change by supervising returned session handles. This change only adds visibility into sessions the Coordinator did not spawn.
+External drivers should use `coordinator_chat list_missions` to discover live, terminal, and archived Coordinator Missions for validation, receipt collection, and cleanup. `include_archived` defaults to true so terminal retained Missions remain visible unless explicitly filtered out.
 
-### 2. Coordinator policy context is the gate
+### 2. Runtime `list_missions` is own-Mission scoped
 
-Only connections with verified Coordinator role identity and typed Coordinator policy context should receive widened list scope. Ordinary Agent Mode callers must keep their existing child-scoped behavior. The production-demo marker can remain a UI bridge, but it must not be the final privilege gate for broad `list_sessions`.
+A Coordinator runtime caller may list only its own Mission. If it omits `coordinator_session_id`, the request resolves from verified request metadata; if it passes a different Mission ID or the runtime Mission cannot be resolved, the operation fails closed. Runtime callers must not use selected UI state as a fallback.
 
-### 3. Current-window active-workspace is the first scope
+### 3. Archive is retention cleanup, not deletion
 
-The first visibility scope should be current-window active-workspace supervised sessions, excluding the Coordinator runtime itself. Cross-window enumeration requires a later routing/control-plane decision.
+Archived terminal Missions leave ordinary live rail surfaces but remain available to inventory/status/receipt/event consumers. External cleanup visibility therefore includes archived Missions, while runtime callers cannot archive or use archive visibility to inspect peer Missions.
 
-### 4. Parity needs a named source of truth
+### 4. Generic session listing remains session-scoped
 
-The implementation must name the Coordinator mode projection/input used as the parity source for the chosen scope. Parity excludes ordering, pagination, and transient liveness differences.
+`agent_manage.list_sessions` enumerates Agent Mode sessions for the caller-appropriate scope. It must exclude Coordinator runtime sessions at the enumeration boundary and preserve ordinary child scoping for in-app Agent callers. This operation is not the authoritative Mission inventory and should not be used as a substitute for `list_missions`.
 
-### 5. The board should converge on Coordinator-visible state
+### 5. Broader Coordinator session visibility remains deferred
 
-The production-demo board currently has an independent projection of the fleet. The target architecture is that the board displays the same current-window active-workspace supervised-session set that a Coordinator role can see through its Coordinator-scoped `list_sessions` visibility. If implementation keeps the projector for UI performance or staging, tests must prove membership parity so the board does not see more than the Coordinator role.
+Visibility into workspace sessions the Coordinator did not spawn may be useful later, but it widens a session enumeration boundary and needs a separate accepted design. Until then, the runtime supervises delegated children through returned session handles and Mission status, and external Mission inventory goes through `list_missions`.
 
 ## Risks / Trade-offs
 
-- **Scope leakage** → require tests proving ordinary in-app Agent callers remain child-scoped.
-- **Projection drift** → name one Coordinator mode projection/input as parity source instead of comparing against vague UI behavior.
-- **Coordinator self-listing** → exclude Coordinator-marked runtime from broad list results.
-- **Marker-as-policy regression** → require typed Coordinator policy context before broad listing is granted.
-- **Scope creep** → do not add mutation, response, stop, cleanup, or cross-window behavior in this visibility change.
+- **Inventory/session confusion** → document `list_missions` vs `agent_manage.list_sessions` separately.
+- **Runtime peer leakage** → scope runtime inventory to its own Mission and fail closed on ambiguity.
+- **Lost receipts after archive** → archive must preserve retained Mission state and inventory access.
+- **Coordinator self-listing** → exclude Coordinator runtime sessions from generic session lists.
+- **Scope creep** → defer broad workspace session visibility and cross-window enumeration.

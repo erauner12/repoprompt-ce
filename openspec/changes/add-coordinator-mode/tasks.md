@@ -1,205 +1,133 @@
-## 1. Main surface and entry point
+## 1. Mission runtime state
 
-- [x] 1.1 Add window-scoped main-surface selection state inside `.main`.
-- [x] 1.2 Preserve Agent Mode as the configured default `.main` landing surface in v1.
-- [x] 1.3 Add a persistent macOS-native peer surface switcher for Agent Mode ↔ Coordinator mode that is available only after a real workspace is active; reject iOS-style tab bars.
-- [x] 1.4 Mirror Agent Mode and Coordinator mode choices in the View menu so navigation remains available when toolbar chrome is hidden or customized.
-- [x] 1.5 Preserve surface selection as sticky per live window while keeping Coordinator selection keyed by active workspace; prefer `@SceneStorage` or equivalent scene-level state.
-- [x] 1.6 Preserve `AppLaunchConfiguration.forcedRootRoute == .main` behavior so deterministic UI tests still land on Agent Mode unless a forced-surface knob is added.
+- [x] 1.1 Persist Coordinator follow-through state on Coordinator-backed Agent sessions.
+- [x] 1.2 Persist Mission objective summary, selected Mission Template metadata, Mission Plan, observed child phases, pending/handled follow-through event IDs, last resume result, and child interaction response records.
+- [x] 1.3 Preserve older persisted payload compatibility by defaulting absent Mission Plan, routing, decision, evidence, and autonomy fields.
+- [x] 1.4 Reset Mission Plan/follow-through state for fresh objectives while allowing same-Mission follow-up turns to preserve the plan.
 
-## 2. Coordinator view snapshot projection
+## 2. Mission Plan and ledgers
 
-- [x] 2.1 Define `CoordinatorModeSnapshot` as the single render contract for counts, groups, rows, Coordinator rail, pending summaries, compact MCP awareness, and deep-link payloads.
-- [x] 2.2 Implement a lazy, window-scoped `@MainActor` Coordinator view model.
-- [x] 2.3 Compose the snapshot from current-window Agent Mode live state, active-workspace session metadata, and `MCPServerViewModel.dashboard`, assuming the named MCP Coordinator mode consumer from `add-mcp-coordinator-mode-consumer`.
-- [x] 2.4 Add diff-before-publish/fingerprint behavior so streaming transcript or token deltas do not republish unchanged Coordinator view rows.
-- [x] 2.5 Represent stale/persisted-only rows for active-workspace sessions without current-window live state.
+- [x] 2.1 Implement `CoordinatorMissionPlan` with stable ID, monotonic revision, mission key, objective, predecessor context, status, approval state, template, shape, policy snapshot, autonomy, workstreams, nodes, routing decisions, decision ledger, evidence ledger, events, and updated timestamp.
+- [x] 2.2 Implement workstream lane summaries with execution policy, worktree strategy, primary child session, related child sessions, and stable ID/title upsert behavior.
+- [x] 2.3 Implement DAG-lite nodes with workflow hints, done criteria, completion evidence, dependencies, execution policy, status, bound session, and bound interaction.
+- [x] 2.4 Preserve omitted Mission Plan fields on partial updates.
+- [x] 2.5 Upsert workstreams and nodes by ID/title unless explicit replacement is requested.
+- [x] 2.6 Upsert routing decisions by ID and sort them chronologically.
+- [x] 2.7 Append decisions and evidence with ID-only dedupe; do not replace existing ledger records.
+- [x] 2.8 Add deterministic user-decision IDs from checkpoint instance plus label.
+- [x] 2.9 Preserve unknown autonomy and decision classes while resolving unknown autonomy to Ask.
+- [x] 2.10 Preserve terminal node status against later regression.
+- [x] 2.11 Prevent Mission completion while non-terminal nodes remain.
 
-## 3. Coordinator identity
+## 3. Mission Policy and autonomy
 
-- [x] 3.1 Implement user-selected Coordinator state as per-window ephemeral state keyed by active workspace ID.
-- [x] 3.2 Implement Orchestrate workflow candidate detection only when launch/first-request workflow metadata is already available without per-row transcript churn.
-- [x] 3.3 Implement MCP-originated lineage-root-with-children candidate detection.
-- [x] 3.4 Implement zero-candidate board/list behavior with empty/choose-Coordinator rail state.
-- [x] 3.5 Implement multiple-candidate behavior by selecting the most recent candidate within the highest-ranked matching precedence tier unless a user-selected Coordinator exists.
-- [x] 3.6 Add tests for Coordinator identity precedence and ambiguity handling.
+- [x] 3.1 Add Mission Policy snapshots separate from Mission Templates.
+- [x] 3.2 Provide Default, Hands-off, Careful writes, and Read-only built-in policies.
+- [x] 3.3 Store default pace, autonomy map, `maxConcurrent`, Definition of Done, standing guidance, pinned skill IDs, and pinned context IDs on policy snapshots.
+- [x] 3.4 Define known decision/autonomy classes: `plan`, `advance`, `writes`, `childAsk`, `recover`, and `irreversible`.
+- [x] 3.5 Force unknown autonomy classes and irreversible actions to resolve to Ask.
+- [x] 3.6 Expose external user-action parity for pace via `coordinator_chat set_pace`.
+- [x] 3.7 Expose external user-action parity for `childAsk` via `coordinator_chat set_autonomy`.
+- [x] 3.8 Reject runtime callers from user-action parity operations.
 
-Deferred selection affordance note: no v1 UI currently sets user selection from row/card visibility alone. When that UI is added, pair it with liveness and eligibility fall-through tests before changing selection precedence.
+## 4. `coordinator_chat` control surface
 
-## 4. Session row projection
+- [x] 4.1 Implement `list`, `select`, `new`, `ensure_mission`, `start_mission`, and `submit` operations.
+- [x] 4.2 Implement `mission_plan` as a state-only update path that does not submit a Coordinator chat turn.
+- [x] 4.3 Implement full and compact `mission_status` serialization.
+- [x] 4.4 Implement `wait_for_update` using compact Mission status fingerprints.
+- [x] 4.5 Implement `mission_events` as an observational sequenced journal.
+- [x] 4.6 Implement `receipt format=markdown` from the receipt projection.
+- [x] 4.7 Implement `doctor` capability reporting.
+- [x] 4.8 Implement `list_missions` lifecycle inventory.
+- [x] 4.9 Implement `stop_mission` and `archive_mission` lifecycle operations.
+- [x] 4.10 Support `coordinator_model_id` on fresh Coordinator Mission starts/submits without changing Coordinator identity or policy semantics.
+- [x] 4.11 Scope runtime caller resolution to the caller Mission and fail closed when unresolved.
 
-- [x] 4.1 Project session identity, lineage, provider/model, run state, MCP origin, worktree bindings, and merge attention from structured metadata/live state.
-- [x] 4.2 Omit workflow labels in v1; leave workflow index/transcript lookup as follow-up unless needed for Coordinator detection without churn.
-- [x] 4.3 Omit objective labels in v1.
-- [x] 4.4 Optionally project workstream labels/chips from worktree/logical-root metadata when available and useful for the UI.
-- [x] 4.5 Ensure session titles or assistant prose are not parsed to infer labels.
+## 5. Approval, delegation, and scheduling guardrails
 
-## 5. Status grouping and sorting
+- [x] 5.1 Require Coordinator parents to record a non-empty Mission Plan before normal delegated child starts.
+- [x] 5.2 Require `approval_state: approved` before normal runtime progress or delegated starts.
+- [x] 5.3 Allow only the documented pre-approval planning exceptions for workflow-less read-only probes, Investigate/Deep Plan planning nodes, and design critique nodes.
+- [x] 5.4 Require `mission_node_id` for pre-approval exceptions.
+- [x] 5.5 Require matching workflow metadata for workflow-bearing nodes.
+- [x] 5.6 Require `worktree_create:true` for pre-approval Investigate/Deep Plan/design critique exceptions.
+- [x] 5.7 Enforce policy `maxConcurrent` as a running-node flight cap for both `agent_run.start` and `agent_explore.start`.
+- [x] 5.8 Require explicit child worktree isolation for mutable Coordinator delegated work.
+- [x] 5.9 Reject mutable Coordinator delegated starts before child creation when no explicit sandbox is provided.
+- [x] 5.10 Keep ordinary non-Coordinator Agent Mode starts on their existing worktree behavior.
 
-- [x] 5.1 Implement Coordinator view status groups: Needs you, Blocked, Working, Review, Done, Idle.
-- [x] 5.2 Evaluate groups top-down: Needs you, Blocked, Working, Review, Done, Idle.
-- [x] 5.3 Map Needs you from current-window live `.waitingForUser`, `.waitingForQuestion`, and `.waitingForApproval`; use MCP pending interactions only as prompt/detail enrichment.
-- [x] 5.4 Ensure persisted-only cards/rows never contribute to live `Needs you` or `Working` counts in v1 and render with stale/persisted-only treatment.
-- [x] 5.5 Map Blocked from `.failed` run state or conflicted worktree/merge attention.
-- [x] 5.6 Map Working from current-window live `.running`, Done from `.completed`/`.cancelled`, and Idle from `.idle` when no higher-priority group applies.
-- [x] 5.7 Implement read-only sort controls for `Last updated` (default), `Name`, and `Priority` across board cards and list rows.
-- [x] 5.8 Ensure sorting only reorders cards/rows within existing status groups and never changes group membership, run state, pending state, Coordinator relationship, or persisted session state.
-- [x] 5.9 Ensure v1 does not expose drag-to-reorder, drag-to-dispatch, or drag-to-change-status interactions.
-- [x] 5.10 Keep completed/cancelled rows with review material observable without treating Done as human acceptance.
-- [x] 5.11 Add snapshot adapter tests for grouping, counts, stale-row count exclusion, review observability, and sort-mode behavior.
-- [x] 5.12 Keep review-bearing completed rows eligible for Done or Review based on observable row state rather than an inspector-owned approval gate.
+## 6. childAsk and pending child interactions
 
-## 6. Pending interaction summaries
+- [x] 6.1 Route selected-Mission pending child interactions through `coordinator_chat submit` when active.
+- [x] 6.2 Support structured `answers` payloads, freeform text fallback, and explicit `skip` for child interactions.
+- [x] 6.3 Record visible child interaction response records in Coordinator follow-through state.
+- [x] 6.4 Reject Coordinator runtime child-answer submits unless current `childAsk` autonomy resolves to Auto.
+- [x] 6.5 Require Director childAsk decisions and evidence before childAsk:auto bound nodes can complete.
+- [x] 6.6 Block generic `agent_run.respond` for active Mission-bound child questions so ledger paths cannot be bypassed.
+- [x] 6.7 Preserve actor integrity for Ask → Auto and Auto → Ask rerouting semantics.
 
-- [x] 6.1 Define Coordinator view pending summaries with `AgentRunMCPSnapshot.Interaction.Kind`, `AgentRunMCPSnapshot.Interaction.Detail`, and nullable `AgentSessionDeepLinkRoute`.
-- [x] 6.2 Project prompt/detail summaries from live MCP-controlled `AgentRunMCPSnapshot.Interaction` values; leave broader non-MCP pending projection as a follow-up Agent Mode contract change.
-- [ ] 6.3 Hide or disable decision navigation when `openAgentChatRoute` cannot be resolved.
-- [x] 6.4 Bridge selected-Mission child pending interactions into the Coordinator chat so the user's answer forwards to the child response path and records visibly in the rail.
-- [x] 6.5 Add tests for pending interaction rendering, missing routes, and non-prose inference.
+## 7. Follow-through runtime
 
-## 7. Deep-link behavior
+- [x] 7.1 Track observed child phases from Coordinator row/workstream projection.
+- [x] 7.2 Enqueue stable follow-through events for child terminal, child question, gate cleared, and eligible work observations.
+- [x] 7.3 Deduplicate follow-through events with pending/handled event IDs.
+- [x] 7.4 Generate structured resume directives that instruct the Coordinator to inspect compact `mission_status`, respect dependencies, honor `maxConcurrent`, and avoid duplicate starts.
+- [x] 7.5 Mark resume events submitted/deferred/rejected without creating new Coordinator parents.
+- [x] 7.6 Hold follow-through at active Coordinator turns, Needs-you/Blocked children, human permission boundaries, or ambiguous next steps.
+- [x] 7.7 Complete Coordinator-only and terminal-bound running nodes when sourced evidence supports completion.
+- [x] 7.8 Keep stale/waiting completion evidence from satisfying completed-node evidence requirements.
 
-- [x] 7.1 Build row and pending-summary route payloads from active workspace, resolvable tab, and optional session ID.
-- [ ] 7.2 Use direct `WindowState.routeToAgentSession` for same-window navigation when possible.
-- [ ] 7.3 Use existing `AgentSessionDeepLinkRoute` / router behavior for cross-window or URL-style navigation as needed.
-- [x] 7.4 Ensure persisted-only rows without route data do not create or restore sessions during rendering.
-- [x] 7.5 Add tests for resolvable, unresolvable, and persisted-only no-restore route states.
+## 8. Status, events, receipt, and lifecycle projection
 
-## 8. MCP compact projection
+- [x] 8.1 Include shape, policy, autonomy, decision counts, evidence counts, recent ledgers, ready nodes, dependency satisfaction, active nodes, liveness warnings, checkpoint metadata, events, and routing decisions in Mission status outputs.
+- [x] 8.2 Include every wait-unblocking ledger/status field in compact fingerprints.
+- [x] 8.3 Expose revision-bound plan approval checkpoint instance IDs in compact status.
+- [x] 8.4 Reject stale consent-granting checkpoint submits while accepting stale Stop.
+- [x] 8.5 Project terminal receipts from Mission-owned state rather than persisted Markdown.
+- [x] 8.6 Include objective/summary, policy, decision counts, evidence, and reserved Spend section in receipt Markdown.
+- [x] 8.7 Preserve receipt, status, events, decisions, evidence, and lineage after archive.
+- [x] 8.8 Reject archive for non-terminal Missions and reject runtime callers from archive.
 
-- [x] 8.1 Consume the Coordinator view MCP consumer provided by `add-mcp-coordinator-mode-consumer`.
-- [x] 8.2 Subscribe to MCP updates while Coordinator mode is visible and unsubscribe when hidden.
-- [x] 8.3 Project connected/idle/off client count, recent tool calls, active/in-flight count, and recent-call history without connected clients as server/window-scoped MCP awareness that may not map one-to-one to visible rows.
-- [x] 8.4 Add tests for MCP compact projection, MCP-off/empty states, and history-only recent-call state without retesting the shared consumer lifecycle owned by `add-mcp-coordinator-mode-consumer`.
+## 9. Prompt and tool contract alignment
 
-## 9. Coordinator composer
+- [x] 9.1 Document `coordinator_chat` as an external/demo control API in the MCP tool schema.
+- [x] 9.2 Document Coordinator Mission node hooks on `agent_run` and `agent_explore` schemas.
+- [x] 9.3 Instruct Coordinator runtimes to use Mission Plan/status/ledger operations before delegation.
+- [x] 9.4 Instruct runtime callers not to start follow-up Missions themselves.
+- [x] 9.5 Keep workflow fidelity: planned workflow metadata must match delegated `agent_run` workflow metadata.
+- [x] 9.6 Keep Director user-facing vocabulary while using raw Coordinator keys only inside structured payloads/debug contracts.
 
-- [x] 9.1 Enable the Coordinator composer only when the selected/detected Coordinator has current-window live state.
-- [x] 9.2 Disable the composer or show `Open agent chat` when no Coordinator exists, the Coordinator is persisted-only, or the Coordinator is owned by another window.
-- [x] 9.3 Deliver submitted directives as ordinary user messages through the existing Agent Mode message path.
-- [x] 9.4 Do not define structured directive envelopes, cross-window directive routing, Coordinator-view-side interrupt/steer semantics, or direct child-session mutation in v1.
-- [x] 9.5 Echo accepted user directives into the Coordinator rail transcript when appropriate, while surfacing Coordinator responses and child-session effects through normal coarse snapshot refresh.
-- [x] 9.6 Add tests for composer enablement, unreachable Coordinator fallback, ordinary-message dispatch, and no direct board/session mutation.
-- [x] 9.7 Suppress `Open in Agent Mode` / `Open agent chat` for the Coordinator backing actor in the production-demo rail while preserving Agent Mode deep links for supervised delegate rows and pending summaries.
-- [x] 9.8 Add a persisted chat-level Manual/Auto Coordinator runtime mode toggle that defaults to Manual.
-- [x] 9.9 Inject follow-through guidance into Coordinator runtime prompts without changing submitted directive text or adding a structured directive envelope.
-- [x] 9.10 Add focused tests for follow-through persistence and prompt-gating behavior.
-- [x] 9.11 Persist lightweight Coordinator follow-through state with objective summary, observed child phases, pending/handled events, and last resume result.
-- [x] 9.12 Add a pure follow-through boundary classifier for safe resume versus hold decisions.
-- [x] 9.13 Add an AgentMode-owned follow-through supervisor that wakes the existing Coordinator runtime on child lifecycle events without creating a new parent.
-- [x] 9.14 Document and test that chat-level `Proceed` is a visible Coordinator message and does not approve merge/apply/commit/push work.
-- [x] 9.15 Keep app-generated resume events observational; human continuation remains chat-owned rather than inspector-owned.
-- [x] 9.16 Add a direct external MCP Coordinator chat control surface for fast live validation that reuses the Coordinator composer path and is hidden from in-agent role catalogs.
-- [x] 9.17 Enforce Coordinator mutable-delegation worktree policy so read-only child runs may omit worktrees, but edits, tests, merge previews, commit/PR prep, and inherited-binding-only mutable starts require an explicit child worktree.
-- [x] 9.18 Feed projected workstream summaries into auto-mode classification so resume/hold decisions use the same phase, owner Coordinator, and next action shown on the board.
-- [x] 9.19 Add chat-level `Proceed`, `Revise`, and `Stop here` continuation controls that submit ordinary messages to the owning Coordinator parent.
-- [x] 9.20 Keep inspector continuation-free; Done remains a terminal observed state rather than human acceptance.
-- [x] 9.21 Render chat-level continuation controls only from explicit Coordinator checkpoint metadata, not from ordinary Coordinator prose.
-- [x] 9.22 Reuse Agent Mode slash-skill/file-mention input affordances and compact provider MCP/tool preference controls in the Coordinator composer for demo-ready Coordinator directives.
-- [x] 9.23 Add Coordinator runtime prompt guidance that keeps Coordinator-owned final checks and recovery on structured MCP control-plane tools instead of raw shell loops.
-- [x] 9.24 Replace the hard-coded Scoped Change composer action with Coordinator-only Mission Templates backed by built-in and custom markdown definitions.
-- [x] 9.25 Split Coordinator directive submission into raw visible Mission text and provider-wrapped runtime text so follow-through objective summaries remain user-readable.
-- [x] 9.26 Persist lightweight Mission Template metadata with Coordinator follow-through state.
-- [x] 9.27 Add focused tests for Mission Template wrapping, rejected-send preservation, accepted-send clearing, follow-up non-wrapping, and visible objective persistence.
-- [x] 9.28 Add in-app Mission Template viewing/editing so built-ins can be inspected and custom markdown can be saved without leaving the app.
-- [x] 9.29 Add a built-in Deep Plan -> Orchestrate -> Review Mission Template that pauses on Deep Plan user checkpoints before mutable delegation.
-- [x] 9.30 Render selected-Mission child Needs-you checkpoints in the Coordinator composer and hold ordinary Coordinator submissions while the child answer is pending.
-- [x] 9.31 Render structured selected-Mission child `ask_user` checkpoints with their original options/custom-answer controls and route selected answers through the child interaction response path.
-- [x] 9.32 Persist a DAG-lite `CoordinatorMissionPlan` foundation with parent Mission follow-through state.
-- [x] 9.33 Add a `coordinator_chat op=mission_plan` update path for objective and declared workstream lane summaries without submitting a chat turn.
-- [x] 9.34 Add explicit worktree strategy to Mission Plan workstreams so execution lanes are defined before DAG nodes inherit them.
-- [x] 9.35 Teach built-in Mission Templates and Coordinator runtime guidance to record/update Mission Plan workstreams before and during delegation.
-- [x] 9.36 Extend `coordinator_chat op=mission_plan` updates to accept status, approval state, DAG-lite nodes, and appended events while preserving omitted fields.
-- [x] 9.37 Add read-only `coordinator_chat op=mission_status` output for external Coordinator debugging with node counts, dependencies, recent events, and row bindings.
-- [x] 9.38 Complete explicit state-only Mission Plan continuation directives without leaving satisfied coordinator-only DAG nodes stale.
+## 10. Deterministic validation support
 
-## 10. Coordinator view UI shell
+- [x] 10.1 Add DEBUG-only scripted child backend selected by `model_id:"scripted"` / scripted selector.
+- [x] 10.2 Require the exact scripted prompt line `SCRIPTED_CHILD_V1 ask_marker token=<TOKEN> options=Alpha,Beta`.
+- [x] 10.3 Create a real `AgentAskUserInteraction` and complete with `SCRIPTED_CHILD_V1 answer=<Alpha|Beta> token=<TOKEN>`.
+- [x] 10.4 Keep scripted child hidden from normal user-facing model lists.
+- [x] 10.5 Report scripted child availability through `coordinator_chat doctor`.
 
-- [x] 10.1 Build the Coordinator view shell with top counts, optional Coordinator rail, board-first status columns/cards, List view alternate/fallback, optional inspector / trailing detail column, compact MCP awareness, and filter affordance.
-- [x] 10.2 Keep the main board/list content calm by default: no full transcripts, full logs, diffs, file viewers, streaming tool feeds, or card/row write controls.
-- [x] 10.3 Add Board/List view switching where Board is the v1 default and List renders the same snapshot as an alternate.
-- [x] 10.4 Add responsive behavior: inspector yields before the board, Coordinator chat may collapse to a rail, high-priority columns remain visible when possible, lower-priority columns may de-emphasize/collapse with visible counts, board columns preserve usable width or scroll horizontally, and widths below two usable board columns fall back to List.
-- [x] 10.5 Add progressive disclosure from count to card/row, optional sourced inspector summaries, and Agent Mode; keep full raw logs, transcripts, files, and diffs in Agent Mode for v1.
-- [x] 10.6 Keep the Coordinator rail focused on Coordinator identity/selection, optional context, and scoped current-window composer; do not add a separate by-agent roster or `Agents` tab in v1.
-- [ ] 10.7 Add UI previews or smoke states for board-default, board-card-selected, inspector-collapsed, list view, sort menu, Coordinator-composer enabled/disabled, empty workspace, active, needs-user, blocked, MCP-off, MCP-empty, MCP-active, filtered, zero-Coordinator, stale/persisted-only card/row, lower-priority column collapsed/de-emphasized, and multiple-Coordinator most-recent states.
-- [x] 10.8 Bind the PR3 Coordinator shell to Agent Mode font-scale, search-field, chip, card, and subtle selection/hover chrome without changing snapshot or write-control behavior.
-- [x] 10.9 Keep the production-demo rail visually framed as an agentic Coordinator conversation rather than an ordinary Agent Mode session proxy.
-- [x] 10.10 Widen the production-demo Coordinator rail and render Coordinator/event messages through the shared Agent Mode Markdown renderer.
-- [x] 10.11 Restyle the Coordinator composer as a compact Agent Mode-like command surface without adding ordinary Agent Mode controls.
-- [x] 10.12 Keep the Coordinator composer text area editable and focused while send is gated by an active Coordinator run.
-- [x] 10.13 Keep Coordinator mode window titles workspace-scoped instead of using the active Agent session tab.
-- [x] 10.14 Move the Agent/Coordinator switcher to one window-toolbar location, remove sidebar/rail copies, and back it with live checked View-menu commands.
-- [x] 10.15 Project read-only workflow display metadata from real Agent Mode workflow definitions, render it on Coordinator rows/inspectors/action chips, and clear/update it between live turns.
-- [x] 10.16 Exclude explicitly marked Coordinator-internal housekeeping children from board/list and Coordinator action-chip surfaces without title matching.
-- [x] 10.17 Document that current Coordinator action chips are board/result-derived delegate cues, not a complete tool-call action/event stream.
-- [x] 10.18 Retire the automatic loopback proof from the default Coordinator demo prompt while preserving the fan-out wait guidance and internal-housekeeping marker.
-- [x] 10.19 Split demo Coordinator state into a workspace-scoped runtime set plus selected rail runtime so multiple Coordinator parents can coexist.
-- [x] 10.20 Change `New Coordinator` from destroy/replace behavior into create-additional-and-select behavior while preserving existing delegated descendants.
-- [x] 10.21 Remove or narrow name-based Coordinator runtime fallback so multiple demo runtimes with similar titles cannot be confused.
-- [x] 10.22 Checkpoint selected-runtime board behavior first: project board/list rows from the selected Coordinator runtime's eligible descendants while multiple runtime roots coexist.
-- [x] 10.23 Add focused tests proving two Coordinator runtime roots can coexist, selection changes the rail target and selected-runtime board, `New Coordinator` preserves previous fleet membership, and explicit fleet reset is the only board-clearing operation.
-- [x] 10.24 Project aggregate board/list rows from all eligible Coordinator fleet roots in the active workspace, excluding Coordinator backing runtimes and explicitly internal housekeeping sessions.
-- [x] 10.25 Preserve parent/owner metadata on projected rows for grouping/filtering, action-chip attribution, inspector context, and aggregate-mode selected-parent emphasis without parsing titles.
-- [x] 10.26 Render a compact sourced parent indicator on aggregate board/list rows using a reserved neutral treatment that does not compete with lifecycle state color or workflow badges.
-- [x] 10.27 Add focused aggregate-mode tests proving all eligible roots appear, parent indicators are sourced, selected-parent row emphasis updates with rail selection, and aggregate mode does not swap board scope when selection changes.
-- [x] 10.28 Add a demo use-case taxonomy with gesture sequence, prompt text, expected result, and required checkpoint for single delegation, one-parent fan-out, sequential multi-parent work, simultaneous multi-parent work, and switch-back supervision.
-- [x] 10.29 Confirm or add a visible parent-selection affordance so users can return to an earlier Coordinator runtime after `New Coordinator` creates another parent.
-- [x] 10.30 Verify workflow-bearing demo prompts by proving `agent_run workflow_name` reaches delegated starts and returns workflow display metadata.
-- [x] 10.31 Add left-side Coordinator mode navigation so the default Coordinator chat board remains selected-parent focused while an All Agents Board shows live delegated rows across active Coordinator roots.
-- [x] 10.32 Project structured workstream summaries for board/list rows with objective, phase, child session, owner Coordinator, worktree, workflow, merge/inspection state, and derived next action.
-- [x] 10.33 Promote structured workstream projection to a first-class `CoordinatorWorkstream` read model with stable child-session identity without introducing DAG/source-of-truth state.
-- [x] 10.34 Replace the vertically stacked inspector's side toggle with a bottom-sheet handle that slides the inspector down/up.
-- [x] 10.35 Move `New Mission` into the leading rail titlebar as an icon-only action and remove redundant titlebar text.
-- [x] 10.36 Hide Coordinator chat/composer in All Agents Board so the board and inspector can use the available workspace width.
-- [x] 10.37 Add an independent left-edge restore affordance when the Coordinator rail is collapsed.
-- [x] 10.38 Replace the Mission popover with inline rail history rows plus an archived-style persisted section.
-- [x] 10.39 Move the session filter field from the top board controls to a bottom board/list filter bar.
-- [x] 10.40 Let expanded archived Coordinator history use the left rail's flexible scroll area instead of a fixed three-row cap.
-- [x] 10.41 Restyle the Coordinator rail and work/inspector surfaces with rounded floating material chrome.
-- [x] 10.42 Rename Coordinator-specific parent-session rail copy to Missions and remove redundant per-row `Persisted` badges.
-- [x] 10.43 Keep selected-Mission Kanban default lanes `Needs you`, `Working`, and `Done` visible while omitting empty `Blocked`/`Review` lanes, and preserve all lanes on the All Agents Board.
-- [x] 10.44 Render Coordinator worktree color indicators from the same persisted worktree identity used by Agent Mode.
-- [x] 10.45 Render delegated-session Coordinator chat event cards as soon as child Missions are projected instead of waiting for terminal status.
-- [x] 10.46 Keep selected-Mission board rows, Mission child counts, and delegated chat action cards on the same Coordinator owner projection.
-- [x] 10.47 Fit selected-Mission default Kanban lanes into ordinary board widths and remove redundant status/persistence chips from Kanban cards.
-- [x] 10.48 Persist workflow summaries in Agent session metadata and render delegated conversation workflow/worktree identity after restart without requiring Agent chat hydration.
-- [x] 10.49 Show an explicit `Open to reply` inspector action for routeable delegated sessions that are not live in the current window.
-- [x] 10.50 Let delegated conversation cards select their projected board/list row and reveal the inspector when the target is still visible in the selected Mission scope.
-- [x] 10.51 Move compact MCP awareness into stable board header chrome, limit session filtering to the All Agents Board, and reduce the stacked inspector handle to a quiet visual affordance.
-- [x] 10.52 Preserve delegated conversation card chronology after restart using child start/delegation time rather than terminal update time.
-- [x] 10.53 Add a compact Mission Template picker and management sheet under the fresh-Mission Coordinator composer, separate from Agent Mode workflow controls.
-- [x] 10.54 Render the selected Mission Plan in the Coordinator conversation and project declared workstreams into matching row/inspector details.
-- [x] 10.55 Replace the visible right-panel List toggle with a read-only Plan presentation while retaining List as the narrow Board fallback.
-- [x] 10.56 Add a shared inspector target for Board rows and Plan nodes so DAG-lite node/workstream details can be inspected without creating phantom board cards.
+## 11. Tests and validation coverage
 
-## 10A. Director / Command Center policy and ledger alignment
+- [x] 11.1 Add Mission Plan persistence, merge, terminal honesty, policy/autonomy, childAsk, and follow-through tests.
+- [x] 11.2 Add `coordinator_chat` tests for start/submit, model override, mission_plan, mission_status, wait/update, set_pace, set_autonomy, doctor, list_missions, archive_mission, mission_events, and receipt.
+- [x] 11.3 Add delegated-run policy tests for approved-plan gating, pre-approval exceptions, workflow matching, created-worktree requirement, and flight cap.
+- [x] 11.4 Add receipt projection tests.
+- [x] 11.5 Add prompt contract tests for Coordinator runtime instructions.
+- [x] 11.6 Add scripted child lifecycle tests.
+- [x] 11.7 Maintain the live E2E plan for S1, S2, S4, S5, S6, S7, capability doctor, mission events, receipts, and archive cleanup.
+- [x] 11.8 Split `add-coordinator-mode` specs by capability while preserving shipped surface/UI coverage and runtime normative content.
 
-- [ ] 10A.1 Update user-facing surface, rail, Mission, policy, decision/evidence, and receipt copy to use Director vocabulary while keeping Swift symbols, MCP op names, Codable keys, fixtures, and raw debug payloads Coordinator-named.
-- [ ] 10A.2 Add Mission Policy as a Mission-owned snapshot distinct from Mission Templates, including built-in Default, Hands-off, Careful writes, and Read-only policies with default pace, autonomy map, optional Definition of Done, standing guidance, pinned skills/context IDs, and `maxConcurrent` with default 3.
-- [ ] 10A.3 Extend Mission Plan state with additive/defaulted shape summary, policy snapshot, autonomy map, decision ledger, evidence ledger, and receipt-projection inputs without introducing a separate store.
-- [ ] 10A.4 Implement append-only decision/evidence merge semantics with ID-only dedupe, omitted-field preservation, and deterministic UUID user-decision IDs from `(checkpointInstanceID, label)`, including `plan.revision` for plan approvals.
-- [ ] 10A.5 Record user-actor decisions through the app and external MCP `op=submit` paths at plan approval/revision, step continuation, child-answer, and Mission-stop checkpoints using the existing Mission Plan update seam.
-- [ ] 10A.6 Update continuation directives and compact checkpoint action payloads so the runtime records director-actor decisions and evidence through `coordinator_chat op="mission_plan"` without re-recording app/MCP user decisions.
-- [ ] 10A.7 Extend `coordinator_chat op="mission_plan"` serialization to accept shape, policy, autonomy, appended decisions, and appended evidence while preserving old objective/workstream/node/routing/event payload compatibility.
-- [ ] 10A.8 Extend `coordinator_chat op="mission_status"`, compact status, compact Mission status fingerprints, and `wait_for_update` behavior so policy/ledger/receipt-ready fields serialize and unblock waiters after decision/evidence appends.
-- [ ] 10A.9 Project Mission Policy, autonomy, decisions, evidence, and receipt-ready summaries from Mission-owned state into Director/Coordinator snapshot surfaces only after ledger-visible state participates in refresh/fingerprints.
-- [ ] 10A.10 Add focused persistence, projector, app/MCP submit, runtime-directive, and MCP serialization tests for unknown autonomy Ask behavior, unknown decision-class round-trip, append-only ledger dedupe, deterministic IDs, plan re-approval after revision, and wait-for-update advancement.
-- [ ] 10A.11 Add the Director context contract for evidence judgment: ledger-bounded Director calls, done-criteria + structured-evidence + diff-stat bundles, optional probe-answer evidence, receipt disclosure, and explicit “not transcript” framing.
-- [ ] 10A.12 Add read-only probe escalation using an `agent_explore.start`-style probe or equivalent read-only probe session; ledger the probe answer/export reference as evidence without importing the probe transcript or selection.
-- [ ] 10A.13 Make director-actor auto-decisions contestable: user overrule records a linked user-actor decision, marks the Director decision overruled, and steers the affected session or Mission path with the correction.
-- [ ] 10A.14 Enforce Mission Policy `maxConcurrent` as a delegated-flight scheduler cap with default 3 and status-ready `running N/cap` projection inputs.
-- [ ] 10A.15 Add the PRD Slices Mission shape: PRD hub, independent slice chains, dependent slice after A+B consolidation, final combined review, and stacked PR/policy-defined landing.
-- [ ] 10A.16 Respect the v1 deferrals recorded in `design.md` Decisions 0F / Risks rather than implementing broader Command Center reshaping, failure retry/Blocked unblock flow, budget-breach checkpoints, restart/resume contracts, hub-freeze reshaping, fresh-eyes final reviewer policy, or queue aging in this wave.
+## 12. Explicit deferrals
 
-## 11. Validation
-
-- [x] 11.1 Run the focused unit tests added for snapshot projection, Coordinator identity, Coordinator composer, pending interactions, MCP projection, and deep links.
-- [x] 11.2 Run the smallest relevant coordinated Swift validation lane for touched app/UI files.
-- [x] 11.3 Run `openspec validate add-coordinator-mode`.
-- [x] 11.4 Re-run focused Coordinator projector/composer tests, coordinated Swift build/style checks, and OpenSpec validation after the workflow/internal-action refinement.
-- [x] 11.5 Re-run focused Coordinator projector/composer tests, coordinated Swift build/style checks, and OpenSpec validation after the multi-runtime fleet-scope refinement.
-- [x] 11.6 Run focused Coordinator mutable-delegation worktree policy tests.
-- [x] 11.7 Live-smoke a fresh Coordinator parent chaining Orchestrate then Review on the same app-managed worktree via MCP Coordinator chat.
-- [x] 11.8 Run focused Coordinator Mission Template store, composer, and objective-persistence tests.
-- [x] 11.9 Run focused Mission Plan persistence, worktree-strategy, projection, composer, and MCP control-surface tests.
-- [x] 11.10 Record the DAG-lite Mission status smoke scenario with expected `mission_status` debug summary, node counts, dependency satisfaction, and no-child/no-edit constraints.
+- [ ] 12.1 Full Coordinator-to-Director technical rename.
+- [ ] 12.2 First-class Coordinator role/runtime extraction and durable role/session-visibility policy.
+- [ ] 12.3 Restart durability scenario for pending checkpoints and pending child questions.
+- [ ] 12.4 Recovery/chaos scenario for steer-not-respawn and killed/stuck child handling.
+- [ ] 12.5 Custom policy CRUD and save-as-policy flow.
+- [ ] 12.6 Spend capture/enforcement beyond the reserved receipt section.
+- [ ] 12.7 Hierarchical Coordinator-of-Coordinators.
+- [ ] 12.8 Broader UI/Command Center layout reshaping not required by the core runtime baseline.
+- [ ] 12.9 UI render-to-click race hardening.
+- [ ] 12.10 Toggle dedup beyond current idempotent ledger behavior.
+- [ ] 12.11 Worktree garbage collection for Coordinator-created child worktrees.
+- [ ] 12.12 Backend fallback between live child providers/backends.

@@ -1,963 +1,252 @@
 ## ADDED Requirements
 
 ### Requirement: User-facing Director and technical Coordinator split
-The system SHALL present the supervisory Command Center actor as Director in user-facing product copy while keeping existing technical Coordinator names stable for this change.
+The system SHALL use Director as the user-facing supervisory actor while keeping the current technical Coordinator contracts stable.
 
-#### Scenario: User-visible supervisory surface is named Director
-- **WHEN** the app labels the supervising mode, rail, Mission conversation, Mission Policy, decision/evidence summaries, or receipt-facing surfaces
-- **THEN** user-facing copy SHALL use Director vocabulary
-- **AND** it SHALL avoid exposing Coordinator as the product actor name except where showing raw technical/debug data is intentional.
+#### Scenario: User-facing copy names the Director
+- **WHEN** the app presents Mission supervision, policy, decisions, evidence, receipts, the rail, or other user-facing Coordinator-mode surfaces
+- **THEN** product copy SHOULD use Director vocabulary
+- **AND** it SHOULD avoid presenting Coordinator as the product actor except in technical/debug contexts.
 
 #### Scenario: Technical contracts remain Coordinator-named
-- **WHEN** code symbols, MCP operations, Codable keys, persisted records, test fixtures, or raw debug payloads refer to existing Coordinator contracts
-- **THEN** the system SHALL keep those names stable in this change
-- **AND** a full Coordinator-to-Director symbol/API/key rename SHALL be deferred to a separate no-behavior change.
+- **WHEN** Swift symbols, MCP operation names, Codable keys, persisted records, fixtures, or debug payloads represent this runtime
+- **THEN** they SHALL keep Coordinator naming for this change
+- **AND** a full Coordinator-to-Director technical rename SHALL be a separate no-behavior migration.
 
 #### Scenario: Shortcut and surface order remain explicit product decisions
 - **WHEN** Director user-facing copy is introduced
-- **THEN** it SHALL NOT silently flip existing main-surface shortcut order or routing behavior
+- **THEN** it SHALL NOT silently flip main-surface shortcut order or routing behavior
 - **AND** any shortcut/order change SHALL be recorded as a separate OpenSpec-backed product decision.
 
-### Requirement: Coordinator mode surface
+### Requirement: Coordinator mode surface entry
 The system SHALL provide a non-default Coordinator mode peer surface inside the existing `.main` app experience.
 
 #### Scenario: Agent Mode remains default
 - **WHEN** a user opens the app into the `.main` route
 - **THEN** the system SHALL show the existing Agent Mode surface by default in v1
-- **AND** this landing surface SHALL be represented as a configurable/default main-surface decision rather than a hard-coded permanent product constraint.
+- **AND** the default SHALL remain a configurable product decision rather than a hard-coded permanent constraint.
 
 #### Scenario: Workspace entry remains unchanged
 - **WHEN** the app is in workspace-entry routing
-- **THEN** the Coordinator view SHALL NOT bypass existing workspace-entry gating
-- **AND** the Agent Mode ↔ Coordinator mode surface switcher SHALL NOT appear until a real workspace is active.
+- **THEN** Coordinator mode SHALL NOT bypass existing workspace-entry gating
+- **AND** the Agent Mode / Coordinator mode switcher SHALL NOT appear until a real workspace is active.
 
 #### Scenario: Coordinator mode entry point is a peer surface switcher
 - **WHEN** a real workspace is active and the app is in `.main`
-- **THEN** the system SHALL provide a persistent top-level affordance for switching between Agent Mode and the Coordinator mode
+- **THEN** the system SHALL provide a persistent top-level affordance for switching between Agent Mode and Coordinator mode
 - **AND** the affordance SHALL use a macOS-native peer-surface control, such as a toolbar segmented control or equivalent adaptive surface switcher
-- **AND** the visible affordance SHALL occupy a single window-toolbar location across Agent Mode and Coordinator mode rather than living inside either surface's sidebar or rail
-- **AND** it SHALL NOT use an iOS-style tab bar
-- **AND** the same surface choices SHALL be reachable from the View menu with live checked state and keyboard shortcuts
-- **AND** Coordinator SHALL be the left segment and use `Command-1`; Agent Mode SHALL be the right segment and use `Command-2`
-- **AND** the affordance SHALL model those views as peer `.main` surfaces rather than a one-way Coordinator mode button or workspace-entry page.
+- **AND** the visible affordance SHALL occupy one shared toolbar location across both surfaces rather than living inside either surface's sidebar or rail
+- **AND** the same surface choices SHALL be reachable from the View menu with live checked state and keyboard shortcuts.
 
 #### Scenario: Main surface selection is window-sticky
-- **WHEN** a user switches between Agent Mode and the Coordinator mode in a window
+- **WHEN** a user switches between Agent Mode and Coordinator mode in a window
 - **THEN** that window SHALL retain the selected main surface while it remains alive
 - **AND** Coordinator selection state SHALL remain scoped separately by active workspace.
 
-#### Scenario: Forced main launch remains stable
-- **WHEN** UI tests or launch configuration force `.main`
-- **THEN** the system SHALL land on Agent Mode unless a Coordinator-view-specific forced-surface option is explicitly added.
-
 ### Requirement: Coordinator view snapshot projection
-The system SHALL render Coordinator mode from a single Coordinator-view-facing `CoordinatorModeSnapshot` projection.
+The system SHALL render Coordinator mode from a single Coordinator-view-facing snapshot projection.
 
-#### Scenario: Coordinator Mode renders from one projection
-- **WHEN** the Coordinator view renders top counts, groups, rows, pending prompts, Coordinator rail, compact MCP awareness, and deep-link affordances
-- **THEN** those UI regions SHALL derive their displayed state from the same `CoordinatorModeSnapshot`.
+#### Scenario: Coordinator view renders from one projection
+- **WHEN** Coordinator mode renders top counts, groups, rows, pending prompts, Coordinator rail, compact MCP awareness, deep-link affordances, board columns, list rows, or inspector detail
+- **THEN** those regions SHALL derive displayed state from the same `CoordinatorModeSnapshot` projection.
 
 #### Scenario: Projection composes independent upstreams
-- **WHEN** the snapshot is produced after `add-mcp-coordinator-mode-consumer` is available
-- **THEN** it SHALL compose active window Agent Mode session state/metadata and MCP Coordinator mode state
-- **AND** it SHALL NOT route MCP Coordinator mode data through Agent Mode as a synthetic agent state.
+- **WHEN** MCP Coordinator mode state and Agent Mode session state are both available
+- **THEN** the snapshot SHALL compose both sources without routing MCP Coordinator mode data through Agent Mode as synthetic agent state.
 
 #### Scenario: Snapshot avoids streaming churn
 - **WHEN** assistant text, transcript tokens, or token counts stream without changing coarse Coordinator view state
 - **THEN** the Coordinator view snapshot SHALL NOT republish changed rows solely because of those streaming deltas.
 
-### Requirement: Active workspace rows and current-window live enrichment
-The system SHALL scope v1 Coordinator view rows to the active workspace and live run-state enrichment to the current window.
+#### Scenario: Active workspace scope is honored
+- **WHEN** Coordinator mode opens in a workspace
+- **THEN** rows SHALL be considered from the active workspace
+- **AND** sessions with only off-window or persisted metadata SHALL be rendered as stale/persisted-only rather than live actionable rows.
 
-#### Scenario: Coordinator view opens in a workspace
-- **WHEN** the Coordinator view opens
-- **THEN** it SHALL consider sessions from the active workspace.
-
-#### Scenario: Active workspace has no sessions
-- **WHEN** the active workspace has no sessions to project
-- **THEN** the Coordinator view SHALL show an empty state instead of empty groups or stale placeholder rows.
-
-#### Scenario: Session live state belongs to another window
-- **WHEN** a session is known from active-workspace persisted metadata but has no current-window live state
-- **THEN** the Coordinator view SHALL render the card or row as stale/persisted-only in v1
-- **AND** it SHALL NOT present stale persisted data as live status.
-
-### Requirement: Coordinator selection
-The system SHALL identify the Coordinator session using explicit precedence.
+### Requirement: Coordinator rail and Mission selection
+The system SHALL keep the selected Coordinator conversation distinct from the supervised fleet projection.
 
 #### Scenario: User-selected Coordinator exists
 - **WHEN** the user has selected a valid Coordinator session for the active workspace in the current window
-- **THEN** the Coordinator view SHALL use that session as Coordinator ahead of auto-detected candidates
-- **AND** a future row/card selection affordance SHALL add explicit liveness and eligibility fall-through coverage before changing this precedence.
+- **THEN** Coordinator mode SHALL use that session ahead of auto-detected candidates.
 
-#### Scenario: Multiple Coordinator parents can be selected in Coordinator mode
+#### Scenario: Multiple Coordinator parents can be selected
 - **WHEN** multiple valid Coordinator parent runtimes exist for the active workspace
-- **THEN** the Coordinator view SHALL expose a visible in-Coordinator selection affordance for returning to an existing parent
-- **AND** selecting a parent SHALL retarget the Coordinator rail to that parent without creating a new Coordinator runtime
-- **AND** selected-runtime board/list projection SHALL update to that selected parent's eligible delegated descendants.
+- **THEN** Coordinator mode SHALL expose visible in-rail Mission selection for returning to an existing parent
+- **AND** selecting a parent SHALL retarget the Coordinator rail conversation without creating a new Coordinator runtime
+- **AND** selected-Mission board/list projection SHALL update to that selected parent's eligible delegated descendants.
 
-#### Scenario: Orchestrate workflow candidate exists
-- **WHEN** no user-selected Coordinator exists and a parent session has launch or first-request workflow metadata of `Orchestrate`
-- **THEN** the Coordinator view SHALL treat that parent session as a Coordinator candidate.
+#### Scenario: Coordinator rail avoids duplicate fleet views
+- **WHEN** the Coordinator rail renders in v1
+- **THEN** it SHALL focus on Coordinator identity, Mission selection/history, optional context, and the scoped Coordinator composer
+- **AND** it SHALL NOT provide a separate agent roster or duplicate fleet view that competes with the board/list.
 
-#### Scenario: MCP-originated lineage candidate exists
-- **WHEN** no user-selected Coordinator or Orchestrate workflow candidate exists and a parent session is both a lineage root with child sessions and MCP-originated
-- **THEN** the Coordinator view SHALL treat that parent session as a Coordinator candidate.
-
-#### Scenario: Detection uses off-window lineage metadata without rendering it
-- **WHEN** Coordinator detection has persisted or off-window lineage metadata for sessions that are not active-workspace rows in the current window
-- **THEN** the Coordinator view MAY use that metadata only to determine whether a visible parent is an Orchestrate or MCP-originated lineage Coordinator candidate
-- **AND** it SHALL NOT render those off-window or detection-only child sessions as Coordinator view rows solely because detection inspected them.
-
-#### Scenario: Plain lineage parent exists
-- **WHEN** a parent session has child sessions but is neither user-selected, Orchestrate-detected, nor MCP-originated
-- **THEN** the Coordinator view SHALL NOT silently treat that parent as the Coordinator.
-
-#### Scenario: No Coordinator is found
-- **WHEN** no Coordinator can be selected or detected
-- **THEN** the Coordinator view SHALL still render the grouped active-workspace board or list
-- **AND** the Coordinator rail SHALL show an empty or choose-Coordinator state rather than blocking Coordinator mode
-- **AND** the rail SHALL NOT render a separate by-agent roster of workspace sessions in v1.
-
-#### Scenario: Multiple Coordinator candidates exist
-- **WHEN** multiple auto-detected Coordinator candidates match
-- **THEN** the Coordinator view SHALL use the most recent candidate within the highest-ranked matching precedence tier in v1
-- **AND** a valid user-selected Coordinator SHALL override that automatic choice.
-
-### Requirement: Coordinator fleet scope
-The production-demo Coordinator mode SHALL separate the selected Coordinator conversation from the workspace-scoped supervised fleet.
-
-#### Scenario: Multiple demo Coordinator runtimes exist
-- **WHEN** more than one Coordinator backing runtime is marked for the active workspace demo fleet
-- **THEN** the Coordinator view SHALL retain all marked runtimes as Coordinator fleet roots
-- **AND** it SHALL select one runtime for the rail and composer without treating the selected runtime as the only fleet root.
-
-#### Scenario: New Coordinator is started
-- **WHEN** the user starts a new Coordinator chat or run in the production-demo bridge
-- **THEN** the system SHALL create or select an additional Coordinator backing runtime for the active workspace
-- **AND** it SHALL make that runtime the selected rail conversation
-- **AND** it SHALL NOT unmark previous Coordinator backing runtimes or remove their supervised delegated descendants from the board/list.
-
-#### Scenario: Coordinator rail chat is cleared
+#### Scenario: Rail transcript is display state
 - **WHEN** the user clears the Coordinator rail chat display
-- **THEN** the Coordinator view SHALL clear only the rail display state for the selected Coordinator conversation
-- **AND** it SHALL NOT reset the workspace-scoped Coordinator fleet, unmark Coordinator runtimes, or remove delegated rows from the board/list.
+- **THEN** only the rail display state SHALL be cleared
+- **AND** the underlying Coordinator session transcript, Mission state, delegated descendants, and fleet membership SHALL NOT be deleted, truncated, or rewritten.
 
-#### Scenario: Fleet reset is requested
-- **WHEN** the user explicitly resets or retires Coordinator fleet state
-- **THEN** the operation SHALL communicate whether it retires only the selected Coordinator runtime or clears the whole workspace-scoped fleet
-- **AND** destructive fleet reset semantics SHALL NOT be hidden behind `New Coordinator` or ordinary rail `Clear Chat`.
+#### Scenario: Coordinator rail is not an Agent session proxy
+- **WHEN** the rail renders the current Coordinator conversation
+- **THEN** it SHALL present that conversation as the place where the user talks to the Director/Coordinator
+- **AND** it SHALL avoid Coordinator-self `Open in Agent Mode` affordances in the production-demo path while preserving deep links for delegated rows.
 
-#### Scenario: Selected-runtime board checkpoint is active
-- **WHEN** multiple demo Coordinator runtimes exist before aggregate fleet board projection is enabled
-- **THEN** the board and list SHALL project eligible delegated descendants from the selected Coordinator runtime only
-- **AND** changing the selected Coordinator runtime SHALL swap the board/list to that runtime's eligible delegated descendants
-- **AND** this checkpoint SHALL preserve the same exclusion rules for Coordinator backing runtimes and explicitly marked Coordinator-internal housekeeping sessions.
+### Requirement: Coordinator fleet and row projection
+The system SHALL project supervised delegated work from structured lineage, Mission, session, workflow, and worktree state.
 
 #### Scenario: Selected Mission projection stays coherent
 - **WHEN** the selected Mission has projected delegated descendants
 - **THEN** the selected-Mission board and list SHALL render the same delegated rows counted by the selected Mission history entry
-- **AND** Coordinator chat delegated event cards SHALL resolve workflow badges and lifecycle status from those same projected rows
-- **AND** Coordinator chat delegated event cards SHOULD render sourced worktree identity when the delegated row has a bound worktree
-- **AND** MCP-submitted Coordinator starts SHALL produce the same selected-Mission projection behavior as starts submitted through the visible Coordinator UI.
+- **AND** delegated event cards SHALL resolve workflow badges and lifecycle status from those same rows.
 
 #### Scenario: Board projects aggregate supervised fleet
 - **WHEN** the active workspace demo fleet has multiple Coordinator runtime roots with supervised delegated descendants
-- **THEN** the board and list SHALL project eligible delegated descendants from all active fleet roots
+- **THEN** board and list projections MAY include eligible delegated descendants from all active fleet roots
 - **AND** they SHALL exclude Coordinator backing runtimes and explicitly marked Coordinator-internal housekeeping sessions
-- **AND** delegated descendants MAY include read-only probe descendants that are not immediate children of a Coordinator root
-- **AND** they SHALL preserve existing status grouping, sorting, stale-row, workflow-label, and Agent Mode deep-link behavior.
+- **AND** delegated descendants MAY include read-only probe descendants that are not immediate children of a Coordinator root.
 
-#### Scenario: User opens the all-agents Coordinator board
-- **WHEN** the user chooses the all-agents board destination from Coordinator mode navigation
-- **THEN** the board and list SHALL include live delegated rows owned by all active Coordinator runtime roots in the workspace
-- **AND** historical persisted-only rows SHALL NOT be included solely because they are still known to Agent Mode
-- **AND** they SHALL continue to exclude Coordinator backing runtimes and explicitly marked Coordinator-internal housekeeping sessions
-- **AND** direct Agent Mode sessions that are not owned by an active Coordinator root SHALL NOT appear solely because they are live in Agent Mode
-- **AND** the destination SHALL hide the Coordinator chat/composer column so the board and inspector can use the available workspace width
-- **AND** this navigation change SHALL NOT mutate Agent Mode session ownership, archive state, Coordinator fleet membership, Manual/Auto mode, or the selected Coordinator rail conversation.
+#### Scenario: Delegated row keeps owner attribution
+- **WHEN** a delegated row is projected from an aggregate fleet
+- **THEN** row projection SHALL retain sourced immediate parent metadata and resolved owner Coordinator metadata
+- **AND** owner Coordinator metadata SHALL be resolved from structured lineage rather than row titles or assistant prose.
 
-#### Scenario: Delegate belongs to a parent Coordinator runtime
-- **WHEN** a delegated row is projected from an aggregate fleet that contains multiple Coordinator runtime roots
-- **THEN** the row projection SHALL retain sourced immediate parent metadata and resolved owner Coordinator metadata sufficient for future grouping, filtering, action-chip attribution, inspector context, and selected-parent emphasis
-- **AND** owner Coordinator metadata SHALL be resolved by walking structured `parentSessionID` lineage upward until an active fleet-root Coordinator runtime is reached
-- **AND** a row's owner Coordinator SHALL NOT be assumed to be the same value as its immediate `parentSessionID`
-- **AND** the implementation SHALL NOT infer parent ownership from row titles or assistant prose.
+#### Scenario: Session row renders from structured data
+- **WHEN** a session appears as a Coordinator view card or list row
+- **THEN** the card or row SHALL derive identity, lineage, provider/model, workflow metadata, worktree state, MCP origin, run status, and routeability from structured session metadata or live state
+- **AND** workflow and workstream labels SHALL be read-only projection metadata that do not affect runtime behavior.
 
-#### Scenario: Aggregate row shows parent ownership
-- **WHEN** a delegated row is projected in aggregate fleet mode
-- **THEN** the card, list row, or inspector SHALL provide a compact sourced parent indicator
-- **AND** the indicator SHALL identify the resolved owner Coordinator runtime root rather than a non-Coordinator immediate parent session
-- **AND** the parent indicator SHALL use a reserved neutral treatment distinct from lifecycle state color and workflow badge styling
-- **AND** it SHALL NOT assign parent identity by parsing row titles or assistant prose.
+#### Scenario: Declared Mission workstream supplements row state
+- **WHEN** a Coordinator Mission Plan declares a workstream that references a projected row's child session ID
+- **THEN** the row MAY retain the declared Mission workstream as supplemental metadata
+- **AND** sourced lifecycle state, workflow metadata, routeability, and worktree identity from the actual child session SHALL remain authoritative for row grouping and actions.
 
-#### Scenario: Selected parent changes in aggregate mode
-- **WHEN** aggregate fleet mode is showing rows from multiple Coordinator runtime roots
-- **AND** the selected Coordinator runtime changes
-- **THEN** the rail and composer SHALL switch to the newly selected Coordinator runtime
-- **AND** the board/list SHALL remain scoped to the aggregate fleet instead of swapping to only the selected runtime
-- **AND** rows owned by the selected Coordinator runtime SHOULD receive subtle visual emphasis so the rail selection and board remain connected.
-
-#### Scenario: Delegated worker has read-only probe descendants
-- **WHEN** a delegated worker session has a read-only `agent_explore` descendant
-- **AND** that descendant is projected as part of the aggregate fleet
-- **THEN** the descendant SHALL be attributed to the same resolved owner Coordinator runtime root as the worker
-- **AND** the descendant SHALL NOT be presented as a separate Coordinator parent solely because it has lineage depth below a delegated worker.
-
-#### Scenario: Hierarchical Coordinator delegation is requested
-- **WHEN** a future design needs a delegated session to become a supervising Coordinator runtime with its own fleet
-- **THEN** that behavior SHALL be treated as a separate hierarchical Coordinator design
-- **AND** it SHALL require durable containment metadata and path-style attribution rather than reusing the v1 single owner Coordinator badge.
-
-### Requirement: Board-first Coordinator view layout
-The system SHALL present v1 as a read-only status board by default, with a list view as an alternate and responsive fallback.
+### Requirement: Board, list, status grouping, and sorting
+The system SHALL present the v1 Coordinator work surface as a read-only status board with a list fallback.
 
 #### Scenario: Coordinator view first opens
-- **WHEN** the user opens the Coordinator mode in v1
-- **THEN** the Coordinator view SHALL show a board view by default
+- **WHEN** the user opens Coordinator mode in v1
+- **THEN** the view SHALL show a board by default
 - **AND** status groups SHALL render as board columns containing session cards
-- **AND** the board SHALL derive columns and cards from the same `CoordinatorModeSnapshot` grouping and row projection used by other Coordinator view regions
-- **AND** the selected-Mission board SHALL keep `Needs you`, `Working`, and `Done` visible as stable default lanes even when empty
-- **AND** the selected-Mission board SHOULD omit empty `Blocked` and `Review` lanes until those statuses contain rows
-- **AND** the selected-Mission board SHOULD size the stable default lanes so all three fit without horizontal scrolling at ordinary Coordinator panel widths
-- **AND** Kanban cards SHOULD avoid redundant status or persistence chips when the same information is already communicated by the lane, inspector, or list view
-- **AND** the All Agents Board SHALL continue to show every status lane for the fleet overview.
+- **AND** the board SHALL derive columns and cards from the same snapshot grouping and row projection used by the list, rail, and inspector.
 
-#### Scenario: User switches to list view
-- **WHEN** the user chooses List view
-- **THEN** the Coordinator view SHALL render the same sourced rows and status groups in a list presentation
-- **AND** the list SHALL preserve the same grouping, sorting, stale-row, deep-link, and read-only action constraints as the board.
+#### Scenario: Selected-Mission board keeps stable lanes
+- **WHEN** the selected-Mission board renders
+- **THEN** it SHALL keep `Needs you`, `Working`, and `Done` visible as stable default lanes even when empty
+- **AND** it SHOULD omit empty `Blocked` and `Review` lanes until those statuses contain rows.
 
-#### Scenario: Board cannot fit available width
-- **WHEN** the Coordinator view viewport cannot fit at least two usable board columns
-- **THEN** the Coordinator view SHALL fall back to the List view rather than rendering a cramped board.
-
-#### Scenario: Board side panes compete for width
-- **WHEN** the board, Coordinator rail/chat, and inspector compete for horizontal space
-- **THEN** the inspector / trailing detail column SHALL yield before the board
-- **AND** Coordinator chat MAY collapse to a rail before board columns are reduced below their usable minimum
-- **AND** the board MAY scroll horizontally to preserve usable column width.
-
-#### Scenario: Inspector is vertically stacked below the board
-- **WHEN** the inspector is rendered as a bottom panel below the Kanban board
-- **THEN** its collapse and restore affordance SHALL behave like a vertical sheet handle that slides the inspector down and back up
-- **AND** it SHALL NOT use a left-side sidebar toggle as the primary hide/show control in that stacked layout
-- **AND** the expanded stacked inspector SHOULD prefer a quiet handle treatment instead of redundant visible hide/show text.
+#### Scenario: User switches to list view or board cannot fit
+- **WHEN** the user chooses List view or the viewport cannot fit at least two usable board columns
+- **THEN** Coordinator mode SHALL render the same sourced rows and status groups in a list presentation
+- **AND** the list SHALL preserve grouping, sorting, stale-row, deep-link, and read-only action constraints.
 
 #### Scenario: Board remains read-only in v1
 - **WHEN** the v1 board renders session cards
 - **THEN** it SHALL NOT provide drag-to-reorder, drag-to-dispatch, drag-to-change-status, inline child-session approval, inline retry, or direct child-session mutation
-- **AND** Coordinator continuation approval SHALL be surfaced through the Coordinator chat as an ordinary visible message, not as a board or inspector row mutation.
-
-#### Scenario: Worktree identity is visually consistent
-- **WHEN** a Coordinator board card, list row, or inspector summary represents a session with a bound worktree
-- **THEN** it SHOULD render the worktree's persisted visual color using the same identity source as Agent Mode
-- **AND** sessions sharing the same worktree SHOULD show the same worktree color indicator across Coordinator and Agent Mode surfaces.
-
-#### Scenario: Session filtering is All Agents board-bottom chrome
-- **WHEN** the All Agents Board renders board or list presentation controls
-- **THEN** view and sort controls SHALL remain in the top board control lane
-- **AND** the session filter field SHALL render along the bottom of the board/list workspace rather than inline to the right of the top board controls
-- **AND** selected-Mission boards SHOULD omit the session filter field and ignore stale All Agents filter text while scoped to the selected Mission.
-
-### Requirement: Coordinator composer
-The system SHALL provide a scoped Coordinator composer as the only v1 Coordinator-mode write path.
-
-#### Scenario: Coordinator is live in the current window
-- **WHEN** a Coordinator is selected or detected
-- **AND** the Coordinator session has current-window live state
-- **THEN** the Coordinator view SHALL enable a Coordinator composer in the Coordinator rail.
-
-#### Scenario: Coordinator is not reachable from the current window
-- **WHEN** no Coordinator is selected or detected
-- **OR** the resolved Coordinator is persisted-only or owned by another window
-- **THEN** the Coordinator view SHALL disable the Coordinator composer or replace it with an `Open agent chat` affordance when route data is available
-- **AND** it SHALL NOT restore, steal, or create a session solely to enable the composer.
-
-#### Scenario: Coordinator backing runtime is the addressed actor
-- **WHEN** the Coordinator rail is addressing a real, marked, or production-demo Coordinator backing runtime
-- **THEN** the rail SHALL treat the composer as the user-facing path for talking to that Coordinator
-- **AND** it SHALL NOT expose `Open in Agent Mode` / `Open agent chat` for the Coordinator backing runtime itself
-- **AND** this restriction SHALL NOT remove Agent Mode deep links from supervised delegate rows or pending summaries.
-
-#### Scenario: User sends a Coordinator directive
-- **WHEN** the user submits text through the enabled Coordinator composer
-- **THEN** the Coordinator view SHALL deliver that text as an ordinary user message to the Coordinator session through the existing Agent Mode message path
-- **AND** it SHALL NOT wrap the directive in a new structured command envelope in v1.
-
-#### Scenario: Delegation events appear progressively
-- **WHEN** a Coordinator starts or selects a Mission with delegated child sessions
-- **THEN** the Coordinator chat SHOULD render delegated-session event cards as soon as those child sessions are projected
-- **AND** those event cards SHOULD update from the live board row state rather than waiting for the child to reach a terminal state
-- **AND** restored delegated event cards SHOULD preserve delegation/start chronology instead of reordering by terminal completion or last activity time.
-
-#### Scenario: Delegated event selects its board row
-- **WHEN** the user clicks a delegated-session event card in the Coordinator conversation
-- **AND** the delegated target still has a projected board or list row in the selected Mission scope
-- **THEN** the Coordinator view SHOULD select that row and reveal the inspector for it
-- **AND** the interaction MAY clear a local session filter that is hiding the selected row
-- **AND** the interaction SHALL NOT mutate the delegated session, Coordinator Mission ownership, Manual/Auto mode, or Agent Mode state.
-
-#### Scenario: Coordinator composer uses Agent Mode input affordances
-- **WHEN** the Coordinator composer is editable
-- **THEN** it MAY expose Agent Mode-compatible slash-skill insertion and workspace file-mention affordances that write into the ordinary directive text
-- **AND** it MAY expose compact provider MCP/tool preference controls for settings that affect Coordinator runtime launches or follow-up turns
-- **AND** those affordances SHALL NOT create child-session mutations, attachments, permission changes, or model switches unless a specific Coordinator-view behavior is defined.
-
-#### Scenario: Coordinator Mission Template starts a new Mission
-- **WHEN** the user selects a Coordinator Mission Template while composing a fresh Mission
-- **THEN** the Coordinator view SHALL send the template-wrapped prompt to the Coordinator runtime
-- **AND** it SHALL echo and persist the user's raw visible Mission text in the Coordinator rail and follow-through objective summary
-- **AND** it SHALL store lightweight selected-template metadata with Coordinator follow-through state
-- **AND** it SHALL clear the selected template after an accepted fresh Mission start
-- **AND** it SHALL preserve the selected template after a rejected fresh Mission send.
-
-#### Scenario: Existing Mission follow-up ignores Mission Template selection
-- **WHEN** the user sends an ordinary follow-up to an existing Coordinator Mission
-- **THEN** the Coordinator view SHALL send the raw visible follow-up text without applying any Mission Template
-- **AND** Mission Templates SHALL NOT behave as general follow-up macros.
-
-#### Scenario: Mission Templates are separate from Agent workflows
-- **WHEN** the Coordinator board, list, inspector, or delegated conversation card renders an Agent workflow badge such as Orchestrate or Review
-- **THEN** that badge SHALL remain read-only delegated child-session metadata sourced from Agent Mode workflow definitions
-- **AND** it SHALL NOT be treated as a Coordinator Mission Template
-- **AND** Coordinator Mission Templates SHALL be stored and managed separately from Agent Mode workflows.
-
-#### Scenario: User manages Coordinator Mission Templates
-- **WHEN** the user opens Mission Template management from the Coordinator composer picker
-- **THEN** the app SHALL support creating custom markdown templates, viewing built-in template markdown, cloning built-in templates, editing custom template markdown in-app, deleting custom templates, and revealing template files or the template folder
-- **AND** template markdown frontmatter MAY include `id`, `name`, `icon`, `accent_color`, `tooltip`, and `description`
-- **AND** template bodies SHALL support `$MISSION` and `$ARGUMENTS` placeholders
-- **AND** if a template has neither placeholder, the app SHALL append the raw Mission text after the template body.
-
-#### Scenario: Built-in Mission Template chains Deep Plan, Orchestrate, and Review
-- **WHEN** the user selects a built-in staged Mission Template for Deep Plan, Orchestrate, and Review
-- **THEN** the Coordinator runtime SHALL receive template guidance to start with a delegated `Deep Plan` workflow child
-- **AND** it SHALL stop when the Deep Plan child reaches a user-question, approval, or Needs-you checkpoint instead of answering on the user's behalf
-- **AND** after the user proceeds, the template guidance MAY continue with workflow-bearing `Orchestrate` and `Review` delegated children through the normal Agent Mode control-plane paths
-- **AND** mutable Orchestrate work SHALL still require explicit child worktree isolation before launch.
-
-#### Scenario: Coordinator records a Mission Plan
-- **WHEN** a Coordinator starts or revises a Mission with one or more intended workstreams
-- **THEN** it MAY update the selected Mission's Mission Plan through the external `coordinator_chat` control surface using `op: "mission_plan"`
-- **AND** the Mission Plan SHALL record a stable plan ID, revision, visible Mission objective, status, approval state, template summary when present, declared workstreams, future DAG-lite nodes, node workflow hints, node completion evidence, and execution events
-- **AND** each declared workstream SHALL record title, purpose, role, default execution policy, explicit worktree strategy, optional primary child session ID, optional related child session IDs, and optional worktree ID
-- **AND** the update MAY include optional status, approval state, DAG-lite nodes, and appended execution events
-- **AND** omitted objective, status, approval state, workstreams, or nodes SHALL preserve their previous stored values
-- **AND** updating the Mission Plan SHALL update Coordinator-mode projection metadata without submitting an ordinary Coordinator chat turn
-- **AND** it SHALL NOT create child sessions, mutate child run state, change status groups, or grant approval for mutable work.
-
-#### Scenario: Mission Plan nodes decompose user intent
-- **WHEN** a Coordinator records DAG-lite nodes for a nontrivial Mission Plan
-- **THEN** node titles SHOULD describe user-specific deliverables, decisions, or verification outcomes rather than generic workflow phases
-- **AND** workflow labels such as Deep Plan, Orchestrate, or Review SHOULD be recorded as node workflow hints instead of being used as the primary node identity
-- **AND** each nontrivial node SHOULD include completion evidence that states what proves the node is done
-- **AND** review nodes SHOULD depend on the implementation or verification nodes they review
-- **AND** parallel nodes SHOULD be used only when their files, worktrees, and context boundaries do not overlap.
-
-#### Scenario: Coordinator queries Mission status
-- **WHEN** an external Coordinator/debugging client calls `coordinator_chat` with `op: "mission_status"` for the selected or requested Mission
-- **THEN** the response SHALL be read-only and SHALL NOT submit a Coordinator chat turn or mutate Mission state
-- **AND** it SHALL include the Mission's plan revision, status, approval state, objective, workstreams, DAG-lite nodes, node workflow hints, node completion evidence, dependency satisfaction, node counts by status, and recent events when a Mission Plan exists
-- **AND** it SHOULD include board/session bindings for nodes or workstreams that resolve to projected delegated rows
-- **AND** it SHALL include a concise debug summary suitable for external coordinator chats.
-
-#### Scenario: Mission Plan workstream declares worktree strategy
-- **WHEN** a Coordinator records a Mission Plan workstream
-- **THEN** it SHALL declare the lane's worktree strategy as one of read-only/no worktree, create isolated worktree, reuse existing worktree, reuse the same workstream worktree, or ask the user
-- **AND** read-only workstreams SHOULD use the read-only/no-worktree strategy
-- **AND** independent parallel mutable workstreams SHOULD use separate create-isolated strategies
-- **AND** fresh review of the same mutable result SHOULD use the same-workstream strategy
-- **AND** overlapping mutable work SHOULD ask the user or serialize by default.
-
-#### Scenario: Mission Plan projects into Coordinator conversation
-- **WHEN** the selected Mission has a stored Mission Plan
-- **THEN** the Coordinator conversation MAY render a compact Mission Plan card ahead of the ordinary transcript
-- **AND** that card SHALL show the declared objective and workstream summaries as Mission context
-- **AND** it SHALL NOT render a declared workstream as a board card unless a matching projected child session row exists.
-
-#### Scenario: Mission Plan renders in right-panel Plan presentation
-- **WHEN** the selected Mission has a stored Mission Plan
-- **THEN** the right work panel SHALL offer a read-only `Plan` presentation beside `Board`
-- **AND** the Plan presentation SHALL show plan revision, status, approval state, objective, declared workstreams, DAG-lite nodes, workflow hint chips, completion evidence, and recent node events when present
-- **AND** when no Mission Plan is stored, the Plan presentation SHALL show an empty state instead of board rows
-- **AND** the former full List presentation SHALL remain available only as the responsive fallback when the Board cannot fit.
-
-#### Scenario: Plan node uses shared inspector surface
-- **WHEN** the user selects a DAG-lite node in the selected Mission Plan
-- **THEN** the stacked inspector SHALL show node title, status, workflow hint, role/detail, completion evidence, execution policy, declared workstream, dependencies, bound session or interaction IDs, and recent node events
-- **AND** it MAY show an Open Agent affordance only when the node's bound session resolves to a routeable projected row
-- **AND** it SHALL NOT show child reply controls for a plan node because the Plan tab is an observability surface.
-
-#### Scenario: Mission Plan enriches projected workstreams
-- **WHEN** a projected delegated row's session ID matches a Mission Plan workstream's primary or related child session IDs
-- **THEN** the row's `CoordinatorWorkstream` summary MAY include the declared title, purpose, role, default execution policy, worktree strategy, and declared worktree from that Mission Plan entry
-- **AND** the inspector MAY show those declared fields alongside sourced live/session state
-- **AND** the declared fields SHALL NOT override sourced lifecycle state, workflow metadata, routeability, or worktree identity from the actual child session.
-
-#### Scenario: Mission Plan persists with Coordinator session metadata
-- **WHEN** the app refreshes the Coordinator session index or restarts
-- **THEN** persisted Coordinator Mission entries SHALL preserve lightweight Mission Plan metadata
-- **AND** selecting that Mission after restore SHOULD recover the Mission Plan card and declared workstream enrichment without requiring the Coordinator backing chat or delegated child chats to be opened first.
-
-#### Scenario: Coordinator chat answers an owned child checkpoint
-- **WHEN** a delegated child session owned by the selected Mission has a live pending interaction
-- **THEN** the selected-Mission board SHALL classify that child under `Needs you`
-- **AND** when the child pending interaction contains structured `ask_user` fields, the Coordinator chat composer SHALL show those fields with the same option labels, option descriptions, custom-answer affordance, skip controls, and completion validation expected by the child interaction
-- **AND** submitting that structured Coordinator-chat checkpoint SHALL forward selected options, custom answers, or skipped answers to the child's pending interaction response path rather than converting the answer through freeform text
-- **AND** for non-structured pending interaction kinds, the Coordinator chat composer MAY fall back to a visible text checkpoint with the pending title, prompt, and details
-- **AND** the external `coordinator_chat` control surface SHALL support structured child-checkpoint answers keyed by question ID as well as the text fallback
-- **AND** the rail transcript SHALL visibly record that the user answered the child checkpoint
-- **AND** Auto mode SHALL NOT proactively resume the Coordinator while the owned child remains in `Needs you`.
-
-#### Scenario: External test client submits a Coordinator directive
-- **WHEN** a direct external MCP client uses the Coordinator chat control surface to list, select, create, or submit to Coordinator parents in the current window
-- **THEN** the app SHALL route accepted submissions through the same Coordinator view submission path as the visible Coordinator composer
-- **AND** the app SHALL target the existing selected or explicitly addressed Coordinator parent unless the request explicitly asks for a fresh parent
-- **AND** it SHALL return structured Coordinator, composer, and board state suitable for live smoke validation
-- **AND** the control surface SHALL NOT be advertised to in-agent role tool catalogs or used as a recursive Coordinator self-control tool.
-
-#### Scenario: Coordinator mode is manual by default
-- **WHEN** the Coordinator view is created for a workspace
-- **THEN** the Manual/Auto mode SHALL default to Manual unless the user has previously changed the persisted setting
-- **AND** the mode control SHALL be presented as Coordinator chat/composer-level state rather than as a Kanban board setting
-- **AND** Manual mode SHALL leave the Coordinator runtime to report current results/status and wait for the user's next directive at ordinary turn boundaries.
-
-#### Scenario: User enables Coordinator Auto mode
-- **WHEN** the user enables the persisted Coordinator Auto mode
-- **THEN** the Coordinator runtime MAY proactively continue supervising delegated work through existing Agent Mode control-plane/message paths until the user's original objective is satisfied
-- **AND** it MAY wait, poll, or steer delegated Agent sessions when the safe next step is clear
-- **AND** it SHALL NOT change the user-submitted directive text, create a new structured Coordinator command envelope, directly mutate board/list rows, change Kanban navigation/presentation state, or bypass normal Agent Mode session state.
-
-#### Scenario: Coordinator-owned checks stay recoverable
-- **WHEN** the Coordinator runtime performs its own follow-through, final inspection, or child recovery steps
-- **THEN** it SHOULD prefer app-owned structured MCP tools such as Agent session wait/poll/log and Git status/diff over raw shell commands for routine status, diff, and validation checks
-- **AND** it SHOULD use bounded waits plus poll, log, steer, or cancel to recover a delegated child or workflow that appears stuck
-- **AND** it SHALL NOT rely on a raw shell loop in the Coordinator turn for routine child recovery or final confirmation when a structured MCP tool can answer the question.
-
-#### Scenario: Coordinator chains workflow-bearing delegated sessions
-- **WHEN** Coordinator Auto mode is enabled
-- **AND** the user asks for a multi-stage workflow such as Orchestrate followed by Review
-- **THEN** the Coordinator runtime MAY start separate workflow-bearing delegated Agent sessions through `agent_run.start` with `workflow_name` or `workflow_id`
-- **AND** later workflow stages MAY bind to the same explicit child worktree created or returned by an earlier delegated stage
-- **AND** the Coordinator SHALL continue to treat those workflow sessions as normal delegated children whose lifecycle state, review output, and worktree diff are observed through Agent Mode control-plane and MCP projection paths.
-
-#### Scenario: Coordinator Auto mode reaches a boundary
-- **WHEN** Coordinator Auto mode is enabled
-- **AND** a delegated session requires user input, permission, human continuation, or is blocked or ambiguous
-- **THEN** the Coordinator runtime SHALL stop at that boundary and surface the required user decision/status
-- **AND** it SHALL NOT bypass or auto-acknowledge the user's continuation, approval, permission, or Needs-you gate.
-
-#### Scenario: App-generated follow-through event resumes Coordinator
-- **WHEN** Coordinator Auto mode is enabled
-- **AND** the owning Coordinator runtime is idle
-- **AND** a supervised delegated child reaches a terminal state or reviewable child output becomes available
-- **THEN** the Coordinator view MAY submit a structured internal resume directive to the existing owning Coordinator runtime
-- **AND** it SHALL NOT create a new Coordinator parent runtime
-- **AND** the resume directive SHALL describe the observed event as app-generated context for the original objective rather than a new user request.
-
-#### Scenario: Auto mode classifies projected workstreams
-- **WHEN** the Coordinator view has projected a workstream summary for a supervised row
-- **THEN** auto-mode resume/hold decisions SHALL prefer the projected owner Coordinator, phase, and next action over parallel ad hoc inference from row titles, assistant prose, or lower-level fallback status
-- **AND** lower-level row fields MAY be used only when the structured workstream summary is unavailable.
-
-#### Scenario: Coordinator continuation checkpoint is chat-owned
-- **WHEN** the Coordinator pauses at a meaningful continuation boundary
-- **AND** the selected Coordinator parent can receive another message
-- **AND** the Coordinator response carries explicit continuation checkpoint metadata
-- **THEN** the Coordinator rail MAY surface chat-level actions such as `Proceed`, `Revise`, and `Stop here`
-- **AND** selecting `Proceed` SHALL submit an ordinary visible user message to the same Coordinator parent
-- **AND** it SHALL NOT create a new Coordinator parent runtime
-- **AND** it SHALL NOT grant permission to apply, merge, approve, commit, push, create a PR, or perform irreversible actions unless the message explicitly grants that action.
-- **AND** the checkpoint metadata SHALL be stripped from Coordinator rail display text.
-
-#### Scenario: Ordinary Coordinator replies do not create checkpoints
-- **WHEN** the Coordinator publishes a normal status update, conversational answer, or final summary without explicit checkpoint metadata
-- **THEN** the Coordinator rail SHALL NOT surface `Proceed`, `Revise`, or `Stop here` actions for that message.
-
-#### Scenario: Inspector remains inspection-only
-- **WHEN** a selected delegated row has review, merge, worktree, status, or session details
-- **THEN** the inspector MAY expose those details and an `Open agent chat` affordance
-- **AND** routeable but non-live reply affordances MAY open Agent Mode so the user can reply in the existing Agent session
-- **AND** it SHALL NOT own mission continuation approval semantics.
-
-#### Scenario: Done does not imply human acceptance
-- **WHEN** a delegated row reaches the `Done` group
-- **THEN** `Done` SHALL mean the child/workstream reached a terminal session outcome
-- **AND** it SHALL NOT imply the human accepted, merged, committed, pushed, or otherwise approved the produced work.
-
-#### Scenario: Follow-through resume events are deduplicated
-- **WHEN** repeated lifecycle refreshes observe the same child terminal state or reviewable child output
-- **THEN** the Coordinator view SHALL use stable event identifiers to avoid submitting duplicate resume directives for the same event
-- **AND** if the Coordinator runtime is active, the event MAY remain pending until the runtime reaches a turn boundary.
-
-#### Scenario: Production-demo Coordinator bridge dispatches children
-- **WHEN** the production-demo Coordinator runtime delegates work
-- **THEN** delegation SHALL use the existing Agent Mode MCP control-plane primitive, such as `agent_run.start`, to create normal tab-scoped Agent sessions
-- **AND** the demo Coordinator runtime root SHALL be modeled as a marked Coordinator backing runtime rather than as a separate non-tab runtime
-- **AND** delegated child sessions SHALL retain their normal tab-coupled selection, worktree, transcript, permission, and routing state.
-
-#### Scenario: Read-only Coordinator delegation may omit a worktree
-- **WHEN** the production-demo Coordinator runtime delegates read-only investigation, summarization, or status work
-- **THEN** the delegated child MAY be started without an explicit worktree sandbox
-- **AND** the delegated child SHALL still retain normal tab-coupled transcript, permission, and routing state.
-
-#### Scenario: Mutable Coordinator delegation requires an explicit child worktree
-- **WHEN** the production-demo Coordinator runtime delegates work that may edit files, run validation that writes outputs, generate a merge preview, commit, or prepare a PR
-- **THEN** the delegated child start SHALL include an explicit isolated execution sandbox such as `worktree_create:true` or a specific `worktree_id`
-- **AND** inherited worktree binding alone SHALL NOT satisfy this requirement
-- **AND** the worktree identity SHALL be available before the child session is created so follow-through, review, and merge state can be attributed to a stable child execution context.
-
-#### Scenario: Mutable Coordinator delegation without a worktree is rejected
-- **WHEN** a Coordinator-owned `agent_run.start` attempts mutable delegated work without an explicit child worktree sandbox
-- **THEN** the app SHALL reject the start before creating a delegated child session
-- **AND** the rejection SHALL tell the Coordinator how to retry with `worktree_create:true` or an existing `worktree_id`
-- **AND** ordinary non-Coordinator Agent Mode starts SHALL preserve their existing worktree behavior.
-
-#### Scenario: Coordinator actor bridge remains distinct from the target role
-- **WHEN** v1 uses the production-demo Coordinator bridge
-- **THEN** the Coordinator actor itself SHALL NOT be specified as requiring `workflow_name="orchestrate"`
-- **AND** delegated child sessions MAY still carry real `workflow_id` or `workflow_name` metadata
-- **AND** the production-demo bridge SHALL be treated as a scaffold toward the first-class Coordinator role specified by `add-coordinator-role`
-- **AND** the bridge SHALL NOT be treated as the durable Coordinator role identity, policy, or session-visibility mechanism.
-
-#### Scenario: Directive is displayed after send
-- **WHEN** a Coordinator directive is accepted by the Coordinator view
-- **THEN** the Coordinator view MAY echo the user's sent directive into the Coordinator rail transcript
-- **AND** Coordinator responses and child-session effects SHALL surface through the normal coarse Coordinator view snapshot refresh rather than a live token stream in the rail.
-
-#### Scenario: Coordinator rail transcript is cleared
-- **WHEN** the user clears the Coordinator rail chat display
-- **THEN** the Coordinator view SHALL reset only the rail's displayed transcript state
-- **AND** it SHALL NOT delete, truncate, or rewrite the underlying Coordinator session transcript
-- **AND** the Coordinator session SHALL continue to persist and archive through the existing Agent Mode session lifecycle.
-
-#### Scenario: Coordinator is mid-run
-- **WHEN** the user attempts to send a directive while the Coordinator is mid-run
-- **THEN** the Coordinator view MAY queue the directive as the next ordinary user turn or disable send
-- **AND** it SHALL NOT implement Coordinator-view-side interrupt or steering semantics in v1.
-
-#### Scenario: Board state remains protected
-- **WHEN** the Coordinator composer sends a directive
-- **THEN** the composer SHALL NOT directly mutate child session state, dispatch cards, approve pending interactions, retry sessions, or change board/list status groups.
-
-### Requirement: Session row projection
-The system SHALL project Coordinator mode session rows/cards from structured session and live-state data.
-
-#### Scenario: Session row renders
-- **WHEN** a session appears as a Coordinator view card or list row
-- **THEN** the card or row SHALL derive identity, lineage, provider/model, worktree state, MCP origin, and run status from structured session metadata or live state.
-
-#### Scenario: Workflow metadata is absent
-- **WHEN** a Coordinator view row has no sourced workflow metadata
-- **THEN** the row SHALL omit workflow labels.
-
-#### Scenario: Workflow metadata is present
-- **WHEN** a Coordinator view row has a sourced workflow display summary derived from real Agent Mode workflow metadata
-- **THEN** the card, list row, inspector, or related Coordinator action chip MAY render a compact read-only workflow label with display name, icon, and accent
-- **AND** the label SHALL NOT affect grouping, sorting, filtering, action creation, model/tool selection, permissions, or runtime behavior.
-
-#### Scenario: Persisted workflow summary survives restart
-- **WHEN** a workflow-bearing delegated Agent session is restored from persisted session metadata after app restart
-- **THEN** Coordinator rows, inspectors, and delegated conversation cards SHOULD retain the workflow label without requiring the user to open the Agent chat first
-- **AND** Agent session metadata index reconciliation SHALL preserve an existing workflow summary or recover it from the persisted session file when rebuilding from lightweight stubs.
-
-#### Scenario: Workflow metadata changes
-- **WHEN** the latest sourced user-turn workflow for a live row changes
-- **THEN** the Coordinator view SHALL update the workflow label from the new display summary.
-
-#### Scenario: Workflow metadata clears
-- **WHEN** a later live user turn for the same row has no workflow metadata
-- **THEN** the Coordinator view SHALL clear the workflow label rather than preserving the previous workflow as stale context.
-
-#### Scenario: Objective label has no source
-- **WHEN** no structured objective source exists
-- **THEN** the row SHALL omit objective labels.
-
-#### Scenario: Workstream source exists
-- **WHEN** bound worktree or logical-root metadata exists for a session and is useful for the UI
-- **THEN** the Coordinator view MAY project that structural metadata as a workstream grouping label
-- **AND** delegated conversation cards SHOULD use the same worktree visual identity source as board cards and inspector fields.
-
-#### Scenario: Workstream source is absent
-- **WHEN** no structured workstream source exists
-- **THEN** the Coordinator view SHALL omit workstream chips
-- **AND** it SHALL NOT parse session titles to invent workstream labels.
-
-#### Scenario: Workstream summary is projected
-- **WHEN** a Coordinator view row represents delegated Agent work
-- **THEN** the Coordinator view SHALL project a read-only `CoordinatorWorkstream` summary from structured session/live-state data
-- **AND** the summary SHALL include the session objective/title, current phase, child session ID, owner Coordinator root when available, worktree binding when available, workflow label when available, available merge/inspection state, and a derived next action when the row is actionable
-- **AND** the summary ID SHALL be stable for the child session it describes
-- **AND** the summary SHALL remain a flat read model that can later receive dependency edges without requiring a DAG in v1
-- **AND** the summary SHALL NOT mutate runtime state, approve actions, apply/merge/commit changes, or parse assistant prose as authoritative state.
-
-#### Scenario: Declared Mission workstream source exists
-- **WHEN** a Coordinator Mission Plan declares a workstream that references the row's child session ID
-- **THEN** the row's workstream summary MAY retain the declared Mission workstream as supplemental metadata
-- **AND** the declared metadata SHALL be treated as Mission plan intent rather than authoritative live session state
-- **AND** row grouping, sorting, workflow badges, and routeability SHALL still come from structured session/live-state projection.
-
-### Requirement: Status grouping and sorting
-The system SHALL group Coordinator view rows by testable, structured status rules.
+- **AND** Coordinator continuation approval SHALL be surfaced through the Coordinator chat as a visible message.
 
 #### Scenario: Group precedence is evaluated
 - **WHEN** a row has signals matching more than one group
-- **THEN** the Coordinator view SHALL evaluate groups in this order: `Needs you`, `Blocked`, `Working`, `Review`, `Done`, `Idle`.
+- **THEN** Coordinator mode SHALL evaluate groups in this order: `Needs you`, `Blocked`, `Working`, `Review`, `Done`, `Idle`.
 
-#### Scenario: Session needs user attention
-- **WHEN** a session has current-window live run state `.waitingForUser`, `.waitingForQuestion`, or `.waitingForApproval`
-- **THEN** the Coordinator view SHALL group that row under `Needs you`
+#### Scenario: Needs-you grouping uses live user-attention state
+- **WHEN** a current-window live session has `.waitingForUser`, `.waitingForQuestion`, or `.waitingForApproval`
+- **THEN** the row SHALL group under `Needs you`
 - **AND** live MCP-controlled pending interaction data MAY enrich the row prompt/details when available.
 
-#### Scenario: Persisted-only card has active-looking stale run state
+#### Scenario: childAsk auto suppresses user-facing pending child rows
+- **WHEN** a selected-Mission child interaction is pending and effective `childAsk` resolves to Auto
+- **THEN** that pending child interaction SHALL be presentation-suppressed from the user Needs-you queue/lane
+- **AND** the bound row SHALL remain in Working or another non-user-attention presentation state while the Director route is active
+- **AND** runtime completion still SHALL satisfy the ledger requirements defined by the trust-invariants capability.
+
+#### Scenario: Stale persisted rows are not live attention
 - **WHEN** a card or row is known only from persisted metadata and has no current-window live state
-- **AND** its persisted run state is `.running`, `.waitingForUser`, `.waitingForQuestion`, or `.waitingForApproval`
-- **THEN** the Coordinator view SHALL NOT count that card or row as live `Working` or `Needs you` in v1.
+- **THEN** Coordinator mode SHALL visually mark it stale/persisted-only
+- **AND** it SHALL NOT count active-looking stale run state as live `Working`, `Needs you`, or `Blocked` contribution.
 
-#### Scenario: Persisted-only card has blocked-looking stale metadata
-- **WHEN** a card or row is known only from persisted metadata and has no current-window live state
-- **AND** its persisted run state is `.failed` or its persisted merge/worktree metadata reports conflicted attention
-- **THEN** the Coordinator view SHALL render that card or row as stale/persisted-only rather than a live `Blocked` contributor
-- **AND** it SHALL NOT increment live Blocked top counts or place the stale row in the `Blocked` group solely from persisted-only blocked-looking metadata.
+#### Scenario: Sort controls are read-only
+- **WHEN** a user selects `Last updated`, `Name`, or `Priority` sorting
+- **THEN** Coordinator mode SHALL reorder cards or rows only within their existing status groups
+- **AND** it SHALL NOT change a row's group, run state, pending state, Coordinator relationship, or persisted session state.
 
-#### Scenario: Persisted-only card renders in board view
-- **WHEN** a persisted-only session appears in board view
-- **THEN** the Coordinator view SHALL visually mark the card as stale/persisted-only
-- **AND** it SHALL not present the card as a live actionable card
-- **AND** it SHALL preserve the same route/no-restore constraints used by list rows.
+### Requirement: Coordinator composer and Mission template surface
+The system SHALL provide a scoped Coordinator composer as the only v1 Coordinator-mode write path.
 
-#### Scenario: Session is blocked
-- **WHEN** a current-window live session has `.failed` run state or conflicted worktree/merge attention
-- **THEN** the Coordinator view SHALL group that row under `Blocked`.
+#### Scenario: Coordinator is live in the current window
+- **WHEN** a Coordinator is selected or detected and has current-window live state
+- **THEN** the Coordinator view SHALL enable a Coordinator composer in the Coordinator rail.
 
-#### Scenario: Session is working
-- **WHEN** a session has current-window live run state `.running`
-- **THEN** the Coordinator view SHALL group that row under `Working`.
+#### Scenario: Coordinator is not reachable from the current window
+- **WHEN** no Coordinator is selected or detected, or the resolved Coordinator is persisted-only or owned by another window
+- **THEN** Coordinator mode SHALL disable the composer or replace it with a route affordance when route data is available
+- **AND** it SHALL NOT restore, steal, or create a session solely to enable the composer.
 
-#### Scenario: Completed session has review material
-- **WHEN** a session run state is `.completed` or `.cancelled`
-- **AND** structured review material such as a worktree merge preview remains available for human review
-- **THEN** the Coordinator view MAY group that row under `Review` when the material is the next actionable thing to inspect
-- **AND** the row and inspector MAY expose merge/inspection context for inspection
-- **AND** the inspector SHALL NOT own continuation approval for the Coordinator objective.
+#### Scenario: User sends a Coordinator directive
+- **WHEN** the user submits text through the enabled Coordinator composer
+- **THEN** Coordinator mode SHALL deliver that text as an ordinary user message to the Coordinator session or as the equivalent external `coordinator_chat` submit path
+- **AND** it SHALL NOT directly mutate child session state, dispatch cards, approve pending interactions, retry sessions, or change board/list status groups.
 
-#### Scenario: Terminal session is eligible for Done
-- **WHEN** a completed or cancelled row has no higher-priority Needs-you, Blocked, Working, or Review signal
-- **THEN** the Coordinator view SHALL keep that row eligible for `Done`
-- **AND** `Done` SHALL remain an observational terminal state, not a human acceptance state.
+#### Scenario: Mission Template starts a new Mission
+- **WHEN** the user selects a Coordinator Mission Template while composing a fresh Mission
+- **THEN** the Coordinator view SHALL send template-wrapped guidance to the Coordinator runtime while preserving the user's raw visible Mission text in the rail and objective summary
+- **AND** selected-template metadata SHALL remain distinct from Mission Policy and Agent workflow metadata.
 
-#### Scenario: Coordinator asks for human continuation after inspection
-- **WHEN** the Coordinator determines the next step should wait for human confirmation after reviewing completed work
-- **THEN** the confirmation SHALL be requested in the Coordinator conversation
-- **AND** any continuation response SHALL be represented as a visible message in that conversation.
+#### Scenario: Existing Mission follow-up ignores Mission Template selection
+- **WHEN** the user sends an ordinary follow-up to an existing Coordinator Mission
+- **THEN** the Coordinator view SHALL send the raw visible follow-up text without applying Mission Template wrapping
+- **AND** Mission Templates SHALL NOT behave as general follow-up macros.
 
-#### Scenario: Session is done
-- **WHEN** a session run state is `.completed` or `.cancelled`
-- **AND** no unacknowledged structured review material remains
-- **THEN** the Coordinator view SHALL group that row under `Done`.
+#### Scenario: Composer keeps Agent Mode visual language
+- **WHEN** the Coordinator rail renders its scoped composer
+- **THEN** it SHALL use a composer surface consistent with Agent Mode's message bar
+- **AND** it SHALL NOT expose Agent Mode model, workflow, broad permission, attachment, child-session mutation, or unrelated context controls unless those controls map to real Coordinator-view behavior.
 
-#### Scenario: Session is idle
-- **WHEN** a session run state is `.idle` and no higher-priority group applies
-- **THEN** the Coordinator view SHALL group that row under `Idle`.
-
-#### Scenario: Rows use default read-only sort
-- **WHEN** cards or rows are displayed within a status group
-- **THEN** the Coordinator view SHALL sort cards or rows within that group by `Last updated` by default
-- **AND** it SHALL use cheap metadata such as attention age, activity date, last modified date, or completion date
-- **AND** it SHALL NOT require per-row transcript loads solely to sort rows.
-
-#### Scenario: User changes read-only sort
-- **WHEN** the user selects `Last updated`, `Name`, or `Priority` sorting
-- **THEN** the Coordinator view SHALL reorder cards or rows only within their existing status groups
-- **AND** it SHALL NOT change a card's or row's group, run state, pending state, Coordinator relationship, or persisted session state.
-
-#### Scenario: Priority sort has limited source data
-- **WHEN** `Priority` sorting is selected
-- **THEN** the Coordinator view SHALL use structured priority or attention metadata already present in the Coordinator view projection when available
-- **AND** cards or rows without structured priority data SHALL remain ordered by a deterministic fallback
-- **AND** the Coordinator view SHALL NOT infer priority from assistant prose or session titles.
-
-#### Scenario: Drag ordering is unavailable in v1
-- **WHEN** the v1 Coordinator view renders grouped cards or rows
-- **THEN** it SHALL NOT provide drag-to-reorder, drag-to-dispatch, or drag-to-change-status interactions.
-
-#### Scenario: High-priority board columns are non-empty
-- **WHEN** `Needs you`, `Blocked`, or `Working` groups contain cards
-- **THEN** the Coordinator view SHALL show those board columns by default when the board view is active.
-
-#### Scenario: Lower-priority board columns are non-empty
-- **WHEN** `Review` or `Done` groups contain cards
-- **THEN** the Coordinator view SHALL keep those columns available in board view
-- **AND** it MAY de-emphasize, horizontally scroll, or collapse lower-priority columns when space is constrained
-- **AND** it SHALL keep counts visible when a column is collapsed.
-
-### Requirement: Pending interaction display
-The system SHALL display pending interactions as read-only prompts that deep-link to Agent Mode.
+### Requirement: Pending interaction and deep-link affordances
+The system SHALL route pending interactions and row detail through existing Agent Mode or selected-Mission child paths without inventing unsourced decisions.
 
 #### Scenario: Pending interaction is available
-- **WHEN** a live MCP-controlled session has an `AgentRunMCPSnapshot.Interaction` that can be projected into the Coordinator view snapshot
-- **THEN** the Coordinator view SHALL render a read-only pending interaction summary with kind, title, prompt, details, and optional Agent UI route
-- **AND** non-MCP pending prompt/detail projection SHALL remain a follow-up Agent Mode contract change.
+- **WHEN** a live MCP-controlled session has an interaction that can be projected into the Coordinator view snapshot
+- **THEN** Coordinator mode SHALL render a read-only pending interaction summary with kind, title, prompt, details, and optional Agent UI route.
 
-#### Scenario: Pending interaction has no route
-- **WHEN** a pending interaction summary cannot resolve an Agent UI route
-- **THEN** the Coordinator view SHALL hide or disable `Open agent chat` and decision navigation affordances for that summary.
+#### Scenario: Selected-Mission child checkpoint is bridged into Coordinator chat
+- **WHEN** a delegated child session owned by the selected Mission has a live pending interaction and `childAsk` resolves to Ask
+- **THEN** the selected-Mission board SHALL classify that child under `Needs you`
+- **AND** the Coordinator chat composer MAY show structured fields, option labels, option descriptions, custom-answer affordance, skip controls, and validation for that child interaction
+- **AND** submitting the answer SHALL forward structured answers or text fallback to the child pending interaction path.
 
-#### Scenario: User needs to respond outside selected-Mission child checkpoint
-- **WHEN** a user chooses to respond to a pending interaction from the Coordinator view
-- **AND** the pending interaction is not an owned child checkpoint currently bridged into the selected Coordinator Mission chat
-- **THEN** the Coordinator view SHALL route the user to the existing Agent Mode session when route data is available
-- **AND** the Coordinator view SHALL NOT execute approval, decline, retry, reassign, or unrelated directive actions in v1.
+#### Scenario: User responds outside selected-Mission child checkpoint
+- **WHEN** a user chooses to respond to a pending interaction that is not bridged into the selected Mission child path
+- **THEN** Coordinator mode SHALL route the user to the existing Agent Mode session when route data is available
+- **AND** it SHALL NOT execute approval, decline, retry, reassign, or unrelated directive actions in v1.
+
+#### Scenario: Deep link is resolvable
+- **WHEN** a Coordinator view row has active workspace context, a resolvable tab, and optional session ID
+- **THEN** Coordinator mode SHALL provide an `Open agent chat` affordance that opens the existing Agent Mode session.
+
+#### Scenario: Deep link is not resolvable
+- **WHEN** a row lacks required route data or is persisted-only without a resolvable tab
+- **THEN** Coordinator mode SHALL show the row without trying to create or restore a session as part of rendering.
 
 #### Scenario: Assistant prose mentions a decision
 - **WHEN** assistant text contains words that appear to request a user decision
-- **THEN** the Coordinator view SHALL NOT classify it as a pending interaction unless structured pending state exists.
+- **THEN** Coordinator mode SHALL NOT classify it as a pending interaction unless structured pending state exists.
 
-### Requirement: Agent chat deep link
-The system SHALL deep-link Coordinator view rows to the existing Agent Mode session when route data is resolvable.
-
-#### Scenario: Route is resolvable
-- **WHEN** a Coordinator view row has active workspace context, a resolvable tab, and optional session ID
-- **THEN** the Coordinator view SHALL provide an `Open agent chat` affordance that opens the existing Agent Mode session.
-
-#### Scenario: Inspector reply target is routeable but not live
-- **WHEN** a selected delegated row is not live in the current Coordinator window
-- **AND** the row has a resolvable Agent chat route
-- **THEN** the inspector reply affordance SHOULD present an explicit `Open to reply` action
-- **AND** activating it SHALL route to the existing Agent Mode session instead of requiring the user to first discover the separate `Open Agent` button.
-
-#### Scenario: Route is not resolvable
-- **WHEN** a Coordinator view row lacks required route data
-- **THEN** the Coordinator view SHALL hide or disable `Open agent chat` for that row.
-
-#### Scenario: Persisted-only row lacks a resolvable tab
-- **WHEN** a persisted-only row has no active workspace/tab/session route
-- **THEN** the Coordinator view SHALL show the row without `Open agent chat`
-- **AND** it SHALL NOT attempt to create or restore a session as part of Coordinator view rendering.
-
-#### Scenario: Row is the Coordinator backing runtime
-- **WHEN** a session or runtime is identified as the Coordinator backing actor rather than a supervised delegate row
-- **THEN** the Coordinator view SHALL NOT expose it as an Agent chat deep-link target from the Coordinator rail or board/list fleet
-- **AND** the implementation SHALL prefer excluding it from supervised-session enumeration before leaf views need to hide it.
-
-#### Scenario: Row is Coordinator-internal housekeeping
-- **WHEN** a session is explicitly marked as Coordinator-internal housekeeping
-- **THEN** the Coordinator view SHALL exclude it from board/list fleet rows and Coordinator action-chip rows
-- **AND** the implementation SHALL NOT infer this internal state from session title text.
-
-### Requirement: Compact MCP awareness
-The system SHALL provide compact MCP client/tool-call awareness without replacing existing MCP status surfaces.
+### Requirement: Compact MCP awareness and progressive disclosure
+The system SHALL keep Coordinator mode calm by default while exposing sourced detail through deliberate actions.
 
 #### Scenario: Coordinator view is visible
-- **WHEN** the Coordinator mode is visible
-- **THEN** the system SHALL subscribe to MCP Coordinator mode updates through the Coordinator view consumer provided by `add-mcp-coordinator-mode-consumer`.
+- **WHEN** Coordinator mode is visible
+- **THEN** it SHALL subscribe to Coordinator-view-specific MCP update consumption and show compact client/in-flight/recent-call awareness in stable board chrome.
 
 #### Scenario: Coordinator view is hidden
-- **WHEN** the Coordinator mode is not visible
-- **THEN** the system SHALL stop Coordinator-view-specific MCP update consumption.
-
-#### Scenario: MCP clients or recent calls exist
-- **WHEN** MCP clients are connected, idle, or active, or the running MCP server has recent tool-call history
-- **THEN** the Coordinator view SHALL show compact client and in-flight/recent tool-call awareness in stable board chrome
-- **AND** it SHALL allow MCP awareness totals to include server/window-scoped clients or calls not represented by the active-workspace row list
-- **AND** recent-call history without connected clients SHALL use a history-aware idle presentation rather than the empty/off state.
-
-#### Scenario: MCP is off or empty
-- **WHEN** the MCP server is off or has no connected clients and no recent tool-call history
-- **THEN** the Coordinator view SHALL show a compact empty/off state rather than a full status surface.
-
-### Requirement: Progressive disclosure
-The system SHALL keep the Coordinator view calm by default and expose detail only through deliberate user action.
-
-#### Scenario: Coordinator rail avoids duplicate fleet views
-- **WHEN** the Coordinator view renders the Coordinator rail in v1
-- **THEN** the rail SHALL focus on Coordinator identity, selection, optional context, and the scoped Coordinator composer
-- **AND** it SHALL NOT provide a separate `Agents` tab, agent roster, or "agents in current Coordinator context" surface that duplicates the board/list fleet view.
-
-#### Scenario: Coordinator Mission history is inline
-- **WHEN** multiple Coordinator parent sessions are available in the active workspace
-- **THEN** the leading Coordinator rail SHALL present those Coordinator-specific parent sessions as `Missions`
-- **AND** it SHALL render the new-Mission row and selectable Mission rows inline rather than behind a Mission popover
-- **AND** dormant persisted Missions MAY be grouped behind an archived Mission disclosure within the same rail
-- **AND** persisted-only Mission rows SHALL NOT render a redundant per-row `Persisted` badge
-- **AND** an expanded archived section SHALL use the rail's flexible scroll area rather than a fixed tiny row cap
-- **AND** selecting an existing Mission row SHALL retarget the rail conversation and selected-Mission board scope without creating a new Coordinator runtime.
-
-#### Scenario: Coordinator rail titlebar stays compact
-- **WHEN** the leading Coordinator rail renders its top chrome
-- **THEN** it SHALL provide an icon-only `New Mission` affordance near the window controls and rail collapse control
-- **AND** it SHALL avoid low-value descriptive title text in that top chrome.
-
-#### Scenario: Coordinator rail is collapsed
-- **WHEN** the user hides the leading Coordinator rail
-- **THEN** the Coordinator view SHALL preserve a slim left-edge affordance for showing the rail again
-- **AND** that restore affordance SHALL be independent from Kanban toolbar controls and inspector hide/show controls.
-
-#### Scenario: Sidebars use floating chrome
-- **WHEN** the Coordinator rail, collapsed rail restore, right work panel, or inspector side surface renders
-- **THEN** the surface SHALL use rounded floating material chrome with subtle border/shadow treatment rather than a hard full-height splitter seam.
-
-#### Scenario: Coordinator rail is not a session proxy
-- **WHEN** the Coordinator rail renders the current Coordinator conversation
-- **THEN** it SHALL present the conversation as the place where the user talks to the Coordinator
-- **AND** it SHALL avoid chrome that frames the Coordinator as an ordinary supervised Agent Mode session, including Coordinator-self `Open in Agent Mode` affordances in the production-demo path.
-
-#### Scenario: Coordinator window title is workspace-scoped
-- **WHEN** Coordinator mode is the active main surface
-- **THEN** the top-level window title SHALL identify the workspace rather than the active Agent session tab
-- **AND** the toolbar peer surface switcher SHALL identify Coordinator mode as the active surface
-- **AND** parent/delegate session titles SHALL remain scoped to board/list rows, inspector detail, or explicit Agent Mode deep links.
-
-#### Scenario: Coordinator messages contain Markdown
-- **WHEN** Coordinator or event conversation rows contain Markdown structures such as lists, links, inline code, or code fences
-- **THEN** the Coordinator rail SHALL render those rows through the shared Agent Mode Markdown rendering substrate where practical
-- **AND** the rail SHALL provide enough width for command-log responses to remain readable without excessive wrapping.
-
-#### Scenario: Coordinator action chip is result-derived
-- **WHEN** a newly visible supervised delegated row appears for the current Coordinator runtime
-- **THEN** the Coordinator rail MAY show a compact delegated action chip derived from that row/result
-- **AND** the chip SHALL reread current target-row status and workflow metadata at render time
-- **AND** the chip MAY fall back to stored row metadata captured when the delegated action was created if the target row is temporarily unavailable
-- **AND** it SHALL NOT claim to represent pending dispatch, collect/review/cancel actions, multi-action batches, or a complete tool-call event stream until a sourced action/activity model exists.
-
-#### Scenario: Coordinator composer matches Agent Mode visual language
-- **WHEN** the Coordinator rail renders its scoped composer
-- **THEN** it SHALL use a composer surface consistent with Agent Mode's message bar, including a clear text area, compact status/identity strip, and send affordance
-- **AND** it SHALL NOT expose Agent Mode model, workflow, broad permission, attachment, child-session mutation, or unrelated context controls unless those controls map to real Coordinator-view behavior.
-
-#### Scenario: Coordinator composer remains draftable while busy
-- **WHEN** the Coordinator runtime is connecting, submitting, or rendering a response
-- **THEN** the Coordinator composer SHALL keep the text area editable for drafting the next directive when the Coordinator is live in the current window
-- **AND** it SHALL gate only the send action until the Coordinator reaches a supported turn boundary.
-
-#### Scenario: Coordinator view first renders
-- **WHEN** the Coordinator view first renders
-- **THEN** it SHALL show summarized counts, status board columns/cards, Coordinator context when available, and compact MCP awareness
-- **AND** it SHALL NOT show full transcripts, full logs, diffs, file viewers, or continuously streaming tool feeds in the main board/list content.
-
-#### Scenario: User selects a row
-- **WHEN** the user selects a Coordinator view row
-- **THEN** the Coordinator view MAY show a read-only inspector / trailing detail column with sourced status, pending interaction, blocker, worktree/merge, route, MCP, and session metadata summaries
-- **AND** it SHALL NOT expose a Coordinator-view-native full raw log, transcript, file viewer, or diff viewer in v1.
+- **WHEN** Coordinator mode is not visible
+- **THEN** it SHALL stop Coordinator-view-specific MCP update consumption.
 
 #### Scenario: User needs deep detail
 - **WHEN** the user needs full transcript, raw log, detailed runtime state, file context, diff context, or action handling
-- **THEN** the Coordinator view SHALL route the user to the existing Agent Mode surface.
+- **THEN** Coordinator mode SHALL route the user to the existing Agent Mode surface rather than embedding those full-detail surfaces in v1.
 
-### Requirement: Director runtime doctrine, evidence judgment, and mission shape
-The system SHALL treat Director supervision as a ledger-bounded control-plane contract rather than a transcript-driven conversation.
-
-#### Scenario: Director context is assembled from Mission ledger state
-- **WHEN** the Director drafts answers, judges evidence, or decides whether to continue a Mission
-- **THEN** its context SHALL be assembled from bounded Mission state such as the user directive, Mission Policy, plan revision, per-node done criteria, structured evidence summaries, decision trail, standing guidance, and bounded exhibits
-- **AND** it SHALL NOT import full child transcripts, full files, or mounted file selections into the Director judgment path by default.
-
-#### Scenario: Evidence judgment bundle is disclosed and receipt-ready
-- **WHEN** the Director or a sibling judge evaluates whether a node meets its done criteria
-- **THEN** the judgment bundle SHALL include the node done criteria, returned structured evidence, relevant diff stats when available, and any recorded read-only probe answer
-- **AND** the visible evidence card or receipt-ready summary SHALL disclose the bundle categories used for judgment
-- **AND** it SHALL explicitly frame the bundle as not being the child transcript.
-
-#### Scenario: Read-only probe escalation records an answer as evidence
-- **WHEN** returned evidence is thin, ambiguous, or needs independent read-only verification
-- **THEN** the Director MAY escalate by starting an `agent_explore.start`-style read-only probe or equivalent read-only probe session
-- **AND** the probe SHALL be represented as delegated read-only work owned by the Mission
-- **AND** only the probe answer, concise summary, and optional export/artifact reference SHALL be appended to Mission evidence
-- **AND** the probe transcript, selection, and raw session context SHALL NOT be imported into Director context.
-
-#### Scenario: Director auto-decisions are contestable
-- **WHEN** the Director records an automatic decision such as answering a child question, accepting evidence, or steering recovery
-- **THEN** the decision SHALL remain visible as a director-actor decision and SHALL be eligible for a user overrule while it is still actionable
-- **AND** a user overrule SHALL append a user-actor decision that references the original Director decision, marks the original as overruled rather than deleting it, and steers the affected session or Mission path with the user's correction
-- **AND** the overrule itself SHALL be final for that decision instance unless a later explicit checkpoint creates a new decision.
-
-#### Scenario: Mission Policy limits concurrent delegated flights
-- **WHEN** a Mission Policy is snapped onto a Mission
-- **THEN** the Mission MAY carry a `maxConcurrent` delegated-flight cap with a default of `3`
-- **AND** the scheduler SHALL NOT start more running delegated Mission nodes than the policy cap permits
-- **AND** ready nodes beyond the cap SHALL remain queued without being marked blocked or failed
-- **AND** status surfaces MAY later show this as `running N/cap`, such as `running 2/3`.
-
-#### Scenario: PRD Slices shape decomposes into independent and dependent chains
-- **WHEN** a directive is inferred or selected as a PRD Slices Mission shape
-- **THEN** the drafted plan SHALL use a hub node that slices the PRD and records per-slice acceptance criteria
-- **AND** it SHALL create independent slice chains that each run Deep Plan → Orchestrate → Review in their own execution lane/worktree when mutable
-- **AND** it SHALL support a dependent slice chain that starts only after slices A and B have completed and consolidated, with the dependent Deep Plan written against the combined A+B result
-- **AND** it SHALL finish with a final combined review against the PRD followed by stacked PR landing or the policy-defined close.
-
-#### Scenario: Larger runtime concerns remain recorded deferrals
-- **WHEN** this Wave 1 alignment is complete
-- **THEN** failure retry and the Blocked-lane unblock flow, budget-breach checkpointing, restart/resume reattachment contracts, hub-freeze reshaping checkpoints, a fresh-eyes final reviewer policy knob, and queue-aging/starvation behavior SHALL be recorded as explicit follow-ups
-- **AND** this wave SHALL NOT require Swift implementation for those deferred behaviors.
-
-### Requirement: Mission Policy, autonomy, decision, evidence, and receipt state
-The system SHALL extend Mission-owned state with additive Mission Policy, autonomy, decision, evidence, and receipt-projection inputs without introducing a second source of truth.
-
-#### Scenario: Mission Policy is distinct from Mission Templates
-- **WHEN** a Mission is started or restored
-- **THEN** the Mission MAY carry a policy snapshot with stable policy ID, display name, default pace, autonomy map, optional Definition of Done, optional standing guidance, and pinned skills or context IDs
-- **AND** Mission Policy SHALL represent trust/settings/guidance rather than prompt-wrapper topology
-- **AND** Mission Policy MAY include a `maxConcurrent` delegated-flight cap whose default is `3`
-- **AND** Mission Templates SHALL remain separate prompt wrappers until a deliberate policy replacement path exists.
-
-#### Scenario: Autonomy map uses shared decision classes
-- **WHEN** the system evaluates or serializes Mission autonomy
-- **THEN** autonomy classes SHALL use the same string-key space as decision classes
-- **AND** known v1 classes SHALL include `plan`, `advance`, `writes`, `childAsk`, `recover`, and `irreversible`
-- **AND** unknown classes SHALL round-trip and resolve to Ask when queried.
-
-#### Scenario: Decision ledger is append-only and ID-deduped
-- **WHEN** Mission decision records are merged from app, MCP submit, or runtime updates
-- **THEN** records SHALL be appended and deduplicated by record `id` only
-- **AND** omitted `mission_plan` update fields SHALL preserve existing decisions
-- **AND** no replace flag SHALL exist for decision arrays in v1.
-
-#### Scenario: Evidence ledger is append-only and receipt-ready
-- **WHEN** Mission evidence records are merged from runtime updates
-- **THEN** records SHALL be appended and deduplicated by record `id` only
-- **AND** evidence SHALL distinguish at least meeting evidence from short verdicts
-- **AND** evidence records SHOULD carry node or session references when available
-- **AND** the completed-Mission receipt SHALL be projected from Mission-owned state rather than persisted as rendered markdown.
-
-#### Scenario: User decision IDs are deterministic per checkpoint instance
-- **WHEN** the app or external MCP submit path records a user-actor checkpoint decision
-- **THEN** the decision ID SHALL be a deterministic UUID derived from `(checkpointInstanceID, label)`
-- **AND** plan approval checkpoint IDs SHALL include `plan.revision` so approval before and after a revision are distinct
-- **AND** follow-through, child-answer, and stop checkpoint IDs SHALL use already instance-unique event or interaction identifiers
-- **AND** retried submits for the same checkpoint instance and label SHALL dedupe to the same record.
-
-#### Scenario: Actor-split writer rules are enforced
-- **WHEN** a checkpoint or runtime action records Mission ledger data
-- **THEN** the app and external MCP `op=submit` path SHALL record user-actor decisions for plan approval, requested plan revision, step continuation, child-answer submit, and Mission stop through the existing Mission Plan update seam
-- **AND** the runtime SHALL record director-actor decisions and evidence through `coordinator_chat` `op: "mission_plan"`
-- **AND** continuation directives and compact checkpoint action payloads SHALL tell the runtime to append only director-actor decisions and evidence, not to re-record the user decision already written by app/MCP submit.
-
-#### Scenario: Ledger-visible state affects projection refresh
-- **WHEN** decision, evidence, policy, autonomy, shape, or receipt-input state changes in a way the Director surface projects
-- **THEN** the Coordinator/Director snapshot fingerprint SHALL move through the projected Mission Plan state
-- **AND** the visible Director surface SHALL refresh from Mission-owned data rather than local SwiftUI-only state.
-
-### Requirement: MCP Mission Plan serialization and update waiting
-The system SHALL extend the existing `coordinator_chat` surface for Mission Policy, ledgers, receipt-ready status, and deterministic wait behavior while preserving old payload compatibility.
-
-#### Scenario: mission_plan accepts additive ledger fields
-- **WHEN** an external Coordinator/debugging client calls `coordinator_chat` with `op: "mission_plan"`
-- **THEN** the update MAY include shape summary, policy snapshot, autonomy map, appended decisions, and appended evidence records
-- **AND** existing clients that send only objective, workstreams, nodes, routing, approval, status, or events SHALL continue to work
-- **AND** ledger arrays SHALL be append-only and ID-deduped rather than replaceable.
-
-#### Scenario: mission_status serializes receipt-ready ledger summaries
-- **WHEN** an external Coordinator/debugging client calls `coordinator_chat` with `op: "mission_status"`
-- **THEN** the response SHALL include serialized shape, policy, autonomy summary, decision counts by actor, evidence counts, recent ledger entries, and receipt-ready summary when present
-- **AND** the response SHALL remain read-only and SHALL NOT submit a Coordinator/Director chat turn or mutate Mission state.
-
-#### Scenario: compact status fingerprint covers wait-unblocking fields
-- **WHEN** a client waits for Mission updates through `coordinator_chat` `op: "wait_for_update"`
-- **THEN** the compact Mission status fingerprint SHALL include every ledger/status field that can unblock the wait
-- **AND** a decision or evidence append SHALL advance the fingerprint so `wait_for_update` does not hang after append-only Mission state changes.
-
-#### Scenario: v1 defers broader Command Center layout changes
-- **WHEN** this Mission Policy and ledger foundation ships
-- **THEN** shared Agent Board/direct-Agent expansion, a separate Decisions rail, Plan-is-board layout, shortcut flip, and full symbol/API/key rename SHALL remain deferred v1 follow-ups
-- **AND** the existing selected-Mission board, Plan presentation, and Agent Mode deep-link boundaries SHALL remain authoritative unless a later OpenSpec change replaces them.
+#### Scenario: Receipt and terminal copy use Mission projection
+- **WHEN** a completed or stopped Mission is shown in Coordinator mode
+- **THEN** terminal copy, status pills, receipt affordances, and summary cards SHALL render from Mission-owned state
+- **AND** they SHALL avoid implying human acceptance, merge, commit, push, or deployment merely because delegated work is Done.

@@ -1,28 +1,29 @@
 ## Why
 
-Agent Mode run leases and MCP connection-policy installation currently pass privilege and tool-policy fields through long positional argument lists. The Coordinator role will need to thread additional privilege state through this path, and adding one more positional argument would make a silent privilege-boundary miswiring easy to compile.
+Agent Mode MCP policy is privilege-bearing: it controls tool restrictions, additional tools, run purpose, task-label context, expected-PID routing, and now whether a connection is the Coordinator runtime. The current Coordinator/Director Mission baseline relies on this plumbing to decide actor attribution and runtime-scoped behavior without trusting model text or caller-supplied arguments.
 
-This change proposes a no-behavior-change prerequisite refactor: collapse Agent Mode MCP policy installation plumbing into a named policy context before Coordinator-specific privilege fields are introduced.
+This change reconciles the original no-behavior plumbing refactor with the implemented core runtime baseline: the named policy context exists, and the durable `isCoordinatorRuntime` marker is now the typed privilege/context bit that must survive leases, reconnects, cached run policy state, and request metadata.
 
 ## What Changes
 
-- Introduce a named Agent Mode MCP policy context or equivalent typed structure for the existing policy fields.
-- Route existing Agent Mode lease/install paths through the named context instead of many positional arguments.
-- Preserve current behavior for restricted tools, granted tools, task-label policy, external-control tool availability, expected-PID routing, and Codex/non-Codex lease paths.
-- Add or identify characterization coverage proving the refactor is behavior-preserving before any Coordinator-specific marker is added.
+- Keep Agent Mode MCP policy fields grouped in a named policy context instead of long positional argument forwarding.
+- Add/own the durable `isCoordinatorRuntime` policy context marker and its preservation through run lease, connection policy, cached run policy state, reconnect/handover, and request metadata.
+- Normalize `.coordinator` task-label policy into Coordinator runtime context only on trusted Agent Mode policy paths; user/tool arguments must not spoof Coordinator attribution.
+- Preserve ordinary Agent Mode behavior for all non-Coordinator connections.
+- Require conservative actor attribution: only a verified Coordinator runtime connection may be treated as Director/runtime actor; ambiguous or missing context falls back to non-Coordinator behavior or fails closed.
 
 ## Capabilities
 
 ### New Capabilities
-- `agent-mcp-policy-context`: Defines a named policy context for Agent Mode MCP run-lease / connection-policy installation.
+- `agent-mcp-policy-context`: Defines typed Agent Mode MCP policy context, including the durable Coordinator runtime marker and conservative policy-cache/request-metadata propagation invariants.
 
 ### Modified Capabilities
 
-None. This is prerequisite plumbing and should not change caller-visible MCP behavior.
+None for user-visible tool permissions. Core Mission runtime behavior remains in `add-coordinator-mode`; role semantics remain in `add-coordinator-role`.
 
 ## Impact
 
-- Agent Mode run lease plumbing: replaces positional privilege/tool-policy argument forwarding with a named context.
-- MCP connection policy installation: continues to install the same effective policy fields with the same semantics.
-- Coordinator role: depends on this change before adding Coordinator privilege state.
-- No changes to Coordinator runtime identity, tool permissions, `list_sessions` scope, or production behavior are intended.
+- Agent Mode run lease plumbing: forwards named context, including `isCoordinatorRuntime`, instead of positional privilege fields.
+- MCP connection policy/cache: preserves Coordinator runtime context in pending policy, run-scoped policy state, live reconnect/handover, and request metadata.
+- `coordinator_chat`: can distinguish runtime callers from external callers for Director actor attribution and external-only operation gates.
+- Ordinary Agent Mode sessions: remain non-Coordinator unless the trusted launch/policy path marks them as Coordinator runtime.

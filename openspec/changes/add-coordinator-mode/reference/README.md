@@ -1,16 +1,25 @@
-# Director Mode — deliverable set (mock v3.2.2)
+# Director / Coordinator reference archive
 
-Everything here is current as of this export; superseded drafts have been removed. The mock is verified by a 170-check harness (all green), including a static check that every UI action has a handler.
+The files in this directory are historical design, mock, prompt, demo, and preflight references. They are retained for archaeology and traceability only.
 
-## The mock
-- **RepoPrompt_Command_Center.html** — the interactive mock, v3.2.2. Open in a browser. Demo beats (child question + deferral, bar miss, review-driven rework) play **once per reload** on the first Scoped Change run; reload to replay them. The ▸ Try chips on the New Mission policy cards prefill the four showcase directives — your words choose the plan (shape inference), the policy chooses how much stops for you.
+## Normative source of truth
 
-## Specs & design (normative)
-- **Mock_Iteration_Spec_v2.md** — the spec of record: per-version deltas (v2 → v3.2.2), state map, component → Swift mapping, interaction contracts, open questions Q1–Q19. Read the newest delta paragraphs first.
-- **Director_Design_v2.3.md** — chapter 1: shape inference, mission policies, decision counting, close-conflict rule. Complementary to v2.4, not superseded by it.
-- **Director_Design_v2.4.md** — chapter 2: autonomy as decision classes, ⚙ decision logging, child questions, the four built-in policies, standing guidance (four channels), Swift table.
-- **Director_Prompt_Design.md** — verbatim prompt skeletons for every model call (§1 inference incl. namedClose · §2 drafting incl. revision + multi-land contracts · §3 delegation · §4 steer/re-review · §5 adjudication · §9b cross-step rework · §9c discovered-scope · §10 landing, once per land node).
+The current normative contract for `add-coordinator-mode` lives in the capability specs under:
 
-## Implementation & demo
-- **Swift_Implementation_Preflight.md** — decide-before-day-one items (naming collision: Director vs the repo's Coordinator stack), the v1 cutline (3 shapes; defer bake-off/measured/reshape), data-model unifications (one MissionDecision record; checkpoints as state), source-neutral orchestration cross-check, and the multi-land/workspace notes (build the runner land-node-parameterized from day one).
-- **Mission_Demo_Scripts.md** — cold open, walkthrough scripts V0–V6, the policy × scenario matrix (Try chips), mechanics bullets, and the reviewer question bank.
+```text
+openspec/changes/add-coordinator-mode/specs/
+```
+
+Use those specs, plus the change proposal/design/tasks, for implementation and validation. If a reference file conflicts with the current specs, the specs win.
+
+## Historical references
+
+- **RepoPrompt_Command_Center.html** — interactive mock export. Useful for visual/layout archaeology; not a current contract by itself.
+- **Mock_Iteration_Spec_v2.md** — historical mock-era deltas, state maps, component mapping, interaction notes, and open questions. Superseded by current capability specs unless explicitly re-adopted there.
+- **Director_Design_v2.3.md** and **Director_Design_v2.4.md** — historical design chapters for shape inference, mission policies, decision logging, child questions, and standing guidance.
+- **Director_Prompt_Design.md** — historical prompt skeletons and model-call notes.
+- **Swift_Implementation_Preflight.md** — historical implementation preflight and v1 cutline notes.
+- **Mission_Demo_Scripts.md** and **coordinator-demo-use-cases.md** — historical demo/use-case material.
+- **Problem_Statement.md**, **Architecture_Review.md**, and **Director_Context_Contract.md** — historical framing and review notes.
+
+Do not treat this archive as a live spec pack. Any behavior that should remain normative must be represented in `../specs/`.

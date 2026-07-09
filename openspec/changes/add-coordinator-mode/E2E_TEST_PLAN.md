@@ -1,231 +1,223 @@
-# Director Mode — Live E2E Test Plan
+# Director / Coordinator Mission Runtime — Live E2E Test Plan
 
-Runner: an agent (Codex) driving three probes — (1) the app's `coordinator_chat` MCP
-(**[verify]** exact op names: start mission / mission_status compact / wait_for_update),
-(2) shell in a **sandbox repo** for git/filesystem truth, (3) computer-use screenshots at
-named beats for presentation. **Principles:** assert invariants, never transcripts;
-deterministic substrate (mechanical marker-file tasks; directives pin the decomposition
-shape — we test the machinery, not the model's coding); `wait_for_update` is the sync
-primitive (a hang = fingerprint regression, itself a finding); every scenario ends with
-teardown assertions (repo state exact, sessions cleaned, mission terminal).
+This plan validates the current core Coordinator Mission runtime at the external first-consumer boundary. Scenarios assert Mission state, ledgers, events, side effects, receipts, and lifecycle cleanup; they do not assert model prose except for explicit deterministic scripted-child markers.
 
-First automated slice: ship the reusable runner and automate **S1 + S2**. Current live
-plateau targets S1, S2, S4, S5, S6 (pace, ask→auto, auto→ask), and S7. S3's cap promise
-is an always-on invariant watcher unless a future cap-specific bug justifies a standalone
-scenario; S8 restart durability is documented and deferred.
+## Principles
+
+- Test invariants, not transcripts.
+- Use `coordinator_chat` as the primary driver and observation surface.
+- Use compact `mission_status` and `wait_for_update` as the synchronization contract.
+- Prefer deterministic substrate: trivial marker-file tasks, explicit Mission shape, scripted child where childAsk mechanics are under test.
+- Every scenario ends with terminal/lifecycle assertions and a receipt-ready summary when terminal.
+- Every run records doctor capabilities, status/event history, invariant failures, timings, Coordinator model/tier, child backend, and artifact paths.
+
+## Required capabilities
+
+Before scenario execution, run `coordinator_chat op="doctor"` and record:
+
+- supported `coordinator_chat` ops;
+- `mission_events` support;
+- receipt Markdown support;
+- `set_pace` / `set_autonomy` support;
+- structured child input availability;
+- scripted child availability;
+- lifecycle ops (`list_missions`, `archive_mission`);
+- runtime gates for external-only user actions and archive.
+
+When `--doctor-mode required` is enabled, missing required capabilities fail before scenario work starts.
 
 ## Sandbox substrate
-A throwaway repo (`e2e-sandbox`) added as a workspace root. Tasks are trivial and
-verifiable: create/read marker files. Reset between scenarios (`git clean -fdx && git
-checkout .`), assert clean before each run.
 
-## Scenarios
+Use a throwaway workspace root/repository for side-effect assertions. Scenario tasks should create or inspect trivial marker files so correctness can be verified mechanically. Reset the sandbox before each attempt and assert expected cleanliness based on policy:
 
-**S1 — Read-only investigation (Auto · Director-answers).**
-Directive: inspect docs, report one candidate; Read-only policy.
-Ledger: ≥1 explore child launched (routing decision recorded); every Done node carries
-evidence; receipt `Needed you 0`; mission Completed. Git: zero diffs in all roots; no
-commits/pushes. UI beats: strip shows running≥1 then Completed; ⚙ cards present; queue
-badge stays 0.
+- Read-only scenarios must leave all roots clean.
+- Fresh-worktree mutable scenarios must keep the canonical root clean until an explicit landing step is in scope.
+- No scenario pushes, opens a PR, or mutates remote state.
 
-**S2 — Parallel fan-out + convergence (the W1 flagship; Careful writes · Auto).**
-Directive: "Two independent steps: create `A.md` and `B.md` (own worktrees). Then a third
-step, after both, verifies both exist and writes `SUMMARY.md`."
-Ledger invariants: some poll shows **running = 2 simultaneously**; converging node
-`deps_satisfied=false` until BOTH parents Completed; it enters `ready_node_ids` exactly
-then; **it launches with no user input** (auto-pickup); fingerprint advanced across the
-transition; running ≤ cap at every poll. Git: exactly A.md, B.md, SUMMARY.md in expected
-worktrees/branches. UI beats: `running 2/3`; the waiting-on line ticking `A ✓ · B …`;
-converged launch entry.
+## Scenario plateau
 
-**S3 — Cap discipline (global invariant, not a default live scenario).**
-The standing watcher asserts observed running never exceeds cap at every poll. If a
-cap-specific regression appears, add a focused four-independent-node scenario; otherwise
-fold "the fourth launches only after a completion" into S2 or the watcher instead of
-minting another live run.
+### S1 — Read-only investigation
 
-**S4 — Step pace + checkpoint revision lock.** Coordinator-only mission.
-Invariants: awaiting-approval checkpoint exposes `checkpoint_instance_id`; directive-driven
-revision while still awaiting approval mints a new instance; stale consent-granting
-Proceed with the old expected id rejects and records no decision; current Proceed accepts
-and records one **user-actor** approval decision stamped with the current instance. Stale
-Stop remains accepted because it withdraws consent. UI adoption of explicit instance ids
-is deferred.
+**Purpose:** Prove read-only Mission execution can delegate investigation and close with evidence without repository changes.
 
-**S5 — childAsk both ways.** Directive instructs the Coordinator to give a normal explore
-child Agent Mode session an exact, deliberately simple tool-level prompt: call its
-structured user-input MCP tool now (`ask_user` in RepoPrompt CE; `request_user_input` only
-if `ask_user` is not advertised in another environment), ask which of two marker names to
-use, wait for the pending interaction to be answered, report the selected marker, and stop.
-The child prompt must not explain Mission Policy or Me/Director routing; the
-parent/Director owns answer routing and attribution. Run twice:
-**Me** → pending
-interaction appears, queue = 1, answer flows, child proceeds, no ⚙ for the answer;
-**Director** → runtime answers, ⚙ decision with question+answer evidence, queue stays 0.
-If the child reports `S5_USER_INPUT_TOOL_UNAVAILABLE`, classify the run as a child-backend
-capability gap: the selected backend cannot create structured pending user input, so S5/S6
-must use a backend or scripted child that advertises `ask_user`/`request_user_input`.
-For deterministic correctness runs, pass `--child-model-id scripted`. The Coordinator must
-copy the exact scripted contract line into the child prompt; the hidden scripted child then
-creates a real `AgentAskUserInteraction` and completes with
-`SCRIPTED_CHILD_V1 answer=Alpha token=<TOKEN>`. The harness asserts that completion form,
-not just the directive echo. Default live-child S5 remains a model/backend negotiation
-sample and should only be treated as a Coordinator failure when the selected backend
-actually advertises structured input.
-For cheap plumbing-regression batches, pass `--coordinator-model-id <role-or-model>` to
-select a lower-cost underlying Coordinator model without changing Coordinator identity,
-prompt, MCP context, policy gates, or ledger semantics. Run bundles record
-`coordinator_model_id` and `coordinator_tier`; cheap regression-tier pass rates are not
-compared to default-tier pass rates. The presentable/headline baseline and any prompt or
-directive change still require the default Coordinator tier.
-Drive Me/Director headlessly through
-`coordinator_chat set_autonomy` with `autonomy_class:"childAsk"` and `mode:"ask|auto"`;
-the op itself is a user-channel parity action and must record only the dial-change
-decision, not an answer to an already-raised child question.
-Current executable `s5` runs both variants in sibling run bundles and flips pace to Auto
-before approval so the child can launch without a Step boundary. The Ask branch asserts the
-pending child question is observed and external submit routes to `child_interaction`; the
-Auto branch asserts no user-facing pending child question is observed and requires a director
-childAsk decision plus Alpha evidence at completion. Each variant carries a unique marker
-token, must show a fresh `agent_run.start` route and completed-node child binding, and the
-Ask/Auto child session and interaction IDs must be disjoint so copied evidence cannot pass.
+**Setup:** Read-only policy or equivalent Mission Plan, Auto pace acceptable.
 
-**S6 — Dial flip semantics.** Three slices. Pace is non-consuming: start Step; flip pace →
-Auto through `coordinator_chat set_pace` while approval is pending.
-Invariants: snapshot pace mutated, revision bumped, fingerprint advanced; user-actor
-"set pace to Auto" decision recorded; **the pending approval checkpoint remains**. ChildAsk
-is immediate-reroute: start with `childAsk:ask`, wait for a real pending child question,
-flip `childAsk:auto` through `coordinator_chat set_autonomy`, then assert the same
-interaction is answered by Director. Invariants: same interaction id; flip user decision
-precedes Director childAsk decision; no Director answer predates the flip; exactly one
-childAsk answer/evidence pair lands; receipt actor chain reads user flip → Director answer.
-The third slice covers the asymmetric reverse: `auto→ask` escalates immediately and beats
-any in-flight Director answer; the pending interaction remains stable and user-visible.
-The executable scripted slice starts with a hidden auto-routed pending question, flips to
-Me, asserts the same interaction reappears in Decisions, answers through the external
-child-interaction path, and requires no Director childAsk decision for that interaction.
-Runtime callers must be rejected from `set_pace`/`set_autonomy`; runtime child-interaction
-submits are rejected while resolved `childAsk` is `ask`. UI: `Policy · … · edited` marker
-appears. Backlog edge: ask→auto→ask→auto should re-fire only when a fresh pending child
-question still exists; do not let event dedup suppress a legitimate second auto reroute.
+**Expected invariants:**
 
-**S7 — Stop semantics.** Stop mid-run.
-Invariants: user-actor stop decision; cancel routing decision(s) for active children;
-status **Stopped**, never Failure styling; terminal UI shows the single follow-up action
-and no live composer/dials. The executable scripted slice starts one child, waits for a
-real pending child question, calls `coordinator_chat stop_mission`, and requires no
-running/ready work, no pending decision row, at least one cancelled node, and an
-`agent_run.cancel` routing decision. With `--receipt-mode required`, it must also capture
-the stopped Mission receipt artifact.
+- Mission Plan records concrete read-only work.
+- At least one read-only child/probe route is recorded when the Mission delegates.
+- Done nodes carry evidence.
+- Decision/evidence counts are reflected in `mission_status`.
+- Receipt is terminal and retrievable.
+- Sandbox has zero diffs.
+- Queue/Needs-you count remains zero unless the model explicitly asks a user question.
 
-**S8 (deferred) — Restart durability.** Relaunch the app mid-mission with a pending
-checkpoint or pending child question. Invariants: mission reconstructs from durable state;
-pending ask remains pending; ledger/fingerprint history stays coherent; no duplicate
-follow-through event fires; queue does not consume or re-mint identity because of restart.
+### S2 — Parallel fan-out and convergence
 
-## The watch-for list (what "working" means)
-Ledger layer: plan recorded with policy snapshot **equal to what was sent**; node
-statuses monotone (Pending→Running→Completed, or Blocked/Cancelled with reasons); every
-Done node has evidence; decisions carry correct **actors** (user only from app paths);
-`ready_node_ids`/`deps_satisfied` always consistent with statuses+edges; fingerprint
-advances on every observed change; receipt totals match the decision log.
-Side-effect layer: only the artifacts the directive names; clean trees under Read-only;
-no pushes/PRs ever (sandbox has no remote by design).
-UI layer: strip rollup matches ledger counts; queue badge = pending asks only; capsules
-only on state; terminal calm (single action, muted history).
+**Purpose:** Prove DAG-lite dependencies, parallel running nodes, cap discipline, and auto-pickup of newly ready work.
 
-## Scenario Governor
+**Directive shape:** Two independent child tasks create `A.md` and `B.md` in their own worktrees. A third dependent task verifies both and writes or reports `SUMMARY.md` according to the scenario variant.
 
-Scenario count tracks doctrine count, not bug count. A new live scenario is added only
-when a new doctrine entry is pinned in `DIRECTOR_DECISIONS.md`; ordinary regressions found
-by live runs get deterministic flow-layer coverage at the lowest faithful layer. The
-plateau is closed: S1, S2, S4, S5, S6 (pace, ask→auto, auto→ask), and S7 are live-proven
-at the first-consumer boundary. Tooling friction (`doctor`, `list_missions`,
-`archive_mission`) and pass-rate sampling improve reliability but do not expand the
-doctrine surface. S8 restart durability and S9 recovery remain declared deferred
-boundaries.
+**Expected invariants:**
 
-## Tooling Phase Notes
+- A poll/event shows two independent nodes running simultaneously when cap permits.
+- Running node count never exceeds policy `maxConcurrent`.
+- Dependent node has `deps_satisfied:false` until both parents complete.
+- Dependent node enters `ready_node_ids` exactly after dependencies complete.
+- Auto follow-through picks up eligible work without user input when policy permits.
+- `mission_events` or compact status history records ready → running → completed transition order.
+- Artifacts are found in the expected worktree/canonical locations for the variant.
+- Terminal receipt summarizes decisions/evidence.
 
-`doctor` v1 reports app/build facts best-effort, supported `coordinator_chat` ops, native
-events/receipt support, dials, scripted child, lifecycle ops, and child structured-input
-availability. The runner writes `doctor.json` and merges capability booleans into
-`features.json` through `--doctor-mode auto|required|off`. Lifecycle cleanup uses
-`list_missions` and `archive_mission`; `--archive-on-success` archives only after a
-successful terminal run and then re-checks status, events, and receipt retention by id.
-Lifecycle ops must preserve actor integrity: `archive_mission` is external/user-channel
-only, never callable by Coordinator runtime sessions, and archive is hide-not-delete.
-Receipts, decisions, evidence, events, status, and lineage remain retrievable after archive.
-The broad test-suite ledger repair is explicitly deferred from this tooling slice; new
-XCTest rows are maintained surgically.
+### S3 — Cap discipline watcher
 
-## Shared Contract Fixture
+**Purpose:** Continuous invariant rather than a default standalone scenario.
 
-Pure Python harness tests load `Scripts/Fixtures/director_e2e_compact_status.json` as the
-base compact-status shape, and Swift checks the fixture's core keys. The fixture is a
-contract skeleton, not a replacement projector: live runs still read `mission_status`
-directly from `coordinator_chat`, while unit tests stop hand-mirroring the response
-surface from scratch.
+**Expected invariant:** Every status wake in every scenario asserts running Mission node count is less than or equal to policy `maxConcurrent`. Add a standalone S3 only if a cap-specific regression needs focused reproduction.
 
-## Packaging
-Ship as a skill (`.agents/skills/rpce-director-e2e/`): one runner with scenario switches
-emitting a pass/fail report **plus the mission's own receipt-ready summary** as the
-artifact — the receipt is half the evidence by design. The runner uses progress-aware
-deadlines: a generous hard ceiling plus a shorter no-progress window. Slow-but-alive
-work can continue; idle missions with no running work fail with the last compact/full
-status, warnings, and artifact path.
+### S4 — Step pace and checkpoint revision identity
 
-## Expansions (from the first live S2 runs, 2026-07-06)
+**Purpose:** Prove approval checkpoint instance IDs are revision-bound and stale grants are rejected.
 
-**Findings that drove these:** a writer child created `A.md` in its isolated worktree
-while canonical saw only `B.md`; the Coordinator autonomously detected the gap,
-materialized the missing in-scope file, **steered the existing verifier instead of
-respawning**, and closed cleanly — but the fixed 90s boundary timeout called it a
-failure mid-recovery.
+**Expected invariants:**
 
-1. **Progress-aware deadlines (replace fixed timeouts).** Fail on a *no-progress window*
-   (N seconds with no fingerprint advance AND no Running children AND ready nodes
-   pending — the harness adopts `eligible_nodes_idle` semantics as its own failure
-   oracle), plus one overall hard ceiling. Slow-but-alive (recovery, long children) must
-   never fail; genuinely stalled must fail fast.
-2. **Worktree-aware artifact assertions + discipline invariant.** Every artifact
-   assertion states WHERE: child worktree, canonical root, or post-land. New standing
-   invariant: under fresh-worktree strategy, the canonical root stays clean until an
-   explicit land — a child writing canonical directly is a violation. Split S2:
-   **S2a** asserts artifacts in worktrees + convergence verifying across them;
-   **S2b** (when landing is in scope) asserts canonical only after land.
-3. **S9 — Recovery as a deliberate scenario.** Engineer a gap (verifier expects a file
-   that won't exist at its location); assert: detection via evidence, **steer-not-respawn**
-   (routing decision targets the existing session), recovery evidence recorded, clean
-   close. Recovery duration becomes a measured metric, not a timeout guess.
-4. **Run bundles on every run.** JSONL of every compact status at each fingerprint wake
-   + receipt Markdown + git snapshots + screenshots + timings (time-to-plan,
-   time-to-fanout, time-to-convergence, recovery duration). Enables replay debugging,
-   cross-version regression diffs, and latency baselines.
-5. **Continuous invariant watcher.** On every wake, validate: running ≤ cap; status
-   monotonicity (needs the JSONL history); `deps_satisfied` consistency; decision actor
-   integrity; terminal nodes gain evidence within one revision. Violations are recorded
-   with the offending snapshot attached.
-6. **Statistical pass rates.** `--repeat N` (3–5): report pass rate per scenario and
-   which invariant flakes; tag runs with the runtime model so regressions attribute to
-   model vs app.
-7. **Tier split.** Ledger + filesystem tiers run headless and often; computer-use UI
-   beats become an optional `--ui` tier for release checks.
-8. **Chaos tier (later): S10** kill a child mid-run → coordinator observes the terminal
-   event, marks the node blocked/cancelled with reason, re-steers or asks per policy,
-   never silently stalls. Restart durability is tracked as deferred S8 above.
+- Awaiting-approval compact status exposes `checkpoint_instance_id`.
+- A plan revision while still awaiting approval changes the instance ID.
+- Stale consent-granting Proceed using the old expected ID rejects and records no user decision.
+- Current Proceed accepts and records one user plan-approval decision for the current instance.
+- Stale Stop remains accepted because it withdraws consent.
 
-## Harness slice accepted (2026-07-07)
+### S5 — childAsk Me and Director parity
 
-The first extension-ready runner pass keeps today's snapshot contract but adds adapters
-for future `coordinator_chat` ops:
+**Purpose:** Prove Mission-bound child questions route through user or Director according to `childAsk` autonomy and record honest actors.
 
-- `--events-mode auto|snapshot|required`: builds without `mission_events` derive
-  `status_history.jsonl` from `mission_status`; builds with `mission_events since_seq`
-  write `events.jsonl` and make S2 assert exact ready → running → completed ordering.
-- `--receipt-mode auto|summary|required`: current Swift builds can write `receipt.md`
-  through `receipt format=markdown`; `summary` preserves the lightweight
-  `receipt_ready_summary.json` fallback.
-- `--idle-timeout-seconds`, `--repeat`, and `--clean-sandbox` make S1/S2 usable as
-  repeatable diagnostics without hiding stalls as model slowness.
-- Each run emits capability, timing, status-history, and invariant-violation artifacts.
+**Child prompt:** The Coordinator must tell the child to ask a structured user-input question with two marker options and then report the selected marker. For deterministic runs, use `--child-model-id scripted` and the exact line:
+
+```text
+SCRIPTED_CHILD_V1 ask_marker token=<TOKEN> options=Alpha,Beta
+```
+
+**Ask / Me branch invariants:**
+
+- `set_autonomy childAsk ask` or equivalent policy routes child question to user.
+- Pending child question becomes visible and queue/Needs-you reflects it.
+- External `coordinator_chat submit` answers the child through the `child_interaction` path.
+- A user childAsk decision/evidence chain is recorded.
+- No Director answer is recorded for that interaction.
+- Scripted child completes with `SCRIPTED_CHILD_V1 answer=Alpha token=<TOKEN>` when Alpha is submitted.
+
+**Auto / Director branch invariants:**
+
+- `set_autonomy childAsk auto` or equivalent policy routes child question to Director.
+- User-facing pending child question does not remain visible.
+- Runtime answer records a Director `childAsk` decision and evidence for the same interaction.
+- Exactly one answer lands for the interaction.
+- Receipt reads the actor chain honestly.
+
+**Capability classification:** If a live child backend reports structured input unavailable, classify as model/backend capability gap unless doctor indicated structured input was advertised and the runtime still failed.
+
+### S6 — Dial flip semantics
+
+**Purpose:** Prove pace and childAsk dials mutate Mission-owned policy/autonomy through user-action parity without consuming unrelated checkpoints.
+
+**Pace slice invariants:**
+
+- Start at Step with approval pending.
+- `coordinator_chat set_pace pace=auto` mutates policy/default pace, bumps revision/fingerprint, and records a user `set pace to Auto` decision.
+- The pending plan approval checkpoint remains pending; the dial does not consume it.
+
+**Ask → Auto childAsk slice invariants:**
+
+- Start with a real pending child question under Ask.
+- `set_autonomy childAsk auto` records a user route-to-Director decision.
+- The same interaction is answered by Director.
+- The route decision precedes the Director childAsk decision.
+- Exactly one childAsk answer/evidence pair lands.
+
+**Auto → Ask childAsk slice invariants:**
+
+- Start with hidden/auto-routed pending child question.
+- Flip to Ask.
+- The same interaction becomes user-visible.
+- User answer completes the child through `coordinator_chat submit`.
+- No Director childAsk decision is recorded for that interaction after the flip.
+- Runtime child-interaction submits are rejected while resolved `childAsk` is Ask.
+
+### S7 — Stop honesty
+
+**Purpose:** Prove stop is a terminal user action that cancels active work without treating the Mission as failed or deleting audit state.
+
+**Expected invariants:**
+
+- Stop records a user irreversible/stop decision.
+- Active linked child sessions receive cancel routing decisions.
+- Active/blocked/bound nodes become cancelled as appropriate.
+- Mission status is `stopped`, not failed.
+- No running/ready work and no pending Decisions row remain.
+- Terminal receipt is available through `receipt format=markdown`.
+- Archive remains separate from stop.
+
+### S8 — Restart durability (deferred)
+
+**Purpose:** Future scenario for relaunch with pending plan approval or pending child question.
+
+**Required future invariants:** Mission reconstructs from durable state; pending asks remain pending; queue item identity does not duplicate or disappear; compact fingerprint history remains coherent; follow-through does not re-fire duplicate events solely because of restart.
+
+### S9 — Recovery / chaos (deferred)
+
+**Purpose:** Future scenario for missing artifacts, stuck children, or cancelled/killed child runs.
+
+**Required future invariants:** Coordinator detects the gap from evidence/status, prefers steer-not-respawn when appropriate, records recovery routing/evidence, and closes or asks without silently stalling.
+
+## Shared invariant watcher
+
+On every compact-status wake or mission event batch, validate:
+
+- running node count ≤ `maxConcurrent`;
+- node status monotonicity for terminal states;
+- dependency satisfaction matches completed dependencies;
+- `ready_node_ids` equals pending nodes whose dependencies are completed;
+- childAsk:auto completed interaction nodes have decision and evidence for the interaction;
+- running delegated nodes have bound sessions;
+- `eligible_nodes_idle` is recorded as telemetry when approved ready work exists and the Coordinator is idle;
+- terminal completed Missions have only terminal nodes;
+- decision actor integrity: user decisions only from app/external paths, Director decisions only from runtime ledger writes;
+- compact fingerprint advances after decision/evidence/policy/autonomy/node/status changes.
+
+## Tooling and lifecycle cleanup
+
+- Use `mission_events since_seq` when available; otherwise derive status history from `mission_status` fingerprints.
+- Use `receipt format=markdown` when terminal receipt is required.
+- Use `list_missions` before and after runs to inventory live/archived Missions.
+- With `--archive-on-success`, archive only after a successful terminal run, then re-check status, events, receipt, decisions, evidence, and lineage by Mission ID.
+- Failed attempts remain unarchived unless a cleanup run explicitly stops/archives them.
+- `archive_mission` must reject runtime callers and non-terminal Missions.
+
+## Run bundles
+
+Each attempt writes a bundle containing at least:
+
+- doctor/features JSON;
+- scenario config, Coordinator model/tier, child model/backend, random tokens, and sandbox root;
+- compact status history JSONL;
+- mission events JSONL when available;
+- invariant violation report;
+- receipt Markdown or receipt-ready summary;
+- mission inventory before/after cleanup;
+- sandbox git/filesystem snapshots;
+- timing metrics: time to plan, approval, first child start, fan-out, convergence, completion, receipt, archive;
+- screenshots only for optional UI/presentation tiers.
+
+## Pass-rate batches
+
+- Repeated batches are diagnostics, not demos.
+- Pre-register repeat count, scenario, Coordinator model/tier, child backend, doctor/events/receipt/archive modes, and timeout policy.
+- Every counted attempt stays in the denominator.
+- If a plumbing or harness defect requires a code fix, invalidate and restart the affected batch after the fix.
+- Model-negotiation, environment, and soak failures remain counted because they measure the selected tier/environment.
+- Cheap regression-tier pass rates are not comparable to default Coordinator-tier pass rates.
+- Prompt/directive changes require default-tier validation before being treated as presentable.
+
+## Scenario governance
+
+Add a new live scenario only when `DIRECTOR_DECISIONS.md` pins new doctrine. Ordinary regressions should receive the lowest faithful deterministic coverage first, then join a live scenario only if they define a new runtime contract boundary.

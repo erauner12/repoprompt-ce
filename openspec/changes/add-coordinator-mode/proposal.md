@@ -1,30 +1,46 @@
 ## Why
 
-Users can already run multiple isolated Agent Mode sessions, often across worktrees, but supervising them requires jumping between session rows, transcripts, MCP status, and notifications. RepoPrompt needs a calm mission-control surface that helps users see what needs attention, inspect progress, and jump into the existing Agent UI without replacing it.
+The `add-coordinator-mode` OpenSpec change must describe the current Coordinator/Director runtime, not the earlier mock/UI projection cutline. The Swift demo branch now contains a Coordinator Mission runtime with durable Mission Plan state, policy/autonomy routing, decision/evidence ledgers, follow-through events, `coordinator_chat` control operations, lifecycle tooling, validator invariants, deterministic scripted child support, and receipt projection.
+
+This change makes the core runtime artifacts authoritative enough that another implementer could recreate the current demo baseline across PRs without relying on commit history or the large mock-era reference notes.
 
 ## What Changes
 
-- Add a new non-default Coordinator mode peer surface inside the existing `.main` app experience.
-- Render Coordinator mode from a single `CoordinatorModeSnapshot` projection composed from the active window's Agent Mode state and `MCPServerViewModel.dashboard`, consuming the MCP Coordinator mode consumer added by `add-mcp-coordinator-mode-consumer`.
-- Scope v1 to active-workspace rows with current-window live-state enrichment and keep Agent Mode as the default surface.
-- Show a Coordinator rail when a Coordinator can be selected or detected, plus a board-first grouped agent workspace with read-only within-group sorting, List view fallback/alternate, optional inspector / trailing detail column, compact MCP footer/popover, mode-local navigation to an all-agents Coordinator board, and deep links back to Agent Mode.
-- Keep the board/list as the only v1 human-facing fleet view; do not add a separate Coordinator-rail agent roster or "agents in Coordinator context" surface in v1.
-- Include one scoped v1 write path: a Coordinator composer that is enabled only for a current-window live Coordinator and sends ordinary user messages to that Coordinator session. Manual/Auto mode is configured at this chat/composer level, the composer reuses Agent Mode slash-skill/file-mention affordances plus provider MCP/tool preferences where they affect Coordinator runs, and board/list cards, pending prompts, and inspector content remain read-only/deep-link-first.
-- Surface structured waiting/user-attention states, enrich live MCP-controlled sessions with normalized interaction details when available, and let selected-Mission child `ask_user` checkpoints be answered from Coordinator chat without jumping into Agent Mode.
-- Avoid heuristic labels and runtime rewrites: workflow is optional, objective is deferred, and workstream chips render only from structured data such as worktree binding metadata.
+- Reframe `coordinator-mode` around the core Coordinator Mission runtime and its external MCP control surface.
+- Specify the Mission-owned state model: objective, template summary, Mission Plan, workstreams, DAG-lite nodes, policy snapshot, autonomy map, routing decisions, user/director decision ledger, evidence ledger, events, follow-through state, and child interaction response records.
+- Specify `coordinator_chat` operations for mission creation, selection, submit, Mission Plan updates, status, event journal, wait-for-update, receipt, pace/autonomy dials, doctor, list/archive lifecycle operations, and stop semantics.
+- Specify autonomy routing and actor-integrity rules, especially `childAsk` ask/auto behavior, user-action parity gates, Director-authored decisions/evidence, and Mission-bound child response routing.
+- Specify delegated-run guardrails: approved Mission Plan requirement, pre-approval planning exceptions, `maxConcurrent` flight cap, explicit worktree isolation for mutable Coordinator work, terminal-state honesty, node-status monotonicity, and childAsk:auto ledger requirements.
+- Specify deterministic validation support: scripted child backend, compact status fingerprints, sequenced mission events, receipt Markdown projection, and live E2E scenario boundaries.
+- Retain Director as user-facing vocabulary while keeping technical Swift symbols, MCP operation names, Codable keys, and fixtures Coordinator-named for this change.
 
 ## Capabilities
 
 ### New Capabilities
-- `coordinator-mode`: Provides Coordinator mode for supervising active-workspace delegated agent sessions through a single Coordinator view projection, board-first grouped status view, List fallback/alternate, optional Coordinator rail with current-window Coordinator composer, chat-level Manual/Auto mode, slash-skill/file-mention input affordances, provider MCP/tool preferences, MCP awareness, all-agents Coordinator board navigation, and Agent UI deep links. Board/list cards and pending prompts remain read-only/deep-link-first, and v1 does not add a separate by-agent roster in the Coordinator rail.
+
+- `coordinator-mode`: Shipped Director/Coordinator surface behavior, including peer surface switcher, rail/Mission selection, board/list lanes, fleet projection, pending interaction presentation, deep links, composer affordances, and terminal/receipt copy.
+- `coordinator-mission-ledger`: Mission-owned state, Mission Plan merge semantics, policy/autonomy snapshots, append-only decision/evidence ledgers, and receipt-ready evidence.
+- `coordinator-chat-contract`: External `coordinator_chat` operations, runtime caller gates, Mission start approval checkpoint publication, status/wait/event contracts, and prompt/tool-schema guidance.
+- `mission-trust-invariants`: Delegation gates, explicit sandboxing, node validators, actor integrity, self-approval prevention, childAsk ledger enforcement, and liveness warning semantics.
+- `coordinator-autonomy-routing`: Pace/childAsk dial behavior, childAsk pending-interaction rerouting, app-owned follow-through wakeups, and Auto-mode boundaries.
+- `coordinator-lifecycle-tooling`: Stop/archive/list/doctor/receipt behavior, E2E validation boundaries, and deferred-scope markers.
+- `scripted-agent-backend`: DEBUG-only deterministic scripted child backend for childAsk validation.
 
 ### Modified Capabilities
 
-None.
+None in this pass. Supporting changes under `add-coordinator-role`, `refactor-agent-mcp-policy-context`, `add-mcp-coordinator-mode-consumer`, and `add-coordinator-list-sessions-visibility` remain separate unless explicitly referenced for integration context.
 
 ## Impact
 
-- App shell: introduces in-`.main` surface selection while preserving existing `.main` / `.workspaceEntry` root gating and Agent Mode default behavior.
-- Agent Mode: reads existing session metadata, live window state, pending interaction projection, worktree binding summaries, and deep-link routing without replacing Agent UI.
-- MCP: depends on `add-mcp-coordinator-mode-consumer` for the Coordinator mode consumer identity, then projects existing MCP state rather than embedding the full MCP status surface.
-- Tests: requires snapshot, grouping, Coordinator selection, MCP projection, deep-link, and surface-selection coverage.
+- Runtime state: `CoordinatorFollowThroughState` persists the Mission runtime foundation on Coordinator-backed Agent sessions.
+- MCP surface: `CoordinatorChatMCPToolService` exposes the external/demo control contract and runtime/user caller gates.
+- Agent control: `MCPAgentControlToolProvider` and `AgentRunCoordinatorMissionPlanPolicy` enforce Mission Plan, node, workflow, worktree, and cap guardrails around delegated starts.
+- Prompts: `AgentModePrompts` instructs Coordinator runtimes to use Mission Plan/ledger/status operations instead of ad hoc transcript or shell-loop control.
+- Validation: focused Swift tests cover Mission Plan persistence/merge behavior, MCP serialization, lifecycle operations, receipt projection, scripted child behavior, and delegated-run policy checks.
+
+## Out of Scope
+
+- Full Coordinator-to-Director symbol/API/key rename.
+- First-class non-tab Coordinator role/runtime extraction.
+- Restart durability (S8), recovery chaos, UI render-to-click race hardening, toggle dedup beyond current idempotent ledgers, worktree garbage collection, backend fallback, custom policy CRUD, spend enforcement, hierarchical Coordinator-of-Coordinators, and broader Command Center layout redesign.
+- Reworking the supporting OpenSpec changes named above; those are intentionally left for later agents.
