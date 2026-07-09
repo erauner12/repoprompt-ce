@@ -1055,6 +1055,76 @@ Loaded roots: demo → /repo/fallback
             with self.assertRaisesRegex(director_e2e.E2EFailure, "S6_MISSING_DIRECTOR_LEDGER_AFTER_CHILD_DONE"):
                 director_e2e.fail_missing_childask_ledger_warning(obs, artifacts)
 
+    def test_s7_accepts_stopped_mission_with_cancelled_child_work(self) -> None:
+        pending = observation(
+            "f1",
+            "running",
+            [
+                {
+                    "id": "n1",
+                    "status": "running",
+                    "bound_session_id": "child-session",
+                    "bound_interaction_id": "interaction-1",
+                    "bound_row": {"run_state": "waitingForQuestion", "status_group": "needsYou"},
+                }
+            ],
+            running=1,
+            needs_you=1,
+            childask_mode="ask",
+            routing_decisions=[{"operation": "agent_run.start", "route_kind": "fresh_child"}],
+        )
+        final = observation(
+            "f2",
+            "stopped",
+            [
+                {
+                    "id": "n1",
+                    "status": "cancelled",
+                    "bound_session_id": "child-session",
+                    "bound_interaction_id": "interaction-1",
+                },
+                {"id": "n2", "status": "pending"},
+            ],
+            user_decisions=1,
+            decisions=[
+                {
+                    "id": "stop-decision",
+                    "label": "stopped the Mission",
+                    "actor": "user",
+                    "decision_class": "irreversible",
+                    "checkpoint_id": "mission-stop",
+                }
+            ],
+            routing_decisions=[
+                {"operation": "agent_run.start", "route_kind": "fresh_child"},
+                {"operation": "agent_run.cancel", "session_id": "child-session"},
+            ],
+        )
+
+        self.assertEqual(
+            director_e2e.assert_s7_stop([pending, final], interaction_id="interaction-1"),
+            {"sessions": ["child-session"], "interactions": ["interaction-1"]},
+        )
+
+    def test_s7_rejects_stop_without_cancel_route(self) -> None:
+        final = observation(
+            "f1",
+            "stopped",
+            [{"id": "n1", "status": "cancelled", "bound_session_id": "child-session"}],
+            user_decisions=1,
+            decisions=[
+                {
+                    "label": "stopped the Mission",
+                    "actor": "user",
+                    "decision_class": "irreversible",
+                }
+            ],
+            routing_decisions=[{"operation": "agent_run.start", "route_kind": "fresh_child"}],
+        )
+
+        with self.assertRaisesRegex(director_e2e.E2EFailure, "agent_run.cancel"):
+            director_e2e.assert_s7_stop([final])
+
     def test_childask_mode_reads_compact_autonomy_summary(self) -> None:
         ask = observation("f1", "draft", [], childask_mode="ask")
         auto = observation("f2", "draft", [], childask_mode="auto")

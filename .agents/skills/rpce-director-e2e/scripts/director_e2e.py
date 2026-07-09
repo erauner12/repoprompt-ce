@@ -1399,8 +1399,66 @@ def assert_s5_variant_refs_disjoint(ask_refs: dict[str, list[str]], auto_refs: d
         )
 
 
+def assert_s7_stop(
+    observations: list[Observation],
+    *,
+    interaction_id: str | None = None,
+) -> dict[str, list[str]]:
+    if not observations:
+        raise E2EFailure("S7 stop did not record any observations")
+    final = observations[-1]
+    if final.status != "stopped":
+        raise E2EFailure(f"S7 expected stopped mission, got {final.status}")
+    assert_common_status_integrity(observations)
+    if any(str(node.get("status") or "") == "running" for node in final.nodes):
+        raise E2EFailure("S7 stopped mission still has a running plan node")
+    if running_count(final) != 0:
+        raise E2EFailure(f"S7 stopped mission still reports running count {running_count(final)}")
+    if final.compact.get("ready_node_ids"):
+        raise E2EFailure(f"S7 stopped mission still reports ready nodes: {final.compact.get('ready_node_ids')}")
+    if has_pending_child_question(final) or needs_you_count(final) != 0:
+        raise E2EFailure("S7 stopped mission still has a pending user decision/question")
+    stop_decisions = matching_decisions(
+        final.full,
+        label="stopped the Mission",
+        actor="user",
+        decision_class="irreversible",
+    )
+    if not stop_decisions:
+        raise E2EFailure("S7 expected a user actor irreversible stop decision")
+    cancel_routes = [
+        route
+        for route in plan_routing_decisions(final.full)
+        if str(route.get("operation") or "") == "agent_run.cancel"
+    ]
+    if not cancel_routes:
+        raise E2EFailure("S7 expected an agent_run.cancel routing decision for active child work")
+    if not observed_agent_run_start(observations):
+        raise E2EFailure("S7 expected a fresh agent_run.start routing decision before stop")
+    refs = {"sessions": [], "interactions": []}
+    for obs in observations:
+        obs_refs = bound_child_refs(obs.full)
+        refs["sessions"].extend(ref for ref in obs_refs["sessions"] if ref not in refs["sessions"])
+        refs["interactions"].extend(ref for ref in obs_refs["interactions"] if ref not in refs["interactions"])
+    refs["sessions"].sort()
+    refs["interactions"].sort()
+    if not refs["sessions"]:
+        raise E2EFailure("S7 expected to observe a bound child session before stop")
+    if not refs["interactions"]:
+        raise E2EFailure("S7 expected to observe a bound child interaction before stop")
+    if interaction_id and interaction_id not in refs["interactions"]:
+        raise E2EFailure(f"S7 expected stopped child refs to include interaction {interaction_id}")
+    if not any(str(node.get("status") or "") == "cancelled" for node in final.nodes):
+        raise E2EFailure("S7 expected at least one cancelled node after stop")
+    return refs
+
+
 def terminal_completed(obs: Observation) -> bool:
     return obs.status == "completed"
+
+
+def terminal_stopped(obs: Observation) -> bool:
+    return obs.status == "stopped"
 
 
 def nonterminal_nodes_in_completed_mission(obs: Observation) -> list[dict[str, Any]]:
@@ -2445,6 +2503,81 @@ def run_s6(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
     artifacts.finalize(True, "s6", {"variants": results})
 
 
+def run_s7(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> None:
+    artifacts.record_timing("started")
+    variant_token = f"S7-stop-{uuid.uuid4().hex[:8]}"
+    session_id = start_mission(
+        client,
+        f"Director E2E S7 stop semantics {variant_token}",
+        s5_message("s7-stop", variant_token, args.child_model_id),
+        "s7",
+    )
+    wait_until(
+        client,
+        artifacts,
+        session_id,
+        lambda item: (
+            plan_approval_state(item.compact) == "awaiting_approval"
+            and has_checkpoint_action(item.compact, "Proceed")
+            and plan_or_nodes_mention_token(item.full, variant_token)
+        ),
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("plan-visible")
+    set_childask_mode(client, artifacts, session_id, "ask", args)
+    set_pace_auto_for_s5(client, artifacts, session_id, args)
+    approve_initial_plan(client, artifacts, session_id, args)
+
+    pending = wait_until(
+        client,
+        artifacts,
+        session_id,
+        lambda item: pending_child_question_with_interaction_or_failed(item, "S7 stop"),
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("child-question-visible")
+    interaction_ids = node_bound_interaction_ids(pending.full) or node_bound_interaction_ids(pending.compact)
+    if not interaction_ids:
+        raise E2EFailure("S7 could not identify pending child interaction id before stop")
+    interaction_id = interaction_ids[0]
+    capture_mission_events(client, artifacts, session_id, args.events_mode)
+
+    response = client.coordinator({
+        "op": "stop_mission",
+        "coordinator_session_id": session_id,
+        "compact": True,
+    }, timeout=180)
+    write_json(artifacts.root / "stop_mission_response.json", response)
+    if response.get("accepted") is False:
+        raise E2EFailure(f"S7 stop_mission rejected: {response.get('error') or response}")
+    if response.get("routed_to") != "coordinator_stop":
+        raise E2EFailure(f"S7 stop_mission response did not route to coordinator_stop: {response}")
+    artifacts.add_checkpoint("stop-submitted")
+
+    final = wait_until(
+        client,
+        artifacts,
+        session_id,
+        terminal_stopped,
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("stopped")
+    refs = assert_s7_stop(artifacts.observations, interaction_id=interaction_id)
+    artifacts.finalize(True, "s7", {
+        "coordinator_session_id": session_id,
+        "final_status": final.status,
+        "variant_token": variant_token,
+        "interaction_id": interaction_id,
+        "child_refs": refs,
+    })
+
+
 def run_scenario(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> None:
     if args.scenario == "s1":
         run_s1(client, artifacts, args)
@@ -2454,6 +2587,8 @@ def run_scenario(client: RpcClient, artifacts: RunArtifacts, args: argparse.Name
         run_s5(client, artifacts, args)
     elif args.scenario == "s6":
         run_s6(client, artifacts, args)
+    elif args.scenario == "s7":
+        run_s7(client, artifacts, args)
     elif args.scenario == "smoke":
         s1_artifacts = RunArtifacts(artifacts.root / "s1")
         s1_client = RpcClient(client.cli, client.window, client.repo_root, s1_artifacts)
@@ -2472,7 +2607,7 @@ def run_scenario(client: RpcClient, artifacts: RunArtifacts, args: argparse.Name
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run live Director mission E2E scenarios.")
-    parser.add_argument("--scenario", choices=["s1", "s2", "s5", "s6", "smoke"], default="s1")
+    parser.add_argument("--scenario", choices=["s1", "s2", "s5", "s6", "s7", "smoke"], default="s1")
     parser.add_argument("--workspace", default="homelab-garden")
     parser.add_argument("--window", type=int, default=1)
     parser.add_argument("--timeout-seconds", type=int, default=900)
@@ -2496,7 +2631,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--child-model-id",
         default="explore",
-        help="Child model_id used by S5/S6 childAsk scenarios; use 'scripted' for deterministic E2E child support.",
+        help="Child model_id used by S5/S6/S7 childAsk scenarios; use 'scripted' for deterministic E2E child support.",
     )
     parser.add_argument("--repeat", type=int, default=1, help="Run the scenario multiple times and aggregate reports.")
     parser.add_argument("--launch", action="store_true", help="Explicitly launch/relaunch the debug app before running.")

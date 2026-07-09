@@ -478,6 +478,12 @@ status all depend on this invariant. The guard lives at the MCP parse boundary a
 shared follow-through state merger, because non-MCP state updates can otherwise merge a
 stale pending node into a terminal plan.
 
+Stop honesty live proof (2026-07-09): S7 now exercises `coordinator_chat stop_mission`
+after a scripted child has created a real pending child question. The accepted contract is
+terminal `status:"stopped"`, no running/ready work, no pending Decisions row, a user
+`stopped the Mission` irreversible decision, `agent_run.cancel` routing for active
+sessions, and cancelled node state rather than completed/failure styling.
+
 Coordinator runtime attribution (2026-07-08): `actor:user` on a Director-answered child
 question is fabricated user consent. `coordinator_chat` therefore stays conservative:
 ambiguous request metadata is user-authored, never Director-authored. The fix is durable

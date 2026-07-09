@@ -105,7 +105,10 @@ question still exists; do not let event dedup suppress a legitimate second auto 
 **S7 — Stop semantics.** Stop mid-run.
 Invariants: user-actor stop decision; cancel routing decision(s) for active children;
 status **Stopped**, never Failure styling; terminal UI shows the single follow-up action
-and no live composer/dials.
+and no live composer/dials. The executable scripted slice starts one child, waits for a
+real pending child question, calls `coordinator_chat stop_mission`, and requires no
+running/ready work, no pending decision row, at least one cancelled node, and an
+`agent_run.cancel` routing decision.
 
 **S8 (deferred) — Restart durability.** Relaunch the app mid-mission with a pending
 checkpoint or pending child question. Invariants: mission reconstructs from durable state;
