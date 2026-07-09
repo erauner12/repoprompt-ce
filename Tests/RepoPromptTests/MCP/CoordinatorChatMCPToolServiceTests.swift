@@ -230,7 +230,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     )
                 },
                 setMissionPace: { _, _ in .accepted },
-                setMissionAutonomy: { _, _, _ in .accepted }
+                setMissionAutonomy: { _, _, _ in .accepted },
+                archiveMission: { _ in .accepted() }
             )
         }
 
@@ -681,6 +682,281 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             XCTAssertFalse(didSetAutonomy)
             XCTAssertTrue(String(describing: error).contains("mode must be one of: ask, auto"))
         }
+    }
+
+    func testDoctorReportsCoordinatorCapabilities() async throws {
+        let coordinatorID = UUID()
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Completed Mission.",
+                    status: .completed,
+                    approvalState: .approved
+                )]
+            }
+        )
+
+        let response = try await service.execute(args: ["op": .string("doctor")])
+        let doctor = try XCTUnwrap(response.objectValue?["doctor"]?.objectValue)
+        let coordinatorChat = try XCTUnwrap(doctor["coordinator_chat"]?.objectValue)
+        let features = try XCTUnwrap(coordinatorChat["features"]?.objectValue)
+        let ops = try XCTUnwrap(coordinatorChat["supported_ops"]?.arrayValue?.compactMap(\.stringValue))
+        let childBackends = try XCTUnwrap(doctor["child_backends"]?.objectValue)
+
+        XCTAssertEqual(doctor["ok"]?.boolValue, true)
+        XCTAssertTrue(ops.contains("doctor"))
+        XCTAssertTrue(ops.contains("list_missions"))
+        XCTAssertTrue(ops.contains("archive_mission"))
+        XCTAssertEqual(features["mission_events"]?.boolValue, true)
+        XCTAssertEqual(features["receipt_markdown"]?.boolValue, true)
+        XCTAssertEqual(features["list_missions"]?.boolValue, true)
+        XCTAssertEqual(features["archive_mission"]?.boolValue, true)
+        XCTAssertEqual(childBackends["structured_user_input_advertised"]?.boolValue, true)
+    }
+
+    func testListMissionsReturnsLifecycleInventory() async throws {
+        let liveID = UUID()
+        let archivedID = UUID()
+        let missionPlans: [UUID: CoordinatorMissionPlan] = [
+            liveID: CoordinatorMissionPlan(
+                missionKey: "live-key",
+                objective: "Live Mission.",
+                status: .running,
+                approvalState: .approved
+            ),
+            archivedID: CoordinatorMissionPlan(
+                missionKey: "archived-key",
+                objective: "Archived Mission.",
+                status: .completed,
+                approvalState: .approved,
+                decisions: [
+                    CoordinatorMissionDecisionRecord(
+                        userDecision: .approvedMissionPlan,
+                        decisionClass: .advance,
+                        checkpointInstanceID: "checkpoint",
+                        sessionID: archivedID,
+                        checkpointID: "plan"
+                    )
+                ],
+                evidence: [
+                    CoordinatorMissionEvidenceRecord(
+                        verdict: .meets,
+                        summary: "Completed.",
+                        source: CoordinatorMissionEvidenceSource(kind: "test")
+                    )
+                ]
+            )
+        ]
+        let service = makeService(
+            coordinatorIDs: [liveID, archivedID],
+            selectedID: liveID,
+            missionPlans: { missionPlans },
+            liveInCurrentWindow: [liveID: true, archivedID: false],
+            persistedOnly: [liveID: false, archivedID: true]
+        )
+
+        let allResponse = try await service.execute(args: ["op": .string("list_missions")])
+        let allMissions = try XCTUnwrap(allResponse.objectValue?["missions"]?.arrayValue?.compactMap(\.objectValue))
+        XCTAssertEqual(allMissions.count, 2)
+        let archived = try XCTUnwrap(allMissions.first { $0["coordinator_session_id"]?.stringValue == archivedID.uuidString })
+        XCTAssertEqual(archived["archived"]?.boolValue, true)
+        XCTAssertEqual(archived["terminal"]?.boolValue, true)
+        XCTAssertEqual(archived["status"]?.stringValue, "completed")
+        XCTAssertEqual(archived["receipt_ready"]?.boolValue, true)
+        XCTAssertEqual(archived["decision_counts_by_actor"]?.objectValue?["user"]?.intValue, 1)
+        XCTAssertEqual(archived["evidence_counts"]?.objectValue?["total"]?.intValue, 1)
+
+        let liveOnlyResponse = try await service.execute(args: [
+            "op": .string("list_missions"),
+            "include_archived": .bool(false)
+        ])
+        let liveOnlyMissions = try XCTUnwrap(liveOnlyResponse.objectValue?["missions"]?.arrayValue?.compactMap(\.objectValue))
+        XCTAssertEqual(liveOnlyMissions.count, 1)
+        XCTAssertEqual(liveOnlyMissions.first?["coordinator_session_id"]?.stringValue, liveID.uuidString)
+    }
+
+    func testListMissionsRuntimeCallerIsScopedToCallerMission() async throws {
+        let callerID = UUID()
+        let otherID = UUID()
+        let service = makeService(
+            coordinatorIDs: [callerID, otherID],
+            selectedID: otherID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex-runtime",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            resolveRuntimeCoordinatorSessionID: { metadata in
+                metadata.isCoordinatorRuntime ? callerID : nil
+            }
+        )
+
+        let response = try await service.execute(args: ["op": .string("list_missions")])
+        let object = try XCTUnwrap(response.objectValue)
+        let missions = try XCTUnwrap(object["missions"]?.arrayValue?.compactMap(\.objectValue))
+
+        XCTAssertEqual(object["runtime_scoped"]?.boolValue, true)
+        XCTAssertEqual(missions.count, 1)
+        XCTAssertEqual(missions.first?["coordinator_session_id"]?.stringValue, callerID.uuidString)
+
+        let explicitOwn = try await service.execute(args: [
+            "op": .string("list_missions"),
+            "coordinator_session_id": .string(callerID.uuidString)
+        ])
+        XCTAssertEqual(explicitOwn.objectValue?["missions"]?.arrayValue?.count, 1)
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("list_missions"),
+                "coordinator_session_id": .string(otherID.uuidString)
+            ])
+            XCTFail("Coordinator runtime list_missions must not inspect other Missions.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("cannot inspect other Coordinator Missions"))
+        }
+    }
+
+    func testArchiveMissionRequiresTerminalMission() async throws {
+        let coordinatorID = UUID()
+        var didArchive = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Running Mission.",
+                    status: .running,
+                    approvalState: .approved
+                )]
+            },
+            archiveMission: { _ in
+                didArchive = true
+                return .accepted()
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("archive_mission"),
+                "coordinator_session_id": .string(coordinatorID.uuidString)
+            ])
+            XCTFail("archive_mission must reject non-terminal Missions.")
+        } catch {
+            XCTAssertFalse(didArchive)
+            XCTAssertTrue(String(describing: error).contains("only available after a Mission is completed or stopped"))
+        }
+    }
+
+    func testArchiveMissionRejectsCoordinatorRuntimeCaller() async throws {
+        let coordinatorID = UUID()
+        var didArchive = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "coordinator-runtime",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Completed Mission.",
+                    status: .completed,
+                    approvalState: .approved
+                )]
+            },
+            archiveMission: { _ in
+                didArchive = true
+                return .accepted()
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("archive_mission"),
+                "coordinator_session_id": .string(coordinatorID.uuidString)
+            ])
+            XCTFail("Coordinator runtime callers must not archive Missions.")
+        } catch {
+            XCTAssertFalse(didArchive)
+            XCTAssertTrue(String(describing: error).contains("cannot archive Coordinator Missions"))
+            XCTAssertTrue(String(describing: error).contains("external user or CLI driver"))
+        }
+    }
+
+    func testArchiveMissionReturnsLifecycleResultAndInventory() async throws {
+        let coordinatorID = UUID()
+        var archiveCalls: [UUID] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Completed Mission.",
+                    status: .completed,
+                    approvalState: .approved
+                )]
+            },
+            pinned: [coordinatorID: true],
+            archiveMission: { sessionID in
+                archiveCalls.append(sessionID)
+                return .accepted(alreadyArchived: false, unpinned: true)
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("archive_mission"),
+            "coordinator_session_id": .string(coordinatorID.uuidString)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(archiveCalls, [coordinatorID])
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "archive_mission")
+        XCTAssertEqual(object["coordinator_session_id"]?.stringValue, coordinatorID.uuidString)
+        XCTAssertEqual(object["already_archived"]?.boolValue, false)
+        XCTAssertEqual(object["unpinned"]?.boolValue, true)
+        XCTAssertNil(object["error"]?.stringValue)
+        XCTAssertNotNil(object["missions"]?.arrayValue)
+    }
+
+    func testArchiveMissionIdempotentForAlreadyArchivedMission() async throws {
+        let coordinatorID = UUID()
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Archived Mission.",
+                    status: .stopped,
+                    approvalState: .approved
+                )]
+            },
+            liveInCurrentWindow: [coordinatorID: false],
+            persistedOnly: [coordinatorID: true],
+            archiveMission: { _ in .accepted(alreadyArchived: true) }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("archive_mission"),
+            "coordinator_session_id": .string(coordinatorID.uuidString)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["already_archived"]?.boolValue, true)
     }
 
     func testEnsureMissionSelectsExistingMissionByKey() async throws {
@@ -4408,12 +4684,16 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         counts: CoordinatorModeCounts = .empty,
         rows: [CoordinatorModeRow] = [],
         missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },
+        liveInCurrentWindow: [UUID: Bool] = [:],
+        persistedOnly: [UUID: Bool] = [:],
+        pinned: [UUID: Bool] = [:],
         updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in },
         missionEvents: @escaping (UUID, Int, Int) -> CoordinatorMissionEventJournal.Batch = { _, sinceSeq, _ in
             CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
         },
         setMissionPace: @escaping (UUID, CoordinatorMissionPolicyPace) -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
         setMissionAutonomy: @escaping (UUID, String, CoordinatorMissionAutonomyMode) -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _ in .accepted },
+        archiveMission: @escaping (UUID) async -> CoordinatorModeViewModel.CoordinatorArchiveMissionResult = { _ in .accepted() },
         initialMissionPlanTimeoutSeconds: TimeInterval = 0,
         initialMissionPlanPollIntervalSeconds: TimeInterval = 0.01,
         sleep: @escaping (UInt64) async -> Void = { _ in }
@@ -4433,10 +4713,14 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             counts: counts,
             rows: rows,
             missionPlans: missionPlans,
+            liveInCurrentWindow: liveInCurrentWindow,
+            persistedOnly: persistedOnly,
+            pinned: pinned,
             updateMissionPlan: updateMissionPlan,
             missionEvents: missionEvents,
             setMissionPace: setMissionPace,
             setMissionAutonomy: setMissionAutonomy,
+            archiveMission: archiveMission,
             initialMissionPlanTimeoutSeconds: initialMissionPlanTimeoutSeconds,
             initialMissionPlanPollIntervalSeconds: initialMissionPlanPollIntervalSeconds,
             sleep: sleep
@@ -4461,12 +4745,16 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         counts: CoordinatorModeCounts = .empty,
         rows: [CoordinatorModeRow] = [],
         missionPlans: @escaping () -> [UUID: CoordinatorMissionPlan] = { [:] },
+        liveInCurrentWindow: [UUID: Bool] = [:],
+        persistedOnly: [UUID: Bool] = [:],
+        pinned: [UUID: Bool] = [:],
         updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in },
         missionEvents: @escaping (UUID, Int, Int) -> CoordinatorMissionEventJournal.Batch = { _, sinceSeq, _ in
             CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
         },
         setMissionPace: @escaping (UUID, CoordinatorMissionPolicyPace) -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
         setMissionAutonomy: @escaping (UUID, String, CoordinatorMissionAutonomyMode) -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _ in .accepted },
+        archiveMission: @escaping (UUID) async -> CoordinatorModeViewModel.CoordinatorArchiveMissionResult = { _ in .accepted() },
         initialMissionPlanTimeoutSeconds: TimeInterval = 0,
         initialMissionPlanPollIntervalSeconds: TimeInterval = 0.01,
         sleep: @escaping (UInt64) async -> Void = { _ in }
@@ -4487,7 +4775,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                         coordinatorRunState: coordinatorRunState,
                         counts: counts,
                         rows: rows,
-                        missionPlans: missionPlans()
+                        missionPlans: missionPlans(),
+                        liveInCurrentWindow: liveInCurrentWindow,
+                        persistedOnly: persistedOnly,
+                        pinned: pinned
                     )
                 },
                 refresh: {},
@@ -4501,7 +4792,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 updateMissionPlan: updateMissionPlan,
                 missionEvents: missionEvents,
                 setMissionPace: setMissionPace,
-                setMissionAutonomy: setMissionAutonomy
+                setMissionAutonomy: setMissionAutonomy,
+                archiveMission: archiveMission
             )
         }
     }
@@ -4512,19 +4804,25 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         coordinatorRunState: AgentSessionRunState = .idle,
         counts: CoordinatorModeCounts = .empty,
         rows: [CoordinatorModeRow] = [],
-        missionPlans: [UUID: CoordinatorMissionPlan] = [:]
+        missionPlans: [UUID: CoordinatorMissionPlan] = [:],
+        liveInCurrentWindow: [UUID: Bool] = [:],
+        persistedOnly: [UUID: Bool] = [:],
+        pinned: [UUID: Bool] = [:]
     ) -> CoordinatorModeSnapshot {
         let options = coordinatorIDs.enumerated().map { index, id in
-            CoordinatorModeCoordinatorOption(
+            let isLive = liveInCurrentWindow[id] ?? true
+            let isPersistedOnly = persistedOnly[id] ?? false
+            let isPinned = pinned[id] ?? false
+            return CoordinatorModeCoordinatorOption(
                 sessionID: id,
                 tabID: UUID(),
                 workspaceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001"),
                 title: "Coordinator \(index + 1)",
                 selectionSource: .demoRuntime,
                 isSelected: id == selectedID,
-                isLiveInCurrentWindow: true,
-                isPinned: false,
-                isPersistedOnly: false,
+                isLiveInCurrentWindow: isLive,
+                isPinned: isPinned,
+                isPersistedOnly: isPersistedOnly,
                 childCounts: .empty,
                 missionTemplate: nil,
                 missionPlan: missionPlans[id],
@@ -4549,9 +4847,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 selectionSource: .demoRuntime,
                 title: options.first(where: { $0.sessionID == selectedID })?.title,
                 availableCoordinators: options,
-                isLiveInCurrentWindow: true,
-                isPersistedOnly: false,
-                isPinned: false,
+                isLiveInCurrentWindow: options.first(where: { $0.sessionID == selectedID })?.isLiveInCurrentWindow ?? true,
+                isPersistedOnly: options.first(where: { $0.sessionID == selectedID })?.isPersistedOnly ?? false,
+                isPinned: options.first(where: { $0.sessionID == selectedID })?.isPinned ?? false,
                 childCounts: .empty,
                 missionTemplate: nil,
                 missionPlan: missionPlans[selectedID],

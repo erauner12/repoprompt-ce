@@ -141,13 +141,17 @@ boundaries.
 
 ## Tooling Phase Notes
 
-`doctor` v1 should report app/CLI version, build SHA, supported `coordinator_chat` ops,
-native events/receipt support, and child backend/scripted availability. Lifecycle cleanup
-ops must preserve actor integrity: `archive_mission` is external/user-channel only, never
-callable by Coordinator runtime sessions, and archive is hide-not-delete. Receipts,
-decisions, evidence, and lineage remain retrievable after archive. The test-suite ledger is
-the only standing normalized-red validation surface; this phase should either repair it or
-explicitly descope it from Coordinator reliability gates.
+`doctor` v1 reports app/build facts best-effort, supported `coordinator_chat` ops, native
+events/receipt support, dials, scripted child, lifecycle ops, and child structured-input
+availability. The runner writes `doctor.json` and merges capability booleans into
+`features.json` through `--doctor-mode auto|required|off`. Lifecycle cleanup uses
+`list_missions` and `archive_mission`; `--archive-on-success` archives only after a
+successful terminal run and then re-checks status, events, and receipt retention by id.
+Lifecycle ops must preserve actor integrity: `archive_mission` is external/user-channel
+only, never callable by Coordinator runtime sessions, and archive is hide-not-delete.
+Receipts, decisions, evidence, events, status, and lineage remain retrievable after archive.
+The broad test-suite ledger repair is explicitly deferred from this tooling slice; new
+XCTest rows are maintained surgically.
 
 ## Shared Contract Fixture
 

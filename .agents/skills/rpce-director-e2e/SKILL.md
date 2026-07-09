@@ -52,6 +52,12 @@ For stop semantics against a live child, use the hidden scripted child:
 .agents/skills/rpce-director-e2e/scripts/director_e2e.py --scenario s7 --workspace homelab-garden --window 1 --events-mode required --child-model-id scripted
 ```
 
+To capture capabilities and clean up a successful run:
+
+```bash
+.agents/skills/rpce-director-e2e/scripts/director_e2e.py --scenario s5 --workspace homelab-garden --window 1 --events-mode required --receipt-mode required --doctor-mode required --archive-on-success --child-model-id scripted
+```
+
 Use `--scenario smoke` to run S1 then S2. The smoke command requires `--sandbox-root` because S2 writes marker files.
 
 Useful knobs:
@@ -60,6 +66,8 @@ Useful knobs:
 - `--repeat N`: produce per-attempt reports plus `repeat_report.json`.
 - `--events-mode auto|snapshot|required`: use Swift `mission_events` when available; default falls back to snapshot history.
 - `--receipt-mode auto|summary|required`: use Swift `receipt format=markdown` when available; default falls back to receipt-ready summary.
+- `--doctor-mode auto|required|off`: capture `coordinator_chat doctor` into `doctor.json`; `required` fails early on unsupported apps.
+- `--archive-on-success`: after a passing terminal scenario, call `list_missions`/`archive_mission` and verify mission status, events, and receipt remain readable by id.
 - `--child-model-id explore|scripted|...`: choose the child model used by S5/S6 childAsk scenarios. `scripted` is hidden debug/E2E infrastructure and must emit `SCRIPTED_CHILD_V1 answer=Alpha token=<TOKEN>`.
 - `--clean-sandbox`: clean a known throwaway Director E2E sandbox before writable scenarios.
 
@@ -68,7 +76,7 @@ Useful knobs:
 - Require an already running CE debug app by default. Use `--launch` only when an intentional relaunch is acceptable.
 - Use `rpce-cli-debug` or `REPOPROMPT_DEBUG_CLI_INSTALL_PATH`; the script falls back to the user-space debug CLI and bundled debug app helper.
 - Treat structured MCP status as the authority. Do not assert transcripts.
-- Store artifacts under `tmp/director-e2e-runs/<run-id>/`: command logs, compact/full statuses, status history, capabilities, timings, report JSON, and receipt summary/markdown when available.
+- Store artifacts under `tmp/director-e2e-runs/<run-id>/`: command logs, compact/full statuses, status history, capabilities, `doctor.json`, `missions.json`, archive result, timings, report JSON, and receipt summary/markdown when available.
 - On timeout or assertion failure, keep the mission state intact for inspection and write the last compact/full status to artifacts.
 
 ## Scenarios

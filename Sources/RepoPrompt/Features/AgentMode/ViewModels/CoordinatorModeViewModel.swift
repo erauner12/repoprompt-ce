@@ -219,6 +219,22 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias ContinuationGateHandler = @MainActor (_ gate: CoordinatorContinuationGate, _ snapshotBeforeGateCleared: CoordinatorModeSnapshot) async -> Void
     typealias CoordinatorActivationHandler = @MainActor (_ sessionID: UUID) async -> Void
     typealias CoordinatorPinHandler = @MainActor (_ option: CoordinatorModeCoordinatorOption, _ isPinned: Bool) -> Void
+    struct CoordinatorArchiveMissionResult: Equatable {
+        var accepted: Bool
+        var alreadyArchived: Bool = false
+        var unpinned: Bool = false
+        var message: String?
+
+        static func accepted(alreadyArchived: Bool = false, unpinned: Bool = false) -> Self {
+            Self(accepted: true, alreadyArchived: alreadyArchived, unpinned: unpinned)
+        }
+
+        static func rejected(_ message: String) -> Self {
+            Self(accepted: false, message: message)
+        }
+    }
+
+    typealias CoordinatorArchiveHandler = @MainActor (_ option: CoordinatorModeCoordinatorOption) async -> CoordinatorArchiveMissionResult
     typealias MissionPlanUpdater = @MainActor (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
     typealias MissionStopper = @MainActor (_ request: CoordinatorMissionStopRequest) async -> CoordinatorMissionStopResult
     typealias PendingFollowThroughEventProvider = @MainActor (_ coordinatorSessionID: UUID?) -> CoordinatorFollowThroughEvent?
@@ -286,6 +302,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let continuationGateHandler: ContinuationGateHandler
     private let coordinatorActivationHandler: CoordinatorActivationHandler
     private let coordinatorPinHandler: CoordinatorPinHandler
+    private let coordinatorArchiveHandler: CoordinatorArchiveHandler
     private let missionPlanUpdater: MissionPlanUpdater
     private let missionStopper: MissionStopper
     private let pendingFollowThroughEventProvider: PendingFollowThroughEventProvider
@@ -328,6 +345,9 @@ final class CoordinatorModeViewModel: ObservableObject {
         continuationGateHandler: @escaping ContinuationGateHandler = { _, _ in },
         coordinatorActivationHandler: @escaping CoordinatorActivationHandler = { _ in },
         coordinatorPinHandler: @escaping CoordinatorPinHandler = { _, _ in },
+        coordinatorArchiveHandler: @escaping CoordinatorArchiveHandler = { _ in
+            .rejected("Coordinator Mission archive is unavailable.")
+        },
         missionPlanUpdater: @escaping MissionPlanUpdater = { _, _ in },
         missionStopper: @escaping MissionStopper = { request in
             CoordinatorMissionStopResult(
@@ -359,6 +379,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.continuationGateHandler = continuationGateHandler
         self.coordinatorActivationHandler = coordinatorActivationHandler
         self.coordinatorPinHandler = coordinatorPinHandler
+        self.coordinatorArchiveHandler = coordinatorArchiveHandler
         self.missionPlanUpdater = missionPlanUpdater
         self.missionStopper = missionStopper
         self.pendingFollowThroughEventProvider = pendingFollowThroughEventProvider
@@ -713,6 +734,33 @@ final class CoordinatorModeViewModel: ObservableObject {
     func togglePinnedCoordinator(_ option: CoordinatorModeCoordinatorOption) {
         coordinatorPinHandler(option, !option.isPinned)
         refresh()
+    }
+
+    func archiveCoordinatorMission(sessionID: UUID) async -> CoordinatorArchiveMissionResult {
+        refresh()
+        guard let option = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == sessionID }) else {
+            let message = "Coordinator session \(sessionID.uuidString) is not available in this window."
+            composerNotice = message
+            return .rejected(message)
+        }
+        guard let plan = option.missionPlan else {
+            let message = "Coordinator session \(sessionID.uuidString) does not have a Mission Plan yet. Archive is only available after a Mission is completed or stopped."
+            composerNotice = message
+            return .rejected(message)
+        }
+        guard plan.status.isTerminal else {
+            let message = "Archive is only available after a Mission is completed or stopped. Stop the Mission first with coordinator_chat op=stop_mission, then archive it."
+            composerNotice = message
+            return .rejected(message)
+        }
+        let result = await coordinatorArchiveHandler(option)
+        refresh()
+        if result.accepted {
+            composerNotice = nil
+        } else {
+            composerNotice = result.message
+        }
+        return result
     }
 
     func clearCoordinator() {
@@ -2136,6 +2184,11 @@ extension AgentModeViewModel {
             await self?.activateCoordinatorRuntimeSession(sessionID)
         } coordinatorPinHandler: { [weak self] option, isPinned in
             self?.setCoordinatorRuntimePinned(isPinned, option: option)
+        } coordinatorArchiveHandler: { [weak self] option in
+            guard let self else {
+                return .rejected("Coordinator Mission archive is unavailable.")
+            }
+            return await archiveCoordinatorRuntimeMission(option)
         } missionPlanUpdater: { [weak self] coordinatorSessionID, update in
             guard let self else {
                 throw MCPError.invalidParams("Coordinator Mission Plan state is unavailable.")
@@ -2851,6 +2904,85 @@ extension AgentModeViewModel {
     ) {
         guard let tabID = option.tabID else { return }
         promptManager?.setComposeTabPinned(isPinned, for: tabID)
+    }
+
+    @MainActor
+    private func archiveCoordinatorRuntimeMission(
+        _ option: CoordinatorModeCoordinatorOption
+    ) async -> CoordinatorModeViewModel.CoordinatorArchiveMissionResult {
+        let unpinned = option.isPinned
+        if unpinned, let tabID = option.tabID {
+            promptManager?.setComposeTabPinned(false, for: tabID)
+        }
+        if option.isPersistedOnly, !option.isLiveInCurrentWindow {
+            if option.isSelected {
+                visibleCoordinatorModeViewModel?.selectCoordinator(sessionID: nil, workspaceID: option.workspaceID)
+            }
+            return .accepted(alreadyArchived: true, unpinned: unpinned)
+        }
+        guard let tabID = option.tabID else {
+            return .rejected("Coordinator Mission \(option.sessionID.uuidString) cannot be archived because no backing compose tab is available.")
+        }
+
+        var archivedIndexEntry = ownerValidatedSessionIndex[option.sessionID]
+        archivedIndexEntry?.isCoordinatorRuntime = true
+        archivedIndexEntry?.coordinatorMissionTemplate = option.missionTemplate
+        archivedIndexEntry?.coordinatorMissionPlan = option.missionPlan
+        let archivedRunStateRaw: String? = switch option.missionPlan?.status {
+        case .completed:
+            AgentSessionRunState.completed.rawValue
+        case .stopped:
+            AgentSessionRunState.cancelled.rawValue
+        case .draft, .approved, .running, .blocked, .none:
+            option.runState?.rawValue
+        }
+        if let runStateRaw = archivedRunStateRaw {
+            archivedIndexEntry?.lastRunStateRaw = runStateRaw
+        }
+
+        await promptManager?.stashTab(tabID, allowReplacement: true)
+        if let entry = archivedIndexEntry {
+            applyLocalSessionIndexUpsert(entry)
+        }
+        if option.isSelected {
+            visibleCoordinatorModeViewModel?.selectCoordinator(sessionID: nil, workspaceID: option.workspaceID)
+        }
+        visibleCoordinatorModeViewModel?.refresh()
+
+        if let updated = visibleCoordinatorModeViewModel?.snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == option.sessionID }),
+           updated.isPersistedOnly,
+           !updated.isLiveInCurrentWindow,
+           !updated.isPinned
+        {
+            return .accepted(alreadyArchived: false, unpinned: unpinned)
+        }
+
+        // Stashing can be refused by transient tab/activation state. Archival is
+        // retention-only, so as a fallback detach the live tab binding while
+        // restoring the preserved coordinator index record.
+        _ = await finalizeDeletedAgentSessionReferences(
+            sessionID: option.sessionID,
+            workspaceID: option.workspaceID,
+            knownTabIDs: [tabID],
+            reason: "coordinator_archive"
+        )
+        if let entry = archivedIndexEntry {
+            applyLocalSessionIndexUpsert(entry)
+        }
+        if option.isSelected {
+            visibleCoordinatorModeViewModel?.selectCoordinator(sessionID: nil, workspaceID: option.workspaceID)
+        }
+        visibleCoordinatorModeViewModel?.refresh()
+
+        if let updated = visibleCoordinatorModeViewModel?.snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == option.sessionID }),
+           updated.isPersistedOnly,
+           !updated.isLiveInCurrentWindow,
+           !updated.isPinned
+        {
+            return .accepted(alreadyArchived: false, unpinned: unpinned)
+        }
+
+        return .rejected("Coordinator Mission \(option.sessionID.uuidString) could not be archived because its compose tab could not be stashed. Open another session tab or stop interacting with the selected tab, then retry archive_mission.")
     }
 
     @MainActor

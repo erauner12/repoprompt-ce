@@ -3032,15 +3032,16 @@ class PromptViewModel: ObservableObject {
     @Published private(set) var currentStashedTabs: [StashedTab] = []
 
     @MainActor
-    func stashTab(_ id: UUID) async {
+    func stashTab(_ id: UUID, allowReplacement: Bool = false) async {
         guard
             let manager = workspaceManager,
             let workspace = manager.activeWorkspace,
             let index = manager.workspaces.firstIndex(where: { $0.id == workspace.id })
         else { return }
 
-        // Don't allow stashing if it's the last tab
-        guard manager.workspaces[index].composeTabs.count > 1 else { return }
+        // Don't allow ordinary UI stashing if it's the last tab. Cleanup flows may
+        // opt in to replacement; closeComposeTabs will append a blank tab.
+        guard manager.workspaces[index].composeTabs.count > 1 || allowReplacement else { return }
 
         // Flush and snapshot current state if this is the active tab
         if id == activeComposeTabID {

@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -165,6 +166,72 @@ Loaded roots: demo → /repo/fallback
 
         self.assertEqual(status["counts"]["needs_you"], 1)
         self.assertEqual(status["coordinator_session_id"], "session-1")
+
+    def test_approve_initial_plan_retries_stale_checkpoint_with_current_instance(self) -> None:
+        def checkpoint_status(fingerprint: str, instance_id: str) -> dict:
+            compact = compact_status_fixture()
+            compact["fingerprint"] = fingerprint
+            compact["plan"]["status"] = "draft"
+            compact["plan"]["approval_state"] = "awaiting_approval"
+            compact["checkpoint"] = {
+                "checkpoint_instance_id": instance_id,
+                "actions": [
+                    {
+                        "label": "Proceed",
+                        "checkpoint_action": "proceed",
+                        "submit_message": "Proceed with the approved plan.",
+                    }
+                ],
+            }
+            return compact
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.compact_statuses = [
+                    checkpoint_status("f1", "coordinator:session:plan-approval:r1"),
+                    checkpoint_status("f2", "coordinator:session:plan-approval:r2"),
+                ]
+                self.compact_calls = 0
+                self.submit_payloads = []
+
+            def coordinator(self, payload, timeout=120):
+                op = payload.get("op")
+                if op == "mission_status":
+                    if payload.get("compact"):
+                        status = self.compact_statuses[min(self.compact_calls, len(self.compact_statuses) - 1)]
+                        self.compact_calls += 1
+                        return {"mission_status": status}
+                    return {"mission_status": {"nodes": [], "plan": {"evidence": [], "decisions": []}}}
+                if op == "submit":
+                    self.submit_payloads.append(dict(payload))
+                    if len(self.submit_payloads) == 1:
+                        return {
+                            "accepted": False,
+                            "error": (
+                                "Stale checkpoint submit rejected: expected checkpoint_instance_id "
+                                "coordinator:session:plan-approval:r1, but current checkpoint_instance_id is "
+                                "coordinator:session:plan-approval:r2."
+                            ),
+                        }
+                    return {"accepted": True}
+                raise AssertionError(f"unexpected op {op}")
+
+        client = FakeClient()
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = director_e2e.RunArtifacts(Path(tmp))
+            args = SimpleNamespace(timeout_seconds=30, idle_timeout_seconds=30, events_mode="snapshot")
+
+            director_e2e.approve_initial_plan(client, artifacts, "session", args)
+
+        self.assertEqual(len(client.submit_payloads), 2)
+        self.assertEqual(
+            client.submit_payloads[0]["expected_checkpoint_instance_id"],
+            "coordinator:session:plan-approval:r1",
+        )
+        self.assertEqual(
+            client.submit_payloads[1]["expected_checkpoint_instance_id"],
+            "coordinator:session:plan-approval:r2",
+        )
 
     def test_s1_accepts_single_runner_approval_with_node_evidence(self) -> None:
         obs = observation(
@@ -1744,6 +1811,210 @@ Loaded roots: demo → /repo/fallback
             self.assertEqual(client.payload["format"], "markdown")
             self.assertTrue(artifacts.features["receipt_markdown"]["available"])
             self.assertEqual((Path(tmp) / "receipt.md").read_text(encoding="utf-8"), "# Mission Receipt\n\n## Spend")
+
+    def test_doctor_fallback_and_required_modes(self) -> None:
+        class FakeClient:
+            def try_coordinator(self, payload, timeout=120):
+                self.payload = payload
+                return False, {"error": "unsupported coordinator_chat op doctor"}
+
+        client = FakeClient()
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = director_e2e.RunArtifacts(Path(tmp))
+            director_e2e.capture_doctor(client, artifacts, "auto")
+
+            self.assertEqual(client.payload["op"], "doctor")
+            self.assertFalse(artifacts.features["doctor"]["available"])
+            self.assertFalse((Path(tmp) / "doctor.json").exists())
+            with self.assertRaises(director_e2e.E2EFailure):
+                director_e2e.capture_doctor(client, artifacts, "required")
+
+    def test_doctor_success_writes_artifact_and_features(self) -> None:
+        doctor = {
+            "ok": True,
+            "coordinator_chat": {
+                "features": {
+                    "mission_events": True,
+                    "receipt_markdown": True,
+                    "archive_mission": True,
+                }
+            },
+        }
+
+        class FakeClient:
+            def try_coordinator(self, payload, timeout=120):
+                self.payload = payload
+                return True, {"doctor": doctor}
+
+        client = FakeClient()
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = director_e2e.RunArtifacts(Path(tmp))
+            result = director_e2e.capture_doctor(client, artifacts, "required")
+
+            self.assertEqual(result, doctor)
+            self.assertEqual(client.payload["op"], "doctor")
+            self.assertTrue(artifacts.features["doctor"]["available"])
+            self.assertTrue(artifacts.features["archive_mission"]["available"])
+            self.assertEqual(json.loads((Path(tmp) / "doctor.json").read_text(encoding="utf-8")), doctor)
+
+    def test_list_and_archive_mission_adapters(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.payloads = []
+
+            def try_coordinator(self, payload, timeout=120):
+                self.payloads.append(payload)
+                if payload["op"] == "list_missions":
+                    return True, {
+                        "missions": [
+                            {
+                                "coordinator_session_id": "session",
+                                "archived": True,
+                            }
+                        ]
+                    }
+                if payload["op"] == "archive_mission":
+                    return True, {
+                        "accepted": True,
+                        "coordinator_session_id": payload["coordinator_session_id"],
+                    }
+                raise AssertionError(payload)
+
+        client = FakeClient()
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = director_e2e.RunArtifacts(Path(tmp))
+            missions = director_e2e.list_missions(client, artifacts, include_archived=True)
+            archive = director_e2e.archive_mission(client, artifacts, "session")
+
+            self.assertEqual(missions[0]["coordinator_session_id"], "session")
+            self.assertTrue(archive["accepted"])
+            self.assertTrue(artifacts.features["list_missions"]["available"])
+            self.assertTrue(artifacts.features["archive_mission"]["available"])
+            self.assertEqual(client.payloads[0]["op"], "list_missions")
+            self.assertTrue(client.payloads[0]["include_archived"])
+            self.assertEqual(client.payloads[1]["op"], "archive_mission")
+            self.assertEqual(json.loads((Path(tmp) / "missions.json").read_text(encoding="utf-8")), missions)
+            self.assertEqual(json.loads((Path(tmp) / "archive_mission.json").read_text(encoding="utf-8")), archive)
+
+    def test_archive_on_success_archives_and_retains_readable_artifacts(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.try_payloads = []
+                self.status_payloads = []
+
+            def coordinator(self, payload, timeout=120):
+                self.status_payloads.append(payload)
+                self.assert_payload(payload, "mission_status")
+                return {
+                    "mission_status": {
+                        "coordinator_session_id": "session",
+                        "fingerprint": "f1",
+                        "plan": {"status": "completed"},
+                    }
+                }
+
+            def try_coordinator(self, payload, timeout=120):
+                self.try_payloads.append(payload)
+                op = payload["op"]
+                if op == "archive_mission":
+                    return True, {"accepted": True, "coordinator_session_id": "session"}
+                if op == "list_missions":
+                    return True, {"missions": [{"coordinator_session_id": "session", "archived": True}]}
+                if op == "mission_events":
+                    return True, {"events": [], "next_seq": 0}
+                if op == "receipt":
+                    return True, {"markdown": "# Mission Receipt\n\n## Spend"}
+                raise AssertionError(payload)
+
+            @staticmethod
+            def assert_payload(payload, expected_op) -> None:
+                if payload["op"] != expected_op:
+                    raise AssertionError(payload)
+
+        client = FakeClient()
+        args = SimpleNamespace(
+            archive_on_success=True,
+            events_mode="required",
+            receipt_mode="required",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = director_e2e.RunArtifacts(Path(tmp))
+            artifacts.report = {"coordinator_session_id": "session"}
+
+            director_e2e.archive_final_mission_if_requested(client, artifacts, args)
+
+            ops = [payload["op"] for payload in client.try_payloads]
+            self.assertEqual(ops, ["archive_mission", "list_missions", "mission_events", "receipt"])
+            self.assertEqual(client.status_payloads[0]["op"], "mission_status")
+            self.assertTrue((Path(tmp) / "archive_mission.json").exists())
+            self.assertTrue((Path(tmp) / "missions.json").exists())
+            self.assertEqual((Path(tmp) / "receipt.md").read_text(encoding="utf-8"), "# Mission Receipt\n\n## Spend")
+
+    def test_archive_on_success_archives_composite_variant_reports(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.try_payloads = []
+                self.status_payloads = []
+
+            def coordinator(self, payload, timeout=120):
+                self.status_payloads.append(payload)
+                return {
+                    "mission_status": {
+                        "coordinator_session_id": payload["coordinator_session_id"],
+                        "fingerprint": "f1",
+                        "plan": {"status": "completed"},
+                    }
+                }
+
+            def try_coordinator(self, payload, timeout=120):
+                self.try_payloads.append(payload)
+                op = payload["op"]
+                if op == "archive_mission":
+                    return True, {
+                        "accepted": True,
+                        "coordinator_session_id": payload["coordinator_session_id"],
+                    }
+                if op == "list_missions":
+                    return True, {
+                        "missions": [
+                            {"coordinator_session_id": "ask-session", "archived": True},
+                            {"coordinator_session_id": "auto-session", "archived": True},
+                        ]
+                    }
+                if op == "mission_events":
+                    return True, {"events": [], "next_seq": 0}
+                if op == "receipt":
+                    return True, {"markdown": "# Mission Receipt\n\n## Spend"}
+                raise AssertionError(payload)
+
+        client = FakeClient()
+        args = SimpleNamespace(
+            archive_on_success=True,
+            events_mode="required",
+            receipt_mode="required",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = director_e2e.RunArtifacts(Path(tmp))
+            artifacts.report = {
+                "variants": [
+                    {"report": {"coordinator_session_id": "ask-session"}},
+                    {"report": {"coordinator_session_id": "auto-session"}},
+                ]
+            }
+
+            director_e2e.archive_final_mission_if_requested(client, artifacts, args)
+
+            archive_payloads = [payload for payload in client.try_payloads if payload["op"] == "archive_mission"]
+            self.assertEqual(
+                [payload["coordinator_session_id"] for payload in archive_payloads],
+                ["ask-session", "auto-session"],
+            )
+            self.assertEqual(
+                [payload["coordinator_session_id"] for payload in client.status_payloads],
+                ["ask-session", "auto-session"],
+            )
+            archive_results = json.loads((Path(tmp) / "archive_missions.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(archive_results), 2)
 
     def test_repeat_report_aggregates_attempts(self) -> None:
         report = director_e2e.repeat_report_for(

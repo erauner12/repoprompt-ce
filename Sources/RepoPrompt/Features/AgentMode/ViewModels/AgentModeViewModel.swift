@@ -9408,7 +9408,7 @@ final class AgentModeViewModel: ObservableObject {
         rebuildSessionSortDatesFromIndex()
     }
 
-    private func applyLocalSessionIndexUpsert(_ entry: AgentSessionIndexEntry) {
+    func applyLocalSessionIndexUpsert(_ entry: AgentSessionIndexEntry) {
         guard let owner = sessionIndexOwner,
               isSessionIndexOwnerCurrent(owner)
         else {

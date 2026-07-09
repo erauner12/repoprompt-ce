@@ -418,8 +418,9 @@ powers. Additions stay additive ops.
    archiving, because archive can hide a Mission from the rail after the fact. Archival is
    retention-only: receipts, decisions, evidence, events, and lineage remain durable and
    retrievable; archive only removes the Mission from ordinary live rail surfaces.
-5. **`doctor`** (later) — app-level pulse: supervisor alive, pending events, last
-   fingerprint age, connected clients.
+5. **`doctor`** — read-only capability pulse: app/build facts where available, supported
+   `coordinator_chat` ops, native events/receipt, dials, scripted child, lifecycle ops, and
+   child structured-input availability.
 
 Not doing: `mission_status` field selectors, which fragment the contract; any
 plan-structure mutation outside the existing mission-plan path.
@@ -519,6 +520,18 @@ global `verify-ledger` command remains a known-red repository maintenance item w
 pre-existing missing rows. The tooling phase must either repair that ledger so it can gate
 again, or explicitly descope it from Coordinator reliability preflight; it must not remain
 an ambient red footnote.
+
+Coordinator tooling phase (2026-07-09): `coordinator_chat doctor`, `list_missions`, and
+`archive_mission` are additive tooling ops for setup, teardown, and diagnosis. `doctor` is
+side-effect free and safe for any caller. `list_missions` is a compact inventory that
+includes live and archived Missions by default for external callers; Coordinator runtime
+callers are scoped to their own Mission and fail closed if that Mission cannot be resolved,
+preserving fleet-visibility gating. `archive_mission` is external-only,
+terminal-only, and retention-only: running Missions must be stopped first; Coordinator
+runtime callers are rejected; already archived Missions return idempotent success; pinned
+Missions are unpinned as part of archive; selected archived Missions clear selection so
+they leave the ordinary live rail. Archive never deletes or invalidates receipt, events,
+decisions, evidence, status, or lineage.
 
 Coordinator runtime attribution (2026-07-08): `actor:user` on a Director-answered child
 question is fabricated user consent. `coordinator_chat` therefore stays conservative:

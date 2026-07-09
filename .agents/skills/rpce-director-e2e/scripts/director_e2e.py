@@ -726,6 +726,103 @@ def capture_receipt(client: RpcClient, artifacts: RunArtifacts, session_id: str,
     (artifacts.root / "receipt.md").write_text(markdown, encoding="utf-8")
 
 
+def capture_doctor(client: RpcClient, artifacts: RunArtifacts, mode: str) -> dict[str, Any] | None:
+    if mode == "off":
+        artifacts.record_feature("doctor", False, "doctor mode off")
+        return None
+    ok, response = client.try_coordinator({"op": "doctor"}, timeout=60)
+    if not ok:
+        detail = str(response.get("error") or "doctor unsupported")
+        artifacts.record_feature("doctor", False, detail)
+        if mode == "required":
+            raise E2EFailure(f"doctor required but unavailable: {detail}")
+        return None
+    doctor = response.get("doctor")
+    if not isinstance(doctor, dict):
+        raise E2EFailure(f"doctor response did not include doctor object: {response}")
+    write_json(artifacts.root / "doctor.json", doctor)
+    artifacts.record_feature("doctor", True, None)
+    features = ((doctor.get("coordinator_chat") or {}).get("features") or {})
+    if isinstance(features, dict):
+        for name, available in features.items():
+            if isinstance(available, bool):
+                artifacts.record_feature(str(name), available, "doctor")
+    return doctor
+
+
+def list_missions(client: RpcClient, artifacts: RunArtifacts, include_archived: bool = True) -> list[dict[str, Any]]:
+    ok, response = client.try_coordinator({
+        "op": "list_missions",
+        "include_archived": include_archived,
+    }, timeout=60)
+    if not ok:
+        detail = str(response.get("error") or "list_missions unsupported")
+        artifacts.record_feature("list_missions", False, detail)
+        raise E2EFailure(f"list_missions unavailable: {detail}")
+    artifacts.record_feature("list_missions", True, None)
+    missions = response.get("missions")
+    if not isinstance(missions, list):
+        raise E2EFailure(f"list_missions response did not include missions array: {response}")
+    normalized = [mission for mission in missions if isinstance(mission, dict)]
+    write_json(artifacts.root / "missions.json", normalized)
+    return normalized
+
+
+def archive_mission(client: RpcClient, artifacts: RunArtifacts, session_id: str) -> dict[str, Any]:
+    ok, response = client.try_coordinator({
+        "op": "archive_mission",
+        "coordinator_session_id": session_id,
+    }, timeout=120)
+    if not ok:
+        detail = str(response.get("error") or "archive_mission unsupported")
+        artifacts.record_feature("archive_mission", False, detail)
+        raise E2EFailure(f"archive_mission unavailable: {detail}")
+    artifacts.record_feature("archive_mission", True, None)
+    write_json(artifacts.root / "archive_mission.json", response)
+    if response.get("accepted") is not True:
+        raise E2EFailure(f"archive_mission rejected: {response.get('error') or response}")
+    return response
+
+
+def coordinator_session_ids_from_report(report: dict[str, Any]) -> list[str]:
+    seen: set[str] = set()
+    session_ids: list[str] = []
+
+    def append(value: Any) -> None:
+        if not isinstance(value, str) or not value.strip() or value in seen:
+            return
+        seen.add(value)
+        session_ids.append(value)
+
+    append(report.get("coordinator_session_id"))
+    for variant in report.get("variants") or []:
+        if not isinstance(variant, dict):
+            continue
+        variant_report = variant.get("report")
+        if isinstance(variant_report, dict):
+            append(variant_report.get("coordinator_session_id"))
+    return session_ids
+
+
+def archive_final_mission_if_requested(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> None:
+    if not getattr(args, "archive_on_success", False):
+        return
+    session_ids = coordinator_session_ids_from_report(artifacts.report)
+    if not session_ids:
+        raise E2EFailure("--archive-on-success requires a scenario report with coordinator_session_id or variant reports")
+    archive_results = [archive_mission(client, artifacts, session_id) for session_id in session_ids]
+    write_json(artifacts.root / "archive_missions.json", archive_results)
+    missions = list_missions(client, artifacts, include_archived=True)
+    for session_id in session_ids:
+        archived = next((mission for mission in missions if mission.get("coordinator_session_id") == session_id), None)
+        if archived is None or archived.get("archived") is not True:
+            raise E2EFailure(f"archive_mission did not leave mission archived in list_missions: {archived}")
+        # Retention check: archived Missions must remain readable by id.
+        compact_status(client, session_id)
+        capture_mission_events(client, artifacts, session_id, args.events_mode)
+        capture_receipt(client, artifacts, session_id, args.receipt_mode)
+
+
 def start_mission(client: RpcClient, title: str, message: str, scenario: str) -> str:
     key = f"director-e2e:{scenario}:{int(time.time())}:{uuid.uuid4().hex[:8]}"
     response = client.coordinator({
@@ -786,6 +883,10 @@ def approve_initial_plan(client: RpcClient, artifacts: RunArtifacts, session_id:
             artifacts.add_checkpoint("plan-approved")
             return
         last_error = str(response.get("error") or "submit was rejected")
+        if stale_checkpoint_submit_rejected(last_error):
+            obs = observe(client, artifacts, session_id)
+            capture_mission_events(client, artifacts, session_id, args.events_mode)
+            continue
         if "mid-run" not in last_error:
             raise E2EFailure(f"Proceed submit rejected: {last_error}")
         if str(obs.compact.get("run_state") or "") == "waitingForQuestion":
@@ -799,6 +900,10 @@ def approve_initial_plan(client: RpcClient, artifacts: RunArtifacts, session_id:
         obs = observe(client, artifacts, session_id)
         capture_mission_events(client, artifacts, session_id, args.events_mode)
     raise E2EFailure(f"Proceed submit never reached an ordinary turn boundary: {last_error}")
+
+
+def stale_checkpoint_submit_rejected(message: str) -> bool:
+    return "Stale checkpoint submit rejected" in message and "current checkpoint_instance_id" in message
 
 
 def submit_with_midrun_retry(
@@ -2940,6 +3045,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--events-mode", choices=["auto", "snapshot", "required"], default="auto")
     parser.add_argument("--receipt-mode", choices=["auto", "summary", "required"], default="auto")
+    parser.add_argument("--doctor-mode", choices=["auto", "required", "off"], default="auto")
+    parser.add_argument(
+        "--archive-on-success",
+        action="store_true",
+        help="Archive the completed/stopped Coordinator Mission after a successful scenario and verify artifacts remain readable.",
+    )
     parser.add_argument(
         "--child-model-id",
         default="explore",
@@ -2953,7 +3064,9 @@ def build_parser() -> argparse.ArgumentParser:
 def run_once(args: argparse.Namespace, repo_root: Path, artifacts: RunArtifacts, cli: str) -> None:
     client = RpcClient(cli, args.window, repo_root, artifacts)
     ensure_workspace(client, args.workspace)
+    capture_doctor(client, artifacts, args.doctor_mode)
     run_scenario(client, artifacts, args)
+    archive_final_mission_if_requested(client, artifacts, args)
 
 
 def repeat_report_for(scenario: str, repeat: int, results: list[dict[str, Any]]) -> dict[str, Any]:

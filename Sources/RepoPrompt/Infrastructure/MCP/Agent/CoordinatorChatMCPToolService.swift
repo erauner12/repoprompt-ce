@@ -19,7 +19,28 @@ struct CoordinatorChatMCPToolService {
         var missionEvents: (_ coordinatorSessionID: UUID, _ sinceSeq: Int, _ limit: Int) -> CoordinatorMissionEventJournal.Batch
         var setMissionPace: (_ coordinatorSessionID: UUID, _ pace: CoordinatorMissionPolicyPace) -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var setMissionAutonomy: (_ coordinatorSessionID: UUID, _ autonomyClassKey: String, _ mode: CoordinatorMissionAutonomyMode) -> CoordinatorModeViewModel.DirectiveSubmissionResult
+        var archiveMission: (_ coordinatorSessionID: UUID) async -> CoordinatorModeViewModel.CoordinatorArchiveMissionResult
     }
+
+    private static let supportedOps = [
+        "list",
+        "list_missions",
+        "doctor",
+        "select",
+        "new",
+        "ensure_mission",
+        "start_mission",
+        "stop_mission",
+        "archive_mission",
+        "submit",
+        "mission_plan",
+        "mission_status",
+        "mission_events",
+        "receipt",
+        "set_pace",
+        "set_autonomy",
+        "wait_for_update"
+    ]
 
     private let toolName: String
     private let makeEnvironment: () throws -> Environment
@@ -61,7 +82,8 @@ struct CoordinatorChatMCPToolService {
                 updateMissionPlan: { try coordinatorViewModel.updateMissionPlan(coordinatorSessionID: $0, update: $1) },
                 missionEvents: { coordinatorViewModel.missionEvents(coordinatorSessionID: $0, sinceSeq: $1, limit: $2) },
                 setMissionPace: { coordinatorViewModel.setCoordinatorMissionPace(coordinatorSessionID: $0, pace: $1) },
-                setMissionAutonomy: { coordinatorViewModel.setCoordinatorMissionAutonomy(coordinatorSessionID: $0, autonomyClassKey: $1, mode: $2) }
+                setMissionAutonomy: { coordinatorViewModel.setCoordinatorMissionAutonomy(coordinatorSessionID: $0, autonomyClassKey: $1, mode: $2) },
+                archiveMission: { await coordinatorViewModel.archiveCoordinatorMission(sessionID: $0) }
             )
         }
     }
@@ -98,6 +120,40 @@ struct CoordinatorChatMCPToolService {
         case "list":
             environment.refresh()
             return stateResponse(environment.snapshot())
+
+        case "list_missions":
+            environment.refresh()
+            let includeArchived = AgentMCPToolHelpers.parseBool(args["include_archived"] ?? args["includeArchived"]) ?? true
+            let runtimeScopeSessionID: UUID?
+            if metadata.isCoordinatorRuntime {
+                guard let resolvedRuntimeID = await resolveRuntimeCoordinatorSessionID(metadata) else {
+                    throw MCPError.invalidParams("list_missions is scoped to the caller Mission for Coordinator runtime calls, but RepoPrompt cannot resolve the caller Mission.")
+                }
+                if let requestedValue = args["coordinator_session_id"] {
+                    let requestedID = try requireCoordinatorSessionID(requestedValue)
+                    if requestedID != resolvedRuntimeID {
+                        throw MCPError.invalidParams("Coordinator runtime list_missions calls are scoped to the caller Mission and cannot inspect other Coordinator Missions.")
+                    }
+                }
+                runtimeScopeSessionID = resolvedRuntimeID
+            } else {
+                runtimeScopeSessionID = nil
+            }
+            return compactStateResponse(environment.snapshot(), extra: [
+                "missions": missionInventoryValue(
+                    environment.snapshot(),
+                    includeArchived: includeArchived,
+                    scopedTo: runtimeScopeSessionID
+                ),
+                "include_archived": .bool(includeArchived),
+                "runtime_scoped": .bool(runtimeScopeSessionID != nil)
+            ])
+
+        case "doctor":
+            environment.refresh()
+            return compactStateResponse(environment.snapshot(), extra: [
+                "doctor": doctorValue(environment.snapshot())
+            ])
 
         case "select":
             environment.refresh()
@@ -215,6 +271,35 @@ struct CoordinatorChatMCPToolService {
                     "error": .string(message)
                 ])
             }
+
+        case "archive_mission":
+            try validateExternalUserAction(metadata, action: "archive Coordinator Missions")
+            environment.refresh()
+            let snapshot = environment.snapshot()
+            let coordinatorSessionID = try requireCoordinatorSessionID(args["coordinator_session_id"])
+            try validateCoordinatorExists(coordinatorSessionID, in: snapshot)
+            guard let plan = snapshot.coordinatorRail.availableCoordinators
+                .first(where: { $0.sessionID == coordinatorSessionID })?
+                .missionPlan
+            else {
+                throw MCPError.invalidParams("archive_mission requires a Coordinator Mission with a recorded Mission Plan.")
+            }
+            guard plan.status.isTerminal else {
+                throw MCPError.invalidParams("archive_mission is only available after a Mission is completed or stopped. Stop the Mission first with coordinator_chat op=stop_mission, then archive it.")
+            }
+            let result = await environment.archiveMission(coordinatorSessionID)
+            environment.refresh()
+            let updatedSnapshot = environment.snapshot()
+            let extra: [String: Value] = [
+                "accepted": .bool(result.accepted),
+                "routed_to": .string("archive_mission"),
+                "coordinator_session_id": .string(coordinatorSessionID.uuidString),
+                "already_archived": .bool(result.alreadyArchived),
+                "unpinned": .bool(result.unpinned),
+                "missions": missionInventoryValue(updatedSnapshot, includeArchived: true),
+                "error": AgentMCPToolHelpers.stringOrNull(result.accepted ? nil : result.message)
+            ]
+            return compactStateResponse(updatedSnapshot, extra: extra)
 
         case "submit":
             let message = normalizedString(args["message"] ?? args["response"])
@@ -521,7 +606,7 @@ struct CoordinatorChatMCPToolService {
             } while true
 
         default:
-            throw MCPError.invalidParams("\(toolName) op must be one of: list, select, new, ensure_mission, start_mission, stop_mission, submit, mission_plan, mission_status, mission_events, receipt, set_pace, set_autonomy, wait_for_update.")
+            throw MCPError.invalidParams("\(toolName) op must be one of: \(Self.supportedOps.joined(separator: ", ")).")
         }
     }
 
@@ -2064,6 +2149,94 @@ struct CoordinatorChatMCPToolService {
         ]
         payload.merge(extra) { _, new in new }
         return .object(payload)
+    }
+
+    private func doctorValue(_ snapshot: CoordinatorModeSnapshot) -> Value {
+        #if DEBUG
+            let scriptedChildAvailable = true
+        #else
+            let scriptedChildAvailable = false
+        #endif
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        let bundleIdentifier = Bundle.main.bundleIdentifier
+
+        return .object([
+            "ok": .bool(true),
+            "app": .object([
+                "bundle_identifier": AgentMCPToolHelpers.stringOrNull(bundleIdentifier),
+                "version": AgentMCPToolHelpers.stringOrNull(version),
+                "build": AgentMCPToolHelpers.stringOrNull(build),
+                "build_sha": .null
+            ]),
+            "coordinator_chat": .object([
+                "supported_ops": .array(Self.supportedOps.map(Value.string)),
+                "features": .object([
+                    "mission_events": .bool(true),
+                    "receipt_markdown": .bool(true),
+                    "set_pace": .bool(true),
+                    "set_autonomy": .bool(true),
+                    "structured_child_input": .bool(true),
+                    "scripted_child": .bool(scriptedChildAvailable),
+                    "list_missions": .bool(true),
+                    "archive_mission": .bool(true)
+                ]),
+                "runtime_gate": .object([
+                    "external_user_actions_block_runtime": .bool(true),
+                    "archive_blocks_runtime": .bool(true)
+                ])
+            ]),
+            "child_backends": .object([
+                "structured_user_input_advertised": .bool(MCPToolCapabilities.toolNames(for: [.userInteraction]).contains("ask_user")),
+                "scripted_child_available": .bool(scriptedChildAvailable),
+                "scripted_selector": .string(AgentScriptedChildModelID.selector)
+            ]),
+            "selected_window": .object([
+                "selected_coordinator_session_id": AgentMCPToolHelpers.stringOrNull(snapshot.coordinatorRail.coordinatorSessionID?.uuidString),
+                "coordinator_count": .int(snapshot.coordinatorRail.availableCoordinators.count),
+                "mission_count": .int(snapshot.coordinatorRail.availableCoordinators.count(where: { $0.missionPlan != nil })),
+                "archived_count": .int(snapshot.coordinatorRail.availableCoordinators.count(where: { $0.isPersistedOnly && !$0.isLiveInCurrentWindow }))
+            ])
+        ])
+    }
+
+    private func missionInventoryValue(
+        _ snapshot: CoordinatorModeSnapshot,
+        includeArchived: Bool,
+        scopedTo sessionID: UUID? = nil
+    ) -> Value {
+        let options = snapshot.coordinatorRail.availableCoordinators.filter { option in
+            if let sessionID, option.sessionID != sessionID {
+                return false
+            }
+            return includeArchived || !(option.isPersistedOnly && !option.isLiveInCurrentWindow)
+        }
+        return .array(options.map(missionInventoryItemValue))
+    }
+
+    private func missionInventoryItemValue(_ option: CoordinatorModeCoordinatorOption) -> Value {
+        let plan = option.missionPlan
+        let decisionCounts = plan.map { missionDecisionCountsByActorValue($0.decisions) } ?? .null
+        let evidenceCounts = plan.map { missionEvidenceCountsValue($0.evidence) } ?? .null
+        let isArchived = option.isPersistedOnly && !option.isLiveInCurrentWindow
+        return .object([
+            "coordinator_session_id": .string(option.sessionID.uuidString),
+            "title": .string(option.title),
+            "mission_key": AgentMCPToolHelpers.stringOrNull(plan?.missionKey),
+            "selected": .bool(option.isSelected),
+            "live": .bool(option.isLiveInCurrentWindow),
+            "archived": .bool(isArchived),
+            "pinned": .bool(option.isPinned),
+            "terminal": .bool(plan?.status.isTerminal ?? false),
+            "status": AgentMCPToolHelpers.stringOrNull(plan?.status.rawValue),
+            "approval_state": AgentMCPToolHelpers.stringOrNull(plan?.approvalState.rawValue),
+            "run_state": AgentMCPToolHelpers.stringOrNull(option.runState?.rawValue),
+            "receipt_ready": .bool(plan?.status.isTerminal ?? false),
+            "decision_counts_by_actor": decisionCounts,
+            "evidence_counts": evidenceCounts,
+            "updated_at": .string(AgentMCPToolHelpers.timestamp(option.updatedAt)),
+            "last_activity_at": .string(AgentMCPToolHelpers.timestamp(option.lastActivityAt))
+        ])
     }
 
     private func missionStatusValue(coordinatorSessionID: UUID, snapshot: CoordinatorModeSnapshot) -> Value {
