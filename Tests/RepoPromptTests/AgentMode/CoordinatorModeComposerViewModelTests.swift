@@ -2589,6 +2589,24 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(session.selectedReasoningEffortRaw, CodexReasoningEffort.low.rawValue)
     }
 
+    func testCoordinatorRuntimeRoleModelOverrideKeepsCoordinatorIdentity() async throws {
+        let fixture = makeAgentModeFixture(tabs: [], activeTabID: nil)
+        let viewModel = fixture.viewModel
+
+        let next = try await viewModel.test_resolveOrCreateCoordinatorRuntimeDemoTarget(
+            preferredSessionID: nil,
+            forceNewRuntime: true,
+            coordinatorModelID: "engineer"
+        )
+        let session = try XCTUnwrap(viewModel.sessions[next.tabID])
+
+        XCTAssertTrue(session.isCoordinatorRuntime)
+        XCTAssertEqual(session.mcpControlContext?.taskLabelKind, .coordinator)
+        XCTAssertEqual(session.selectedAgent, .codexExec)
+        XCTAssertEqual(session.selectedModelRaw, "gpt-5.5")
+        XCTAssertEqual(session.selectedReasoningEffortRaw, CodexReasoningEffort.low.rawValue)
+    }
+
     func testCoordinatorRuntimeRejectsScriptedModelOverride() async throws {
         let fixture = makeAgentModeFixture(tabs: [], activeTabID: nil)
         let viewModel = fixture.viewModel

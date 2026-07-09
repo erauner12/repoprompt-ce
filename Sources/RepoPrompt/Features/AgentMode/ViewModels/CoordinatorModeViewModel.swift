@@ -3024,11 +3024,12 @@ extension AgentModeViewModel {
             )
         }
         let modelSelection = try Self.resolvedCoordinatorRuntimeModelSelection(coordinatorModelID)
+        let resolvedModel = AgentExternalMCPRunStarter.extractReasoningEffort(from: modelSelection.modelRaw)
         try await mcpConfigureSession(
             tabID: tabID,
             agentRaw: modelSelection.agentRaw,
-            modelRaw: modelSelection.modelRaw,
-            reasoningEffortRaw: nil
+            modelRaw: resolvedModel.model,
+            reasoningEffortRaw: resolvedModel.effort
         )
     }
 
