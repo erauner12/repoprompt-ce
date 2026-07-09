@@ -13,6 +13,11 @@ esac
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
+PROCESS_HELPER="$repo_root/Scripts/debug_app_process.py"
+DEBUG_APP_ROOT="${REPOPROMPT_DEBUG_APP_ROOT:-$HOME/Library/Application Support/RepoPrompt CE/DebugApps}"
+APP_BUNDLE="${REPOPROMPT_DEBUG_APP_BUNDLE:-$DEBUG_APP_ROOT/RepoPrompt.app}"
+APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/RepoPrompt"
+
 tmp_root=""
 cleanup() {
   if [[ -n "${tmp_root:-}" ]]; then
@@ -97,6 +102,35 @@ range_contains() {
   return 1
 }
 
+find_debug_app_pids_for_preflight() {
+  command -v python3 >/dev/null 2>&1 || fail "python3 is required to safely identify the RepoPrompt CE debug app before root push tests"
+  python3 "$PROCESS_HELPER" list --executable "$APP_EXECUTABLE"
+}
+
+run_root_tests_or_labeled_visible_app_skip() {
+  local pids pid_list
+  if [[ "${RPCE_PREFLIGHT_FORCE_ROOT_TESTS:-0}" == "1" ]]; then
+    log "Run coordinated root tests"
+    make dev-test
+    return
+  fi
+  if ! pids="$(find_debug_app_pids_for_preflight)"; then
+    fail "could not safely determine whether the RepoPrompt CE debug app is running"
+  fi
+  if [[ -n "$pids" ]]; then
+    pid_list="$(printf '%s\n' "$pids" | paste -sd, -)"
+    log "Skip coordinated root tests because visible debug app is running"
+    printf 'PUSH_PREFLIGHT_ROOT_TESTS_SKIPPED_VISIBLE_DEBUG_APP: exact RepoPrompt CE debug app PID(s): %s\n' "$pid_list"
+    cat <<'EOF'
+Focused validation and product builds remain required for the touched boundary.
+Stop the visible debug app and rerun push preflight, or set RPCE_PREFLIGHT_FORCE_ROOT_TESTS=1 to run root tests anyway.
+EOF
+    return
+  fi
+  log "Run coordinated root tests"
+  make dev-test
+}
+
 push_success() {
   cat <<'EOF'
 
@@ -163,8 +197,7 @@ if range_contains "$files" '\.swift$'; then
 fi
 
 if range_contains "$files" '^(Sources/RepoPrompt/|Tests/RepoPromptTests/)'; then
-  log "Run coordinated root tests"
-  make dev-test
+  run_root_tests_or_labeled_visible_app_skip
 fi
 
 if range_contains "$files" '^Packages/RepoPromptAgentProviders/'; then

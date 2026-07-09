@@ -27,6 +27,8 @@ MISSING_CHILDASK_LEDGER_WARNING = "completed_child_missing_childask_ledger"
 CHILD_INPUT_TOOL_UNAVAILABLE = "S5_USER_INPUT_TOOL_UNAVAILABLE"
 SCRIPTED_CHILD_SELECTOR = "scripted"
 SCRIPTED_CHILD_COMPLETION_PREFIX = "SCRIPTED_CHILD_V1 answer="
+TERMINAL_READINESS_MESSAGE = "not ready until the Mission is completed or stopped"
+ARCHIVE_TERMINAL_READINESS_MESSAGE = "archive_mission is only available after a Mission is completed or stopped"
 STATUS_RANK = {
     "pending": 0,
     "running": 1,
@@ -708,11 +710,21 @@ def capture_receipt(client: RpcClient, artifacts: RunArtifacts, session_id: str,
     if mode == "summary":
         artifacts.record_feature("receipt_markdown", False, "summary mode selected")
         return
-    ok, response = client.try_coordinator({
-        "op": "receipt",
-        "coordinator_session_id": session_id,
-        "format": "markdown",
-    }, timeout=60)
+    response: dict[str, Any] = {}
+    ok = False
+    deadline = time.monotonic() + 45
+    while True:
+        ok, response = client.try_coordinator({
+            "op": "receipt",
+            "coordinator_session_id": session_id,
+            "format": "markdown",
+        }, timeout=60)
+        markdown = response.get("markdown") or response.get("receipt_markdown") or response.get("receipt")
+        if not ok or (isinstance(markdown, str) and markdown.strip()):
+            break
+        if TERMINAL_READINESS_MESSAGE not in str(response.get("error") or "") or time.monotonic() >= deadline:
+            break
+        time.sleep(2)
     if not ok:
         detail = str(response.get("error") or "receipt markdown unsupported")
         artifacts.record_feature("receipt_markdown", False, detail)
@@ -769,14 +781,26 @@ def list_missions(client: RpcClient, artifacts: RunArtifacts, include_archived: 
 
 
 def archive_mission(client: RpcClient, artifacts: RunArtifacts, session_id: str) -> dict[str, Any]:
-    ok, response = client.try_coordinator({
-        "op": "archive_mission",
-        "coordinator_session_id": session_id,
-    }, timeout=120)
-    if not ok:
-        detail = str(response.get("error") or "archive_mission unsupported")
-        artifacts.record_feature("archive_mission", False, detail)
-        raise E2EFailure(f"archive_mission unavailable: {detail}")
+    response: dict[str, Any] = {}
+    deadline = time.monotonic() + 45
+    while True:
+        try:
+            response = client.coordinator({
+                "op": "archive_mission",
+                "coordinator_session_id": session_id,
+            }, timeout=120)
+            break
+        except E2EFailure as exc:
+            message = str(exc)
+            if coordinator_op_unsupported(message):
+                artifacts.record_feature("archive_mission", False, message)
+                raise E2EFailure(f"archive_mission unavailable: {message}")
+            if (
+                TERMINAL_READINESS_MESSAGE not in message
+                and ARCHIVE_TERMINAL_READINESS_MESSAGE not in message
+            ) or time.monotonic() >= deadline:
+                raise
+            time.sleep(2)
     artifacts.record_feature("archive_mission", True, None)
     write_json(artifacts.root / "archive_mission.json", response)
     if response.get("accepted") is not True:
@@ -2690,9 +2714,31 @@ def run_s6_pace(client: RpcClient, artifacts: RunArtifacts, args: argparse.Names
     capture_mission_events(client, artifacts, session_id, args.events_mode)
     assert_s6_pace_flip(before, after)
     artifacts.add_checkpoint("pace-set-auto")
+
+    stop_response = client.coordinator({
+        "op": "stop_mission",
+        "coordinator_session_id": session_id,
+        "compact": True,
+    }, timeout=180)
+    write_json(artifacts.root / "stop_mission_response.json", stop_response)
+    if stop_response.get("accepted") is False:
+        raise E2EFailure(f"S6 pace cleanup stop rejected: {stop_response.get('error') or stop_response}")
+    stopped = wait_until(
+        client,
+        artifacts,
+        session_id,
+        terminal_stopped,
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("pace-mission-stopped")
+    capture_receipt(client, artifacts, session_id, args.receipt_mode)
+
     artifacts.finalize(True, "s6", {
         "coordinator_session_id": session_id,
-        "final_status": after.status,
+        "final_status": stopped.status,
+        "pace_asserted_status": after.status,
         "approval_state": plan_approval_state(after.compact),
         "default_pace": plan_default_pace(after.compact),
         "revision_before": plan_revision(before.compact),
@@ -2700,7 +2746,8 @@ def run_s6_pace(client: RpcClient, artifacts: RunArtifacts, args: argparse.Names
     })
     return {
         "coordinator_session_id": session_id,
-        "final_status": after.status,
+        "final_status": stopped.status,
+        "pace_asserted_status": after.status,
         "approval_state": plan_approval_state(after.compact),
         "default_pace": plan_default_pace(after.compact),
         "revision_before": plan_revision(before.compact),

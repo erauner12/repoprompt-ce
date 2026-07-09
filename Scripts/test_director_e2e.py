@@ -12,6 +12,7 @@ import unittest
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1862,6 +1863,12 @@ Loaded roots: demo → /repo/fallback
             def __init__(self) -> None:
                 self.payloads = []
 
+            def coordinator(self, payload, timeout=120):
+                ok, response = self.try_coordinator(payload, timeout)
+                if not ok:
+                    raise director_e2e.E2EFailure(str(response))
+                return response
+
             def try_coordinator(self, payload, timeout=120):
                 self.payloads.append(payload)
                 if payload["op"] == "list_missions":
@@ -1903,6 +1910,9 @@ Loaded roots: demo → /repo/fallback
                 self.status_payloads = []
 
             def coordinator(self, payload, timeout=120):
+                if payload["op"] == "archive_mission":
+                    self.try_payloads.append(payload)
+                    return {"accepted": True, "coordinator_session_id": payload["coordinator_session_id"]}
                 self.status_payloads.append(payload)
                 self.assert_payload(payload, "mission_status")
                 return {
@@ -1916,8 +1926,6 @@ Loaded roots: demo → /repo/fallback
             def try_coordinator(self, payload, timeout=120):
                 self.try_payloads.append(payload)
                 op = payload["op"]
-                if op == "archive_mission":
-                    return True, {"accepted": True, "coordinator_session_id": "session"}
                 if op == "list_missions":
                     return True, {"missions": [{"coordinator_session_id": "session", "archived": True}]}
                 if op == "mission_events":
@@ -1950,6 +1958,56 @@ Loaded roots: demo → /repo/fallback
             self.assertTrue((Path(tmp) / "missions.json").exists())
             self.assertEqual((Path(tmp) / "receipt.md").read_text(encoding="utf-8"), "# Mission Receipt\n\n## Spend")
 
+    def test_receipt_capture_retries_terminal_readiness_race(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def try_coordinator(self, payload, timeout=120):
+                self.calls += 1
+                if self.calls == 1:
+                    return True, {
+                        "format": "markdown",
+                        "error": "Mission receipt is not ready until the Mission is completed or stopped.",
+                    }
+                return True, {"markdown": "# Mission Receipt\n\n## Spend"}
+
+        client = FakeClient()
+        with tempfile.TemporaryDirectory() as tmp, patch.object(director_e2e.time, "sleep", return_value=None):
+            artifacts = director_e2e.RunArtifacts(Path(tmp))
+
+            director_e2e.capture_receipt(client, artifacts, "session", "required")
+
+            self.assertEqual(client.calls, 2)
+            self.assertEqual((Path(tmp) / "receipt.md").read_text(encoding="utf-8"), "# Mission Receipt\n\n## Spend")
+
+    def test_archive_mission_retries_terminal_readiness_race(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def coordinator(self, payload, timeout=120):
+                self.calls += 1
+                if self.calls == 1:
+                    raise director_e2e.E2EFailure(
+                        "coordinator_chat:archive_mission failed with exit 1: "
+                        "archive_mission is only available after a Mission is completed or stopped."
+                    )
+                return {
+                    "accepted": True,
+                    "coordinator_session_id": payload["coordinator_session_id"],
+                }
+
+        client = FakeClient()
+        with tempfile.TemporaryDirectory() as tmp, patch.object(director_e2e.time, "sleep", return_value=None):
+            artifacts = director_e2e.RunArtifacts(Path(tmp))
+
+            response = director_e2e.archive_mission(client, artifacts, "session")
+
+            self.assertEqual(client.calls, 2)
+            self.assertTrue(response["accepted"])
+            self.assertTrue(artifacts.features["archive_mission"]["available"])
+
     def test_archive_on_success_archives_composite_variant_reports(self) -> None:
         class FakeClient:
             def __init__(self) -> None:
@@ -1957,6 +2015,12 @@ Loaded roots: demo → /repo/fallback
                 self.status_payloads = []
 
             def coordinator(self, payload, timeout=120):
+                if payload["op"] == "archive_mission":
+                    self.try_payloads.append(payload)
+                    return {
+                        "accepted": True,
+                        "coordinator_session_id": payload["coordinator_session_id"],
+                    }
                 self.status_payloads.append(payload)
                 return {
                     "mission_status": {
@@ -1969,11 +2033,6 @@ Loaded roots: demo → /repo/fallback
             def try_coordinator(self, payload, timeout=120):
                 self.try_payloads.append(payload)
                 op = payload["op"]
-                if op == "archive_mission":
-                    return True, {
-                        "accepted": True,
-                        "coordinator_session_id": payload["coordinator_session_id"],
-                    }
                 if op == "list_missions":
                     return True, {
                         "missions": [

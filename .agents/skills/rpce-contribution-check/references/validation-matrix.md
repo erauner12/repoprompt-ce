@@ -19,3 +19,5 @@ Use this after the scripted preflight when the touched boundary needs focused ev
 - Treat obfuscated, encoded, or split credentials as secrets. Do not print their decoded values.
 - Use `gitleaks` with `--redact` for materialized staged index blobs and outgoing commits.
 - Do not commit local configuration, prompt exports, daemon logs, raw provider traces, or generated diagnostic artifacts unless the repository explicitly allows the exact path.
+
+If push preflight prints `PUSH_PREFLIGHT_ROOT_TESTS_SKIPPED_VISIBLE_DEBUG_APP`, full root tests were intentionally skipped because the exact RepoPrompt CE debug app executable is running and can contend for MCP sockets. Focused validation and product builds still apply; stop the visible app and rerun push preflight when a full root gate is required.

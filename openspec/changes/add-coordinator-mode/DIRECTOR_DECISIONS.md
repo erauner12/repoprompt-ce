@@ -533,6 +533,40 @@ Missions are unpinned as part of archive; selected archived Missions clear selec
 they leave the ordinary live rail. Archive never deletes or invalidates receipt, events,
 decisions, evidence, status, or lineage.
 
+Baseline sampling rules (2026-07-09): pass-rate batches are pre-registered diagnostics,
+not curated demos. Every attempt counts, and failed attempts are not quietly rerun.
+Failure classes are `plumbing`, `harness`, `model-negotiation`, `environment`, and `soak`.
+If a plumbing or harness defect requires a code fix, restart the affected batch after the
+fix; model-negotiation, environment, and soak failures stay in the denominator because
+they are part of what the batch measures. Report raw pass counts only: 10/10 is useful
+evidence but not a broad statistical guarantee. Run S5/S6 scripted batches in one
+continuous app session so `--archive-on-success` also soaks mission cleanup and retention.
+
+Baseline sampling results (2026-07-09): first raw scripted batches ran against one visible
+debug app session with `--repeat 10 --doctor-mode required --events-mode required
+--receipt-mode required --archive-on-success --child-model-id scripted`. The S6 batch was
+restarted after two harness/plumbing fixes (stop the non-terminal pace slice before
+receipt/archive, then retry terminal readiness races for receipt/archive); those invalid
+batches are not counted. Counted results:
+
+- S5 artifact root:
+  `tmp/director-e2e-runs/20260709T145114Z-s5-b06f6d` — 9/10 passed. Attempt 1 failed as
+  `model-negotiation`: the Mission reached approved/running with no active work and one
+  ready child node, then made no observable progress for 208 seconds. Successful attempt
+  durations ranged ~293-341s, median ~312s.
+- S6 artifact root:
+  `tmp/director-e2e-runs/20260709T183323Z-s6-a3f473` — 9/10 passed. Attempt 6 failed as
+  `soak/product status-regression`: a node moved from completed back to running, with the
+  warning `node_should_steer_primary_but_started_fresh`. Successful attempt durations
+  ranged ~436-516s, median ~476s.
+- Archive soak: S5 archived 18 successful-attempt Missions; S6 archived 27. Archive
+  cleanup preserved status/events/receipt retrieval for successful attempts. Failed
+  attempts were left unarchived by design.
+- Demo-leading receipt artifact:
+  `tmp/director-e2e-runs/20260709T145114Z-s5-b06f6d/attempt-002/auto/receipt.md` records a
+  childAsk:auto run with Director-routed answer evidence. Completed and stopped receipts
+  remain separate packaging artifacts.
+
 Coordinator runtime attribution (2026-07-08): `actor:user` on a Director-answered child
 question is fabricated user consent. `coordinator_chat` therefore stays conservative:
 ambiguous request metadata is user-authored, never Director-authored. The fix is durable
