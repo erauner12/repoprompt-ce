@@ -778,6 +778,9 @@ def approve_initial_plan(client: RpcClient, artifacts: RunArtifacts, session_id:
         checkpoint_action = proceed.get("checkpoint_action")
         if isinstance(checkpoint_action, str) and checkpoint_action.strip():
             submit_payload["checkpoint_action"] = checkpoint_action.strip()
+        expected_checkpoint_instance_id = checkpoint_instance_id(obs.compact)
+        if expected_checkpoint_instance_id:
+            submit_payload["expected_checkpoint_instance_id"] = expected_checkpoint_instance_id
         response = client.coordinator(submit_payload, timeout=180)
         if response.get("accepted") is not False:
             artifacts.add_checkpoint("plan-approved")
@@ -853,6 +856,31 @@ def has_running_work_that_could_still_complete(obs: Observation) -> bool:
         if str(node.get("execution_policy") or "") != "coordinator_only":
             return True
     return False
+
+
+def checkpoint_instance_id(status: dict[str, Any]) -> str | None:
+    checkpoint = status.get("checkpoint")
+    if not isinstance(checkpoint, dict):
+        nested = status.get("mission_status")
+        if isinstance(nested, dict):
+            checkpoint = nested.get("checkpoint")
+    if not isinstance(checkpoint, dict):
+        return None
+    raw = checkpoint.get("checkpoint_instance_id") or checkpoint.get("checkpointInstanceID")
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    return value or None
+
+
+def checkpoint_action(status: dict[str, Any], label: str) -> dict[str, Any] | None:
+    checkpoint = status.get("checkpoint")
+    if not isinstance(checkpoint, dict):
+        return None
+    for action in checkpoint.get("actions") or []:
+        if isinstance(action, dict) and str(action.get("label") or "") == label:
+            return action
+    return None
 
 
 def completed_node_evidence_missing(obs: Observation) -> list[str]:

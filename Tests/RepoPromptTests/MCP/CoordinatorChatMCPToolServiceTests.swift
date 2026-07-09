@@ -3271,12 +3271,21 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let labels = actions.compactMap { $0["label"]?.stringValue }
 
         XCTAssertEqual(checkpoint["kind"]?.stringValue, "plan_approval")
+        XCTAssertEqual(checkpoint["checkpoint_id"]?.stringValue, "plan-approval")
+        XCTAssertEqual(
+            checkpoint["checkpoint_instance_id"]?.stringValue,
+            "coordinator:\(coordinatorID.uuidString):plan-approval:r1"
+        )
         XCTAssertTrue(labels.contains("Proceed"))
         XCTAssertTrue(labels.contains("Gather evidence"))
         XCTAssertTrue(labels.contains("Get independent critique"))
         let proceed = try XCTUnwrap(actions.first { $0["label"]?.stringValue == "Proceed" })
         XCTAssertEqual(proceed["submit_op"]?.stringValue, "submit")
         XCTAssertEqual(proceed["checkpoint_action"]?.stringValue, "proceed")
+        XCTAssertEqual(
+            proceed["expected_checkpoint_instance_id"]?.stringValue,
+            "coordinator:\(coordinatorID.uuidString):plan-approval:r1"
+        )
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("Approved to proceed") == true)
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("actor:\"director\"") == true)
         XCTAssertTrue(proceed["submit_message"]?.stringValue?.contains("Do not record user decisions") == true)
@@ -3891,6 +3900,65 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(object["accepted"]?.boolValue, true)
     }
 
+    func testSubmitWithCheckpointActionRejectsStaleExpectedCheckpointInstance() async throws {
+        let coordinatorID = UUID()
+        let plan = Self.approvalPlan(coordinatorID: coordinatorID, revision: 2)
+        var submittedActions: [CoordinatorModeViewModel.ContinuationAction] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submitContinuation: {
+                submittedActions.append($0)
+                return .accepted
+            },
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("submit"),
+            "coordinator_session_id": .string(coordinatorID.uuidString),
+            "checkpoint_action": .string("proceed"),
+            "expected_checkpoint_instance_id": .string("coordinator:\(coordinatorID.uuidString):plan-approval:r1"),
+            "compact": .bool(true)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertTrue(submittedActions.isEmpty)
+        XCTAssertEqual(object["accepted"]?.boolValue, false)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "coordinator")
+        let error = try XCTUnwrap(object["error"]?.stringValue)
+        XCTAssertTrue(error.contains("Stale checkpoint submit rejected"), error)
+        XCTAssertTrue(error.contains("plan-approval:r2"), error)
+    }
+
+    func testSubmitWithCheckpointActionAcceptsCurrentExpectedCheckpointInstance() async throws {
+        let coordinatorID = UUID()
+        let plan = Self.approvalPlan(coordinatorID: coordinatorID, revision: 2)
+        var submittedActions: [CoordinatorModeViewModel.ContinuationAction] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submitContinuation: {
+                submittedActions.append($0)
+                return .accepted
+            },
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("submit"),
+            "coordinator_session_id": .string(coordinatorID.uuidString),
+            "checkpoint_action": .string("proceed"),
+            "expected_checkpoint_instance_id": .string("coordinator:\(coordinatorID.uuidString):plan-approval:r2"),
+            "compact": .bool(true)
+        ])
+        let object = try XCTUnwrap(response.objectValue)
+
+        XCTAssertEqual(submittedActions, [.proceed])
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["routed_to"]?.stringValue, "coordinator")
+    }
+
     func testSubmitWithCheckpointActionDoesNotAnswerPendingChildInteraction() async throws {
         let coordinatorID = UUID()
         let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
@@ -4460,6 +4528,33 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             openAgentChatRoute: nil,
             statusReport: nil,
             origin: .coordinatorFleet
+        )
+    }
+
+    private static func approvalPlan(coordinatorID _: UUID, revision: Int) -> CoordinatorMissionPlan {
+        let workstreamID = UUID()
+        return CoordinatorMissionPlan(
+            revision: revision,
+            objective: "Approve the next safe slice.",
+            approvalState: .awaitingApproval,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Planning",
+                    purpose: "Choose the next safe slice.",
+                    defaultPolicy: .coordinatorOnly,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: UUID(),
+                    title: "Choose next PR scope",
+                    workstreamID: workstreamID,
+                    executionPolicy: .coordinatorOnly,
+                    status: .pending
+                )
+            ]
         )
     }
 

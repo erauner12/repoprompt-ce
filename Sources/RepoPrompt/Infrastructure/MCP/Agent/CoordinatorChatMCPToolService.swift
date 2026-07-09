@@ -219,6 +219,7 @@ struct CoordinatorChatMCPToolService {
         case "submit":
             let message = normalizedString(args["message"] ?? args["response"])
             let continuationAction = try parseCheckpointContinuationAction(args)
+            let expectedCheckpointInstanceID = try parseExpectedCheckpointInstanceID(args)
             let newParent = AgentMCPToolHelpers.parseBool(args["new_parent"]) ?? false
             let compact = AgentMCPToolHelpers.parseBool(args["compact"]) ?? true
             if newParent, message == nil {
@@ -226,6 +227,9 @@ struct CoordinatorChatMCPToolService {
             }
             if newParent, continuationAction != nil {
                 throw MCPError.invalidParams("checkpoint_action is only valid for existing Coordinator Missions.")
+            }
+            if expectedCheckpointInstanceID != nil, continuationAction == nil {
+                throw MCPError.invalidParams("expected_checkpoint_instance_id is only valid with checkpoint_action.")
             }
             if newParent {
                 try validateExternalMissionCreation(metadata)
@@ -262,7 +266,16 @@ struct CoordinatorChatMCPToolService {
                 routedToChildInteraction = true
             } else {
                 if let continuationAction {
-                    result = await environment.submitContinuation(continuationAction)
+                    if let expectedCheckpointInstanceID,
+                       let message = checkpointInstanceMismatchMessage(
+                           expected: expectedCheckpointInstanceID,
+                           snapshot: selectedSnapshot
+                       )
+                    {
+                        result = .rejected(message: message)
+                    } else {
+                        result = await environment.submitContinuation(continuationAction)
+                    }
                     routedToChildInteraction = false
                 } else {
                     guard let message, !message.isEmpty else {
@@ -792,6 +805,37 @@ struct CoordinatorChatMCPToolService {
             throw MCPError.invalidParams("checkpoint_action must be one of: proceed, gather_evidence, deepen_plan, independent_critique, start_smaller, stop.")
         }
         return action
+    }
+
+    private func parseExpectedCheckpointInstanceID(_ args: [String: Value]) throws -> String? {
+        normalizedString(
+            args["expected_checkpoint_instance_id"]
+                ?? args["expectedCheckpointInstanceID"]
+                ?? args["checkpoint_instance_id"]
+                ?? args["checkpointInstanceID"]
+        )
+    }
+
+    private func checkpointInstanceMismatchMessage(
+        expected: String,
+        snapshot: CoordinatorModeSnapshot
+    ) -> String? {
+        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID,
+              let plan = snapshot.coordinatorRail.missionPlan,
+              plan.approvalState == .awaitingApproval
+        else {
+            return "Checkpoint submit rejected because no plan approval checkpoint is currently pending. Refresh coordinator_chat op=mission_status before resubmitting."
+        }
+        let current = planApprovalCheckpointInstanceID(
+            coordinatorSessionID: coordinatorSessionID,
+            revision: plan.revision
+        )
+        guard expected != current else { return nil }
+        return "Stale checkpoint submit rejected: expected checkpoint_instance_id \(expected), but current checkpoint_instance_id is \(current). Refresh coordinator_chat op=mission_status and resubmit the current checkpoint action."
+    }
+
+    private func planApprovalCheckpointInstanceID(coordinatorSessionID: UUID, revision: Int) -> String {
+        "coordinator:\(coordinatorSessionID.uuidString):plan-approval:r\(revision)"
     }
 
     private func parseMissionPredecessorUpdate(_ args: [String: Value]) throws -> (
@@ -2215,7 +2259,7 @@ struct CoordinatorChatMCPToolService {
                 )
             }),
             "liveness_warnings": .array(warnings.map(Value.string)),
-            "checkpoint": compactMissionCheckpointValue(plan),
+            "checkpoint": compactMissionCheckpointValue(plan, coordinatorSessionID: coordinatorSessionID),
             "recent_events": .array(
                 plan.events
                     .sorted { lhs, rhs in
@@ -2664,7 +2708,7 @@ struct CoordinatorChatMCPToolService {
         return String(format: "%016llx", hash)
     }
 
-    private func compactMissionCheckpointValue(_ plan: CoordinatorMissionPlan) -> Value {
+    private func compactMissionCheckpointValue(_ plan: CoordinatorMissionPlan, coordinatorSessionID: UUID) -> Value {
         guard plan.approvalState == .awaitingApproval,
               !plan.nodes.isEmpty,
               plan.status != .stopped,
@@ -2673,15 +2717,22 @@ struct CoordinatorChatMCPToolService {
             return .null
         }
 
+        let checkpointInstanceID = planApprovalCheckpointInstanceID(
+            coordinatorSessionID: coordinatorSessionID,
+            revision: plan.revision
+        )
         return .object([
             "kind": .string("plan_approval"),
+            "checkpoint_id": .string("plan-approval"),
+            "checkpoint_instance_id": .string(checkpointInstanceID),
             "title": .string("Approval required"),
             "description": .string("Submit one of these messages with coordinator_chat op=submit to continue through the existing Coordinator checkpoint contract."),
             "actions": .array([
                 compactMissionCheckpointAction(
                     label: "Proceed",
                     action: .proceed,
-                    message: CoordinatorModeViewModel.ContinuationAction.proceed.directiveText
+                    message: CoordinatorModeViewModel.ContinuationAction.proceed.directiveText,
+                    checkpointInstanceID: checkpointInstanceID
                 ),
                 compactMissionCheckpointAction(
                     label: "Revise",
@@ -2690,27 +2741,32 @@ struct CoordinatorChatMCPToolService {
                 compactMissionCheckpointAction(
                     label: "Gather evidence",
                     action: .runLightweightDiscovery,
-                    message: CoordinatorModeViewModel.ContinuationAction.runLightweightDiscovery.directiveText
+                    message: CoordinatorModeViewModel.ContinuationAction.runLightweightDiscovery.directiveText,
+                    checkpointInstanceID: checkpointInstanceID
                 ),
                 compactMissionCheckpointAction(
                     label: "Deepen plan",
                     action: .runDeepPlan,
-                    message: CoordinatorModeViewModel.ContinuationAction.runDeepPlan.directiveText
+                    message: CoordinatorModeViewModel.ContinuationAction.runDeepPlan.directiveText,
+                    checkpointInstanceID: checkpointInstanceID
                 ),
                 compactMissionCheckpointAction(
                     label: "Get independent critique",
                     action: .runDesignCritique,
-                    message: CoordinatorModeViewModel.ContinuationAction.runDesignCritique.directiveText
+                    message: CoordinatorModeViewModel.ContinuationAction.runDesignCritique.directiveText,
+                    checkpointInstanceID: checkpointInstanceID
                 ),
                 compactMissionCheckpointAction(
                     label: "Start smaller",
                     action: .startSmaller,
-                    message: CoordinatorModeViewModel.ContinuationAction.startSmaller.directiveText
+                    message: CoordinatorModeViewModel.ContinuationAction.startSmaller.directiveText,
+                    checkpointInstanceID: checkpointInstanceID
                 ),
                 compactMissionCheckpointAction(
                     label: "Stop",
                     action: .stopHere,
-                    message: CoordinatorModeViewModel.ContinuationAction.stopHere.directiveText
+                    message: CoordinatorModeViewModel.ContinuationAction.stopHere.directiveText,
+                    checkpointInstanceID: checkpointInstanceID
                 )
             ])
         ])
@@ -2719,7 +2775,8 @@ struct CoordinatorChatMCPToolService {
     private func compactMissionCheckpointAction(
         label: String,
         action: CoordinatorModeViewModel.ContinuationAction? = nil,
-        message: String
+        message: String,
+        checkpointInstanceID: String? = nil
     ) -> Value {
         let guidance = CoordinatorModeViewModel.ContinuationAction.runtimeLedgerInstruction
         let submitMessage = message.contains(guidance) ? message : "\(message)\n\n\(guidance)"
@@ -2731,6 +2788,9 @@ struct CoordinatorChatMCPToolService {
         ]
         if let action {
             object["checkpoint_action"] = .string(action.checkpointActionID)
+        }
+        if let checkpointInstanceID {
+            object["expected_checkpoint_instance_id"] = .string(checkpointInstanceID)
         }
         return .object(object)
     }
