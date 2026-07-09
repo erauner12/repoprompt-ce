@@ -463,6 +463,123 @@ final class CoordinatorAutoModeBoundaryClassifierTests: XCTestCase {
         XCTAssertEqual(event.childSessionID, childID)
     }
 
+    func testEligibleReadyMissionWorkResumesWhenIdle() {
+        let coordinatorID = uuid(1)
+        let workstreamID = uuid(10)
+        let readyNodeID = uuid(11)
+        var state = baseState()
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            objective: "Launch the approved ready work.",
+            status: .running,
+            approvalState: .approved,
+            policySnapshot: CoordinatorMissionPolicySnapshot.handsOff,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Smoke",
+                    purpose: "Exercise ready work pickup.",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: readyNodeID,
+                    title: "Launch child",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .pending
+                )
+            ]
+        ))
+
+        let decision = classifier.classify(input(
+            coordinatorID: coordinatorID,
+            state: state
+        ))
+
+        guard case let .resume(event) = decision else {
+            return XCTFail("Expected eligible work resume, got \(decision)")
+        }
+        XCTAssertEqual(event.kind, .eligibleWork)
+        XCTAssertEqual(
+            event.id,
+            "mission:\(coordinatorID.uuidString):eligible:r1:\(readyNodeID.uuidString)"
+        )
+        XCTAssertTrue(event.detail.contains("eligible ready node"))
+        XCTAssertTrue(event.resumeDirective.contains("approved eligible work"))
+        XCTAssertTrue(event.resumeDirective.contains("max_concurrent"))
+    }
+
+    func testEligibleReadyMissionWorkDedupesAndRespectsCapacity() {
+        let coordinatorID = uuid(1)
+        let workstreamID = uuid(10)
+        let runningNodeID = uuid(11)
+        let readyNodeID = uuid(12)
+        let policy = CoordinatorMissionPolicySnapshot(
+            id: "cap-one",
+            name: "Cap one",
+            defaultPace: .auto,
+            maxConcurrent: 1
+        )
+        var state = baseState()
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            objective: "Launch with cap.",
+            status: .running,
+            approvalState: .approved,
+            policySnapshot: policy,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Smoke",
+                    purpose: "Exercise cap.",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: runningNodeID,
+                    title: "Running child",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .running
+                ),
+                CoordinatorMissionPlanNode(
+                    id: readyNodeID,
+                    title: "Ready child",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .pending
+                )
+            ]
+        ))
+
+        XCTAssertEqual(
+            classifier.classify(input(coordinatorID: coordinatorID, state: state)),
+            .hold(.noResumableEvent)
+        )
+
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: runningNodeID,
+                    title: "Running child",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .completed
+                )
+            ]
+        ))
+        let eventID = "mission:\(coordinatorID.uuidString):eligible:r2:\(readyNodeID.uuidString)"
+        state.handledEventIDs.insert(eventID)
+
+        XCTAssertEqual(
+            classifier.classify(input(coordinatorID: coordinatorID, state: state)),
+            .hold(.duplicateEvent(eventID))
+        )
+    }
+
     func testDuplicateEventHolds() {
         let coordinatorID = uuid(1)
         let childID = uuid(2)

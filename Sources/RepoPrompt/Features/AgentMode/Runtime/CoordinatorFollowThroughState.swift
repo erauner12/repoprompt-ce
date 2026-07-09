@@ -188,9 +188,6 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         incoming: [CoordinatorMissionPlanNode]?,
         replace: Bool
     ) -> [CoordinatorMissionPlanNode] {
-        if replace {
-            return incoming ?? []
-        }
         guard let incoming else { return existing }
         guard !existing.isEmpty else { return incoming }
 
@@ -209,12 +206,30 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             return node
         }
 
+        if replace {
+            return normalizedIncoming.map { incomingNode in
+                guard let existingNode = existingByID[incomingNode.id] else { return incomingNode }
+                return preserveTerminalNode(existing: existingNode, incoming: incomingNode)
+            }
+        }
+
         var updatesByID = Dictionary(uniqueKeysWithValues: normalizedIncoming.map { ($0.id, $0) })
         var merged = existing.map { node -> CoordinatorMissionPlanNode in
-            updatesByID.removeValue(forKey: node.id) ?? node
+            guard let incomingNode = updatesByID.removeValue(forKey: node.id) else { return node }
+            return preserveTerminalNode(existing: node, incoming: incomingNode)
         }
         merged.append(contentsOf: normalizedIncoming.filter { updatesByID[$0.id] != nil })
         return merged
+    }
+
+    private func preserveTerminalNode(
+        existing: CoordinatorMissionPlanNode,
+        incoming: CoordinatorMissionPlanNode
+    ) -> CoordinatorMissionPlanNode {
+        guard existing.status.isTerminal,
+              !incoming.status.isTerminal
+        else { return incoming }
+        return existing
     }
 
     private func mergeRoutingDecisions(
@@ -1743,6 +1758,7 @@ struct CoordinatorFollowThroughEvent: Codable, Equatable, Identifiable {
         case childTerminal
         case childQuestion
         case gateCleared
+        case eligibleWork
     }
 
     let id: String
@@ -1775,6 +1791,14 @@ struct CoordinatorFollowThroughEvent: Codable, Equatable, Identifiable {
                 "Inspect `coordinator_chat op=mission_status` with `compact:true`, then answer the active child interaction with `coordinator_chat op=submit` for `coordinator_session_id` \(coordinatorSessionID.uuidString).",
                 "Choose the answer supported by the Mission directive and the child's question. Record the answer as a Director childAsk decision and evidence in the Mission Plan before completing the related node.",
                 "If the child asks for unsafe, missing, or irreversible information, stop and explain the boundary instead of guessing."
+            ])
+        }
+        if kind == .eligibleWork {
+            lines.append(contentsOf: [
+                "",
+                "The Mission Plan already has approved eligible work and no active Coordinator turn is handling it.",
+                "Inspect `coordinator_chat op=mission_status` with `compact:true`, then launch the ready node(s) whose dependencies are satisfied according to their execution policies.",
+                "Respect `max_concurrent`, do not start nodes that are already running or bound, and update the Mission Plan with routing decisions or a clear hold reason."
             ])
         }
         lines.append(contentsOf: [

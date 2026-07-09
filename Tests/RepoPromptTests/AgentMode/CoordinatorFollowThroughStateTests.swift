@@ -113,6 +113,75 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(plan.nodes.map(\.status), [.pending, .completed])
     }
 
+    func testMissionPlanUpdateCannotRegressTerminalNodeStatus() throws {
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let childID = UUID()
+        let completedNode = CoordinatorMissionPlanNode(
+            id: nodeID,
+            title: "Run scripted child",
+            completionEvidence: "SCRIPTED_CHILD_V1 answer=Alpha token=S6",
+            workstreamID: workstreamID,
+            executionPolicy: .freshReadOnlyChild,
+            status: .completed,
+            boundSessionID: childID
+        )
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 8,
+            objective: "Keep terminal nodes terminal.",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Smoke",
+                    purpose: "Exercise node monotonicity.",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [completedNode],
+            updatedAt: Date(timeIntervalSince1970: 10)
+        ))
+
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Run scripted child",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .running,
+                    boundSessionID: childID
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 20)
+        ))
+
+        let mergedPlan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(mergedPlan.nodes.first?.status, .completed)
+        XCTAssertEqual(mergedPlan.nodes.first?.completionEvidence, completedNode.completionEvidence)
+
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Run scripted child",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .pending
+                )
+            ],
+            replaceNodes: true,
+            updatedAt: Date(timeIntervalSince1970: 30)
+        ))
+
+        let replacedPlan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(replacedPlan.nodes.map(\.id), [nodeID])
+        XCTAssertEqual(replacedPlan.nodes.first?.status, .completed)
+        XCTAssertEqual(replacedPlan.nodes.first?.boundSessionID, childID)
+    }
+
     func testResumeDirectiveContainsMissionEligibilityCapAndIdempotencyClauses() {
         let event = CoordinatorFollowThroughEvent(
             id: "resume-1",

@@ -8088,6 +8088,8 @@ private extension CoordinatorFollowThroughEvent {
             "Delegated child question"
         case .gateCleared:
             "Director gate cleared"
+        case .eligibleWork:
+            "Mission work is ready"
         }
     }
 

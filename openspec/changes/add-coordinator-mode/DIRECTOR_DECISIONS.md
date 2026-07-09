@@ -551,14 +551,17 @@ batches are not counted. Counted results:
 
 - S5 artifact root:
   `tmp/director-e2e-runs/20260709T145114Z-s5-b06f6d` — 9/10 passed. Attempt 1 failed as
-  `model-negotiation`: the Mission reached approved/running with no active work and one
-  ready child node, then made no observable progress for 208 seconds. Successful attempt
-  durations ranged ~293-341s, median ~312s.
+  `plumbing`: the Mission reached approved/running with no active work and one ready
+  child node, then made no observable progress for 208 seconds. Diagnosis: the
+  follow-through classifier had child-terminal, child-question, and gate-cleared triggers,
+  but no eligible-work-idle trigger for approved Auto Missions with ready work and an idle
+  Coordinator. Successful attempt durations ranged ~293-341s, median ~312s.
 - S6 artifact root:
   `tmp/director-e2e-runs/20260709T183323Z-s6-a3f473` — 9/10 passed. Attempt 6 failed as
   `soak/product status-regression`: a node moved from completed back to running, with the
-  warning `node_should_steer_primary_but_started_fresh`. Successful attempt durations
-  ranged ~436-516s, median ~476s.
+  warning `node_should_steer_primary_but_started_fresh`. Diagnosis: terminal node status
+  monotonicity was enforced only by the Python harness, not by the app's shared Mission
+  Plan merger. Successful attempt durations ranged ~436-516s, median ~476s.
 - Archive soak: S5 archived 18 successful-attempt Missions; S6 archived 27. Archive
   cleanup preserved status/events/receipt retrieval for successful attempts. Failed
   attempts were left unarchived by design.
@@ -566,6 +569,10 @@ batches are not counted. Counted results:
   `tmp/director-e2e-runs/20260709T145114Z-s5-b06f6d/attempt-002/auto/receipt.md` records a
   childAsk:auto run with Director-routed answer evidence. Completed and stopped receipts
   remain separate packaging artifacts.
+Post-fix rule application: because both counted failures are plumbing/product defects,
+the S5 and S6 baseline batches are invalidated and must each be rerun as fresh 10x
+batches after the fixes. Keep the original 9/10 history as evidence that repetition found
+bugs single-pass validation missed.
 
 Coordinator runtime attribution (2026-07-08): `actor:user` on a Director-answered child
 question is fabricated user consent. `coordinator_chat` therefore stays conservative:

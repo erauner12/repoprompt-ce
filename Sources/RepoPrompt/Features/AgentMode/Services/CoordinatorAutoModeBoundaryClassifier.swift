@@ -121,7 +121,57 @@ struct CoordinatorAutoModeBoundaryClassifier {
             return deduped(event, state: state)
         }
 
+        if let event = eligibleWorkEvent(coordinatorSessionID: coordinatorSessionID, state: state) {
+            return deduped(event, state: state)
+        }
+
         return .hold(.noResumableEvent)
+    }
+
+    private func eligibleWorkEvent(
+        coordinatorSessionID: UUID,
+        state: CoordinatorFollowThroughState
+    ) -> CoordinatorFollowThroughEvent? {
+        guard let plan = state.missionPlan,
+              plan.approvalState == .approved || plan.approvalState == .notRequired,
+              plan.status == .approved || plan.status == .running
+        else { return nil }
+
+        let nodesByID = Dictionary(uniqueKeysWithValues: plan.nodes.map { ($0.id, $0) })
+        let readyNodes = plan.nodes.filter { node in
+            node.status == .pending
+                && node.dependsOn.allSatisfy { nodesByID[$0]?.status == .completed }
+        }
+        guard !readyNodes.isEmpty else { return nil }
+
+        let runningCapacityCount = plan.nodes.count { node in
+            node.status == .running && usesStartCapacity(node.executionPolicy)
+        }
+        let maxConcurrent = plan.policySnapshot?.maxConcurrent ?? CoordinatorMissionPolicySnapshot.defaultMaxConcurrent
+        let hasLaunchableReadyNode = readyNodes.contains { node in
+            !usesStartCapacity(node.executionPolicy) || runningCapacityCount < maxConcurrent
+        }
+        guard hasLaunchableReadyNode else { return nil }
+
+        let readyIDs = readyNodes
+            .map(\.id.uuidString)
+            .sorted()
+        let readyTitles = readyNodes
+            .map(\.title)
+            .sorted()
+            .prefix(3)
+            .joined(separator: ", ")
+        let suffix = readyNodes.count > 3 ? " (+\(readyNodes.count - 3) more)" : ""
+        return CoordinatorFollowThroughEvent(
+            id: "mission:\(coordinatorSessionID.uuidString):eligible:r\(plan.revision):\(readyIDs.joined(separator: ","))",
+            kind: .eligibleWork,
+            coordinatorSessionID: coordinatorSessionID,
+            childSessionID: nil,
+            childTitle: nil,
+            gate: nil,
+            phase: nil,
+            detail: "Mission has \(readyNodes.count) eligible ready node\(readyNodes.count == 1 ? "" : "s") with capacity available: \(readyTitles)\(suffix)."
+        )
     }
 
     private func childQuestionDecision(
@@ -202,5 +252,14 @@ struct CoordinatorAutoModeBoundaryClassifier {
 
     private func phase(for row: CoordinatorModeRow) -> CoordinatorFollowThroughChildPhase {
         CoordinatorFollowThroughChildPhase(row: row)
+    }
+
+    private func usesStartCapacity(_ policy: CoordinatorMissionExecutionPolicy) -> Bool {
+        switch policy {
+        case .freshReadOnlyChild, .freshWorktree, .freshSiblingOnSameWorktree, .planCritique:
+            true
+        case .coordinatorOnly, .steerPrimary, .askUser:
+            false
+        }
     }
 }
