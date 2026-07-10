@@ -3806,6 +3806,323 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         })
     }
 
+    func testRevisionProposalProductionPersistenceBarrierSupportsExactSuccessAndRetryAfterFlushFailure() async throws {
+        let harness = await makeRevisionProposalPersistenceHarness()
+        var barrierAttempts = 0
+        harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { tabID, minimumGeneration in
+            XCTAssertEqual(tabID, harness.tabID)
+            XCTAssertGreaterThan(minimumGeneration, 0)
+            barrierAttempts += 1
+            return barrierAttempts > 1
+        }
+
+        do {
+            _ = try await harness.coordinatorModeViewModel.appendRevisionProposal(
+                coordinatorSessionID: harness.coordinatorID,
+                request: harness.request
+            )
+            XCTFail("Expected the first persistence barrier attempt to fail.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("did not durably save"))
+        }
+        let pendingAfterFailure = try XCTUnwrap(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.pendingRevisionProposal
+        )
+        XCTAssertEqual(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.events
+                .count(where: { $0.kind == .revisionProposalFiled }),
+            1
+        )
+
+        let retryRequest = revisionProposalRequest(
+            coordinatorID: harness.coordinatorID,
+            plan: harness.plan,
+            summary: "Retry summary intentionally differs.",
+            rationale: "Retry rationale intentionally differs."
+        )
+        let retry = try await harness.coordinatorModeViewModel.appendRevisionProposal(
+            coordinatorSessionID: harness.coordinatorID,
+            request: retryRequest
+        )
+
+        XCTAssertEqual(retry.proposalID, pendingAfterFailure.id)
+        XCTAssertEqual(retry.disposition, .existingPendingRetry)
+        XCTAssertEqual(barrierAttempts, 2)
+        let persistedPlan = try XCTUnwrap(harness.session.coordinatorFollowThroughState?.missionPlan)
+        XCTAssertEqual(persistedPlan.pendingRevisionProposal, pendingAfterFailure)
+        XCTAssertEqual(persistedPlan.decisions, [])
+        XCTAssertEqual(persistedPlan.revisionProposalResolutions, [])
+        XCTAssertEqual(
+            persistedPlan.events.count(where: { $0.kind == .revisionProposalFiled }),
+            1
+        )
+    }
+
+    func testRevisionProposalProductionPersistenceBarrierRejectsReentrantStateCorruption() async throws {
+        let unapprovedHarness = await makeRevisionProposalPersistenceHarness()
+        var unapprovedPlan = unapprovedHarness.plan
+        unapprovedPlan.approvalState = .revisionRequested
+        unapprovedHarness.session.coordinatorFollowThroughState = CoordinatorFollowThroughState(
+            missionPlan: unapprovedPlan
+        )
+        unapprovedHarness.coordinatorModeViewModel.refresh()
+        var unapprovedBarrierCalls = 0
+        unapprovedHarness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in
+            unapprovedBarrierCalls += 1
+            return true
+        }
+        do {
+            _ = try await unapprovedHarness.coordinatorModeViewModel.appendRevisionProposal(
+                coordinatorSessionID: unapprovedHarness.coordinatorID,
+                request: revisionProposalRequest(
+                    coordinatorID: unapprovedHarness.coordinatorID,
+                    plan: unapprovedPlan
+                )
+            )
+            XCTFail("Expected authoritative callback approval validation to reject.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("approved Mission Plan"))
+        }
+        XCTAssertEqual(unapprovedBarrierCalls, 0)
+        XCTAssertEqual(unapprovedHarness.session.coordinatorFollowThroughState?.missionPlan?.revisionProposals, [])
+
+        for mutation in RevisionProposalBarrierMutation.allCases {
+            let harness = await makeRevisionProposalPersistenceHarness()
+            harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in
+                switch mutation {
+                case .sessionReplacement:
+                    harness.agentModeViewModel.test_replaceSessionForRevisionProposal(tabID: harness.tabID)
+
+                case .planReplacement:
+                    harness.session.coordinatorFollowThroughState = CoordinatorFollowThroughState(
+                        missionPlan: CoordinatorMissionPlan(
+                            objective: "Replacement Mission",
+                            status: .running,
+                            approvalState: .approved
+                        )
+                    )
+
+                case .proposalReplacement:
+                    var state = try! XCTUnwrap(harness.session.coordinatorFollowThroughState)
+                    var plan = try! XCTUnwrap(state.missionPlan)
+                    let proposal = try! XCTUnwrap(plan.pendingRevisionProposal)
+                    plan.revisionProposals = [
+                        CoordinatorMissionRevisionProposal(
+                            id: proposal.id,
+                            canonicalRequestIdentity: proposal.canonicalRequestIdentity,
+                            canonicalRequestIdentityVersion: proposal.canonicalRequestIdentityVersion,
+                            basePlanID: proposal.basePlanID,
+                            baseContractSnapshot: proposal.baseContractSnapshot,
+                            baseContractFingerprint: proposal.baseContractFingerprint,
+                            representation: proposal.representation,
+                            summary: "Corrupted persisted summary",
+                            rationale: proposal.rationale,
+                            affectedFields: proposal.affectedFields,
+                            remedy: proposal.remedy,
+                            supportingEvidenceIDs: proposal.supportingEvidenceIDs,
+                            requestedChange: proposal.requestedChange,
+                            actor: proposal.actor,
+                            filedAt: proposal.filedAt
+                        )
+                    ]
+                    state.missionPlan = plan
+                    harness.session.coordinatorFollowThroughState = state
+
+                case .actorCorruption:
+                    var state = try! XCTUnwrap(harness.session.coordinatorFollowThroughState)
+                    var plan = try! XCTUnwrap(state.missionPlan)
+                    let proposal = try! XCTUnwrap(plan.pendingRevisionProposal)
+                    plan.revisionProposals = [
+                        CoordinatorMissionRevisionProposal(
+                            id: proposal.id,
+                            canonicalRequestIdentity: proposal.canonicalRequestIdentity,
+                            canonicalRequestIdentityVersion: proposal.canonicalRequestIdentityVersion,
+                            basePlanID: proposal.basePlanID,
+                            baseContractSnapshot: proposal.baseContractSnapshot,
+                            baseContractFingerprint: proposal.baseContractFingerprint,
+                            representation: proposal.representation,
+                            summary: proposal.summary,
+                            rationale: proposal.rationale,
+                            affectedFields: proposal.affectedFields,
+                            remedy: proposal.remedy,
+                            supportingEvidenceIDs: proposal.supportingEvidenceIDs,
+                            requestedChange: proposal.requestedChange,
+                            actor: CoordinatorMissionRevisionProposalActor(
+                                coordinatorSessionID: harness.coordinatorID,
+                                runtimeSessionID: harness.coordinatorID,
+                                modelID: "replacement-model",
+                                role: "director"
+                            ),
+                            filedAt: proposal.filedAt
+                        )
+                    ]
+                    state.missionPlan = plan
+                    harness.session.coordinatorFollowThroughState = state
+
+                case .proposalResolution:
+                    var state = try! XCTUnwrap(harness.session.coordinatorFollowThroughState)
+                    let proposal = try! XCTUnwrap(state.missionPlan?.pendingRevisionProposal)
+                    _ = try! state.resolveRevisionProposal(
+                        CoordinatorMissionRevisionProposalResolutionRequest(
+                            proposalID: proposal.id,
+                            outcome: .rejected
+                        )
+                    )
+                    harness.session.coordinatorFollowThroughState = state
+
+                case .materialContractMutation:
+                    var state = try! XCTUnwrap(harness.session.coordinatorFollowThroughState)
+                    var plan = try! XCTUnwrap(state.missionPlan)
+                    plan.objective = "Mutated contract"
+                    state.missionPlan = plan
+                    harness.session.coordinatorFollowThroughState = state
+
+                case .eventCorruption:
+                    var state = try! XCTUnwrap(harness.session.coordinatorFollowThroughState)
+                    var plan = try! XCTUnwrap(state.missionPlan)
+                    plan.events.removeAll { $0.kind == .revisionProposalFiled }
+                    state.missionPlan = plan
+                    harness.session.coordinatorFollowThroughState = state
+
+                case .decisionCorruption:
+                    var state = try! XCTUnwrap(harness.session.coordinatorFollowThroughState)
+                    var plan = try! XCTUnwrap(state.missionPlan)
+                    plan.decisions.append(CoordinatorMissionDecisionRecord(
+                        decisionClass: CoordinatorMissionDecisionClass.advance.rawValue,
+                        actor: .director,
+                        label: "unauthorized during proposal persistence"
+                    ))
+                    state.missionPlan = plan
+                    harness.session.coordinatorFollowThroughState = state
+
+                case .resolutionCorruption:
+                    var state = try! XCTUnwrap(harness.session.coordinatorFollowThroughState)
+                    var plan = try! XCTUnwrap(state.missionPlan)
+                    let proposal = try! XCTUnwrap(plan.pendingRevisionProposal)
+                    plan.revisionProposalResolutions.append(
+                        CoordinatorMissionRevisionProposalResolution(
+                            id: UUID(),
+                            proposalID: proposal.id,
+                            outcome: .rejected,
+                            userDecisionID: nil,
+                            checkpointID: nil,
+                            checkpointInstanceID: nil,
+                            resultingPlanID: plan.id,
+                            resultingContractFingerprint: proposal.baseContractFingerprint,
+                            resolvedAt: Date()
+                        )
+                    )
+                    state.missionPlan = plan
+                    harness.session.coordinatorFollowThroughState = state
+                }
+                return true
+            }
+
+            do {
+                _ = try await harness.coordinatorModeViewModel.appendRevisionProposal(
+                    coordinatorSessionID: harness.coordinatorID,
+                    request: harness.request
+                )
+                XCTFail("Expected \(mutation.rawValue) to fail closed.")
+            } catch {
+                XCTAssertFalse(String(describing: error).isEmpty)
+            }
+        }
+    }
+
+    private enum RevisionProposalBarrierMutation: String, CaseIterable {
+        case sessionReplacement
+        case planReplacement
+        case proposalReplacement
+        case actorCorruption
+        case proposalResolution
+        case materialContractMutation
+        case eventCorruption
+        case decisionCorruption
+        case resolutionCorruption
+    }
+
+    private struct RevisionProposalPersistenceHarness {
+        let agentModeViewModel: AgentModeViewModel
+        let coordinatorModeViewModel: CoordinatorModeViewModel
+        let session: AgentModeViewModel.TabSession
+        let tabID: UUID
+        let coordinatorID: UUID
+        let plan: CoordinatorMissionPlan
+        let request: CoordinatorMissionRevisionProposalRequest
+        let workspaceManager: WorkspaceManagerViewModel
+        let promptViewModel: PromptViewModel
+    }
+
+    private func makeRevisionProposalPersistenceHarness() async -> RevisionProposalPersistenceHarness {
+        let tabID = UUID()
+        let coordinatorID = UUID()
+        let plan = CoordinatorMissionPlan(
+            objective: "Approved Mission",
+            status: .running,
+            approvalState: .approved
+        )
+        let tab = ComposeTabState(
+            id: tabID,
+            name: "Coordinator Runtime",
+            activeAgentSessionID: coordinatorID
+        )
+        let fixture = makeAgentModeFixture(tabs: [tab], activeTabID: tabID)
+        let agentModeViewModel = fixture.viewModel
+        let session = await agentModeViewModel.ensureSessionReady(tabID: tabID)
+        _ = agentModeViewModel.test_installPersistentSessionBinding(
+            sessionID: coordinatorID,
+            on: session
+        )
+        session.isCoordinatorRuntime = true
+        session.hasLoadedPersistedState = true
+        session.coordinatorFollowThroughState = CoordinatorFollowThroughState(missionPlan: plan)
+        let coordinatorModeViewModel = agentModeViewModel.coordinatorModeViewModel
+        coordinatorModeViewModel.refresh()
+        XCTAssertTrue(
+            coordinatorModeViewModel.snapshot.coordinatorRail.availableCoordinators
+                .contains { $0.sessionID == coordinatorID }
+        )
+        return RevisionProposalPersistenceHarness(
+            agentModeViewModel: agentModeViewModel,
+            coordinatorModeViewModel: coordinatorModeViewModel,
+            session: session,
+            tabID: tabID,
+            coordinatorID: coordinatorID,
+            plan: plan,
+            request: revisionProposalRequest(
+                coordinatorID: coordinatorID,
+                plan: plan
+            ),
+            workspaceManager: fixture.manager,
+            promptViewModel: fixture.prompt
+        )
+    }
+
+    private func revisionProposalRequest(
+        coordinatorID: UUID,
+        plan: CoordinatorMissionPlan,
+        summary: String = "Request a material revision.",
+        rationale: String? = "New evidence requires contract changes."
+    ) -> CoordinatorMissionRevisionProposalRequest {
+        CoordinatorMissionRevisionProposalRequest(
+            expectedBasePlanID: plan.id,
+            expectedBaseContractFingerprint: try! plan.materialContractFingerprint(),
+            summary: summary,
+            rationale: rationale,
+            affectedFields: ["objective", "workstreams"],
+            remedy: "revise_plan",
+            supportingEvidenceIDs: [uuid(9901)],
+            requestedChange: "Expand the approved scope.",
+            actor: CoordinatorMissionRevisionProposalActor(
+                coordinatorSessionID: coordinatorID,
+                runtimeSessionID: coordinatorID,
+                modelID: "coordinator-model",
+                role: "director"
+            )
+        )
+    }
+
     private func input(
         workspaceID: UUID? = UUID(uuidString: "00000000-0000-0000-0000-000000000090"),
         persisted: [CoordinatorModeSnapshotProjector.PersistedSession] = [],

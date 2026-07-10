@@ -641,6 +641,7 @@ final class AgentModeViewModel: ObservableObject {
         private var test_activeWorkspaceIDForSessionIndexOverride: UUID?
         private var test_allowsScheduledDerivedTranscriptRefreshWithoutPromptManager = false
         private var test_afterMCPStoreEpochBegan: (@MainActor () async -> Void)?
+        var test_revisionProposalPersistenceBarrier: (@MainActor (_ tabID: UUID, _ minimumGeneration: UInt64) async -> Bool)?
         private var test_terminalPublicationOverride: ((
             AgentRunTerminalCommitRevision,
             AgentRunEpochTransitionKind?,
@@ -709,6 +710,16 @@ final class AgentModeViewModel: ObservableObject {
 
         func test_setAfterMCPStoreEpochBegan(_ hook: (@MainActor () async -> Void)?) {
             test_afterMCPStoreEpochBegan = hook
+        }
+
+        func test_setRevisionProposalPersistenceBarrier(
+            _ hook: (@MainActor (_ tabID: UUID, _ minimumGeneration: UInt64) async -> Bool)?
+        ) {
+            test_revisionProposalPersistenceBarrier = hook
+        }
+
+        func test_replaceSessionForRevisionProposal(tabID: UUID) {
+            sessions[tabID] = makeSession(for: tabID)
         }
 
         func test_setTerminalPublicationOverride(

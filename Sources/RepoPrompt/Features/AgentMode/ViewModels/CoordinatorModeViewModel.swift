@@ -248,6 +248,7 @@ final class CoordinatorModeViewModel: ObservableObject {
 
     typealias CoordinatorArchiveHandler = @MainActor (_ option: CoordinatorModeCoordinatorOption) async -> CoordinatorArchiveMissionResult
     typealias MissionPlanUpdater = @MainActor (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
+    typealias RevisionProposalAppender = @MainActor (_ coordinatorSessionID: UUID, _ request: CoordinatorMissionRevisionProposalRequest) async throws -> CoordinatorMissionRevisionProposalAppendResult
     typealias MissionStopper = @MainActor (_ request: CoordinatorMissionStopRequest) async -> CoordinatorMissionStopResult
     typealias PendingFollowThroughEventProvider = @MainActor (_ coordinatorSessionID: UUID?) -> CoordinatorFollowThroughEvent?
     typealias FollowThroughEventSubmitter = @MainActor (_ event: CoordinatorFollowThroughEvent) async -> DirectiveSubmissionResult
@@ -326,6 +327,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let coordinatorPinHandler: CoordinatorPinHandler
     private let coordinatorArchiveHandler: CoordinatorArchiveHandler
     private let missionPlanUpdater: MissionPlanUpdater
+    private let revisionProposalAppender: RevisionProposalAppender
     private let missionStopper: MissionStopper
     private let pendingFollowThroughEventProvider: PendingFollowThroughEventProvider
     private let followThroughEventSubmitter: FollowThroughEventSubmitter
@@ -374,6 +376,9 @@ final class CoordinatorModeViewModel: ObservableObject {
             .rejected("Coordinator Mission archive is unavailable.")
         },
         missionPlanUpdater: @escaping MissionPlanUpdater = { _, _ in },
+        revisionProposalAppender: @escaping RevisionProposalAppender = { _, _ in
+            throw MCPError.invalidParams("Coordinator Mission revision proposals are unavailable.")
+        },
         missionStopper: @escaping MissionStopper = { request in
             CoordinatorMissionStopResult(
                 requestedSessionIDs: request.sessionIDs,
@@ -407,6 +412,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.coordinatorPinHandler = coordinatorPinHandler
         self.coordinatorArchiveHandler = coordinatorArchiveHandler
         self.missionPlanUpdater = missionPlanUpdater
+        self.revisionProposalAppender = revisionProposalAppender
         self.missionStopper = missionStopper
         self.pendingFollowThroughEventProvider = pendingFollowThroughEventProvider
         self.followThroughEventSubmitter = followThroughEventSubmitter
@@ -513,6 +519,18 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
         try missionPlanUpdater(coordinatorSessionID, update)
         refresh()
+    }
+
+    func appendRevisionProposal(
+        coordinatorSessionID: UUID,
+        request: CoordinatorMissionRevisionProposalRequest
+    ) async throws -> CoordinatorMissionRevisionProposalAppendResult {
+        guard snapshot.coordinatorRail.availableCoordinators.contains(where: { $0.sessionID == coordinatorSessionID }) else {
+            throw MCPError.invalidParams("Coordinator session \(coordinatorSessionID.uuidString) is not available in this window.")
+        }
+        let result = try await revisionProposalAppender(coordinatorSessionID, request)
+        refresh()
+        return result
     }
 
     @discardableResult
@@ -2771,6 +2789,14 @@ extension AgentModeViewModel {
                 coordinatorSessionID: coordinatorSessionID,
                 update: update
             )
+        } revisionProposalAppender: { [weak self] coordinatorSessionID, request in
+            guard let self else {
+                throw MCPError.invalidParams("Coordinator Mission revision proposal state is unavailable.")
+            }
+            return try await appendCoordinatorMissionRevisionProposal(
+                coordinatorSessionID: coordinatorSessionID,
+                request: request
+            )
         } missionStopper: { [weak self] request in
             guard let self else {
                 return CoordinatorMissionStopResult(
@@ -3230,6 +3256,135 @@ extension AgentModeViewModel {
         var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
         state.updateMissionPlan(update)
         persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+    }
+
+    @MainActor
+    private func appendCoordinatorMissionRevisionProposal(
+        coordinatorSessionID: UUID,
+        request: CoordinatorMissionRevisionProposalRequest
+    ) async throws -> CoordinatorMissionRevisionProposalAppendResult {
+        guard let match = sessions.first(where: { _, session in
+            session.activeAgentSessionID == coordinatorSessionID && session.isCoordinatorRuntime
+        }) else {
+            throw MCPError.invalidParams("Coordinator session \(coordinatorSessionID.uuidString) is not live in this window.")
+        }
+        let tabID = match.key
+        let session = match.value
+        guard request.actor.coordinatorSessionID == coordinatorSessionID,
+              request.actor.runtimeSessionID == coordinatorSessionID,
+              request.actor.role == "director"
+        else {
+            throw MCPError.invalidParams("Coordinator Mission revision proposal actor does not match the owning Director runtime.")
+        }
+        var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        guard let originalPlan = state.missionPlan else {
+            throw MCPError.invalidParams("Coordinator Mission Plan state is unavailable.")
+        }
+        guard originalPlan.approvalState == .approved else {
+            throw MCPError.invalidParams("Coordinator Mission revision proposals require an approved Mission Plan.")
+        }
+        let result = try state.appendRevisionProposal(request)
+        guard let expectedPlan = state.missionPlan,
+              let expectedProposal = expectedPlan.revisionProposals.first(where: { $0.id == result.proposalID })
+        else {
+            throw MCPError.invalidParams("Coordinator Mission revision proposal append did not install canonical state.")
+        }
+        try validateRevisionProposal(
+            expectedProposal,
+            request: request,
+            originalPlan: originalPlan,
+            result: result
+        )
+        persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+        let minimumGeneration = session.saveRequestGeneration
+        guard await persistRevisionProposal(tabID: tabID, minimumGeneration: minimumGeneration) else {
+            throw MCPError.invalidParams("Coordinator Mission persistence did not durably save the revision proposal before success.")
+        }
+        guard sessions[tabID] === session,
+              let persistedPlan = session.coordinatorFollowThroughState?.missionPlan,
+              persistedPlan == expectedPlan,
+              persistedPlan.pendingRevisionProposal?.id == result.proposalID,
+              persistedPlan.decisions == originalPlan.decisions,
+              persistedPlan.revisionProposalResolutions == originalPlan.revisionProposalResolutions,
+              persistedPlan.id == request.expectedBasePlanID,
+              persistedPlan.approvalState == .approved,
+              !persistedPlan.status.isTerminal,
+              persistedPlan.materialContractSnapshot == originalPlan.materialContractSnapshot,
+              try persistedPlan.materialContractFingerprint() == request.expectedBaseContractFingerprint,
+              let persistedProposal = persistedPlan.revisionProposals.first(where: { $0.id == result.proposalID })
+        else {
+            throw MCPError.invalidParams("Coordinator Mission revision proposal changed before durable persistence completed.")
+        }
+        try validateRevisionProposal(
+            persistedProposal,
+            request: request,
+            originalPlan: originalPlan,
+            result: result
+        )
+        let matchingEvents = persistedPlan.events.filter {
+            $0.kind == .revisionProposalFiled && $0.proposalID == result.proposalID
+        }
+        guard matchingEvents.count == 1,
+              matchingEvents[0].sessionID == request.actor.runtimeSessionID,
+              expectedPlan.events == persistedPlan.events
+        else {
+            throw MCPError.invalidParams("Coordinator Mission revision proposal event changed before durable persistence completed.")
+        }
+        return result
+    }
+
+    @MainActor
+    private func persistRevisionProposal(
+        tabID: UUID,
+        minimumGeneration: UInt64
+    ) async -> Bool {
+        #if DEBUG
+            if let test_revisionProposalPersistenceBarrier {
+                return await test_revisionProposalPersistenceBarrier(tabID, minimumGeneration)
+            }
+        #endif
+        return await flushSave(for: tabID, requiringMinimumSaveGeneration: minimumGeneration)
+    }
+
+    private func validateRevisionProposal(
+        _ proposal: CoordinatorMissionRevisionProposal,
+        request: CoordinatorMissionRevisionProposalRequest,
+        originalPlan: CoordinatorMissionPlan,
+        result: CoordinatorMissionRevisionProposalAppendResult
+    ) throws {
+        let affectedFields = CoordinatorMissionRevisionProposalIdentity.canonicalAffectedFields(request.affectedFields)
+        let remedy = CoordinatorMissionRevisionProposalIdentity.canonicalRemedy(request.remedy)
+        let evidenceIDs = CoordinatorMissionRevisionProposalIdentity.canonicalEvidenceIDs(request.supportingEvidenceIDs)
+        let requestedChange = CoordinatorMissionCanonicalRequestedChange(rawValue: request.requestedChange)
+        let canonicalRequestIdentity = try CoordinatorMissionRevisionProposalIdentity.canonicalRequestIdentity(
+            baseContractFingerprint: request.expectedBaseContractFingerprint,
+            affectedFields: affectedFields,
+            remedy: remedy,
+            supportingEvidenceIDs: evidenceIDs,
+            requestedChange: requestedChange
+        )
+        guard proposal.id == result.proposalID,
+              proposal.canonicalRequestIdentity == canonicalRequestIdentity,
+              proposal.canonicalRequestIdentityVersion == CoordinatorMissionRevisionProposal.canonicalRequestIdentityVersion,
+              proposal.basePlanID == request.expectedBasePlanID,
+              proposal.baseContractSnapshot == originalPlan.materialContractSnapshot,
+              proposal.baseContractFingerprint == request.expectedBaseContractFingerprint,
+              proposal.representation == .summaryOnly,
+              proposal.affectedFields == affectedFields,
+              proposal.remedy == remedy,
+              proposal.supportingEvidenceIDs == evidenceIDs,
+              proposal.requestedChange == requestedChange,
+              proposal.actor == request.actor
+        else {
+            throw MCPError.invalidParams("Coordinator Mission revision proposal does not match the canonical persisted request.")
+        }
+        if result.disposition == .appended {
+            guard proposal.summary == request.summary,
+                  proposal.rationale == request.rationale
+            else {
+                throw MCPError.invalidParams("Coordinator Mission revision proposal summary changed before persistence.")
+            }
+        }
     }
 
     @MainActor

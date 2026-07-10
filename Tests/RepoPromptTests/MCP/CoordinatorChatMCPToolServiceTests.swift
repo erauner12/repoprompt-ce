@@ -275,6 +275,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     state.updateMissionPlan(update)
                     missionPlans[sessionID] = state.missionPlan
                 },
+                appendRevisionProposal: { _, _ in
+                    throw MCPError.invalidParams("Revision proposals are unavailable in this test.")
+                },
                 missionEvents: { _, sinceSeq, _ in
                     CoordinatorMissionEventJournal.Batch(
                         events: [],
@@ -5818,6 +5821,400 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertTrue(AgentModeMCPToolPolicy.grantedTools(forAgent: .codexExec).contains(MCPWindowToolName.askUser))
     }
 
+    func testProposeRevisionRoutesOwningRuntimeThroughDedicatedPersistedCallback() async throws {
+        let coordinatorID = UUID()
+        let evidenceID = UUID()
+        let basePlan = CoordinatorMissionPlan(
+            objective: "Implement approved work.",
+            status: .running,
+            approvalState: .approved
+        )
+        let baseFingerprint = try basePlan.materialContractFingerprint()
+        var missionPlans = [coordinatorID: basePlan]
+        var callbackCount = 0
+        var persisted = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: { Self.coordinatorRuntimeMetadata() },
+            resolveRuntimeCoordinatorSessionID: { _ in coordinatorID },
+            missionPlans: { missionPlans },
+            appendRevisionProposal: { sessionID, request in
+                XCTAssertEqual(sessionID, coordinatorID)
+                XCTAssertFalse(persisted)
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                let result = try state.appendRevisionProposal(request, filedAt: Date(timeIntervalSince1970: 10))
+                missionPlans[sessionID] = state.missionPlan
+                callbackCount += 1
+                persisted = true
+                return result
+            }
+        )
+
+        let response = try await service.execute(args: proposalArgs(
+            coordinatorID: coordinatorID,
+            plan: basePlan,
+            fingerprint: baseFingerprint,
+            evidenceIDs: [evidenceID],
+            requestedChange: "  Expand   the approved scope. "
+        ))
+        let object = try XCTUnwrap(response.objectValue)
+        let proposal = try XCTUnwrap(missionPlans[coordinatorID]?.pendingRevisionProposal)
+
+        XCTAssertTrue(persisted)
+        XCTAssertEqual(callbackCount, 1)
+        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertEqual(object["persisted"]?.boolValue, true)
+        XCTAssertEqual(object["proposal_id"]?.stringValue, proposal.id.uuidString)
+        XCTAssertEqual(proposal.requestedChange.value, "Expand the approved scope.")
+        XCTAssertFalse(proposal.canonicalRequestIdentity.isEmpty)
+        XCTAssertEqual(proposal.actor.coordinatorSessionID, coordinatorID)
+        XCTAssertEqual(proposal.actor.runtimeSessionID, coordinatorID)
+        XCTAssertEqual(proposal.supportingEvidenceIDs, [evidenceID])
+        XCTAssertEqual(missionPlans[coordinatorID]?.decisions, [])
+        XCTAssertEqual(missionPlans[coordinatorID]?.revisionProposalResolutions, [])
+        XCTAssertEqual(
+            missionPlans[coordinatorID]?.events.count(where: { $0.kind == .revisionProposalFiled }),
+            1
+        )
+        XCTAssertEqual(try missionPlans[coordinatorID]?.materialContractFingerprint(), baseFingerprint)
+    }
+
+    func testProposeRevisionExactRetryUsesServerDerivedIdentityAndExistingProposalID() async throws {
+        let coordinatorID = UUID()
+        let basePlan = CoordinatorMissionPlan(
+            objective: "Implement approved work.",
+            status: .running,
+            approvalState: .approved
+        )
+        let fingerprint = try basePlan.materialContractFingerprint()
+        var missionPlans = [coordinatorID: basePlan]
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: { Self.coordinatorRuntimeMetadata() },
+            resolveRuntimeCoordinatorSessionID: { _ in coordinatorID },
+            missionPlans: { missionPlans },
+            appendRevisionProposal: { sessionID, request in
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                let result = try state.appendRevisionProposal(request)
+                missionPlans[sessionID] = state.missionPlan
+                return result
+            }
+        )
+
+        let first = try await service.execute(args: proposalArgs(
+            coordinatorID: coordinatorID,
+            plan: basePlan,
+            fingerprint: fingerprint,
+            summary: "First summary",
+            requestedChange: "Cafe\u{301} needs a wider scope."
+        ))
+        let retry = try await service.execute(args: proposalArgs(
+            coordinatorID: coordinatorID,
+            plan: basePlan,
+            fingerprint: fingerprint,
+            summary: "Retry summary",
+            requestedChange: "  Café   needs a wider scope. "
+        ))
+
+        XCTAssertEqual(first.objectValue?["proposal_id"]?.stringValue, retry.objectValue?["proposal_id"]?.stringValue)
+        XCTAssertEqual(retry.objectValue?["existing_pending_retry"]?.boolValue, true)
+        XCTAssertEqual(missionPlans[coordinatorID]?.revisionProposals.count, 1)
+        XCTAssertEqual(
+            missionPlans[coordinatorID]?.events.count(where: { $0.kind == .revisionProposalFiled }),
+            1
+        )
+    }
+
+    func testProposeRevisionRejectsExternalMissingIdentityAndInternalNonOwnerCallers() async throws {
+        let coordinatorID = UUID()
+        let plan = CoordinatorMissionPlan(objective: "Approved", status: .running, approvalState: .approved)
+        let fingerprint = try plan.materialContractFingerprint()
+        let callers: [(MCPServerViewModel.RequestMetadata, UUID?)] = [
+            (MCPServerViewModel.RequestMetadata(connectionID: nil, clientName: "cli", windowID: 1), nil),
+            (Self.coordinatorRuntimeMetadata(), nil),
+            (
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "worker",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .engineer,
+                    isCoordinatorRuntime: false
+                ),
+                nil
+            )
+        ]
+
+        for (metadata, resolvedID) in callers {
+            var didAppend = false
+            let service = makeService(
+                coordinatorIDs: [coordinatorID],
+                selectedID: coordinatorID,
+                captureRequestMetadata: { metadata },
+                resolveRuntimeCoordinatorSessionID: { _ in resolvedID },
+                missionPlans: { [coordinatorID: plan] },
+                appendRevisionProposal: { _, _ in
+                    didAppend = true
+                    throw MCPError.invalidParams("unexpected append")
+                }
+            )
+            await assertThrowsAsync {
+                try await service.execute(args: proposalArgs(
+                    coordinatorID: coordinatorID,
+                    plan: plan,
+                    fingerprint: fingerprint
+                ))
+            }
+            XCTAssertFalse(didAppend)
+        }
+    }
+
+    func testProposeRevisionRejectsCrossMissionWithoutSelectedMissionFallback() async {
+        let ownerID = UUID()
+        let selectedID = UUID()
+        let ownerPlan = CoordinatorMissionPlan(objective: "Owner", status: .running, approvalState: .approved)
+        let selectedPlan = CoordinatorMissionPlan(objective: "Selected", status: .running, approvalState: .approved)
+        var didAppend = false
+        let service = makeService(
+            coordinatorIDs: [ownerID, selectedID],
+            selectedID: selectedID,
+            captureRequestMetadata: { Self.coordinatorRuntimeMetadata() },
+            resolveRuntimeCoordinatorSessionID: { _ in ownerID },
+            missionPlans: { [ownerID: ownerPlan, selectedID: selectedPlan] },
+            appendRevisionProposal: { _, _ in
+                didAppend = true
+                throw MCPError.invalidParams("unexpected append")
+            }
+        )
+
+        await assertThrowsAsync {
+            try await service.execute(args: proposalArgs(
+                coordinatorID: selectedID,
+                plan: selectedPlan,
+                fingerprint: selectedPlan.materialContractFingerprint()
+            ))
+        }
+        XCTAssertFalse(didAppend)
+    }
+
+    func testProposeRevisionRejectsAbsentUnapprovedTerminalAndStaleMissionState() async throws {
+        let coordinatorID = UUID()
+        let approved = CoordinatorMissionPlan(objective: "Approved", status: .running, approvalState: .approved)
+        let cases: [(String, [UUID: CoordinatorMissionPlan], UUID, String)] = try [
+            ("absent", [:], approved.id, approved.materialContractFingerprint()),
+            (
+                "unapproved",
+                [coordinatorID: CoordinatorMissionPlan(objective: "Draft", status: .draft, approvalState: .awaitingApproval)],
+                approved.id,
+                approved.materialContractFingerprint()
+            ),
+            (
+                "terminal",
+                [coordinatorID: CoordinatorMissionPlan(objective: "Done", status: .completed, approvalState: .approved)],
+                approved.id,
+                approved.materialContractFingerprint()
+            ),
+            ("stale plan", [coordinatorID: approved], UUID(), approved.materialContractFingerprint()),
+            ("stale contract", [coordinatorID: approved], approved.id, String(repeating: "0", count: 64))
+        ]
+
+        for (name, missionPlans, basePlanID, fingerprint) in cases {
+            var didAppend = false
+            let service = makeService(
+                coordinatorIDs: [coordinatorID],
+                selectedID: coordinatorID,
+                captureRequestMetadata: { Self.coordinatorRuntimeMetadata() },
+                resolveRuntimeCoordinatorSessionID: { _ in coordinatorID },
+                missionPlans: { missionPlans },
+                appendRevisionProposal: { _, _ in
+                    didAppend = true
+                    throw MCPError.invalidParams("unexpected append")
+                }
+            )
+            var args = proposalArgs(
+                coordinatorID: coordinatorID,
+                plan: approved,
+                fingerprint: fingerprint
+            )
+            args["base_plan_id"] = .string(basePlanID.uuidString)
+            do {
+                _ = try await service.execute(args: args)
+                XCTFail("Expected \(name) proposal to be rejected.")
+            } catch {}
+            XCTAssertFalse(didAppend, "\(name) must reject before mutation")
+        }
+    }
+
+    func testProposeRevisionRejectsReplacementAndAuthorityFields() async throws {
+        let coordinatorID = UUID()
+        let plan = CoordinatorMissionPlan(objective: "Approved", status: .running, approvalState: .approved)
+        let fingerprint = try plan.materialContractFingerprint()
+        let forbiddenFields = [
+            "replacement_plan", "plan_diff", "approve_revised_plan",
+            "canonicalRequestIdentity", "canonical_requested_change",
+            "approval_state", "objective", "user_decision_id", "decisions",
+            "nodes", "bound_session_id", "bindings", "resolution", "resolution_state"
+        ]
+        var didAppend = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: { Self.coordinatorRuntimeMetadata() },
+            resolveRuntimeCoordinatorSessionID: { _ in coordinatorID },
+            missionPlans: { [coordinatorID: plan] },
+            appendRevisionProposal: { _, _ in
+                didAppend = true
+                throw MCPError.invalidParams("unexpected append")
+            }
+        )
+
+        for field in forbiddenFields {
+            var args = proposalArgs(coordinatorID: coordinatorID, plan: plan, fingerprint: fingerprint)
+            args[field] = .string("forbidden")
+            do {
+                _ = try await service.execute(args: args)
+                XCTFail("Expected \(field) to be rejected.")
+            } catch {
+                XCTAssertTrue(String(describing: error).contains("summary-only"))
+            }
+        }
+        XCTAssertFalse(didAppend)
+    }
+
+    func testProposeRevisionValidatesSummaryFieldsAndSupportingEvidenceIDsBeforeMutation() async throws {
+        let coordinatorID = UUID()
+        let plan = CoordinatorMissionPlan(objective: "Approved", status: .running, approvalState: .approved)
+        let fingerprint = try plan.materialContractFingerprint()
+        var didAppend = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: { Self.coordinatorRuntimeMetadata() },
+            resolveRuntimeCoordinatorSessionID: { _ in coordinatorID },
+            missionPlans: { [coordinatorID: plan] },
+            appendRevisionProposal: { _, _ in
+                didAppend = true
+                throw MCPError.invalidParams("unexpected append")
+            }
+        )
+        var missingSummary = proposalArgs(coordinatorID: coordinatorID, plan: plan, fingerprint: fingerprint)
+        missingSummary.removeValue(forKey: "summary")
+        await assertThrowsAsync { try await service.execute(args: missingSummary) }
+
+        var emptyAffectedFields = proposalArgs(coordinatorID: coordinatorID, plan: plan, fingerprint: fingerprint)
+        emptyAffectedFields["affected_fields"] = .array([])
+        await assertThrowsAsync { try await service.execute(args: emptyAffectedFields) }
+
+        var invalidEvidence = proposalArgs(coordinatorID: coordinatorID, plan: plan, fingerprint: fingerprint)
+        invalidEvidence["supporting_evidence_ids"] = .array([.string("not-a-uuid")])
+        await assertThrowsAsync { try await service.execute(args: invalidEvidence) }
+        XCTAssertFalse(didAppend)
+    }
+
+    func testProposeRevisionAliasPairsRequireSemanticallyIdenticalValues() async throws {
+        let coordinatorID = UUID()
+        let evidenceA = UUID()
+        let evidenceB = UUID()
+        let plan = CoordinatorMissionPlan(objective: "Approved", status: .running, approvalState: .approved)
+        let fingerprint = try plan.materialContractFingerprint()
+        var missionPlans = [coordinatorID: plan]
+        var appendCount = 0
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: { Self.coordinatorRuntimeMetadata() },
+            resolveRuntimeCoordinatorSessionID: { _ in coordinatorID },
+            missionPlans: { missionPlans },
+            appendRevisionProposal: { sessionID, request in
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                let result = try state.appendRevisionProposal(request)
+                missionPlans[sessionID] = state.missionPlan
+                appendCount += 1
+                return result
+            }
+        )
+        var identical = proposalArgs(
+            coordinatorID: coordinatorID,
+            plan: plan,
+            fingerprint: fingerprint,
+            evidenceIDs: [evidenceA, evidenceB],
+            requestedChange: "Cafe\u{301} needs a wider scope."
+        )
+        identical["coordinatorSessionID"] = .string(coordinatorID.uuidString.lowercased())
+        identical["basePlanID"] = .string(plan.id.uuidString.lowercased())
+        identical["baseContractFingerprint"] = .string("  \(fingerprint)  ")
+        identical["affectedFields"] = .array([
+            .string("workstreams"),
+            .string("objective"),
+            .string("objective")
+        ])
+        identical["supportingEvidenceIDs"] = .array([
+            .string(evidenceB.uuidString),
+            .string(evidenceA.uuidString),
+            .string(evidenceA.uuidString)
+        ])
+        identical["requestedChange"] = .string("  Café   needs a wider scope. ")
+
+        let response = try await service.execute(args: identical)
+        XCTAssertEqual(response.objectValue?["accepted"]?.boolValue, true)
+        XCTAssertEqual(appendCount, 1)
+
+        let conflicts: [(String, Value)] = [
+            ("coordinatorSessionID", .string(UUID().uuidString)),
+            ("basePlanID", .string(UUID().uuidString)),
+            ("baseContractFingerprint", .string(String(repeating: "0", count: 64))),
+            ("affectedFields", .array([.string("policy")])),
+            ("supportingEvidenceIDs", .array([.string(UUID().uuidString)])),
+            ("requestedChange", .string("café needs a wider scope."))
+        ]
+        for (alias, conflictingValue) in conflicts {
+            var args = proposalArgs(
+                coordinatorID: coordinatorID,
+                plan: plan,
+                fingerprint: fingerprint,
+                evidenceIDs: [evidenceA, evidenceB],
+                requestedChange: "Cafe\u{301} needs a wider scope."
+            )
+            args[alias] = conflictingValue
+            do {
+                _ = try await service.execute(args: args)
+                XCTFail("Expected conflicting alias \(alias) to be rejected.")
+            } catch {
+                XCTAssertTrue(String(describing: error).contains("Conflicting"))
+            }
+        }
+        XCTAssertEqual(appendCount, 1)
+    }
+
+    func testProposeRevisionDoesNotReturnSuccessWhenPersistenceCallbackFails() async throws {
+        let coordinatorID = UUID()
+        let plan = CoordinatorMissionPlan(objective: "Approved", status: .running, approvalState: .approved)
+        let fingerprint = try plan.materialContractFingerprint()
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: { Self.coordinatorRuntimeMetadata() },
+            resolveRuntimeCoordinatorSessionID: { _ in coordinatorID },
+            missionPlans: { [coordinatorID: plan] },
+            appendRevisionProposal: { _, _ in
+                throw MCPError.invalidParams("durable proposal persistence failed")
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: proposalArgs(
+                coordinatorID: coordinatorID,
+                plan: plan,
+                fingerprint: fingerprint
+            ))
+            XCTFail("Expected persistence failure.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("durable proposal persistence failed"))
+        }
+    }
+
     func testDirectorE2ECompactStatusFixtureMatchesCoreShape() throws {
         let fixtureURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent("Scripts/Fixtures/director_e2e_compact_status.json")
@@ -5838,6 +6235,50 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertNotNil(root["counts"])
         XCTAssertNotNil(root["active_nodes"])
         XCTAssertNotNil(root["liveness_warnings"])
+    }
+
+    private static func coordinatorRuntimeMetadata() -> MCPServerViewModel.RequestMetadata {
+        MCPServerViewModel.RequestMetadata(
+            connectionID: UUID(),
+            clientName: "coordinator-runtime",
+            windowID: 1,
+            runPurpose: .agentModeRun,
+            taskLabelKind: .coordinator,
+            isCoordinatorRuntime: true
+        )
+    }
+
+    private func proposalArgs(
+        coordinatorID: UUID,
+        plan: CoordinatorMissionPlan,
+        fingerprint: String,
+        summary: String = "Request a material scope revision.",
+        evidenceIDs: [UUID] = [],
+        requestedChange: String = "Expand the approved scope."
+    ) -> [String: Value] {
+        [
+            "op": .string("propose_revision"),
+            "coordinator_session_id": .string(coordinatorID.uuidString),
+            "base_plan_id": .string(plan.id.uuidString),
+            "base_contract_fingerprint": .string(fingerprint),
+            "summary": .string(summary),
+            "rationale": .string("New evidence requires a contract-changing remedy."),
+            "affected_fields": .array([.string("objective"), .string("workstreams")]),
+            "remedy": .string("revise_plan"),
+            "supporting_evidence_ids": .array(evidenceIDs.map { .string($0.uuidString) }),
+            "requested_change": .string(requestedChange)
+        ]
+    }
+
+    private func assertThrowsAsync(
+        _ operation: () async throws -> some Any,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        do {
+            _ = try await operation()
+            XCTFail("Expected operation to throw.", file: file, line: line)
+        } catch {}
     }
 
     private func compactFingerprint(
@@ -5933,6 +6374,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         persistedOnly: [UUID: Bool] = [:],
         pinned: [UUID: Bool] = [:],
         updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in },
+        appendRevisionProposal: @escaping (UUID, CoordinatorMissionRevisionProposalRequest) async throws -> CoordinatorMissionRevisionProposalAppendResult = { _, _ in
+            throw MCPError.invalidParams("Revision proposals are unavailable in this test.")
+        },
         durableApprovalAuthorityToken: @escaping (UUID) -> String? = { _ in nil },
         missionEvents: @escaping (UUID, Int, Int) -> CoordinatorMissionEventJournal.Batch = { _, sinceSeq, _ in
             CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
@@ -5963,6 +6407,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             persistedOnly: persistedOnly,
             pinned: pinned,
             updateMissionPlan: updateMissionPlan,
+            appendRevisionProposal: appendRevisionProposal,
             durableApprovalAuthorityToken: durableApprovalAuthorityToken,
             missionEvents: missionEvents,
             setMissionPace: setMissionPace,
@@ -5996,6 +6441,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         persistedOnly: [UUID: Bool] = [:],
         pinned: [UUID: Bool] = [:],
         updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in },
+        appendRevisionProposal: @escaping (UUID, CoordinatorMissionRevisionProposalRequest) async throws -> CoordinatorMissionRevisionProposalAppendResult = { _, _ in
+            throw MCPError.invalidParams("Revision proposals are unavailable in this test.")
+        },
         durableApprovalAuthorityToken: @escaping (UUID) -> String? = { _ in nil },
         missionEvents: @escaping (UUID, Int, Int) -> CoordinatorMissionEventJournal.Batch = { _, sinceSeq, _ in
             CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
@@ -6039,6 +6487,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 submitPendingChildInteractionResponse: submitPendingChild,
                 durableApprovalAuthorityToken: durableApprovalAuthorityToken,
                 updateMissionPlan: updateMissionPlan,
+                appendRevisionProposal: appendRevisionProposal,
                 missionEvents: missionEvents,
                 setMissionPace: setMissionPace,
                 setMissionAutonomy: setMissionAutonomy,

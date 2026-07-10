@@ -17,6 +17,7 @@ struct CoordinatorChatMCPToolService {
         var submitPendingChildInteractionResponse: (_ submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission, _ row: CoordinatorModeRow, _ actor: CoordinatorMissionDecisionActor) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var durableApprovalAuthorityToken: (_ coordinatorSessionID: UUID) -> String?
         var updateMissionPlan: (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
+        var appendRevisionProposal: (_ coordinatorSessionID: UUID, _ request: CoordinatorMissionRevisionProposalRequest) async throws -> CoordinatorMissionRevisionProposalAppendResult
         var missionEvents: (_ coordinatorSessionID: UUID, _ sinceSeq: Int, _ limit: Int) -> CoordinatorMissionEventJournal.Batch
         var setMissionPace: (_ coordinatorSessionID: UUID, _ pace: CoordinatorMissionPolicyPace) -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var setMissionAutonomy: (_ coordinatorSessionID: UUID, _ autonomyClassKey: String, _ mode: CoordinatorMissionAutonomyMode) -> CoordinatorModeViewModel.DirectiveSubmissionResult
@@ -93,6 +94,7 @@ struct CoordinatorChatMCPToolService {
                 submitPendingChildInteractionResponse: { await coordinatorViewModel.submitPendingChildInteractionResponse($0, to: $1, actor: $2) },
                 durableApprovalAuthorityToken: { coordinatorViewModel.durableApprovalAuthorityToken(coordinatorSessionID: $0) },
                 updateMissionPlan: { try coordinatorViewModel.updateMissionPlan(coordinatorSessionID: $0, update: $1) },
+                appendRevisionProposal: { try await coordinatorViewModel.appendRevisionProposal(coordinatorSessionID: $0, request: $1) },
                 missionEvents: { coordinatorViewModel.missionEvents(coordinatorSessionID: $0, sinceSeq: $1, limit: $2) },
                 setMissionPace: { coordinatorViewModel.setCoordinatorMissionPace(coordinatorSessionID: $0, pace: $1) },
                 setMissionAutonomy: { coordinatorViewModel.setCoordinatorMissionAutonomy(coordinatorSessionID: $0, autonomyClassKey: $1, mode: $2) },
@@ -461,6 +463,68 @@ struct CoordinatorChatMCPToolService {
                     : stateResponse(environment.snapshot(), extra: extra)
             }
 
+        case "propose_revision":
+            let caller = try await classifyCaller(metadata, requiresResolvedRuntime: true)
+            guard case let .owningCoordinatorRuntime(runtimeCoordinatorSessionID) = caller else {
+                throw MCPError.invalidParams("propose_revision is restricted to the verified owning Coordinator runtime.")
+            }
+            let parsed = try parseRevisionProposal(args)
+            if let requestedCoordinatorSessionID = parsed.requestedCoordinatorSessionID,
+               requestedCoordinatorSessionID != runtimeCoordinatorSessionID
+            {
+                throw MCPError.invalidParams("Coordinator runtime propose_revision calls are scoped to the caller Mission and cannot target another Mission.")
+            }
+            environment.refresh()
+            let snapshot = environment.snapshot()
+            try validateCoordinatorExists(runtimeCoordinatorSessionID, in: snapshot)
+            guard let plan = snapshot.coordinatorRail.availableCoordinators
+                .first(where: { $0.sessionID == runtimeCoordinatorSessionID })?
+                .missionPlan
+            else {
+                throw MCPError.invalidParams("propose_revision requires an existing Mission Plan owned by the caller runtime.")
+            }
+            guard plan.approvalState == .approved else {
+                throw MCPError.invalidParams("propose_revision requires an approved Mission Plan.")
+            }
+            guard !plan.status.isTerminal else {
+                throw MCPError.invalidParams("propose_revision cannot mutate a terminal Mission.")
+            }
+            guard parsed.expectedBasePlanID == plan.id else {
+                throw MCPError.invalidParams("propose_revision targets a stale Mission Plan.")
+            }
+            guard try parsed.expectedBaseContractFingerprint == (plan.materialContractFingerprint()) else {
+                throw MCPError.invalidParams("propose_revision targets a stale material contract.")
+            }
+            let request = CoordinatorMissionRevisionProposalRequest(
+                expectedBasePlanID: parsed.expectedBasePlanID,
+                expectedBaseContractFingerprint: parsed.expectedBaseContractFingerprint,
+                summary: parsed.summary,
+                rationale: parsed.rationale,
+                affectedFields: parsed.affectedFields,
+                remedy: parsed.remedy,
+                supportingEvidenceIDs: parsed.supportingEvidenceIDs,
+                requestedChange: parsed.requestedChange,
+                actor: CoordinatorMissionRevisionProposalActor(
+                    coordinatorSessionID: runtimeCoordinatorSessionID,
+                    runtimeSessionID: runtimeCoordinatorSessionID
+                )
+            )
+            let result: CoordinatorMissionRevisionProposalAppendResult
+            do {
+                result = try await environment.appendRevisionProposal(runtimeCoordinatorSessionID, request)
+            } catch let error as CoordinatorMissionRevisionProposalLedgerError {
+                throw MCPError.invalidParams(error.localizedDescription)
+            }
+            environment.refresh()
+            return compactStateResponse(environment.snapshot(), extra: [
+                "accepted": .bool(true),
+                "routed_to": .string("revision_proposal"),
+                "coordinator_session_id": .string(runtimeCoordinatorSessionID.uuidString),
+                "proposal_id": .string(result.proposalID.uuidString),
+                "existing_pending_retry": .bool(result.disposition == .existingPendingRetry),
+                "persisted": .bool(true)
+            ])
+
         case "mission_plan":
             let caller = try await classifyCaller(
                 metadata,
@@ -824,6 +888,206 @@ struct CoordinatorChatMCPToolService {
             throw MCPError.invalidParams("timeout_seconds must be 300 seconds or less.")
         }
         return parsed
+    }
+
+    private struct ParsedRevisionProposal {
+        let requestedCoordinatorSessionID: UUID?
+        let expectedBasePlanID: UUID
+        let expectedBaseContractFingerprint: String
+        let summary: String
+        let rationale: String?
+        let affectedFields: [String]
+        let remedy: String
+        let supportingEvidenceIDs: [UUID]
+        let requestedChange: String
+    }
+
+    private func parseRevisionProposal(_ args: [String: Value]) throws -> ParsedRevisionProposal {
+        let acceptedKeys: Set = [
+            "op", "context_id", "_tabID", "_windowID",
+            "coordinator_session_id", "coordinatorSessionID",
+            "base_plan_id", "basePlanID",
+            "base_contract_fingerprint", "baseContractFingerprint",
+            "summary", "rationale",
+            "affected_fields", "affectedFields",
+            "remedy",
+            "supporting_evidence_ids", "supportingEvidenceIDs",
+            "requested_change", "requestedChange"
+        ]
+        let rejectedKeys = args.keys.filter { !acceptedKeys.contains($0) }.sorted()
+        guard rejectedKeys.isEmpty else {
+            throw MCPError.invalidParams(
+                "propose_revision is summary-only and rejects unsupported or authority-bearing fields: \(rejectedKeys.joined(separator: ", ")). Exact replacement plans/diffs, canonical identities, approval/contract/user-decision/node/binding/resolution fields, and immediate approval requests are not accepted."
+            )
+        }
+
+        let requestedCoordinatorSessionID = try parseAliasedOptionalUUID(
+            snakeValue: args["coordinator_session_id"],
+            camelValue: args["coordinatorSessionID"],
+            name: "coordinator_session_id"
+        )
+        guard let expectedBasePlanID = try parseAliasedOptionalUUID(
+            snakeValue: args["base_plan_id"],
+            camelValue: args["basePlanID"],
+            name: "base_plan_id"
+        ) else {
+            throw MCPError.invalidParams("base_plan_id is required.")
+        }
+        let expectedBaseContractFingerprint = try parseAliasedRequiredString(
+            snakeValue: args["base_contract_fingerprint"],
+            camelValue: args["baseContractFingerprint"],
+            name: "base_contract_fingerprint"
+        )
+        let summary = try AgentMCPToolHelpers.requireNonEmptyString(args["summary"], name: "summary")
+        let rationale = normalizedString(args["rationale"])
+        let affectedFields = try parseAliasedAffectedFields(
+            snakeValue: args["affected_fields"],
+            camelValue: args["affectedFields"]
+        )
+        let remedy = try AgentMCPToolHelpers.requireNonEmptyString(args["remedy"], name: "remedy")
+        let supportingEvidenceIDs = try parseAliasedEvidenceIDs(
+            snakeValue: args["supporting_evidence_ids"],
+            camelValue: args["supportingEvidenceIDs"]
+        )
+        let requestedChange = try parseAliasedRequestedChange(
+            snakeValue: args["requested_change"],
+            camelValue: args["requestedChange"]
+        )
+        return ParsedRevisionProposal(
+            requestedCoordinatorSessionID: requestedCoordinatorSessionID,
+            expectedBasePlanID: expectedBasePlanID,
+            expectedBaseContractFingerprint: expectedBaseContractFingerprint,
+            summary: summary,
+            rationale: rationale,
+            affectedFields: affectedFields,
+            remedy: remedy,
+            supportingEvidenceIDs: supportingEvidenceIDs,
+            requestedChange: requestedChange
+        )
+    }
+
+    private func parseAliasedOptionalUUID(
+        snakeValue: Value?,
+        camelValue: Value?,
+        name: String
+    ) throws -> UUID? {
+        let snake = try optionalUUID(snakeValue, name: name)
+        let camel = try optionalUUID(camelValue, name: name)
+        try rejectConflictingAliases(snake: snake, camel: camel, name: name)
+        return snake ?? camel
+    }
+
+    private func parseAliasedRequiredString(
+        snakeValue: Value?,
+        camelValue: Value?,
+        name: String
+    ) throws -> String {
+        let snake = try snakeValue.map {
+            try AgentMCPToolHelpers.requireNonEmptyString($0, name: name)
+        }
+        let camel = try camelValue.map {
+            try AgentMCPToolHelpers.requireNonEmptyString($0, name: name)
+        }
+        try rejectConflictingAliases(snake: snake, camel: camel, name: name)
+        guard let value = snake ?? camel else {
+            throw MCPError.invalidParams("\(name) is required.")
+        }
+        return value
+    }
+
+    private func parseAliasedAffectedFields(
+        snakeValue: Value?,
+        camelValue: Value?
+    ) throws -> [String] {
+        let snake = try snakeValue.map { try parseRequiredStringArray($0, name: "affected_fields") }
+        let camel = try camelValue.map { try parseRequiredStringArray($0, name: "affected_fields") }
+        let normalizedSnake = snake.map(CoordinatorMissionRevisionProposalIdentity.canonicalAffectedFields)
+        let normalizedCamel = camel.map(CoordinatorMissionRevisionProposalIdentity.canonicalAffectedFields)
+        try rejectConflictingAliases(
+            snake: normalizedSnake,
+            camel: normalizedCamel,
+            name: "affected_fields"
+        )
+        guard let fields = normalizedSnake ?? normalizedCamel else {
+            throw MCPError.invalidParams("affected_fields must be a non-empty array of strings.")
+        }
+        return fields
+    }
+
+    private func parseAliasedEvidenceIDs(
+        snakeValue: Value?,
+        camelValue: Value?
+    ) throws -> [UUID] {
+        let snake = try snakeValue.map { try parseUUIDArray($0, name: "supporting_evidence_ids") }
+        let camel = try camelValue.map { try parseUUIDArray($0, name: "supporting_evidence_ids") }
+        let normalizedSnake = snake.map(CoordinatorMissionRevisionProposalIdentity.canonicalEvidenceIDs)
+        let normalizedCamel = camel.map(CoordinatorMissionRevisionProposalIdentity.canonicalEvidenceIDs)
+        try rejectConflictingAliases(
+            snake: normalizedSnake,
+            camel: normalizedCamel,
+            name: "supporting_evidence_ids"
+        )
+        return normalizedSnake ?? normalizedCamel ?? []
+    }
+
+    private func parseAliasedRequestedChange(
+        snakeValue: Value?,
+        camelValue: Value?
+    ) throws -> String {
+        let snake = try snakeValue.map {
+            try AgentMCPToolHelpers.requireNonEmptyString($0, name: "requested_change")
+        }
+        let camel = try camelValue.map {
+            try AgentMCPToolHelpers.requireNonEmptyString($0, name: "requested_change")
+        }
+        let normalizedSnake = snake.map { CoordinatorMissionCanonicalRequestedChange(rawValue: $0) }
+        let normalizedCamel = camel.map { CoordinatorMissionCanonicalRequestedChange(rawValue: $0) }
+        try rejectConflictingAliases(
+            snake: normalizedSnake,
+            camel: normalizedCamel,
+            name: "requested_change"
+        )
+        guard let value = snake ?? camel else {
+            throw MCPError.invalidParams("requested_change is required.")
+        }
+        return value
+    }
+
+    private func rejectConflictingAliases<T: Equatable>(
+        snake: T?,
+        camel: T?,
+        name: String
+    ) throws {
+        if let snake, let camel, snake != camel {
+            throw MCPError.invalidParams("Conflicting \(name) snake_case and camelCase aliases are not allowed.")
+        }
+    }
+
+    private func parseRequiredStringArray(_ value: Value, name: String) throws -> [String] {
+        guard let values = value.arrayValue else {
+            throw MCPError.invalidParams("\(name) must be a non-empty array of strings.")
+        }
+        let parsed = try values.enumerated().map { index, value in
+            try AgentMCPToolHelpers.requireNonEmptyString(value, name: "\(name)[\(index)]")
+        }
+        guard !parsed.isEmpty else {
+            throw MCPError.invalidParams("\(name) must be a non-empty array of strings.")
+        }
+        return parsed
+    }
+
+    private func parseUUIDArray(_ value: Value, name: String) throws -> [UUID] {
+        guard let values = value.arrayValue else {
+            throw MCPError.invalidParams("\(name) must be an array of UUID strings.")
+        }
+        return try values.enumerated().map { index, value in
+            guard let raw = value.stringValue,
+                  let id = UUID(uuidString: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+            else {
+                throw MCPError.invalidParams("\(name)[\(index)] must be a UUID string.")
+            }
+            return id
+        }
     }
 
     private func parseMissionPlanUpdate(

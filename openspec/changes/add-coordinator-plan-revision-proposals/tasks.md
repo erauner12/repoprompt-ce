@@ -26,10 +26,10 @@
 
 ## 4. MCP Proposal Ingress and Public Schema
 
-- [ ] 4.1 After Item 1, implement pure `propose_revision` parsing/validation for base identity, summary-only fields, raw `requested_change`, and supporting evidence; derive `canonicalRequestIdentity` server-side. This pure work may begin before 13.x completion.
-- [ ] 4.2 Restrict ingress to the verified owning Coordinator runtime and reject external, missing-identity, internal non-owner, cross-Mission, unapproved, terminal, and stale-base callers without UI-selection fallback.
-- [ ] 4.3 Route successful ingress through a dedicated environment callback/mutator, append only a non-decision Director/runtime proposal event, and persist the installed pause before returning success.
-- [ ] 4.4 Reject exact replacement plans/diffs and any attempt to mutate approval, contract fields, user decisions, nodes, bindings, or resolution state.
+- [x] 4.1 After Item 1, implement pure `propose_revision` parsing/validation for base identity, summary-only fields, raw `requested_change`, and supporting evidence; derive `canonicalRequestIdentity` server-side. This pure work may begin before 13.x completion.
+- [x] 4.2 Restrict ingress to the verified owning Coordinator runtime and reject external, missing-identity, internal non-owner, cross-Mission, unapproved, terminal, and stale-base callers without UI-selection fallback.
+- [x] 4.3 Route successful ingress through a dedicated environment callback/mutator, append only a non-decision Director/runtime proposal event, and persist the installed pause before returning success.
+- [x] 4.4 Reject exact replacement plans/diffs and any attempt to mutate approval, contract fields, user decisions, nodes, bindings, or resolution state.
 - [ ] 4.5 After task 13.6, update established doctor output so `supported_ops` includes `propose_revision` and `features.revision_proposals` equals version 1 / `summary_only` / `revise_plan`, `keep_current_plan`, `stop_mission`; update public input schema only with the op/fields and no duplicate feature object or extra wrapper plumbing, then test doctor plus schema independently.
 - [ ] 4.6 After task 13.6, update the owning Coordinator runtime prompt to teach `propose_revision` only for contract-changing remedies, distinguish ordinary evidence/failure/tool-error/changed-assumption prose, and forbid self-revision, self-resolution, and user-decision impersonation; add explicit `SystemPromptServiceCoordinatorModeTests` traceability and assertions.
 
