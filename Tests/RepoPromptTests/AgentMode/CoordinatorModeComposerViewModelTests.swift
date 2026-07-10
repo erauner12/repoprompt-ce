@@ -4320,6 +4320,149 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         )
     }
 
+    func testRenderedPlanAndStepStopActionsRetainMissionAcrossSelectionChangeAndRemainIdempotent() async throws {
+        let missionA = uuid(1)
+        let missionB = uuid(2)
+        let childA = uuid(3)
+        let renderedStepEvent = CoordinatorFollowThroughEvent(
+            id: "rendered-step-a",
+            kind: .gateCleared,
+            coordinatorSessionID: missionA,
+            childSessionID: childA,
+            childTitle: "Active A work",
+            gate: nil,
+            phase: nil,
+            detail: "Mission A reached a rendered step boundary."
+        )
+        var pendingEvent: CoordinatorFollowThroughEvent? = renderedStepEvent
+        var resolvedEvents: [CoordinatorFollowThroughEvent] = []
+        var states: [UUID: CoordinatorFollowThroughState] = [
+            missionA: CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+                revision: 2,
+                objective: "Mission A",
+                status: .running,
+                approvalState: .approved,
+                nodes: [
+                    CoordinatorMissionPlanNode(
+                        title: "Active A work",
+                        workstreamID: uuid(30),
+                        executionPolicy: .freshReadOnlyChild,
+                        status: .running,
+                        boundSessionID: childA
+                    )
+                ]
+            )),
+            missionB: CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+                revision: 3,
+                objective: "Mission B",
+                status: .running,
+                approvalState: .approved,
+                nodes: [
+                    CoordinatorMissionPlanNode(
+                        title: "Active B work",
+                        workstreamID: uuid(40),
+                        executionPolicy: .coordinatorOnly,
+                        status: .running
+                    )
+                ]
+            ))
+        ]
+        var stopRequests: [CoordinatorMissionStopRequest] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [missionA, missionB].map { missionID in
+                        self.live(
+                            id: missionID,
+                            tab: missionID == missionA ? self.uuid(101) : self.uuid(102),
+                            title: missionID == missionA ? "Mission A" : "Mission B",
+                            updatedAt: self.date(20),
+                            state: .running,
+                            coordinatorRuntime: true,
+                            missionPlan: states[missionID]?.missionPlan
+                        )
+                    },
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [missionA, missionB]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            missionPlanUpdater: { missionID, update in
+                var state = try XCTUnwrap(states[missionID])
+                state.updateMissionPlan(update)
+                states[missionID] = state
+            },
+            missionStopper: { request in
+                stopRequests.append(request)
+                return CoordinatorMissionStopResult(
+                    requestedSessionIDs: request.sessionIDs,
+                    cancelledSessionIDs: request.sessionIDs,
+                    skippedSessionIDs: []
+                )
+            },
+            pendingFollowThroughEventProvider: { coordinatorSessionID in
+                coordinatorSessionID == missionA ? pendingEvent : nil
+            },
+            followThroughEventResolver: { event in
+                resolvedEvents.append(event)
+                if pendingEvent?.id == event.id {
+                    pendingEvent = nil
+                }
+            }
+        )
+        viewModel.selectCoordinator(sessionID: missionA)
+        XCTAssertEqual(viewModel.activePendingFollowThroughEvent(), renderedStepEvent)
+
+        var renderedTargets: [UUID] = []
+        let planApprovalStop = CoordinatorModeView.renderedPlanApprovalStopAction(coordinatorSessionID: missionA) {
+            renderedTargets.append($0)
+        }
+        var stepStopResults: [CoordinatorModeViewModel.DirectiveSubmissionResult] = []
+        let stepStopsFinished = expectation(description: "Rendered step Stop resolves and stops its bound Mission")
+        stepStopsFinished.expectedFulfillmentCount = 2
+        let stepBoundaryStop = CoordinatorModeView.renderedStepBoundaryStopAction(
+            event: renderedStepEvent,
+            resolve: { event, continuation in
+                Task { @MainActor in
+                    await viewModel.resolvePendingFollowThroughEvent(event)
+                    continuation()
+                }
+            },
+            stop: { targetMissionID in
+                renderedTargets.append(targetMissionID)
+                Task { @MainActor in
+                    await stepStopResults.append(viewModel.stopCoordinatorMission(targetMissionID: targetMissionID))
+                    stepStopsFinished.fulfill()
+                }
+            }
+        )
+
+        viewModel.selectCoordinator(sessionID: missionB)
+        planApprovalStop()
+        let planStopResult = try await viewModel.stopCoordinatorMission(targetMissionID: XCTUnwrap(renderedTargets.last))
+        stepBoundaryStop()
+        stepBoundaryStop()
+        await fulfillment(of: [stepStopsFinished], timeout: 1)
+
+        XCTAssertEqual(planStopResult, .accepted)
+        XCTAssertEqual(stepStopResults, [.accepted, .accepted])
+
+        XCTAssertEqual(renderedTargets, [missionA, missionA, missionA])
+        XCTAssertEqual(resolvedEvents, [renderedStepEvent, renderedStepEvent])
+        XCTAssertNil(pendingEvent)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, missionB)
+        XCTAssertEqual(states[missionA]?.missionPlan?.status, .stopped)
+        XCTAssertEqual(states[missionB]?.missionPlan?.status, .running)
+        XCTAssertEqual(stopRequests.count, 1)
+        XCTAssertEqual(stopRequests.first?.coordinatorSessionID, missionA)
+        XCTAssertTrue(stopRequests.first?.sessionIDs.contains(childA) == true)
+        XCTAssertEqual(states[missionA]?.missionPlan?.decisions.count(where: { $0.actor == .user }), 1)
+        XCTAssertTrue(states[missionB]?.missionPlan?.decisions.isEmpty == true)
+        viewModel.selectCoordinator(sessionID: missionA)
+        XCTAssertNil(viewModel.activePendingFollowThroughEvent())
+    }
+
     private func makeAgentModeFixture(
         tabs: [ComposeTabState],
         activeTabID: UUID?

@@ -3758,6 +3758,46 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertNil(status["routing_decisions_recent"]?.arrayValue?.first?.objectValue?["context_summary"]?.stringValue)
     }
 
+    func testMissionStatusProjectsLegacyNotRequiredAsNonAuthorizingRecoveryGuidance() async throws {
+        let coordinatorID = UUID()
+        let plan = CoordinatorMissionPlan(
+            revision: 4,
+            objective: "Recover legacy approval",
+            status: .draft,
+            approvalState: .notRequired,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    title: "Await fresh approval",
+                    workstreamID: UUID(),
+                    executionPolicy: .coordinatorOnly
+                )
+            ]
+        )
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        for compact in [false, true] {
+            let response = try await service.execute(args: [
+                "op": .string("mission_status"),
+                "compact": .bool(compact)
+            ])
+            let status = try XCTUnwrap(response.objectValue?["mission_status"]?.objectValue)
+            let recovery = try XCTUnwrap(status["approval_recovery"]?.objectValue)
+
+            XCTAssertEqual(recovery["legacy_state"]?.stringValue, "not_required")
+            XCTAssertEqual(recovery["authorizing"]?.boolValue, false)
+            XCTAssertEqual(recovery["requires_fresh_approval_checkpoint"]?.boolValue, true)
+            let guidance = try XCTUnwrap(recovery["guidance"]?.stringValue)
+            XCTAssertTrue(guidance.contains("output-only and non-authorizing"))
+            XCTAssertTrue(guidance.contains("fresh visible revision-bound approval checkpoint"))
+            XCTAssertTrue(guidance.contains("before ordinary delegation, runtime progress, or follow-through resume"))
+            XCTAssertEqual(status["plan"]?.objectValue?["approval_state"]?.stringValue, "not_required")
+        }
+    }
+
     func testMissionStatusCompactReturnsPollingSummaryAndLivenessWarnings() async throws {
         let coordinatorID = UUID()
         let workstreamID = UUID()

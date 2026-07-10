@@ -290,7 +290,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                     "new_parent": .boolean(description: "[submit] Start from a blank Coordinator parent before sending this directive. Default false."),
                     "compact": .boolean(description: "[submit, mission_status] For submit, return a compact automation response instead of the full Coordinator snapshot; default true. For mission_status, return a small polling summary with fingerprint, warnings, and checkpoint hints; default false."),
                     "checkpoint_action": .string(description: "[submit] External-user checkpoint action. Runtime callers cannot submit checkpoints. Non-stop actions require expected_checkpoint_instance_id.", enum: ["proceed", "gather_evidence", "deepen_plan", "independent_critique", "start_smaller", "stop"]),
-                    "expected_checkpoint_instance_id": .string(description: "[submit] Required stale-submit guard for non-stop checkpoint_action values. Use mission_status compact pending_checkpoint.checkpoint_instance_id."),
+                    "expected_checkpoint_instance_id": .string(description: "[submit] Required stale-submit guard for non-stop checkpoint_action values. Use mission_status with compact=true and copy checkpoint.checkpoint_instance_id."),
                     "since_seq": .number(description: "[mission_events] Last event sequence observed by the caller. Returns events with seq greater than this value."),
                     "limit": .number(description: "[mission_events] Maximum number of transition events to return. Default 200, max 500."),
                     "format": .string(description: "[receipt] Receipt output format. Only markdown is supported.", enum: ["markdown"]),

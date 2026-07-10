@@ -3068,6 +3068,7 @@ struct CoordinatorChatMCPToolService {
             "has_plan": .bool(true),
             "debug_summary": .string(debugSummary),
             "plan": missionPlanValue(plan),
+            "approval_recovery": missionApprovalRecoveryValue(plan),
             "shape_summary": missionShapeSummaryValue(plan.shapeSummary),
             "policy_snapshot": missionPolicySnapshotValue(plan.policySnapshot),
             "autonomy_summary": missionAutonomySummaryValue(plan.autonomy),
@@ -3105,6 +3106,16 @@ struct CoordinatorChatMCPToolService {
                     .prefix(20)
                     .map(missionRoutingDecisionValue)
             )
+        ])
+    }
+
+    private func missionApprovalRecoveryValue(_ plan: CoordinatorMissionPlan) -> Value {
+        guard plan.approvalState == .notRequired else { return .null }
+        return .object([
+            "legacy_state": .string(CoordinatorMissionPlanApprovalState.notRequired.rawValue),
+            "authorizing": .bool(false),
+            "requires_fresh_approval_checkpoint": .bool(true),
+            "guidance": .string("Legacy approval_state not_required is output-only and non-authorizing. Restore an awaiting_approval plan and require a fresh visible revision-bound approval checkpoint before ordinary delegation, runtime progress, or follow-through resume.")
         ])
     }
 
@@ -3206,6 +3217,7 @@ struct CoordinatorChatMCPToolService {
                 "policy_snapshot": missionPolicySnapshotSummaryValue(plan.policySnapshot),
                 "autonomy_summary": missionAutonomySummaryValue(plan.autonomy)
             ]),
+            "approval_recovery": missionApprovalRecoveryValue(plan),
             "decision_counts_by_actor": missionDecisionCountsByActorValue(plan.decisions),
             "evidence_counts": missionEvidenceCountsValue(plan.evidence),
             "recent_ledger_entries": missionRecentLedgerEntriesValue(plan: plan, limit: 5),

@@ -3718,8 +3718,8 @@ struct CoordinatorModeView: View {
                 onRevise: {
                     reviseCoordinatorPlanApprovalCheckpoint()
                 },
-                onStop: {
-                    stopCoordinatorMission(targetMissionID: coordinatorSessionID)
+                onStop: Self.renderedPlanApprovalStopAction(coordinatorSessionID: coordinatorSessionID) { targetMissionID in
+                    stopCoordinatorMission(targetMissionID: targetMissionID)
                 }
             )
             .disabled(isSubmittingCoordinatorDirective)
@@ -3742,17 +3742,40 @@ struct CoordinatorModeView: View {
                 onRevise: {
                     reviseCoordinatorFollowThroughCheckpoint(event)
                 },
-                onStop: {
-                    resolvePendingFollowThroughEvent(event) {
-                        stopCoordinatorMission(targetMissionID: event.coordinatorSessionID)
+                onStop: Self.renderedStepBoundaryStopAction(
+                    event: event,
+                    resolve: { pendingEvent, continuation in
+                        resolvePendingFollowThroughEvent(pendingEvent, then: continuation)
+                    },
+                    stop: { targetMissionID in
+                        stopCoordinatorMission(targetMissionID: targetMissionID)
                     }
-                }
+                )
             )
             .disabled(isSubmittingCoordinatorDirective)
             .padding(.horizontal, metrics.cardPadding)
             .padding(.vertical, metrics.smallSpacing)
         case nil:
             EmptyView()
+        }
+    }
+
+    static func renderedPlanApprovalStopAction(
+        coordinatorSessionID: UUID,
+        perform: @escaping (UUID) -> Void
+    ) -> () -> Void {
+        { perform(coordinatorSessionID) }
+    }
+
+    static func renderedStepBoundaryStopAction(
+        event: CoordinatorFollowThroughEvent,
+        resolve: @escaping (CoordinatorFollowThroughEvent, @escaping () -> Void) -> Void,
+        stop: @escaping (UUID) -> Void
+    ) -> () -> Void {
+        {
+            resolve(event) {
+                stop(event.coordinatorSessionID)
+            }
         }
     }
 
