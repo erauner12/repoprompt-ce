@@ -133,6 +133,54 @@ final class ModelPickerStringOrderingTests: XCTestCase {
         XCTAssertEqual(high.reasoningEffort, .high)
     }
 
+    func testAIModelPickerDoesNotTreatGpt51CodexMaxFamilyTokenAsMaxEffort() {
+        let codexMaxFamilySorted = AIModel.sortedForPicker([
+            .gpt5CodexXHigh,
+            .gpt5CodexMed,
+            .gpt5CodexHigh,
+            .gpt5CodexLow
+        ]).map(\.rawValue)
+
+        XCTAssertEqual(codexMaxFamilySorted, [
+            "gpt-5.1-codex-max-low",
+            "gpt-5.1-codex-max",
+            "gpt-5.1-codex-max-high",
+            "gpt-5.1-codex-max-xhigh"
+        ])
+
+        let extendedEffortSorted = AIModel.sortedForPicker([
+            .codexCliGpt56SolUltra,
+            .codexCliGpt56SolMax,
+            .codexCliGpt56SolXHigh
+        ]).map(\.rawValue)
+
+        XCTAssertEqual(extendedEffortSorted, [
+            "codex_cli_gpt-5.6-sol-xhigh",
+            "codex_cli_gpt-5.6-sol-max",
+            "codex_cli_gpt-5.6-sol-ultra"
+        ])
+    }
+
+    func testStripCodexReasoningSuffixIsFamilyAwareForUltraFastAndCodexMaxLabels() {
+        XCTAssertEqual(AIModel.stripCodexReasoningSuffix(from: "GPT-5.6 Sol Ultra"), "GPT-5.6 Sol")
+        XCTAssertEqual(AIModel.stripCodexReasoningSuffix(from: "GPT-5.6 Sol Fast Ultra"), "GPT-5.6 Sol Fast")
+        XCTAssertEqual(AIModel.stripCodexReasoningSuffix(from: "GPT-5.6 Sol Fast X-High"), "GPT-5.6 Sol Fast")
+        XCTAssertEqual(AIModel.stripCodexReasoningSuffix(from: "GPT-5.1 Codex Max"), "GPT-5.1 Codex Max")
+        XCTAssertEqual(AIModel.stripCodexReasoningSuffix(from: "GPT-5.1 Codex Max High"), "GPT-5.1 Codex Max")
+
+        let strippedFastUltra = AIModel.stripCodexReasoningSuffix(from: "GPT-5.6 Sol Fast Ultra")
+        XCTAssertEqual("\(strippedFastUltra) Ultra", "GPT-5.6 Sol Fast Ultra")
+        XCTAssertFalse("\(strippedFastUltra) Ultra".contains("Ultra Fast Ultra"))
+    }
+
+    func testUnsupportedMaxUltraAgentModelResolutionReturnsNilInsteadOfMediumFallback() {
+        XCTAssertNil(AgentModel.resolvedModel(forRaw: "gpt-5.1-codex-max", agentKind: .codexExec))
+        XCTAssertNil(AgentModel.resolvedModel(forRaw: "gpt-5.6-luna-ultra", agentKind: .codexExec))
+        XCTAssertNil(AgentModel.resolvedModel(forRaw: "gpt-5.6-sol-preview-ultra", agentKind: .codexExec))
+        XCTAssertEqual(AgentModel.resolvedModel(forRaw: "gpt-5.6-sol-max", agentKind: .codexExec), .gpt56SolMax)
+        XCTAssertEqual(AgentModel.resolvedModel(forRaw: "gpt-5.6-sol-ultra", agentKind: .codexExec), .gpt56SolUltra)
+    }
+
     func testCodexPickerExposesExtendedEffortsOnlyWhereSupportedAndInOrder() {
         let models = AgentModel.modelsForAgent(.codexExec)
         guard let solXHighIndex = models.firstIndex(of: .gpt56SolXHigh),
@@ -217,6 +265,10 @@ final class ModelPickerStringOrderingTests: XCTestCase {
         XCTAssertFalse(BestPracticeProfiles.all.compactMap(\.agentModel).contains(.gpt56SolMax))
         XCTAssertFalse(BestPracticeProfiles.all.compactMap(\.agentModel).contains(.gpt56SolUltra))
         XCTAssertFalse(BestPracticeProfiles.codexVsOpenAIExplanation.contains("Sol XHigh for ChatGPT"))
+    }
+
+    func testSentryTelemetryModelFamilyIncludesGpt56() {
+        XCTAssertEqual(SentryTelemetryBootstrap.ModelFamily.gpt56.rawValue, "gpt_5_6")
     }
 
     func testAIModelCodexMenuGroupsUseStableSemanticOrdering() {

@@ -1632,22 +1632,18 @@ public enum AIModel: Equatable, Hashable {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return trimmed }
 
-        let suffixes = [
-            "-xhigh", " xhigh", "-x-high", " x-high",
-            "-maximum", " maximum", "-max", " max",
-            "-medium", " medium", "-med", " med",
-            "-minimal", " minimal",
-            "-high", " high",
-            "-none", " none",
-            "-low", " low"
-        ]
-        let lowered = trimmed.lowercased()
-        for suffix in suffixes where lowered.hasSuffix(suffix) {
-            return String(trimmed.dropLast(suffix.count))
-                .trimmingCharacters(in: CharacterSet(charactersIn: " -_/·"))
+        let specifier = codexSpecifierFromSemanticLabel(trimmed)
+        guard specifier.reasoningEffort != nil, let baseModel = specifier.baseModel else {
+            return trimmed
         }
 
-        return trimmed
+        var stripped = humanizedCodexBaseModel(baseModel)
+        if let serviceTier = specifier.serviceTier {
+            stripped += serviceTier == CodexServiceTierVariantCatalog.fastServiceTier
+                ? " Fast"
+                : " \(serviceTier.capitalized)"
+        }
+        return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func semanticModelPrecedes(_ lhs: AIModel, _ rhs: AIModel) -> Bool {
@@ -1765,24 +1761,40 @@ public enum AIModel: Equatable, Hashable {
     }
 
     private static func reasoningEffort(in text: String) -> CodexReasoningEffort? {
-        let tokens = text
-            .lowercased()
+        codexSpecifierFromSemanticLabel(text).reasoningEffort
+    }
+
+    private static func codexSpecifierFromSemanticLabel(_ text: String) -> CodexModelSpecifier {
+        let parseableText = text
+            .replacingOccurrences(of: "CLI·", with: "")
             .replacingOccurrences(of: "(", with: " ")
             .replacingOccurrences(of: ")", with: " ")
-            .replacingOccurrences(of: "·", with: " ")
-            .split { !$0.isLetter && !$0.isNumber }
-            .map(String.init)
-
-        for token in tokens.reversed() {
-            if token == "med" {
-                return .medium
-            }
-            if let parsed = CodexReasoningEffort.parse(token) {
-                return parsed
+        let normalized = normalizedSemanticText(parseableText)
+        let candidates = codexSpecifierCandidates(fromNormalizedSemanticText: normalized)
+        for candidate in candidates {
+            let specifier = CodexModelSpecifier(raw: candidate)
+            if specifier.reasoningEffort != nil {
+                return specifier
             }
         }
+        return CodexModelSpecifier(raw: normalized)
+    }
 
-        return nil
+    private static func codexSpecifierCandidates(fromNormalizedSemanticText normalized: String) -> [String] {
+        guard !normalized.isEmpty else { return [normalized] }
+
+        var candidates: [String] = []
+        func appendAlias(suffix: String, replacement: String) {
+            guard normalized.hasSuffix(suffix) else { return }
+            let base = String(normalized.dropLast(suffix.count))
+            guard !base.isEmpty else { return }
+            candidates.append("\(base)\(replacement)")
+        }
+
+        appendAlias(suffix: "-x-high", replacement: "-xhigh")
+        appendAlias(suffix: "-med", replacement: "-medium")
+        candidates.append(normalized)
+        return candidates
     }
 
     private static func normalizedCodexBaseLabel(_ label: String) -> String {

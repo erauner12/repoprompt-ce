@@ -356,6 +356,10 @@ enum AgentModel: String, CaseIterable, Codable {
         let specifier = CodexModelSpecifier(raw: normalized)
         let base = (specifier.baseModel ?? normalized).lowercased()
         let effort = specifier.reasoningEffort
+        // Unsupported Max/Ultra-looking raw values intentionally remain unresolved instead of
+        // falling through to generic GPT-5/Codex Medium fallbacks. This preserves legitimate
+        // base IDs such as `gpt-5.1-codex-max` and prevents unknown `*-ultra` selections from
+        // silently changing to a runnable lower-effort model.
         if effort == nil,
            let trailingToken = normalized.split(separator: "-").last,
            let trailingEffort = CodexReasoningEffort.parse(String(trailingToken)),
