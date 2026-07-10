@@ -591,3 +591,39 @@ construction so Director answers arrive with explicit `isCoordinatorRuntime` met
 ## 16. OpenSpec sync extraction (2026-07-09)
 
 The OpenSpec sync extracted current Director/Coordinator Mission norms into capability-scoped requirements under `openspec/changes/add-coordinator-mode/specs/`. Those specs are the current normative contract for implementation and validation. This file remains the append-only historical decision record and should continue to receive dated doctrine entries rather than thematic rewrites or digest replacements.
+
+## 17. Mission consent modes: ceremony is a dial, the record is not (2026-07-09)
+
+Planless delegation is specced as a consent mode, not a plan removal. The Mission Plan
+stays mandatory as the ledger substrate in every mode; what becomes optional is the
+blocking initial approval checkpoint, selected per Mission via the `plan` autonomy class
+(`ask` default, `auto` = `approval_state:"not_required"` at bootstrap with a recorded
+user-actor waiver decision). Rationale: every trust mechanism (decisions, evidence,
+childAsk routing, terminal honesty, receipts) hangs on the plan, not on the approval —
+removing the plan would rebuild Agent Mode with a second, unaudited Coordinator
+delegation path, which the one-door principle forbids.
+
+Pinned semantics, spec-first in `mission-consent-modes`:
+- Consent-mode selection is external user-action parity (runtime can never choose or
+  flip `plan` autonomy) — bug seven's generalization: self-approval and self-waiver are
+  the same forgery through different doors.
+- `awaiting_approval`/`revision_requested` exit only via user checkpoint actions.
+  `mission_plan` cannot write `approved` (single door) and cannot write `not_required`
+  over a pending gate (waive-block). Dial flips never consume a pending approval
+  (S6 non-consumption applied to `plan`).
+- Escalation `auto`→`ask` is immediate: current revision transitions to
+  `awaiting_approval` with a fresh checkpoint instance (S4 identity rules); running
+  children unaffected; flip decision precedes any later approval in the journal.
+- All unrelated invariants (sandbox, caps, `irreversible:ask`, childAsk, actor
+  attribution, archive gating) resolve identically in both modes; status and receipt
+  disclose the mode.
+
+Sequencing: the bug-seven single-door guard must be implemented in the
+not-required-aware shape (block gated-state exits via `mission_plan` in both directions),
+so the guard is written once. Per the scenario governor, this doctrine mints S10
+(policy-consented Mission with mid-flight escalation). Implementation follows the
+guard, the fresh 10x batches, and the cleanup phase; recon confirmed the downstream
+seams (eligibleWork classifier, terminal-honesty merger, presentation, MCP approval
+gate) already treat `not_required` as consented — the enforcement deltas are the
+delegation gate (`AgentRunCoordinatorMissionPlanPolicy` approved-only check), the
+`start_mission` bootstrap, and `set_autonomy` class acceptance.

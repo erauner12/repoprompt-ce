@@ -29,7 +29,12 @@ The system SHALL expose the core Coordinator Mission runtime through the `coordi
 - **THEN** the tool SHALL reject the request because those paths represent external user action or lifecycle authority.
 
 ### Requirement: Mission start publishes an approval checkpoint
-The system SHALL ensure external Mission starts produce a visible, revision-bound plan approval boundary before ordinary delegation.
+The system SHALL ensure external Mission starts produce a visible, revision-bound plan approval boundary before ordinary delegation, unless the external caller selects the policy-consented mode defined by `mission-consent-modes`.
+
+#### Scenario: External caller waives the initial approval boundary
+- **WHEN** `start_mission` or `ensure_mission` runs with the external user-channel `plan:"auto"` autonomy override
+- **THEN** bootstrap SHALL follow the `mission-consent-modes` not-required path instead of publishing an approval checkpoint
+- **AND** all other checkpoint scenarios in this requirement SHALL apply only to approval-required Missions.
 
 #### Scenario: Runtime publishes an initial plan
 - **WHEN** `start_mission` or `ensure_mission` accepts an initial directive

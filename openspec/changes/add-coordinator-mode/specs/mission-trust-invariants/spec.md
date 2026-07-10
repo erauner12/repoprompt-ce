@@ -7,13 +7,14 @@ The system SHALL gate Coordinator-owned `agent_run` and `agent_explore` starts o
 - **WHEN** a non-Coordinator parent starts an Agent Mode child
 - **THEN** Coordinator Mission Plan policy SHALL allow the start without requiring a Mission Plan.
 
-#### Scenario: Coordinator start has no approved plan
-- **WHEN** a Coordinator parent attempts a normal delegated start without a non-empty approved Mission Plan
+#### Scenario: Coordinator start has no consented plan
+- **WHEN** a Coordinator parent attempts a normal delegated start without a non-empty consented Mission Plan
 - **THEN** the system SHALL deny the start
-- **AND** the denial SHALL instruct the Coordinator to use `coordinator_chat op=mission_plan`, record real deliverable nodes, request approval, and retry only after approval.
+- **AND** the denial SHALL instruct the Coordinator to use `coordinator_chat op=mission_plan`, record real deliverable nodes, request approval, and retry only after the plan is consented.
 
-#### Scenario: Approved Mission Plan allows normal delegation
-- **WHEN** a Coordinator parent has a Mission Plan with at least one node and `approval_state:"approved"`
+#### Scenario: Consented Mission Plan allows normal delegation
+- **WHEN** a Coordinator parent has a Mission Plan with at least one node
+- **AND** its `approval_state` is `approved`, or `not_required` selected through the external user channel per `mission-consent-modes`
 - **THEN** normal delegated starts MAY proceed subject to the remaining policy checks.
 
 #### Scenario: Pre-approval read-only explore exception
@@ -111,6 +112,11 @@ The system SHALL allow `approval_state` to advance to `approved` only through th
 - **WHEN** a Coordinator runtime or generic `mission_plan` state update attempts to advance `approval_state` to `approved` without the user checkpoint/continuation path
 - **THEN** the system SHALL reject the update or preserve the prior non-approved state
 - **AND** it SHALL NOT treat Director/runtime self-approval as a second consent-granting door.
+
+#### Scenario: Runtime waiver of a pending approval is rejected
+- **WHEN** a `mission_plan` update attempts to move `approval_state` from `awaiting_approval` or `revision_requested` to `not_required`
+- **THEN** the system SHALL reject the update
+- **AND** it SHALL NOT treat consent-mode waiver as a second exit from a pending approval.
 
 #### Scenario: Approval downgrade after approval is rejected
 - **WHEN** a later runtime update attempts to downgrade an already approved plan to a weaker approval state

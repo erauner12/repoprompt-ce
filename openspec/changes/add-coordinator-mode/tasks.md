@@ -131,3 +131,13 @@
 - [ ] 12.10 Toggle dedup beyond current idempotent ledger behavior.
 - [ ] 12.11 Worktree garbage collection for Coordinator-created child worktrees.
 - [ ] 12.12 Backend fallback between live child providers/backends.
+
+## 13. Mission consent modes (spec-first; implement after the single-door guard and fresh S5/S6 batches)
+
+- [ ] 13.1 Implement the not-required-aware single-door guard: `mission_plan` rejects `approval_state` writes of `approved` (self-approval) and of `not_required` over `awaiting_approval`/`revision_requested` (waiver), with instructive errors naming checkpoint submit.
+- [ ] 13.2 Accept external `plan:"auto"` autonomy at `start_mission`/`ensure_mission`: bootstrap publishes `not_required` with nodes, no approval checkpoint, and a recorded user-actor waiver decision; runtime callers rejected.
+- [ ] 13.3 Extend `set_autonomy` to class `plan` (external-only): ask→auto never consumes a pending gate; auto→ask transitions the current revision to `awaiting_approval` with a fresh checkpoint instance and blocks further delegated starts.
+- [ ] 13.4 Widen the delegation gate (`AgentRunCoordinatorMissionPlanPolicy`) to accept consented plans (`approved` or user-selected `not_required`) with unchanged sandbox/cap/binding checks.
+- [ ] 13.5 Disclose consent mode in compact `mission_status` and `receipt`; keep the waiver decision visible in the actor chain.
+- [ ] 13.6 Deterministic coverage per the `mission-consent-modes` traceability scenario; add harness S10 and run it scripted before any live-child validation.
+- [ ] 13.7 Coordinator prompt branch for policy-consented Missions, validated at the negotiation tier (High) before landing prompt text.
