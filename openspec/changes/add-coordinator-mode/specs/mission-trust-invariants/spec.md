@@ -1,20 +1,20 @@
 ## ADDED Requirements
 
 ### Requirement: Delegated child starts are Mission-gated
-The system SHALL gate Coordinator-owned `agent_run` and `agent_explore` starts on the Mission Plan contract.
+The system SHALL gate Coordinator-owned `agent_run` and `agent_explore` starts on the approved concrete Mission Plan contract.
 
 #### Scenario: Non-Coordinator starts are unaffected
 - **WHEN** a non-Coordinator parent starts an Agent Mode child
 - **THEN** Coordinator Mission Plan policy SHALL allow the start without requiring a Mission Plan.
 
-#### Scenario: Coordinator start has no consented plan
-- **WHEN** a Coordinator parent attempts a normal delegated start without a non-empty consented Mission Plan
+#### Scenario: Coordinator start has no approved concrete plan
+- **WHEN** a Coordinator parent attempts a normal delegated start without a non-empty approved Mission Plan
 - **THEN** the system SHALL deny the start
-- **AND** the denial SHALL instruct the Coordinator to use `coordinator_chat op=mission_plan`, record real deliverable nodes, request approval, and retry only after the plan is consented.
+- **AND** the denial SHALL instruct the Coordinator to use `coordinator_chat op=mission_plan`, record real deliverable nodes, request approval, and retry only after the concrete Mission Plan is approved.
 
-#### Scenario: Consented Mission Plan allows normal delegation
+#### Scenario: Approved Mission Plan allows normal delegation
 - **WHEN** a Coordinator parent has a Mission Plan with at least one node
-- **AND** its `approval_state` is `approved`, or `not_required` selected through the external user channel per `mission-consent-modes`
+- **AND** its `approval_state` is `approved`
 - **THEN** normal delegated starts MAY proceed subject to the remaining policy checks.
 
 #### Scenario: Pre-approval read-only explore exception
@@ -91,7 +91,7 @@ The system SHALL validate node state transitions and bindings at the Mission Pla
 - **THEN** the system SHALL preserve the terminal status and its terminal evidence.
 
 #### Scenario: Pre-approval runtime progress is attempted
-- **WHEN** Mission approval state is neither `approved` nor `not_required`
+- **WHEN** Mission approval state is not `approved`
 - **AND** an update advances Mission status or node status into runtime progress
 - **THEN** the update SHALL be rejected except for the explicit pre-approval delegated start policy above.
 
@@ -100,32 +100,32 @@ The system SHALL validate node state transitions and bindings at the Mission Pla
 - **THEN** enforcement SHOULD be discoverable in `CoordinatorFollowThroughState.swift` and `CoordinatorChatMCPToolService.swift`
 - **AND** tests SHOULD include `CoordinatorChatMCPToolServiceTests.testMissionPlanRejectsRunningDelegatedNodeWithoutBinding`, `testMissionPlanRejectsRuntimeProgressBeforeInitialApproval`, `testMissionPlanRejectsCompletedNodeWithStaleWaitingEvidence`, `testMissionPlanRejectsCompletedStatusWithPendingNodes`, `CoordinatorFollowThroughStateTests.testMissionPlanUpdateCannotCompleteWithMergedPendingNodes`, and `testMissionPlanUpdateCannotRegressTerminalNodeStatus`.
 
-### Requirement: Consent-granting approval has exactly one door
-The system SHALL allow `approval_state` to advance to `approved` only through the user checkpoint/continuation consent path.
+### Requirement: Plan approval has exactly one door
+The system SHALL allow `approval_state` to advance to `approved` only through the user checkpoint/continuation approval path.
 
 #### Scenario: User checkpoint approval advances approval_state
 - **WHEN** the app or external user submit path accepts the current revision-bound plan approval checkpoint
 - **THEN** it MAY advance the Mission Plan to `approval_state:"approved"`
-- **AND** it SHALL record the corresponding user-actor decision before ordinary runtime progress or delegation can proceed.
+- **AND** it SHALL record the corresponding user-actor approval decision before ordinary runtime progress or delegation can proceed.
 
 #### Scenario: Runtime self-approval is rejected
 - **WHEN** a Coordinator runtime or generic `mission_plan` state update attempts to advance `approval_state` to `approved` without the user checkpoint/continuation path
 - **THEN** the system SHALL reject the update or preserve the prior non-approved state
-- **AND** it SHALL NOT treat Director/runtime self-approval as a second consent-granting door.
+- **AND** it SHALL NOT treat Director/runtime self-approval as a second approval-granting door.
 
-#### Scenario: Runtime waiver of a pending approval is rejected
-- **WHEN** a `mission_plan` update attempts to move `approval_state` from `awaiting_approval` or `revision_requested` to `not_required`
-- **THEN** the system SHALL reject the update
-- **AND** it SHALL NOT treat consent-mode waiver as a second exit from a pending approval.
+#### Scenario: Runtime approval waiver is rejected
+- **WHEN** a Coordinator runtime or generic `mission_plan` state update attempts to create or transition a Mission Plan to `approval_state:"not_required"`
+- **THEN** the system SHALL reject the update or preserve the prior approval-gated state
+- **AND** legacy persisted `not_required` payloads, if decoded for compatibility, SHALL NOT authorize ordinary runtime progress or delegated starts.
 
 #### Scenario: Approval downgrade after approval is rejected
 - **WHEN** a later runtime update attempts to downgrade an already approved plan to a weaker approval state
 - **THEN** the system SHALL reject that downgrade or preserve the approved state unless a user-authored revision/stop path explicitly changes the Mission boundary.
 
 #### Scenario: Approval traceability is discoverable
-- **WHEN** maintainers verify approval-state consent
+- **WHEN** maintainers verify approval-state transitions
 - **THEN** enforcement SHOULD be discoverable in `CoordinatorModeViewModel` checkpoint handling and `CoordinatorChatMCPToolService` Mission Plan update gates
-- **AND** tests SHOULD include `CoordinatorChatMCPToolServiceTests.testSubmitWithCheckpointActionAcceptsCurrentExpectedCheckpointInstance`, `testSubmitWithCheckpointActionRejectsStaleExpectedCheckpointInstance`, `testMissionPlanRejectsRuntimeProgressBeforeInitialApproval`, `testMissionPlanRejectsApprovalDowngradeAfterApproval`, and a regression test for runtime self-approval attempts if one is not already present.
+- **AND** tests SHOULD include `CoordinatorChatMCPToolServiceTests.testSubmitWithCheckpointActionAcceptsCurrentExpectedCheckpointInstance`, `testSubmitWithCheckpointActionRejectsStaleExpectedCheckpointInstance`, `testMissionPlanRejectsRuntimeProgressBeforeInitialApproval`, `testMissionPlanRejectsApprovalDowngradeAfterApproval`, and regression tests for runtime self-approval and approval-waiver attempts if they are not already present.
 
 ### Requirement: Mission decisions preserve actor integrity
 The system SHALL record user and Director decisions through separate trusted paths.

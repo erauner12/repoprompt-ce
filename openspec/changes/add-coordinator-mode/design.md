@@ -100,7 +100,7 @@ Before normal delegated child starts, Coordinator parents must have a recorded M
 - `agent_run.start` may launch approved pre-approval Investigate or Deep Plan read-only planning nodes when the real workflow ID/name matches the node and `worktree_create:true` is used.
 - `agent_run.start` may launch a `plan_critique` node with `model_id:"design"`, no workflow, `mission_node_id`, and `worktree_create:true`.
 
-Plan approval checkpoints expose a revision-bound `checkpoint_instance_id`. Consent-granting stale checkpoint submits are rejected; `stop` remains stale-tolerant because it withdraws consent.
+Plan approval checkpoints expose a revision-bound `checkpoint_instance_id`. Approval-granting stale checkpoint submits are rejected; `stop` remains stale-tolerant so users can always stop the Mission.
 
 ## Delegation Guardrails
 

@@ -83,7 +83,7 @@
 - [x] 8.1 Include shape, policy, autonomy, decision counts, evidence counts, recent ledgers, ready nodes, dependency satisfaction, active nodes, liveness warnings, checkpoint metadata, events, and routing decisions in Mission status outputs.
 - [x] 8.2 Include every wait-unblocking ledger/status field in compact fingerprints.
 - [x] 8.3 Expose revision-bound plan approval checkpoint instance IDs in compact status.
-- [x] 8.4 Reject stale consent-granting checkpoint submits while accepting stale Stop.
+- [x] 8.4 Reject stale approval-granting checkpoint submits while accepting stale Stop.
 - [x] 8.5 Project terminal receipts from Mission-owned state rather than persisted Markdown.
 - [x] 8.6 Include objective/summary, policy, decision counts, evidence, and reserved Spend section in receipt Markdown.
 - [x] 8.7 Preserve receipt, status, events, decisions, evidence, and lineage after archive.
@@ -131,13 +131,8 @@
 - [ ] 12.10 Toggle dedup beyond current idempotent ledger behavior.
 - [ ] 12.11 Worktree garbage collection for Coordinator-created child worktrees.
 - [ ] 12.12 Backend fallback between live child providers/backends.
+- [ ] 12.13 Future bounded preauthorization for unattended Mission starts: express `initialPlanReview: required | preauthorized(policyGrantID)` with versioned user grants, app validation of generated concrete plans, scoped tools/budget/writes/evidence/stops, receipt provenance, and irreversible approvals still Ask.
 
-## 13. Mission consent modes (spec-first; implement after the single-door guard and fresh S5/S6 batches)
+## 13. Approval-boundary hardening
 
-- [ ] 13.1 Implement the not-required-aware single-door guard: `mission_plan` rejects `approval_state` writes of `approved` (self-approval) and of `not_required` over `awaiting_approval`/`revision_requested` (waiver), with instructive errors naming checkpoint submit.
-- [ ] 13.2 Accept external `plan:"auto"` autonomy at `start_mission`/`ensure_mission`: bootstrap publishes `not_required` with nodes, no approval checkpoint, and a recorded user-actor waiver decision; runtime callers rejected.
-- [ ] 13.3 Extend `set_autonomy` to class `plan` (external-only): ask→auto never consumes a pending gate; auto→ask transitions the current revision to `awaiting_approval` with a fresh checkpoint instance and blocks further delegated starts.
-- [ ] 13.4 Widen the delegation gate (`AgentRunCoordinatorMissionPlanPolicy`) to accept consented plans (`approved` or user-selected `not_required`) with unchanged sandbox/cap/binding checks.
-- [ ] 13.5 Disclose consent mode in compact `mission_status` and `receipt`; keep the waiver decision visible in the actor chain.
-- [ ] 13.6 Deterministic coverage per the `mission-consent-modes` traceability scenario; add harness S10 and run it scripted before any live-child validation.
-- [ ] 13.7 Coordinator prompt branch for policy-consented Missions, validated at the negotiation tier (High) before landing prompt text.
+- [ ] 13.1 Close the approval boundary completely: reject fresh generic `mission_plan` self-approval, reject runtime creation/transition to `approval_state:"not_required"`, retain legacy `not_required` decoding only as non-authorizing, and add focused service/ViewModel regressions.

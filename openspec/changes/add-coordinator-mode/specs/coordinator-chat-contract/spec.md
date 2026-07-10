@@ -29,12 +29,7 @@ The system SHALL expose the core Coordinator Mission runtime through the `coordi
 - **THEN** the tool SHALL reject the request because those paths represent external user action or lifecycle authority.
 
 ### Requirement: Mission start publishes an approval checkpoint
-The system SHALL ensure external Mission starts produce a visible, revision-bound plan approval boundary before ordinary delegation, unless the external caller selects the policy-consented mode defined by `mission-consent-modes`.
-
-#### Scenario: External caller waives the initial approval boundary
-- **WHEN** `start_mission` or `ensure_mission` runs with the external user-channel `plan:"auto"` autonomy override
-- **THEN** bootstrap SHALL follow the `mission-consent-modes` not-required path instead of publishing an approval checkpoint
-- **AND** all other checkpoint scenarios in this requirement SHALL apply only to approval-required Missions.
+The system SHALL ensure external Mission starts produce a visible, revision-bound plan approval boundary before ordinary delegation.
 
 #### Scenario: Runtime publishes an initial plan
 - **WHEN** `start_mission` or `ensure_mission` accepts an initial directive
@@ -49,16 +44,16 @@ The system SHALL ensure external Mission starts produce a visible, revision-boun
 #### Scenario: Plan approval checkpoint identifies the revision
 - **WHEN** compact Mission status reports an awaiting-approval plan
 - **THEN** it SHALL expose a `checkpoint_instance_id` derived from Coordinator session ID and Mission Plan revision
-- **AND** consent-granting checkpoint submit actions SHALL include the expected instance ID.
+- **AND** approval-granting checkpoint submit actions SHALL include the expected instance ID.
 
 #### Scenario: Stale checkpoint grant is rejected
-- **WHEN** a caller submits a consent-granting checkpoint action with an old `expected_checkpoint_instance_id`
+- **WHEN** a caller submits an approval-granting checkpoint action with an old `expected_checkpoint_instance_id`
 - **THEN** the system SHALL reject it and record no user decision
 - **AND** it SHALL return the current checkpoint instance guidance.
 
 #### Scenario: Stale stop remains accepted
 - **WHEN** a caller submits a stale `stop` checkpoint action
-- **THEN** the system MAY accept it because stop withdraws consent rather than granting it.
+- **THEN** the system MAY accept it because stop withdraws approval rather than granting it.
 
 ### Requirement: Mission Plan updates are state-only MCP operations
 The system SHALL allow external clients and Coordinator runtimes to mutate Mission Plan state without submitting an ordinary Coordinator chat turn.

@@ -83,9 +83,9 @@ Use a throwaway workspace root/repository for side-effect assertions. Scenario t
 
 - Awaiting-approval compact status exposes `checkpoint_instance_id`.
 - A plan revision while still awaiting approval changes the instance ID.
-- Stale consent-granting Proceed using the old expected ID rejects and records no user decision.
+- Stale approval-granting Proceed using the old expected ID rejects and records no user decision.
 - Current Proceed accepts and records one user plan-approval decision for the current instance.
-- Stale Stop remains accepted because it withdraws consent.
+- Stale Stop remains accepted because it withdraws approval.
 
 ### S5 — childAsk Me and Director parity
 
@@ -161,20 +161,15 @@ SCRIPTED_CHILD_V1 ask_marker token=<TOKEN> options=Alpha,Beta
 
 **Purpose:** Future scenario for relaunch with pending plan approval or pending child question.
 
-### S10 — Policy-consented Mission with mid-flight escalation (planned, spec-first)
-
-**Purpose:** Prove `mission-consent-modes`: a Mission started with external `plan:"auto"` delegates without an initial approval checkpoint while keeping the full ledger, then re-gates correctly when the user escalates.
-
-**Minted by:** doctrine entry 17 (2026-07-09), per the scenario governor. Implementation follows the not-required-aware single-door guard and the fresh S5/S6 batches.
-
-**Planned assertions:**
-- Bootstrap publishes `approval_state:"not_required"` with recorded nodes and no approval checkpoint; the user-actor waiver decision is in the ledger.
-- Scripted child delegates immediately; sandbox/cap/node-binding/evidence invariants match approved-Mission behavior; receipt and compact status disclose the consent mode.
-- `mission_plan` attempts to write `approved` or to waive a gated state are rejected (single door, both directions).
-- Mid-flight `set_autonomy plan:ask` transitions the current revision to `awaiting_approval` with a fresh checkpoint instance (S4 identity rules); further delegated starts block; running children are unaffected; flip decision precedes the later approval in `mission_events` sequence.
-- After user Proceed, the Mission completes with an honest actor chain.
-
 **Required future invariants:** Mission reconstructs from durable state; pending asks remain pending; queue item identity does not duplicate or disappear; compact fingerprint history remains coherent; follow-through does not re-fire duplicate events solely because of restart.
+
+### Future bounded preauthorization — unattended Mission starts (deferred)
+
+**Purpose:** Future scenario family, not part of the current demo plateau. Revisit unattended starts only after a bounded, user-approved Mission charter is expressible and enforceable.
+
+**Future shape:** A start contract such as `initialPlanReview: required | preauthorized(policyGrantID)` with a versioned user grant. The app must validate the generated concrete Mission Plan against that grant before delegation.
+
+**Required future invariants:** scoped tools, budgets, write authority, evidence duties, stop conditions, receipt provenance, and generated-plan validation are enforced by the app; irreversible approvals still resolve to Ask.
 
 ### S9 — Recovery / chaos (deferred)
 

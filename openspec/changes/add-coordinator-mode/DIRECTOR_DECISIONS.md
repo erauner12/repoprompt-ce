@@ -627,3 +627,26 @@ seams (eligibleWork classifier, terminal-honesty merger, presentation, MCP appro
 gate) already treat `not_required` as consented — the enforcement deltas are the
 delegation gate (`AgentRunCoordinatorMissionPlanPolicy` approved-only check), the
 `start_mission` bootstrap, and `set_autonomy` class acceptance.
+
+## 18. Current demo keeps concrete-plan approval; unattended starts deferred (2026-07-09)
+
+This entry supersedes entry 17 for the current demo. The current demo reverts policy-consented Mission starts from the active OpenSpec contract.
+For v1, the ratification boundary is one concrete Mission Plan approval: external Mission
+starts must publish a non-empty Mission Plan and require a visible, revision-bound approval
+checkpoint before ordinary delegation. `plan:auto`, a plan-autonomy dial,
+`approval_state:"not_required"` as a delegation-authorizing state, and S10 as a current
+live scenario are not current-demo capabilities.
+
+The hardening is required current work, not optional cleanup: `mission_plan` must not
+self-approve a plan by writing `approval_state:"approved"`; runtime paths must not create
+or transition to `approval_state:"not_required"`; Mission Plans remain mandatory and
+non-empty; approvals are revision-bound; pre-approval planning exceptions stay narrow;
+sandbox, node-binding, concurrency, evidence, and terminal-honesty checks remain part of
+the contract.
+
+Unattended Mission starts are deferred until a bounded, user-approved Mission charter is
+expressible and enforceable. The future shape should look more like
+`initialPlanReview: required | preauthorized(policyGrantID)` than "approval not required":
+a versioned user grant, app validation of the generated concrete Mission Plan against that
+grant, scoped tools/budget/writes/evidence/stops, receipt provenance for the grant and
+validation result, and irreversible approvals still resolving to Ask.

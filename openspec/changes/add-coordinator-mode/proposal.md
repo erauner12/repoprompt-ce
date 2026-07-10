@@ -10,7 +10,7 @@ This change makes the core runtime artifacts authoritative enough that another i
 - Specify the Mission-owned state model: objective, template summary, Mission Plan, workstreams, DAG-lite nodes, policy snapshot, autonomy map, routing decisions, user/director decision ledger, evidence ledger, events, follow-through state, and child interaction response records.
 - Specify `coordinator_chat` operations for mission creation, selection, submit, Mission Plan updates, status, event journal, wait-for-update, receipt, pace/autonomy dials, doctor, list/archive lifecycle operations, and stop semantics.
 - Specify autonomy routing and actor-integrity rules, especially `childAsk` ask/auto behavior, user-action parity gates, Director-authored decisions/evidence, and Mission-bound child response routing.
-- Specify delegated-run guardrails: consented Mission Plan requirement (approved, or user-selected `not_required` per `mission-consent-modes`), pre-approval planning exceptions, `maxConcurrent` flight cap, explicit worktree isolation for mutable Coordinator work, terminal-state honesty, node-status monotonicity, and childAsk:auto ledger requirements.
+- Specify delegated-run guardrails: approved concrete Mission Plan requirement, pre-approval planning exceptions, `maxConcurrent` flight cap, explicit worktree isolation for mutable Coordinator work, terminal-state honesty, node-status monotonicity, and childAsk:auto ledger requirements.
 - Specify deterministic validation support: scripted child backend, compact status fingerprints, sequenced mission events, receipt Markdown projection, and live E2E scenario boundaries.
 - Retain Director as user-facing vocabulary while keeping technical Swift symbols, MCP operation names, Codable keys, and fixtures Coordinator-named for this change.
 
@@ -25,7 +25,6 @@ This change makes the core runtime artifacts authoritative enough that another i
 - `coordinator-autonomy-routing`: Pace/childAsk dial behavior, childAsk pending-interaction rerouting, app-owned follow-through wakeups, and Auto-mode boundaries.
 - `coordinator-lifecycle-tooling`: Stop/archive/list/doctor/receipt behavior, E2E validation boundaries, and deferred-scope markers.
 - `scripted-agent-backend`: DEBUG-only deterministic scripted child backend for childAsk validation.
-- `mission-consent-modes`: Per-Mission initial-approval consent selection via the `plan` autonomy class — required-approval default, external-user-only `not_required` waiver with recorded decision, single-exit gated states, non-consuming ask→auto flips, immediate auto→ask escalation with fresh checkpoint identity, and mode disclosure in status/receipt. Spec-first; implementation follows the bug-seven guard and cleanup phase.
 
 ### Modified Capabilities
 
@@ -43,5 +42,5 @@ None in this pass. Supporting changes under `add-coordinator-role`, `refactor-ag
 
 - Full Coordinator-to-Director symbol/API/key rename.
 - First-class non-tab Coordinator role/runtime extraction.
-- Restart durability (S8), recovery chaos, UI render-to-click race hardening, toggle dedup beyond current idempotent ledgers, worktree garbage collection, backend fallback, custom policy CRUD, spend enforcement, hierarchical Coordinator-of-Coordinators, and broader Command Center layout redesign.
+- Restart durability (S8), recovery chaos, UI render-to-click race hardening, toggle dedup beyond current idempotent ledgers, worktree garbage collection, backend fallback, custom policy CRUD, spend enforcement, hierarchical Coordinator-of-Coordinators, broader Command Center layout redesign, and future bounded preauthorization for unattended Mission starts (`initialPlanReview: required | preauthorized(policyGrantID)`) with versioned user grants, generated-plan validation, scoped tools/budget/writes/evidence/stops, receipt provenance, and irreversible actions still Ask.
 - Reworking the supporting OpenSpec changes named above; those are intentionally left for later agents.
