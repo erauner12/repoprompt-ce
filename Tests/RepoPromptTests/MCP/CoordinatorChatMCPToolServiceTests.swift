@@ -1565,6 +1565,36 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         }
     }
 
+    func testMissionPlanRejectsApprovalAdvanceWithoutUserCheckpoint() async throws {
+        let coordinatorID = UUID()
+        let plan = CoordinatorMissionPlan(
+            missionKey: "awaiting-approval",
+            objective: "Await user checkpoint.",
+            status: .draft,
+            approvalState: .awaitingApproval
+        )
+        var updateCalled = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] },
+            updateMissionPlan: { _, _ in updateCalled = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "approval_state": .string("approved")
+            ])
+            XCTFail("Runtime mission_plan updates must not approve the plan without the user checkpoint path.")
+        } catch {
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("cannot advance approval_state to approved"), message)
+            XCTAssertTrue(message.contains("user checkpoint/continuation path"), message)
+        }
+        XCTAssertFalse(updateCalled)
+    }
+
     func testMissionPlanRejectsApprovalDowngradeAfterApproval() async throws {
         let coordinatorID = UUID()
         let plan = CoordinatorMissionPlan(

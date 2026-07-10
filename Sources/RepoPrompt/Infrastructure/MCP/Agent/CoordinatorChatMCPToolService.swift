@@ -783,6 +783,12 @@ struct CoordinatorChatMCPToolService {
         approvalState: CoordinatorMissionPlanApprovalState?,
         nodes: [CoordinatorMissionPlanNode]?
     ) throws {
+        if approvalState == .approved,
+           let existingApprovalState = existingPlan?.approvalState,
+           existingApprovalState != .approved
+        {
+            throw MCPError.invalidParams("mission_plan cannot advance approval_state to approved; approve the current Mission Plan through the user checkpoint/continuation path.")
+        }
         if existingPlan?.approvalState == .approved {
             if let approvalState, approvalState != .approved {
                 throw MCPError.invalidParams("mission_plan cannot downgrade approval_state from approved to \(approvalState.rawValue).")
