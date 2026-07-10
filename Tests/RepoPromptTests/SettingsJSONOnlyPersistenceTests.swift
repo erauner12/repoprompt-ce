@@ -106,6 +106,44 @@ final class SettingsJSONOnlyPersistenceTests: XCTestCase {
         XCTAssertFalse(rewritten.contains("didAutoApplyRecommendationsAt"))
     }
 
+    func testLegacyOnlyWorkspaceContextBuilderSelectionMigratesBeforeFieldsAreStripped() throws {
+        let temp = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let fileURL = temp.appendingPathComponent("Settings/globalSettings.json")
+        let fileStore = GlobalSettingsFileStore(fileURL: fileURL)
+
+        let workspaceID = UUID()
+        let legacySettings = ChatGlobalSettings(
+            workspaceID: workspaceID,
+            contextBuilderAgentRaw: AgentProviderKind.codexExec.rawValue,
+            contextBuilderAgentModelRaw: AgentModel.gpt55CodexLow.rawValue
+        )
+        try fileStore.save(GlobalSettingsDocument(
+            chatSettings: [workspaceID: legacySettings],
+            globalDefaults: GlobalDefaults(discoverAgentRaw: nil, discoverModelsByAgent: nil)
+        ))
+
+        let reloaded = try makeStore(at: fileURL)
+        let migratedSelection = reloaded.persistedGlobalContextBuilderAgentSelection()
+        let strippedWorkspaceSettings = reloaded.chatSettings(for: workspaceID)
+
+        XCTAssertEqual(migratedSelection.agentRaw, AgentProviderKind.codexExec.rawValue)
+        XCTAssertEqual(migratedSelection.modelRaw, AgentModel.gpt55CodexLow.rawValue)
+        XCTAssertNil(strippedWorkspaceSettings.contextBuilderAgentRaw)
+        XCTAssertNil(strippedWorkspaceSettings.contextBuilderAgentModelRaw)
+
+        reloaded.setGlobalRecommendationProviderFilter([.codex])
+        let persisted = try fileStore.load()
+        XCTAssertEqual(persisted.globalDefaults.discoverAgentRaw, AgentProviderKind.codexExec.rawValue)
+        XCTAssertEqual(
+            persisted.globalDefaults.discoverModelsByAgent?[AgentProviderKind.codexExec.rawValue],
+            AgentModel.gpt55CodexLow.rawValue
+        )
+        XCTAssertNil(persisted.globalDefaults.contextBuilderAgentRaw)
+        XCTAssertNil(persisted.chatSettings[workspaceID]?.contextBuilderAgentRaw)
+        XCTAssertNil(persisted.chatSettings[workspaceID]?.contextBuilderAgentModelRaw)
+    }
+
     func testTelemetrySettingsDefaultPersistAndMirrorMasterOptOut() throws {
         let temp = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: temp) }

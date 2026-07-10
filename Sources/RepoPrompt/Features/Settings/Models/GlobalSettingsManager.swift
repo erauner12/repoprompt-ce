@@ -1695,9 +1695,12 @@ class GlobalSettingsStore: ObservableObject {
         }
         let document = loadedExistingDocument ?? fileStore.loadOrCreateDefault()
         copySettings = document.copySettings
-        chatSettings = Self.removingLegacyWorkspaceContextBuilderState(from: document.chatSettings)
-        globalDefaults = document.globalDefaults
-        globalDefaults.contextBuilderAgentRaw = nil
+        let migratedContextBuilderState = Self.migratingLegacyContextBuilderState(
+            chatSettings: document.chatSettings,
+            globalDefaults: document.globalDefaults
+        )
+        chatSettings = migratedContextBuilderState.chatSettings
+        globalDefaults = migratedContextBuilderState.globalDefaults
         scalarPreferences = document.scalarPreferences ?? GlobalScalarPreferences()
         if !existingFileWasCorrupt {
             syncTelemetryMirrorFromLoadedSettings(scalarPreferences)
@@ -1747,9 +1750,12 @@ class GlobalSettingsStore: ObservableObject {
             let document = try fileStore.load()
             objectWillChange.send()
             copySettings = document.copySettings
-            chatSettings = Self.removingLegacyWorkspaceContextBuilderState(from: document.chatSettings)
-            globalDefaults = document.globalDefaults
-            globalDefaults.contextBuilderAgentRaw = nil
+            let migratedContextBuilderState = Self.migratingLegacyContextBuilderState(
+                chatSettings: document.chatSettings,
+                globalDefaults: document.globalDefaults
+            )
+            chatSettings = migratedContextBuilderState.chatSettings
+            globalDefaults = migratedContextBuilderState.globalDefaults
             scalarPreferences = document.scalarPreferences ?? GlobalScalarPreferences()
             syncTelemetryMirrorFromLoadedSettings(scalarPreferences)
             codeMapsGloballyDisabled = globalDefaults.codeMapsGloballyDisabled ?? false
@@ -1768,6 +1774,90 @@ class GlobalSettingsStore: ObservableObject {
         fileSystemSettings.globalIgnoreDefaults = IgnoreSettingsDefaults.canonicalGlobalIgnoreDefaults
         scalarPreferences.fileSystem = fileSystemSettings
         save()
+    }
+
+    private static func migratingLegacyContextBuilderState(
+        chatSettings: [UUID: ChatGlobalSettings],
+        globalDefaults: GlobalDefaults
+    ) -> (chatSettings: [UUID: ChatGlobalSettings], globalDefaults: GlobalDefaults) {
+        var migratedGlobalDefaults = globalDefaults
+        if migratedGlobalDefaults.discoverAgentRaw == nil,
+           let legacySelection = legacyContextBuilderSelection(
+               chatSettings: chatSettings,
+               globalDefaults: globalDefaults
+           )
+        {
+            migratedGlobalDefaults.discoverAgentRaw = legacySelection.agentRaw
+            if migratedGlobalDefaults.discoverModelsByAgent?[legacySelection.agentRaw] == nil,
+               let modelRaw = legacySelection.modelRaw
+            {
+                if migratedGlobalDefaults.discoverModelsByAgent == nil {
+                    migratedGlobalDefaults.discoverModelsByAgent = [:]
+                }
+                migratedGlobalDefaults.discoverModelsByAgent?[legacySelection.agentRaw] = modelRaw
+            }
+            migratedGlobalDefaults.didUserSetDiscoverAgentDefaults = true
+        }
+        migratedGlobalDefaults.contextBuilderAgentRaw = nil
+
+        return (
+            removingLegacyWorkspaceContextBuilderState(from: chatSettings),
+            migratedGlobalDefaults
+        )
+    }
+
+    private static func legacyContextBuilderSelection(
+        chatSettings: [UUID: ChatGlobalSettings],
+        globalDefaults: GlobalDefaults
+    ) -> (agentRaw: String, modelRaw: String?)? {
+        let orderedSettings = chatSettings
+            .sorted { $0.key.uuidString < $1.key.uuidString }
+            .map(\.value)
+
+        if let agentRaw = validLegacyAgentRaw(globalDefaults.contextBuilderAgentRaw) {
+            let modelRaw = orderedSettings.lazy
+                .compactMap { legacyModelRaw(for: agentRaw, in: $0) }
+                .first
+            return (agentRaw, modelRaw)
+        }
+
+        for settings in orderedSettings {
+            if settings.didUserSetContextBuilderDefaults != false,
+               let agentRaw = validLegacyAgentRaw(settings.contextBuilderAgentRaw)
+            {
+                return (agentRaw, legacyModelRaw(for: agentRaw, in: settings))
+            }
+            if settings.didUserSetDiscoverAgentDefaults != false,
+               let agentRaw = validLegacyAgentRaw(settings.lastUsedDiscoverAgentRaw)
+            {
+                return (agentRaw, legacyModelRaw(for: agentRaw, in: settings))
+            }
+        }
+        return nil
+    }
+
+    private static func validLegacyAgentRaw(_ rawValue: String?) -> String? {
+        guard let rawValue else { return nil }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return AgentProviderKind(rawValue: trimmed)?.rawValue
+    }
+
+    private static func legacyModelRaw(
+        for agentRaw: String,
+        in settings: ChatGlobalSettings
+    ) -> String? {
+        if validLegacyAgentRaw(settings.contextBuilderAgentRaw) == agentRaw,
+           let modelRaw = nonEmptyTrimmed(settings.contextBuilderAgentModelRaw)
+        {
+            return modelRaw
+        }
+        return nonEmptyTrimmed(settings.lastUsedDiscoverModelsByAgent?[agentRaw])
+    }
+
+    private static func nonEmptyTrimmed(_ rawValue: String?) -> String? {
+        guard let rawValue else { return nil }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func removingLegacyWorkspaceContextBuilderState(
