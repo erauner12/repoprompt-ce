@@ -1,17 +1,17 @@
 ## 1. Prerequisite and Contract Audit
 
-- [ ] 1.1 Record the current status and relevant seams of `add-coordinator-mode` tasks 13.3, 13.6, 13.7, and 13.8 without asserting that any prerequisite is complete.
-- [ ] 1.2 Audit exact Mission contract fields and lifecycle seams for objective/scope, predecessor lineage, workstreams, nodes/dependencies/workflow/execution policy/done criteria, planned write/worktree strategy, policy/autonomy/pace/`childAsk`/concurrency, pinned context/skills, guidance, Stop, continuation, child interactions, and projection.
-- [ ] 1.3 Record the implementation partial order: sections 2–3 and pure proposal parsing/validation may begin after this audit; prompt/schema/doctor surfaces wait for 13.6; sections 5–8 integration waits for hard prerequisites 13.7 and 13.8.
-- [ ] 1.4 Treat task 13.3 legacy `not_required` recovery as soft/independent; promote it to a blocker only if this audit demonstrates a shared authority path.
+- [x] 1.1 Record the current status and relevant seams of `add-coordinator-mode` tasks 13.3, 13.6, 13.7, and 13.8 without asserting that any prerequisite is complete.
+- [x] 1.2 Audit exact Mission contract fields and lifecycle seams for objective/scope, predecessor lineage, workstreams, nodes/dependencies/workflow/execution policy/done criteria, planned write/worktree strategy, policy/autonomy/pace/`childAsk`/concurrency, pinned context/skills, guidance, Stop, continuation, child interactions, and projection.
+- [x] 1.3 Record the implementation partial order: sections 2–3 and pure proposal parsing/validation may begin after this audit; prompt/schema/doctor surfaces wait for 13.6; sections 5–8 integration waits for hard prerequisites 13.7 and 13.8.
+- [x] 1.4 Treat task 13.3 legacy `not_required` recovery as soft/independent; promote it to a blocker only if this audit demonstrates a shared authority path.
 
 ## 2. Canonical Material Contract Identity
 
-- [ ] 2.1 Implement a versioned canonical material-contract snapshot shared by proposal ingress, approved-contract immutability, resolution CAS, diagnostics, projection, and tests.
-- [ ] 2.2 Exclude runtime worktree IDs, node status, bindings, evidence, decisions, events, child observations, terminal provenance, and continuation bookkeeping while retaining planned write/worktree strategy.
-- [ ] 2.3 Deterministically sort workstreams, nodes, dependency lists, autonomy keys, pinned context/skills, and all map/set-like inputs before canonical encoding.
-- [ ] 2.4 Derive deterministic SHA-256 fingerprints from canonical snapshots and use structural snapshot equality—not `plan.revision`—as the authoritative CAS.
-- [ ] 2.5 Add focused tests covering every material field, every excluded runtime field, deterministic ordering, stable evidence-only identity, and stale material-contract detection.
+- [x] 2.1 Implement a versioned canonical material-contract snapshot shared by proposal ingress, approved-contract immutability, resolution CAS, diagnostics, projection, and tests.
+- [x] 2.2 Exclude runtime worktree IDs, node status, bindings, evidence, decisions, events, child observations, terminal provenance, and continuation bookkeeping while retaining planned write/worktree strategy.
+- [x] 2.3 Deterministically sort workstreams, nodes, dependency lists, autonomy keys, pinned context/skills, and all map/set-like inputs before canonical encoding.
+- [x] 2.4 Derive deterministic SHA-256 fingerprints from canonical snapshots and use structural snapshot equality—not `plan.revision`—as the authoritative CAS.
+- [x] 2.5 Add focused tests covering every material field, every excluded runtime field, deterministic ordering, stable evidence-only identity, and stale material-contract detection.
 
 ## 3. Proposal and Resolution Ledger
 

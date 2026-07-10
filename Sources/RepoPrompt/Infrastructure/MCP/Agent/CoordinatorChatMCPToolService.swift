@@ -1113,7 +1113,7 @@ struct CoordinatorChatMCPToolService {
             guard let existingPolicy = existingPlan.policySnapshot else {
                 throw MCPError.invalidParams("mission_plan cannot establish or mutate Mission policy authority before approval; choose Mission policy through the app/external user-action controls.")
             }
-            guard policySnapshot == existingPolicy else {
+            guard CoordinatorMissionMaterialContractComparator.policiesMatch(policySnapshot, existingPolicy) else {
                 throw MCPError.invalidParams("mission_plan cannot change user-owned Mission policy authority, including pace, autonomy, max_concurrent, standing guidance, pinned skills, or pinned contexts; use external UI/MCP user-action paths so a user decision is recorded.")
             }
         }
@@ -1179,7 +1179,14 @@ struct CoordinatorChatMCPToolService {
         if hasShapeSummary, shapeSummary != existingPlan.shapeSummary {
             throw materialApprovedContractChangeError("shape_summary")
         }
-        if hasPolicySnapshot, policySnapshot != existingPlan.policySnapshot {
+        if hasPolicySnapshot,
+           let policySnapshot,
+           let existingPolicy = existingPlan.policySnapshot,
+           !CoordinatorMissionMaterialContractComparator.policiesMatch(policySnapshot, existingPolicy)
+        {
+            throw materialApprovedContractChangeError("policy_snapshot")
+        }
+        if hasPolicySnapshot, (policySnapshot == nil) != (existingPlan.policySnapshot == nil) {
             throw materialApprovedContractChangeError("policy_snapshot")
         }
         if hasAutonomy,
@@ -1294,43 +1301,20 @@ struct CoordinatorChatMCPToolService {
         existing: CoordinatorMissionWorkstreamSummary,
         incoming: CoordinatorMissionWorkstreamSummary
     ) -> Bool {
-        existing.title != incoming.title
-            || existing.purpose != incoming.purpose
-            || existing.role != incoming.role
-            || existing.defaultPolicy != incoming.defaultPolicy
-            || worktreeStrategyContractDiffers(existing: existing.worktreeStrategy, incoming: incoming.worktreeStrategy)
+        !CoordinatorMissionMaterialContractComparator.workstreamsMatch(existing, incoming)
+            || runtimeWorktreeBindingDiffers(existing: existing.worktreeID, incoming: incoming.worktreeID)
     }
 
-    private func worktreeStrategyContractDiffers(
-        existing: CoordinatorMissionWorktreeStrategy,
-        incoming: CoordinatorMissionWorktreeStrategy
-    ) -> Bool {
-        existing.mode != incoming.mode
-            || worktreeIDTargetDiffers(existing: existing.worktreeID, incoming: incoming.worktreeID)
-            || existing.baseRef != incoming.baseRef
-            || existing.baseReason != incoming.baseReason
-            || existing.reason != incoming.reason
-    }
-
-    private func worktreeIDTargetDiffers(existing: String?, incoming: String?) -> Bool {
-        if let existing {
-            return incoming != existing
-        }
-        return false
+    private func runtimeWorktreeBindingDiffers(existing: String?, incoming: String?) -> Bool {
+        guard let existing else { return false }
+        return incoming != existing
     }
 
     private func nodeContractDiffers(
         existing: CoordinatorMissionPlanNode,
         incoming: CoordinatorMissionPlanNode
     ) -> Bool {
-        existing.title != incoming.title
-            || existing.detail != incoming.detail
-            || existing.workflowHint != incoming.workflowHint
-            || existing.doneCriteria != incoming.doneCriteria
-            || existing.workstreamID != incoming.workstreamID
-            || existing.dependsOn != incoming.dependsOn
-            || existing.role != incoming.role
-            || existing.executionPolicy != incoming.executionPolicy
+        !CoordinatorMissionMaterialContractComparator.nodesMatch(existing, incoming)
     }
 
     private func materialApprovedContractChangeError(_ field: String) -> MCPError {
