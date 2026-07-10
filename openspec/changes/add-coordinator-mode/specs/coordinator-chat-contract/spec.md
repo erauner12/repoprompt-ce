@@ -24,6 +24,11 @@ The system SHALL expose the core Coordinator Mission runtime through the `coordi
 - **AND** it SHALL fail closed when that Mission cannot be resolved
 - **AND** it SHALL NOT fall back to whichever Mission the user has selected in the UI.
 
+#### Scenario: Runtime caller explicit Mission scope must match ownership
+- **WHEN** a Coordinator runtime caller invokes a Mission-scoped operation with an explicit `coordinator_session_id`
+- **THEN** the system SHALL verify that the requested Mission is the caller's owning Mission
+- **AND** cross-Mission IDs, selected-Mission fallback, and unresolved caller metadata SHALL fail closed before any write or status-changing action is applied.
+
 #### Scenario: Runtime callers cannot invoke user-action parity ops
 - **WHEN** a Coordinator runtime caller invokes `set_pace`, `set_autonomy`, checkpoint submit as user, or `archive_mission`
 - **THEN** the tool SHALL reject the request because those paths represent external user action or lifecycle authority.
@@ -46,6 +51,11 @@ The system SHALL ensure external Mission starts produce a visible, revision-boun
 - **THEN** it SHALL expose a `checkpoint_instance_id` derived from Coordinator session ID and Mission Plan revision
 - **AND** approval-granting checkpoint submit actions SHALL include the expected instance ID.
 
+#### Scenario: Missing expected checkpoint ID is rejected
+- **WHEN** a caller submits an approval-granting checkpoint action without `expected_checkpoint_instance_id`
+- **THEN** the system SHALL reject it and record no user decision
+- **AND** it SHALL return guidance to refresh compact `mission_status` and resubmit with the current checkpoint instance.
+
 #### Scenario: Stale checkpoint grant is rejected
 - **WHEN** a caller submits an approval-granting checkpoint action with an old `expected_checkpoint_instance_id`
 - **THEN** the system SHALL reject it and record no user decision
@@ -54,6 +64,29 @@ The system SHALL ensure external Mission starts produce a visible, revision-boun
 #### Scenario: Stale stop remains accepted
 - **WHEN** a caller submits a stale `stop` checkpoint action
 - **THEN** the system MAY accept it because stop withdraws approval rather than granting it.
+
+#### Scenario: Runtime caller cannot perform checkpoint action
+- **WHEN** a Coordinator runtime caller submits a checkpoint action such as `proceed`, revision approval, or `stop` through `submit`
+- **THEN** the system SHALL reject approval-granting actions as user impersonation
+- **AND** Stop authority SHALL remain on the app/external user lifecycle path rather than runtime self-stop.
+
+#### Scenario: Approved continuation is durable and status-visible
+- **WHEN** a user approves a Mission Plan with the current checkpoint instance and `proceed`
+- **THEN** the approval transaction SHALL durably record the user decision, approved plan state, and a post-approval continuation record before any runtime resume is attempted
+- **AND** `mission_status` SHALL expose the continuation lifecycle status as `pending`, `deferred`, `dispatching`, `delivered`, `failed`, or `invalidated` through the Mission Plan summary
+- **AND** compact status fingerprints SHALL change when that lifecycle status, attempt count, or last error changes.
+
+#### Scenario: Deferred continuation drains once without external resubmit
+- **WHEN** the approved continuation is blocked because the Coordinator runtime is busy
+- **THEN** the continuation SHALL become `deferred` without counting another attempt on repeated busy observations
+- **AND** the runtime SHALL evaluate the deferred continuation at ordinary turn boundaries independently from visible Coordinator UI refresh
+- **AND** one later accepted dispatch SHALL transition through `dispatching` to `delivered`
+- **AND** the app SHALL NOT require or emit a second external user `submit` for that accepted continuation.
+
+#### Scenario: Continuation dispatch failures are terminally visible
+- **WHEN** an actual continuation dispatch is attempted and delivery is rejected for a non-busy reason
+- **THEN** the continuation SHALL transition to `failed` with `last_error`
+- **AND** it SHALL NOT be reported as `delivered` unless the directive delivery was accepted.
 
 ### Requirement: Mission Plan updates are state-only MCP operations
 The system SHALL allow external clients and Coordinator runtimes to mutate Mission Plan state without submitting an ordinary Coordinator chat turn.
@@ -72,6 +105,12 @@ The system SHALL allow external clients and Coordinator runtimes to mutate Missi
 - **WHEN** a `mission_plan` update sets the workstream or node replacement flag
 - **THEN** the corresponding DAG entries MAY be replaced according to the documented merge semantics
 - **AND** decision and evidence ledgers SHALL remain append-only.
+
+#### Scenario: Approval states distinguish writable and output-only authority
+- **WHEN** `mission_plan` receives an approval state from a runtime or generic state update
+- **THEN** draft/revision states such as `awaiting_approval` MAY be accepted only as non-authorizing runtime output
+- **AND** `approved` SHALL be writable only by the trusted user checkpoint transaction
+- **AND** `not_required` SHALL NOT be writable in the current demo and, if decoded from legacy payloads, SHALL be output-only recovery information that does not authorize progress or delegation.
 
 ### Requirement: Mission status and waits expose automation-safe state
 The system SHALL provide read-only status surfaces sufficient for external drivers and Coordinator runtimes.

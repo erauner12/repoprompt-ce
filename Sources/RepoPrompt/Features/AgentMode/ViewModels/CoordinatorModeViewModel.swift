@@ -41,6 +41,13 @@ final class CoordinatorModeViewModel: ObservableObject {
         case rejected(message: String)
     }
 
+    enum PostApprovalContinuationStatus: Equatable {
+        case none
+        case deferred(checkpointInstanceID: String)
+        case delivered(checkpointInstanceID: String)
+        case failed(checkpointInstanceID: String, message: String)
+    }
+
     enum ContinuationAction: Equatable {
         case proceed
         case runLightweightDiscovery
@@ -89,10 +96,14 @@ final class CoordinatorModeViewModel: ObservableObject {
         Runtime ledger rule: append only Director-owned decisions (actor:"director") and evidence records through coordinator_chat op=mission_plan. Judge from the bounded Mission ledger and any judgment_bundle/probe_answer evidence, not the full transcript. If evidence is thin, use a narrow read-only agent_explore.start probe and record the probe answer as evidence before deciding. Do not record user decisions; the app/MCP submit path owns user-actor checkpoint decisions. Auto decisions are visible and contestable; if the user overrules one, treat it as a user decision plus correction steer, preserve the original record, and link the Director correction with overruled_decision_id/overrule_reason/correction_reason/correction_steer_text when useful.
         """
 
+        var requiresCurrentPlanApprovalCheckpoint: Bool {
+            self != .stopHere
+        }
+
         var directiveText: String {
             switch self {
             case .proceed:
-                "Approved to proceed with the current Mission Plan phase you proposed. Proceed advances the next planned phase, not necessarily implementation. If the current phase is evidence gathering or planning, run only that phase and ask again after updating the Mission Plan. If the current phase is mutable implementation, update the Mission Plan to approval_state:\"approved\" before launching implementation. If this mission is investigation-only or issue-drafting-only, do not invent an implementation phase. Do not merge, apply, commit, push, create a PR, or perform irreversible actions unless I explicitly request that next.\n\n\(Self.runtimeLedgerInstruction)"
+                "Approved to proceed with the current Mission Plan phase you proposed. Proceed advances the next planned phase, not necessarily implementation. If the current phase is evidence gathering or planning, run only that phase and ask again after updating the Mission Plan. The app has already persisted the user approval decision and approval_state before this directive is sent; do not write approval_state:\"approved\" yourself. If this mission is investigation-only or issue-drafting-only, do not invent an implementation phase. Do not merge, apply, commit, push, create a PR, or perform irreversible actions unless I explicitly request that next.\n\n\(Self.runtimeLedgerInstruction)"
             case .runLightweightDiscovery:
                 """
                 Gather evidence before approval using visible Mission Plan nodes.
@@ -240,8 +251,17 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias MissionStopper = @MainActor (_ request: CoordinatorMissionStopRequest) async -> CoordinatorMissionStopResult
     typealias PendingFollowThroughEventProvider = @MainActor (_ coordinatorSessionID: UUID?) -> CoordinatorFollowThroughEvent?
     typealias FollowThroughEventSubmitter = @MainActor (_ event: CoordinatorFollowThroughEvent) async -> DirectiveSubmissionResult
+    struct PostApprovalContinuationPersistenceToken: Equatable {
+        let coordinatorSessionID: UUID
+        let continuationID: UUID
+        let checkpointInstanceID: String
+        let planID: UUID
+        let planRevision: Int
+    }
+
     typealias FollowThroughEventResolver = @MainActor (_ event: CoordinatorFollowThroughEvent) async -> Void
     typealias FollowThroughEvaluationHandler = @MainActor (_ coordinatorSessionID: UUID) async -> Void
+    typealias PostApprovalContinuationPersistenceBarrier = @MainActor (_ token: PostApprovalContinuationPersistenceToken) async throws -> Void
 
     @Published private(set) var snapshot: CoordinatorModeSnapshot = .empty
     @Published private(set) var railTranscriptEntries: [CoordinatorModeRailTranscriptEntry] = []
@@ -252,6 +272,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     @Published private(set) var missionPaceSelection: CoordinatorMissionPolicyPace
     @Published private(set) var childAskSelection: CoordinatorMissionAutonomyMode
     @Published private(set) var pendingFollowThroughEvent: CoordinatorFollowThroughEvent?
+    @Published private(set) var postApprovalContinuationStatus: PostApprovalContinuationStatus = .none
     @Published private(set) var railDestination: RailDestination = .mission
     @Published var selectedMissionPolicy: CoordinatorMissionPolicySnapshot = .defaultPolicy {
         didSet {
@@ -310,6 +331,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let followThroughEventSubmitter: FollowThroughEventSubmitter
     private let followThroughEventResolver: FollowThroughEventResolver
     private let followThroughEvaluationHandler: FollowThroughEvaluationHandler
+    private let postApprovalContinuationPersistenceBarrier: PostApprovalContinuationPersistenceBarrier
     private let missionEventJournal: CoordinatorMissionEventJournal
     private let projector: CoordinatorModeSnapshotProjector
     private let userDefaults: UserDefaults
@@ -319,6 +341,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private var displayedTranscriptCoordinatorSessionID: UUID?
     private var lastDurableRailStatusEntryKey: String?
     private var displayedDelegateActionTargetIDs: Set<UUID> = []
+    private var durableApprovalAuthorityTokensByCoordinatorID: [UUID: String] = [:]
     private var pendingAcceptedDirectiveDecision: PendingMissionUserDecision?
     private var pendingFreshCoordinatorModelID: String?
     private var draftDialOverridesPolicy = false
@@ -364,6 +387,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         },
         followThroughEventResolver: @escaping FollowThroughEventResolver = { _ in },
         followThroughEvaluationHandler: @escaping FollowThroughEvaluationHandler = { _ in },
+        postApprovalContinuationPersistenceBarrier: @escaping PostApprovalContinuationPersistenceBarrier = { _ in },
         missionEventJournal: CoordinatorMissionEventJournal? = nil,
         projector: CoordinatorModeSnapshotProjector = CoordinatorModeSnapshotProjector(),
         userDefaults: UserDefaults = .standard
@@ -388,6 +412,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.followThroughEventSubmitter = followThroughEventSubmitter
         self.followThroughEventResolver = followThroughEventResolver
         self.followThroughEvaluationHandler = followThroughEvaluationHandler
+        self.postApprovalContinuationPersistenceBarrier = postApprovalContinuationPersistenceBarrier
         self.missionEventJournal = missionEventJournal ?? .shared
         self.projector = projector
         self.userDefaults = userDefaults
@@ -459,6 +484,24 @@ final class CoordinatorModeViewModel: ObservableObject {
         policySnapshot.defaultPace = missionPaceSelection
         policySnapshot.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key] = childAskSelection
         return policySnapshot
+    }
+
+    func durableApprovalAuthorityToken(coordinatorSessionID: UUID?) -> String? {
+        guard let coordinatorSessionID else { return nil }
+        refresh()
+        guard let plan = snapshot.coordinatorRail.availableCoordinators
+            .first(where: { $0.sessionID == coordinatorSessionID })?
+            .missionPlan
+        else {
+            durableApprovalAuthorityTokensByCoordinatorID.removeValue(forKey: coordinatorSessionID)
+            return nil
+        }
+        let token = durableApprovalAuthorityTokensByCoordinatorID[coordinatorSessionID]
+        guard plan.hasDurableApprovalAuthority(token) else {
+            durableApprovalAuthorityTokensByCoordinatorID.removeValue(forKey: coordinatorSessionID)
+            return nil
+        }
+        return token
     }
 
     func updateMissionPlan(
@@ -614,9 +657,10 @@ final class CoordinatorModeViewModel: ObservableObject {
     var canStopSelectedCoordinatorMission: Bool {
         guard snapshot.coordinatorRail.state == .selected,
               snapshot.coordinatorRail.isLiveInCurrentWindow,
-              snapshot.coordinatorRail.missionPlan?.status != .stopped
+              let plan = snapshot.coordinatorRail.missionPlan,
+              !plan.status.isTerminal
         else { return false }
-        return !coordinatorMissionStopTargetSessionIDs().isEmpty
+        return true
     }
 
     @discardableResult
@@ -626,30 +670,43 @@ final class CoordinatorModeViewModel: ObservableObject {
             composerNotice = message
             return .rejected(message: message)
         }
-        let targetSessionIDs = coordinatorMissionStopTargetSessionIDs()
-        guard !targetSessionIDs.isEmpty else {
-            let message = "No live Coordinator-linked sessions were found to stop."
+        return await stopCoordinatorMission(targetMissionID: coordinatorSessionID)
+    }
+
+    @discardableResult
+    func stopCoordinatorMission(targetMissionID coordinatorSessionID: UUID) async -> DirectiveSubmissionResult {
+        refresh()
+        guard let option = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == coordinatorSessionID }) else {
+            let message = "Coordinator Mission \(coordinatorSessionID.uuidString) is not available in this window."
             composerNotice = message
             return .rejected(message: message)
         }
+        guard var plan = option.missionPlan else {
+            let message = "Coordinator Mission \(coordinatorSessionID.uuidString) does not have a Mission Plan to stop."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        if plan.status.isTerminal {
+            let message = "Mission is already \(plan.status.rawValue). Stop accepted as a no-op."
+            composerNotice = message
+            appendCoordinatorEventTranscriptEntry(message)
+            refresh()
+            return .accepted
+        }
 
-        let result = await missionStopper(CoordinatorMissionStopRequest(
+        let targetSessionIDs = coordinatorMissionStopTargetSessionIDs(
             coordinatorSessionID: coordinatorSessionID,
-            sessionIDs: targetSessionIDs
-        ))
-        let message = coordinatorMissionStopMessage(result)
-        composerNotice = message
-        appendCoordinatorEventTranscriptEntry(message)
-
-        if var plan = snapshot.coordinatorRail.missionPlan {
-            let stoppedAt = Date()
-            let decision = stoppedMissionDecision(
-                coordinatorSessionID: coordinatorSessionID,
-                plan: plan,
-                timestamp: stoppedAt
-            )
-            plan.stopMission(cancelledSessionIDs: Set(result.cancelledSessionIDs), at: stoppedAt)
-            try? missionPlanUpdater(
+            missionPlan: plan
+        )
+        let stoppedAt = Date()
+        let decision = stoppedMissionDecision(
+            coordinatorSessionID: coordinatorSessionID,
+            plan: plan,
+            timestamp: stoppedAt
+        )
+        plan.stopMission(cancelledSessionIDs: Set(targetSessionIDs), at: stoppedAt)
+        do {
+            try missionPlanUpdater(
                 coordinatorSessionID,
                 CoordinatorMissionPlanUpdate(
                     status: plan.status,
@@ -659,14 +716,28 @@ final class CoordinatorModeViewModel: ObservableObject {
                     events: [
                         CoordinatorMissionPlanEvent(
                             kind: .revised,
-                            timestamp: plan.updatedAt,
-                            summary: message
+                            timestamp: stoppedAt,
+                            summary: "Mission stopped by user."
                         )
                     ],
-                    updatedAt: plan.updatedAt
+                    updatedAt: stoppedAt
                 )
             )
+        } catch {
+            let message = "Mission stop could not be recorded; cancellation was not started: \(error.localizedDescription)"
+            composerNotice = message
+            refresh()
+            return .rejected(message: message)
         }
+        refresh()
+
+        let result = await missionStopper(CoordinatorMissionStopRequest(
+            coordinatorSessionID: coordinatorSessionID,
+            sessionIDs: targetSessionIDs
+        ))
+        let message = coordinatorMissionStopMessage(result)
+        composerNotice = message
+        appendCoordinatorEventTranscriptEntry(message)
         refresh()
         return .accepted
     }
@@ -675,6 +746,9 @@ final class CoordinatorModeViewModel: ObservableObject {
         let cancelledCount = result.cancelledSessionIDs.count
         let skippedCount = result.skippedSessionIDs.count
         let cancelledText = "\(cancelledCount) active \(cancelledCount == 1 ? "session" : "sessions")"
+        if result.requestedSessionIDs.isEmpty {
+            return "Mission stopped. No live Coordinator-linked sessions required cancellation."
+        }
         guard skippedCount > 0 else {
             return "Mission stopped. Requested cancellation for \(cancelledText)."
         }
@@ -984,24 +1058,134 @@ final class CoordinatorModeViewModel: ObservableObject {
     }
 
     @discardableResult
-    func submitCoordinatorContinuation(_ action: ContinuationAction) async -> DirectiveSubmissionResult {
-        let pendingDecision = missionUserDecisionRecord(for: action)
-        pendingAcceptedDirectiveDecision = nil
-        let result = await submitCoordinatorDirective(action.directiveText)
-        if case .accepted = result, let pendingDecision {
-            appendMissionUserDecision(pendingDecision)
+    func submitCoordinatorContinuation(
+        _ action: ContinuationAction,
+        expectedCheckpointInstanceID: String? = nil
+    ) async -> DirectiveSubmissionResult {
+        let checkpointContext: PlanApprovalCheckpointContext?
+        if action.requiresCurrentPlanApprovalCheckpoint {
+            do {
+                checkpointContext = try currentPlanApprovalCheckpointContext(expected: expectedCheckpointInstanceID)
+            } catch {
+                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                composerNotice = message
+                return .rejected(message: message)
+            }
+        } else {
+            checkpointContext = nil
         }
-        return result
+
+        if action == .stopHere {
+            guard let targetMissionID = snapshot.coordinatorRail.coordinatorSessionID else {
+                let message = "No Coordinator Mission is selected."
+                composerNotice = message
+                return .rejected(message: message)
+            }
+            return await stopCoordinatorMission(targetMissionID: targetMissionID)
+        }
+
+        pendingAcceptedDirectiveDecision = nil
+        if action == .proceed, let checkpointContext {
+            let approvalResult = approvePlan(checkpointContext)
+            guard approvalResult == .accepted else { return approvalResult }
+            guard recordPostApprovalContinuationDeferral(
+                checkpointContext.coordinatorSessionID,
+                error: "Approved continuation is queued for the next ordinary turn boundary."
+            ) else {
+                let message = "Mission approval was recorded, but the post-approval continuation could not be queued durably. The Director was not resumed. Refresh Mission status and retry."
+                composerNotice = message
+                return .rejected(message: message)
+            }
+            guard let persistenceToken = postApprovalContinuationPersistenceToken(for: checkpointContext) else {
+                let message = "Mission approval was recorded, but the post-approval continuation record is missing. The Director was not resumed. Refresh Mission status and retry."
+                composerNotice = message
+                return .rejected(message: message)
+            }
+            do {
+                try await postApprovalContinuationPersistenceBarrier(persistenceToken)
+            } catch {
+                let errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                let message = "Mission approval was recorded, but durable continuation persistence failed. The Director was not resumed. \(errorMessage)"
+                durableApprovalAuthorityTokensByCoordinatorID.removeValue(forKey: checkpointContext.coordinatorSessionID)
+                _ = recordPostApprovalContinuationFailure(checkpointContext.coordinatorSessionID, error: message)
+                composerNotice = message
+                return .rejected(message: message)
+            }
+            guard confirmDurableApprovalAuthority(checkpointContext.coordinatorSessionID) else {
+                let message = "Mission approval was recorded, but durable approval authority could not be confirmed. The Director was not resumed. Refresh Mission status and retry."
+                _ = recordPostApprovalContinuationFailure(checkpointContext.coordinatorSessionID, error: message)
+                composerNotice = message
+                return .rejected(message: message)
+            }
+            refresh()
+            guard let authorityToken = snapshot.coordinatorRail.availableCoordinators
+                .first(where: { $0.sessionID == checkpointContext.coordinatorSessionID })?
+                .missionPlan?
+                .expectedDurableApprovalAuthorityToken
+            else {
+                let message = "Mission approval was recorded, but durable approval authority could not be confirmed. The Director was not resumed. Refresh Mission status and retry."
+                _ = recordPostApprovalContinuationFailure(checkpointContext.coordinatorSessionID, error: message)
+                composerNotice = message
+                return .rejected(message: message)
+            }
+            durableApprovalAuthorityTokensByCoordinatorID[checkpointContext.coordinatorSessionID] = authorityToken
+            composerNotice = "Mission plan approved. The authorized continuation is queued and will be delivered once at the next ordinary turn boundary."
+            Task { @MainActor [followThroughEvaluationHandler] in
+                await followThroughEvaluationHandler(checkpointContext.coordinatorSessionID)
+            }
+            return .accepted
+        }
+
+        if action == .startSmaller, let checkpointContext {
+            let revisionResult = requestPlanRevision(checkpointContext)
+            guard revisionResult == .accepted else { return revisionResult }
+            let resumeResult = await submitCoordinatorDirective(action.directiveText)
+            if case let .rejected(message) = resumeResult {
+                composerNotice = "Plan revision requested. Director could not be resumed automatically: \(message)"
+            }
+            return .accepted
+        }
+
+        return await submitCoordinatorDirective(action.directiveText)
+    }
+
+    @discardableResult
+    func requestSelectedPlanRevision() -> Bool {
+        do {
+            let context = try currentPlanApprovalCheckpointContext(expected: nil, requireExpectedInstance: false)
+            return requestPlanRevision(context) == .accepted
+        } catch {
+            composerNotice = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
+    func submitPlanRevisionDirective(_ text: String) async -> DirectiveSubmissionResult {
+        do {
+            let revisionResult: DirectiveSubmissionResult
+            if snapshot.coordinatorRail.missionPlan?.approvalState == .approved {
+                revisionResult = try requestApprovedPlanRevision()
+            } else {
+                let context = try currentPlanApprovalCheckpointContext(expected: nil, requireExpectedInstance: false)
+                revisionResult = requestPlanRevision(context)
+            }
+            guard revisionResult == .accepted else { return revisionResult }
+            let submitResult = await submitCoordinatorDirective(text)
+            if case let .rejected(message) = submitResult {
+                composerNotice = "Plan revision requested. Director could not be resumed automatically: \(message)"
+            }
+            return .accepted
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            composerNotice = message
+            return .rejected(message: message)
+        }
     }
 
     @discardableResult
     func queuePlanRevisionDecisionAfterAcceptedDirective() -> Bool {
-        guard let pendingDecision = planApprovalDecision(
-            label: .requestedPlanRevision,
-            timestamp: Date()
-        ) else { return false }
-        pendingAcceptedDirectiveDecision = pendingDecision
-        return true
+        requestSelectedPlanRevision()
     }
 
     @discardableResult
@@ -1053,6 +1237,13 @@ final class CoordinatorModeViewModel: ObservableObject {
     private static let missionStopCheckpointID = "mission-stop"
     private static let missionPolicyOverrideCheckpointID = "mission-policy-override"
 
+    private struct PlanApprovalCheckpointContext: Equatable {
+        let coordinatorSessionID: UUID
+        let planID: UUID
+        let revision: Int
+        let checkpointInstanceID: String
+    }
+
     private func missionUserDecisionRecord(for action: ContinuationAction) -> PendingMissionUserDecision? {
         switch action {
         case .proceed:
@@ -1076,27 +1267,398 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
     }
 
+    private func currentPlanApprovalCheckpointContext(
+        expected: String?,
+        requireExpectedInstance: Bool = true
+    ) throws -> PlanApprovalCheckpointContext {
+        refresh()
+        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID,
+              let plan = snapshot.coordinatorRail.missionPlan,
+              !plan.nodes.isEmpty,
+              !plan.status.isTerminal
+        else {
+            throw MCPError.invalidParams("Checkpoint approval rejected because no nonterminal Mission Plan checkpoint is currently pending. Refresh Mission status and retry.")
+        }
+        if plan.approvalState == .notRequired {
+            try migrateLegacyNotRequiredPlanCheckpoint(coordinatorSessionID: coordinatorSessionID)
+            throw MCPError.invalidParams("Legacy not_required Mission Plan checkpoint was migrated to awaiting_approval with a fresh checkpoint instance. Refresh Mission status and retry.")
+        }
+        guard plan.approvalState == .awaitingApproval else {
+            throw MCPError.invalidParams("Checkpoint approval rejected because the Mission Plan is \(plan.approvalState.rawValue), not awaiting_approval.")
+        }
+        let current = planApprovalCheckpointInstanceID(
+            coordinatorSessionID: coordinatorSessionID,
+            revision: plan.revision
+        )
+        if requireExpectedInstance {
+            guard let expected else {
+                throw MCPError.invalidParams("Checkpoint approval rejected because the rendered checkpoint instance is missing. Refresh Mission status and retry.")
+            }
+            guard expected == current else {
+                throw MCPError.invalidParams("Checkpoint approval rejected because the rendered checkpoint instance is stale. Current checkpoint instance is \(current). Refresh Mission status and retry.")
+            }
+        }
+        return PlanApprovalCheckpointContext(
+            coordinatorSessionID: coordinatorSessionID,
+            planID: plan.id,
+            revision: plan.revision,
+            checkpointInstanceID: current
+        )
+    }
+
     private func planApprovalDecision(
         label: CoordinatorMissionUserDecisionLabel,
         timestamp: Date
     ) -> PendingMissionUserDecision? {
+        do {
+            let context = try currentPlanApprovalCheckpointContext(expected: nil, requireExpectedInstance: false)
+            return PendingMissionUserDecision(
+                coordinatorSessionID: context.coordinatorSessionID,
+                record: planApprovalDecisionRecord(
+                    label: label,
+                    context: context,
+                    timestamp: timestamp
+                )
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private func postApprovalContinuationRecord(
+        context: PlanApprovalCheckpointContext,
+        directiveText: String,
+        timestamp: Date
+    ) -> CoordinatorPostApprovalContinuationRecord {
+        let providerText = """
+        <coordinator_post_approval_continuation checkpoint_instance_id=\"\(context.checkpointInstanceID)\">
+        The app already persisted user approval for Mission Plan revision \(context.revision). This is the single accepted continuation authorized by that checkpoint for this live demo run; do not ask the user to submit it again.
+
+        \(directiveText)
+        </coordinator_post_approval_continuation>
+        """
+        return CoordinatorPostApprovalContinuationRecord(
+            id: CoordinatorMissionStableIdentity.uuid(
+                namespace: "coordinator-post-approval-continuation",
+                parts: [context.checkpointInstanceID, directiveText]
+            ),
+            coordinatorSessionID: context.coordinatorSessionID,
+            checkpointInstanceID: context.checkpointInstanceID,
+            planID: context.planID,
+            planRevision: context.revision,
+            directiveText: providerText,
+            status: .pending,
+            createdAt: timestamp,
+            updatedAt: timestamp
+        )
+    }
+
+    private func planApprovalDecisionRecord(
+        label: CoordinatorMissionUserDecisionLabel,
+        context: PlanApprovalCheckpointContext,
+        timestamp: Date
+    ) -> CoordinatorMissionDecisionRecord {
+        CoordinatorMissionDecisionRecord(
+            userDecision: label,
+            decisionClass: .plan,
+            checkpointInstanceID: context.checkpointInstanceID,
+            timestamp: timestamp,
+            checkpointID: Self.planApprovalCheckpointID
+        )
+    }
+
+    @discardableResult
+    private func approvePlan(_ context: PlanApprovalCheckpointContext) -> DirectiveSubmissionResult {
+        let timestamp = Date()
+        do {
+            try validateCurrentPlanApprovalCheckpoint(context)
+            try missionPlanUpdater(
+                context.coordinatorSessionID,
+                CoordinatorMissionPlanUpdate(
+                    status: .running,
+                    approvalState: .approved,
+                    decisions: [
+                        planApprovalDecisionRecord(
+                            label: .approvedMissionPlan,
+                            context: context,
+                            timestamp: timestamp
+                        )
+                    ],
+                    events: [
+                        CoordinatorMissionPlanEvent(
+                            kind: .approved,
+                            timestamp: timestamp,
+                            summary: "Mission plan approved by user."
+                        )
+                    ],
+                    postApprovalContinuation: postApprovalContinuationRecord(
+                        context: context,
+                        directiveText: ContinuationAction.proceed.directiveText,
+                        timestamp: timestamp
+                    ),
+                    updatedAt: timestamp
+                )
+            )
+            refresh()
+            return .accepted
+        } catch {
+            let message = "Mission approval could not be recorded; the Director was not resumed. Refresh Mission status and retry. \(error.localizedDescription)"
+            composerNotice = message
+            refresh()
+            return .rejected(message: message)
+        }
+    }
+
+    @discardableResult
+    private func requestApprovedPlanRevision() throws -> DirectiveSubmissionResult {
+        refresh()
         guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID,
               let plan = snapshot.coordinatorRail.missionPlan,
-              plan.approvalState == .awaitingApproval
-        else { return nil }
-        return PendingMissionUserDecision(
+              plan.approvalState == .approved,
+              !plan.nodes.isEmpty,
+              !plan.status.isTerminal
+        else {
+            throw MCPError.invalidParams("Approved Mission Plan revision rejected because no nonterminal approved Mission Plan is selected. Refresh Mission status and retry.")
+        }
+        let context = PlanApprovalCheckpointContext(
             coordinatorSessionID: coordinatorSessionID,
-            record: CoordinatorMissionDecisionRecord(
-                userDecision: label,
-                decisionClass: .plan,
-                checkpointInstanceID: planApprovalCheckpointInstanceID(
-                    coordinatorSessionID: coordinatorSessionID,
-                    revision: plan.revision
-                ),
-                timestamp: timestamp,
-                checkpointID: Self.planApprovalCheckpointID
+            planID: plan.id,
+            revision: plan.revision,
+            checkpointInstanceID: planRevisionCheckpointInstanceID(
+                coordinatorSessionID: coordinatorSessionID,
+                revision: plan.revision
             )
         )
+        let timestamp = Date()
+        do {
+            try missionPlanUpdater(
+                context.coordinatorSessionID,
+                CoordinatorMissionPlanUpdate(
+                    approvalState: .revisionRequested,
+                    decisions: [
+                        planApprovalDecisionRecord(
+                            label: .requestedPlanRevision,
+                            context: context,
+                            timestamp: timestamp
+                        )
+                    ],
+                    events: [
+                        CoordinatorMissionPlanEvent(
+                            kind: .revised,
+                            timestamp: timestamp,
+                            summary: "Approved Mission plan revision requested by user."
+                        )
+                    ],
+                    updatedAt: timestamp
+                )
+            )
+            refresh()
+            return .accepted
+        } catch {
+            let message = "Approved plan revision request could not be recorded; the Director was not resumed. Refresh Mission status and retry. \(error.localizedDescription)"
+            composerNotice = message
+            refresh()
+            return .rejected(message: message)
+        }
+    }
+
+    @discardableResult
+    private func requestPlanRevision(_ context: PlanApprovalCheckpointContext) -> DirectiveSubmissionResult {
+        let timestamp = Date()
+        do {
+            try validateCurrentPlanApprovalCheckpoint(context)
+            try missionPlanUpdater(
+                context.coordinatorSessionID,
+                CoordinatorMissionPlanUpdate(
+                    approvalState: .revisionRequested,
+                    decisions: [
+                        planApprovalDecisionRecord(
+                            label: .requestedPlanRevision,
+                            context: context,
+                            timestamp: timestamp
+                        )
+                    ],
+                    events: [
+                        CoordinatorMissionPlanEvent(
+                            kind: .revised,
+                            timestamp: timestamp,
+                            summary: "Mission plan revision requested by user."
+                        )
+                    ],
+                    updatedAt: timestamp
+                )
+            )
+            refresh()
+            return .accepted
+        } catch {
+            let message = "Plan revision request could not be recorded; the Director was not resumed. Refresh Mission status and retry. \(error.localizedDescription)"
+            composerNotice = message
+            refresh()
+            return .rejected(message: message)
+        }
+    }
+
+    @discardableResult
+    private func confirmDurableApprovalAuthority(_ coordinatorSessionID: UUID) -> Bool {
+        updatePostApprovalContinuation(coordinatorSessionID) { continuation in
+            continuation.confirmingDurableApprovalAuthority()
+        }
+    }
+
+    private func postApprovalContinuationPersistenceToken(
+        for context: PlanApprovalCheckpointContext
+    ) -> PostApprovalContinuationPersistenceToken? {
+        refresh()
+        guard let continuation = snapshot.coordinatorRail.availableCoordinators
+            .first(where: { $0.sessionID == context.coordinatorSessionID })?
+            .missionPlan?
+            .postApprovalContinuation,
+            continuation.checkpointInstanceID == context.checkpointInstanceID,
+            continuation.planID == context.planID,
+            continuation.planRevision == context.revision
+        else { return nil }
+        return PostApprovalContinuationPersistenceToken(
+            coordinatorSessionID: context.coordinatorSessionID,
+            continuationID: continuation.id,
+            checkpointInstanceID: continuation.checkpointInstanceID,
+            planID: continuation.planID,
+            planRevision: continuation.planRevision
+        )
+    }
+
+    private func recordPostApprovalContinuationDelivery(_ coordinatorSessionID: UUID) {
+        _ = updatePostApprovalContinuation(coordinatorSessionID) { continuation in
+            var state = CoordinatorFollowThroughState()
+            state.recordPostApprovalContinuation(continuation)
+            _ = state.markPostApprovalContinuationDelivered()
+            return state.postApprovalContinuation ?? continuation
+        }
+    }
+
+    @discardableResult
+    private func recordPostApprovalContinuationDeferral(_ coordinatorSessionID: UUID, error: String?) -> Bool {
+        updatePostApprovalContinuation(coordinatorSessionID) { continuation in
+            var state = CoordinatorFollowThroughState()
+            state.recordPostApprovalContinuation(continuation)
+            _ = state.markPostApprovalContinuationDeferred(error: error)
+            return state.postApprovalContinuation ?? continuation
+        }
+    }
+
+    @discardableResult
+    private func recordPostApprovalContinuationFailure(_ coordinatorSessionID: UUID, error: String) -> Bool {
+        updatePostApprovalContinuation(coordinatorSessionID) { continuation in
+            var state = CoordinatorFollowThroughState()
+            state.recordPostApprovalContinuation(continuation)
+            _ = state.markPostApprovalContinuationFailed(error: error)
+            return state.postApprovalContinuation ?? continuation
+        }
+    }
+
+    @discardableResult
+    private func updatePostApprovalContinuation(
+        _ coordinatorSessionID: UUID,
+        transform: (CoordinatorPostApprovalContinuationRecord) -> CoordinatorPostApprovalContinuationRecord
+    ) -> Bool {
+        refresh()
+        guard let continuation = snapshot.coordinatorRail.availableCoordinators
+            .first(where: { $0.sessionID == coordinatorSessionID })?
+            .missionPlan?
+            .postApprovalContinuation
+        else { return false }
+        do {
+            let updatedContinuation = transform(continuation)
+            try missionPlanUpdater(
+                coordinatorSessionID,
+                CoordinatorMissionPlanUpdate(
+                    postApprovalContinuation: updatedContinuation,
+                    updatedAt: Date()
+                )
+            )
+            postApprovalContinuationStatus = Self.postApprovalContinuationStatus(updatedContinuation)
+            refresh()
+            return true
+        } catch {
+            composerNotice = "Post-approval continuation state could not be updated: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private func syncPostApprovalContinuationStatus(from plan: CoordinatorMissionPlan?) {
+        postApprovalContinuationStatus = Self.postApprovalContinuationStatus(plan?.postApprovalContinuation)
+    }
+
+    private static func postApprovalContinuationStatus(
+        _ continuation: CoordinatorPostApprovalContinuationRecord?
+    ) -> PostApprovalContinuationStatus {
+        guard let continuation else { return .none }
+        switch continuation.status {
+        case .pending, .deferred, .dispatching:
+            return .deferred(checkpointInstanceID: continuation.checkpointInstanceID)
+        case .delivered:
+            return .delivered(checkpointInstanceID: continuation.checkpointInstanceID)
+        case .failed, .invalidated:
+            return .failed(
+                checkpointInstanceID: continuation.checkpointInstanceID,
+                message: continuation.lastError ?? continuation.status.rawValue
+            )
+        }
+    }
+
+    private func migrateLegacyNotRequiredPlanCheckpoint(
+        coordinatorSessionID: UUID
+    ) throws {
+        let timestamp = Date()
+        try missionPlanUpdater(
+            coordinatorSessionID,
+            CoordinatorMissionPlanUpdate(
+                approvalState: .awaitingApproval,
+                events: [
+                    CoordinatorMissionPlanEvent(
+                        kind: .revised,
+                        timestamp: timestamp,
+                        summary: "Legacy not_required Mission Plan checkpoint migrated to awaiting_approval."
+                    )
+                ],
+                updatedAt: timestamp
+            )
+        )
+        refresh()
+    }
+
+    private func validateCurrentPlanApprovalCheckpoint(_ context: PlanApprovalCheckpointContext) throws {
+        refresh()
+        guard let option = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == context.coordinatorSessionID }),
+              let plan = option.missionPlan
+        else {
+            throw MCPError.invalidParams("Coordinator Mission \(context.coordinatorSessionID.uuidString) is not available in this window.")
+        }
+        guard snapshot.coordinatorRail.coordinatorSessionID == context.coordinatorSessionID else {
+            throw MCPError.invalidParams("Checkpoint target changed before the transaction could be recorded. Refresh Mission status and retry.")
+        }
+        guard plan.id == context.planID else {
+            throw MCPError.invalidParams("Checkpoint rejected because the Mission Plan identity changed. Refresh Mission status and retry.")
+        }
+        guard plan.revision == context.revision else {
+            let current = planApprovalCheckpointInstanceID(
+                coordinatorSessionID: context.coordinatorSessionID,
+                revision: plan.revision
+            )
+            throw MCPError.invalidParams("Checkpoint rejected because the rendered checkpoint instance is stale. Current checkpoint instance is \(current). Refresh Mission status and retry.")
+        }
+        if plan.approvalState == .notRequired {
+            try migrateLegacyNotRequiredPlanCheckpoint(coordinatorSessionID: context.coordinatorSessionID)
+            throw MCPError.invalidParams("Legacy not_required Mission Plan checkpoint was migrated to awaiting_approval with a fresh checkpoint instance. Refresh Mission status and retry.")
+        }
+        guard plan.approvalState == .awaitingApproval else {
+            throw MCPError.invalidParams("Checkpoint rejected because the Mission Plan is \(plan.approvalState.rawValue), not awaiting_approval.")
+        }
+        guard !plan.nodes.isEmpty else {
+            throw MCPError.invalidParams("Checkpoint rejected because the Mission Plan has no nodes to approve.")
+        }
+        guard !plan.status.isTerminal else {
+            throw MCPError.invalidParams("Checkpoint rejected because the Mission is already \(plan.status.rawValue).")
+        }
     }
 
     private func followThroughDecision(
@@ -1299,6 +1861,10 @@ final class CoordinatorModeViewModel: ObservableObject {
         "coordinator:\(coordinatorSessionID.uuidString):plan-approval:r\(revision)"
     }
 
+    private func planRevisionCheckpointInstanceID(coordinatorSessionID: UUID, revision: Int) -> String {
+        "coordinator:\(coordinatorSessionID.uuidString):plan-revision:r\(revision)"
+    }
+
     private func selectFreshCoordinatorRuntimeIfAvailable(
         previousCoordinatorIDs: Set<UUID>,
         workspaceID: UUID?
@@ -1401,8 +1967,8 @@ final class CoordinatorModeViewModel: ObservableObject {
         )
     }
 
-    func activePendingChildInteractionRow() -> CoordinatorModeRow? {
-        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID else { return nil }
+    func activePendingChildInteractionRow(coordinatorSessionID explicitCoordinatorSessionID: UUID? = nil) -> CoordinatorModeRow? {
+        guard let coordinatorSessionID = explicitCoordinatorSessionID ?? snapshot.coordinatorRail.coordinatorSessionID else { return nil }
         return coordinatorModeRowsForRouting(in: snapshot)
             .filter { row in
                 row.parentCoordinator?.sessionID == coordinatorSessionID
@@ -1614,6 +2180,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
         updateRailStatusPresentation(from: nextSnapshot.coordinatorRail)
         updateRailActionPresentation(from: nextSnapshot)
+        syncPostApprovalContinuationStatus(from: nextSnapshot.coordinatorRail.missionPlan)
         syncDialSelections(from: nextSnapshot.coordinatorRail)
         syncRailConversationTranscript(for: nextCoordinatorSessionID)
         mergeMissionLedgerEntries(from: nextSnapshot.coordinatorRail.missionPlan)
@@ -1684,8 +2251,10 @@ final class CoordinatorModeViewModel: ObservableObject {
         ))
     }
 
-    private func coordinatorMissionStopTargetSessionIDs() -> [UUID] {
-        guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID else { return [] }
+    private func coordinatorMissionStopTargetSessionIDs(
+        coordinatorSessionID: UUID,
+        missionPlan: CoordinatorMissionPlan?
+    ) -> [UUID] {
         var ids: [UUID] = []
         func append(_ id: UUID?) {
             guard let id, !ids.contains(id) else { return }
@@ -1717,7 +2286,7 @@ final class CoordinatorModeViewModel: ObservableObject {
             }
         }
 
-        if let missionPlan = snapshot.coordinatorRail.missionPlan {
+        if let missionPlan {
             for workstream in missionPlan.workstreams {
                 for sessionID in workstream.linkedSessionIDs {
                     append(sessionID)
@@ -2101,11 +2670,10 @@ extension AgentModeViewModel {
     @discardableResult
     func refreshCoordinatorModeForChildLifecycleIfVisible() -> Bool {
         let refreshed = visibleCoordinatorModeViewModel?.refreshIfVisible() ?? false
-        guard refreshed else { return false }
         Task { @MainActor [weak self] in
             await self?.evaluateCoordinatorFollowThrough(trigger: .lifecycle)
         }
-        return true
+        return refreshed
     }
 
     @MainActor
@@ -2223,12 +2791,17 @@ extension AgentModeViewModel {
             self?.resolvePendingCoordinatorFollowThroughEvent(event)
         } followThroughEvaluationHandler: { [weak self] coordinatorSessionID in
             guard let self else { return }
-            coordinatorModeViewModel.refreshIfVisible()
+            coordinatorModeViewModel.refresh()
             await evaluateCoordinatorFollowThrough(
                 coordinatorSessionID: coordinatorSessionID,
                 snapshot: coordinatorModeViewModel.snapshot,
                 trigger: .lifecycle
             )
+        } postApprovalContinuationPersistenceBarrier: { [weak self] token in
+            guard let self else {
+                throw MCPError.invalidParams("Coordinator Mission persistence is unavailable.")
+            }
+            try await flushCoordinatorPostApprovalContinuationPersistence(token)
         }
     }
 
@@ -2296,7 +2869,8 @@ extension AgentModeViewModel {
     func submitCoordinatorDirectiveToAgentMode(
         _ text: String,
         coordinatorSessionID: UUID?,
-        forceNewRuntime: Bool = false
+        forceNewRuntime: Bool = false,
+        beforeSubmit: (@MainActor () throws -> Void)? = nil
     ) async -> UserTurnSubmissionResult {
         await submitCoordinatorDirectiveToAgentMode(
             CoordinatorDirectiveSubmission(
@@ -2307,13 +2881,15 @@ extension AgentModeViewModel {
                 coordinatorSessionID: coordinatorSessionID,
                 coordinatorModelID: nil,
                 forceNewRuntime: forceNewRuntime
-            )
+            ),
+            beforeSubmit: beforeSubmit
         )
     }
 
     @MainActor
     func submitCoordinatorDirectiveToAgentMode(
-        _ submission: CoordinatorDirectiveSubmission
+        _ submission: CoordinatorDirectiveSubmission,
+        beforeSubmit: (@MainActor () throws -> Void)? = nil
     ) async -> UserTurnSubmissionResult {
         let runtime: (tabID: UUID, sessionID: UUID)
         do {
@@ -2337,7 +2913,11 @@ extension AgentModeViewModel {
         else {
             return .blocked(message: "Coordinator composer is unavailable for this session state.")
         }
-        let result = await submitUserTurnCreatingSessionIfNeeded(text: submission.providerText, target: target) {
+        let result = await submitUserTurnCreatingSessionIfNeeded(
+            text: submission.providerText,
+            target: target,
+            beforeSubmit: beforeSubmit
+        ) {
             nil
         }
         if case .submitted = result,
@@ -2361,6 +2941,9 @@ extension AgentModeViewModel {
         trigger: CoordinatorAutoModeBoundaryClassifier.Trigger,
         snapshot explicitSnapshot: CoordinatorModeSnapshot? = nil
     ) async {
+        if explicitSnapshot == nil {
+            coordinatorModeViewModel.refresh()
+        }
         let snapshot = explicitSnapshot ?? coordinatorModeViewModel.snapshot
         let rows = coordinatorModeRows(in: snapshot)
         let coordinatorIDs = Set(
@@ -2402,18 +2985,44 @@ extension AgentModeViewModel {
         let session = match.value
         var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
         guard state.originalObjectiveSummary?.isEmpty == false else { return }
-        guard state.missionPlan?.status != .stopped else { return }
+        guard state.missionPlan?.status.isTerminal != true else { return }
+        guard let plan = state.missionPlan,
+              plan.approvalState == .approved,
+              plan.hasDurableApprovalAuthority(coordinatorModeViewModel.durableApprovalAuthorityToken(coordinatorSessionID: coordinatorSessionID))
+        else { return }
         let shouldAutoSubmit = state.missionPlan?.policySnapshot?.defaultPace == .auto
 
         let ownedRows = rows.filter { $0.parentCoordinator?.sessionID == coordinatorSessionID }
+        var shouldPersistObservedPhases = true
         defer {
-            var latest = session.coordinatorFollowThroughState ?? state
-            latest.updateObservedPhases(from: ownedRows)
-            persistCoordinatorFollowThroughState(latest, tabID: tabID, session: session)
+            if shouldPersistObservedPhases {
+                var latest = session.coordinatorFollowThroughState ?? state
+                latest.updateObservedPhases(from: ownedRows)
+                persistCoordinatorFollowThroughState(latest, tabID: tabID, session: session)
+            }
         }
         if state.completeTerminalBoundRunningMissionPlanNodes(from: ownedRows) {
             persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
             coordinatorModeViewModel.refreshIfVisible()
+        }
+
+        if state.postApprovalContinuation?.status == .dispatching {
+            shouldPersistObservedPhases = false
+            return
+        }
+
+        if let continuation = state.postApprovalContinuation,
+           continuation.status.isDeliverable
+        {
+            shouldPersistObservedPhases = false
+            if Self.canAcceptCoordinatorDirective(runState: session.runState) {
+                await submitCoordinatorPostApprovalContinuation(continuation, tabID: tabID, session: session)
+            } else if state.markPostApprovalContinuationDeferred(
+                error: "Coordinator is mid-run. Continue when it reaches an ordinary turn boundary."
+            ) {
+                persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+            }
+            return
         }
 
         if case .gateCleared = trigger {
@@ -2498,6 +3107,48 @@ extension AgentModeViewModel {
         case .hold:
             break
         }
+    }
+
+    @MainActor
+    private func submitCoordinatorPostApprovalContinuation(
+        _ continuation: CoordinatorPostApprovalContinuationRecord,
+        tabID: UUID,
+        session: TabSession
+    ) async {
+        var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        guard state.postApprovalContinuation?.id == continuation.id,
+              state.markPostApprovalContinuationDispatching()
+        else { return }
+        persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+
+        let result = await submitCoordinatorDirectiveToAgentMode(
+            continuation.directiveText,
+            coordinatorSessionID: continuation.coordinatorSessionID,
+            forceNewRuntime: false,
+            beforeSubmit: { [weak self] in
+                guard let self else {
+                    throw MCPError.invalidParams("Coordinator continuation authority is unavailable.")
+                }
+                try validatePostApprovalContinuationEnqueueAuthority(continuation)
+            }
+        )
+        state = session.coordinatorFollowThroughState ?? state
+        switch result {
+        case .submitted:
+            if state.markPostApprovalContinuationDelivered() {
+                persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+            }
+        case let .blocked(message):
+            let changed = if message.localizedCaseInsensitiveContains("mid-run") {
+                state.markPostApprovalContinuationDeferred(error: message)
+            } else {
+                state.markPostApprovalContinuationFailed(error: message)
+            }
+            if changed {
+                persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+            }
+        }
+        coordinatorModeViewModel.refreshIfVisible()
     }
 
     @MainActor
@@ -2621,8 +3272,87 @@ extension AgentModeViewModel {
         scheduleSave(for: tabID)
     }
 
+    @MainActor
+    private func flushCoordinatorPostApprovalContinuationPersistence(
+        _ token: CoordinatorModeViewModel.PostApprovalContinuationPersistenceToken
+    ) async throws {
+        guard let match = sessions.first(where: { _, session in
+            session.activeAgentSessionID == token.coordinatorSessionID && session.isCoordinatorRuntime
+        }) else {
+            throw MCPError.invalidParams("Coordinator Mission persistence failed because the Coordinator session is no longer live.")
+        }
+        let tabID = match.key
+        let session = match.value
+        let minimumGeneration = session.saveRequestGeneration
+        try validatePostApprovalContinuationPersistenceToken(token, in: session)
+        guard await flushSave(for: tabID, requiringMinimumSaveGeneration: minimumGeneration) else {
+            throw MCPError.invalidParams("Coordinator Mission persistence did not durably save the approved continuation before dispatch.")
+        }
+        guard sessions[tabID] === session else {
+            throw MCPError.invalidParams("Coordinator Mission persistence target changed before dispatch.")
+        }
+        try validatePostApprovalContinuationPersistenceToken(token, in: session)
+    }
+
+    @MainActor
+    private func validatePostApprovalContinuationPersistenceToken(
+        _ token: CoordinatorModeViewModel.PostApprovalContinuationPersistenceToken,
+        in session: TabSession
+    ) throws {
+        guard let plan = session.coordinatorFollowThroughState?.missionPlan,
+              let continuation = plan.postApprovalContinuation,
+              continuation.id == token.continuationID,
+              continuation.coordinatorSessionID == token.coordinatorSessionID,
+              continuation.checkpointInstanceID == token.checkpointInstanceID,
+              continuation.planID == token.planID,
+              continuation.planRevision == token.planRevision
+        else {
+            throw MCPError.invalidParams("Post-approval continuation changed before it was durably saved.")
+        }
+        guard plan.id == token.planID,
+              plan.approvalState == .approved,
+              !plan.status.isTerminal
+        else {
+            throw MCPError.invalidParams("Approved Mission Plan authority changed before continuation dispatch.")
+        }
+        guard continuation.status == .pending || continuation.status == .deferred else {
+            throw MCPError.invalidParams("Post-approval continuation is \(continuation.status.rawValue), not pending or deferred.")
+        }
+    }
+
+    @MainActor
+    private func validatePostApprovalContinuationEnqueueAuthority(
+        _ expected: CoordinatorPostApprovalContinuationRecord
+    ) throws {
+        guard let session = sessions.values.first(where: { session in
+            session.activeAgentSessionID == expected.coordinatorSessionID && session.isCoordinatorRuntime
+        }),
+            let plan = session.coordinatorFollowThroughState?.missionPlan,
+            let continuation = plan.postApprovalContinuation
+        else {
+            throw MCPError.invalidParams("Post-approval continuation enqueue rejected because the Coordinator Mission is unavailable.")
+        }
+        guard continuation.id == expected.id,
+              continuation.coordinatorSessionID == expected.coordinatorSessionID,
+              continuation.checkpointInstanceID == expected.checkpointInstanceID,
+              continuation.planID == expected.planID,
+              continuation.planRevision == expected.planRevision
+        else {
+            throw MCPError.invalidParams("Post-approval continuation enqueue rejected because the continuation identity changed.")
+        }
+        guard continuation.status == .dispatching,
+              plan.id == expected.planID,
+              plan.approvalState == .approved,
+              plan.hasDurableApprovalAuthority(coordinatorModeViewModel.durableApprovalAuthorityToken(coordinatorSessionID: expected.coordinatorSessionID)),
+              !plan.status.isTerminal
+        else {
+            throw MCPError.invalidParams("Post-approval continuation enqueue rejected because Mission authority changed before dispatch.")
+        }
+    }
+
     private func isCoordinatorFollowThroughResumeDirective(_ text: String) -> Bool {
         text.contains("<coordinator_follow_through_resume")
+            || text.contains("<coordinator_post_approval_continuation")
     }
 
     @MainActor
@@ -2636,7 +3366,10 @@ extension AgentModeViewModel {
         else { return }
         guard let session = sessions[tabID], session.isCoordinatorRuntime else { return }
         var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
-        guard state.completeSatisfiedCoordinatorOnlyRunningMissionPlanNodes() else { return }
+        guard let coordinatorSessionID = session.activeAgentSessionID,
+              state.missionPlan?.hasDurableApprovalAuthority(coordinatorModeViewModel.durableApprovalAuthorityToken(coordinatorSessionID: coordinatorSessionID)) == true,
+              state.completeSatisfiedCoordinatorOnlyRunningMissionPlanNodes()
+        else { return }
         persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
     }
 

@@ -482,8 +482,8 @@ actions. Consent-granting stale submits (`proceed`, evidence/deepen/critique/sta
 smaller lanes) reject and name the current checkpoint; stale `stop` still succeeds,
 because withdrawing consent is harm-reducing and must not be denied by a fast plan
 revision. Rejected stale grants record no user decision. The SwiftUI click path still
-binds implicitly to the rendered checkpoint and does not yet echo the instance id; that
-narrow render-to-click race is deliberately deferred for a UI follow-up.
+binds implicitly to the rendered checkpoint and does not yet echo the instance id; entry
+19 promotes that narrow render-to-click race into current approval-boundary hardening.
 
 Terminal-state honesty (2026-07-08): a Mission cannot publish `status:"completed"` while
 any planned node remains pending, running, or blocked. Runtime `mission_plan` writes must
@@ -650,3 +650,45 @@ expressible and enforceable. The future shape should look more like
 a versioned user grant, app validation of the generated concrete Mission Plan against that
 grant, scoped tools/budget/writes/evidence/stops, receipt provenance for the grant and
 validation result, and irreversible approvals still resolving to Ask.
+
+## 19. Approval-boundary ownership matrix and atomic transaction (2026-07-10)
+
+This entry closes the current demo approval boundary before implementation resumes.
+Field ownership is not advisory; it is the write-authority matrix:
+
+| Field / transition | Owner | Runtime authority |
+| --- | --- | --- |
+| Mission objective, concrete plan draft, workstreams, nodes, routing/evidence proposals | Coordinator runtime may draft/update before approval | Allowed only for draft/runtime-owned fields, scoped to the owning Mission |
+| `approval_state:"approved"` and plan-approval user decision | App/external user checkpoint path | Never writable by generic `mission_plan` or runtime caller |
+| `approval_state:"not_required"` | No current-demo owner | Fresh writes rejected; legacy decode is non-authorizing recovery state only |
+| Pace and `childAsk` dials, policy-authority overrides, user decisions | App/external user-action parity paths | Runtime cannot mutate or impersonate |
+| Approved objective, workstream/node contract, sandbox/write authority, done criteria | User-approved contract | Runtime cannot materially rewrite; it must request a trusted revision |
+| Runtime progress, Director decisions, evidence, childAsk:auto answers | Coordinator runtime | Allowed only after approval, except the narrow pre-approval planning nodes |
+| Stop / terminal stop decision | App/external user path | Runtime cannot stop on behalf of user; stale Stop is accepted because it withdraws consent |
+| Terminal Mission/node states | Shared merger/app invariant | Runtime updates cannot reopen terminal states |
+
+Atomic approval transaction: every approval-granting click or external submit carries the
+rendered `expected_checkpoint_instance_id`; the app compares it with the current Mission's
+checkpoint, rejects stale/missing IDs with no user decision, appends the deterministic
+user approval decision, transitions the current revision to `approved`, publishes the new
+status/fingerprint, and only then wakes or resumes the Coordinator runtime. There is no
+window where a runtime can observe approval before the user decision and approved contract
+are durable. SwiftUI render-to-click hardening is therefore current approval-boundary work,
+not a deferred UI nicety.
+
+Owning-Mission scoping is part of the same transaction boundary. Runtime callers may write
+only to the Mission proven by caller metadata; selected-Mission fallback, cross-Mission
+checkpoint actions, and unresolved runtime identity all fail closed. Internal non-owner
+Agent Mode workers are a separate caller class from external users and owning Coordinator
+runtimes; ordinary `submit` and `mission_plan` reject them before selected/explicit Mission
+mutation or user-decision creation. `MCPConnectionManager.notRequired` remains connection
+policy only and is not a Mission approval state or waiver.
+
+Post-approval continuation is durable app-owned transport, not a second visible user
+message. Approval records one visible durable user decision/event plus a
+`post_approval_continuation` record. Delivery state is status-visible (`pending`,
+`deferred`, `dispatching`, `delivered`, `failed`, `invalidated`) and fingerprint-moving.
+Busy observations defer without attempt churn; an accepted dispatch is the only path to
+`delivered`; non-busy delivery rejection becomes `failed`. Live S4 must prove deferred ->
+one accepted delivered transition with no failure and no second external `submit`; restart
+exactly-once recovery remains S8.

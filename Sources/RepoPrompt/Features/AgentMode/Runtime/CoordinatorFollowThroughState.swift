@@ -10,7 +10,20 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
     var pendingEvents: [CoordinatorFollowThroughEvent]
     var handledEventIDs: Set<String>
     var lastResume: CoordinatorFollowThroughResumeRecord?
+    var postApprovalContinuation: CoordinatorPostApprovalContinuationRecord?
     var childInteractionResponses: [CoordinatorChildInteractionResponseRecord]
+
+    private enum CodingKeys: String, CodingKey {
+        case originalObjectiveSummary
+        case missionTemplate
+        case missionPlan
+        case observedChildPhases
+        case pendingEvents
+        case handledEventIDs
+        case lastResume
+        case postApprovalContinuation
+        case childInteractionResponses
+    }
 
     init(
         originalObjectiveSummary: String? = nil,
@@ -20,16 +33,38 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         pendingEvents: [CoordinatorFollowThroughEvent] = [],
         handledEventIDs: Set<String> = [],
         lastResume: CoordinatorFollowThroughResumeRecord? = nil,
+        postApprovalContinuation: CoordinatorPostApprovalContinuationRecord? = nil,
         childInteractionResponses: [CoordinatorChildInteractionResponseRecord] = []
     ) {
         self.originalObjectiveSummary = originalObjectiveSummary
         self.missionTemplate = missionTemplate
-        self.missionPlan = missionPlan
+        let resolvedPostApprovalContinuation = postApprovalContinuation ?? missionPlan?.postApprovalContinuation
+        var resolvedMissionPlan = missionPlan
+        if let resolvedPostApprovalContinuation {
+            resolvedMissionPlan?.postApprovalContinuation = resolvedPostApprovalContinuation
+        }
+        self.missionPlan = resolvedMissionPlan
         self.observedChildPhases = observedChildPhases
         self.pendingEvents = pendingEvents
         self.handledEventIDs = handledEventIDs
         self.lastResume = lastResume
+        self.postApprovalContinuation = resolvedPostApprovalContinuation
         self.childInteractionResponses = childInteractionResponses
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            originalObjectiveSummary: container.decodeIfPresent(String.self, forKey: .originalObjectiveSummary),
+            missionTemplate: container.decodeIfPresent(CoordinatorMissionTemplateSummary.self, forKey: .missionTemplate),
+            missionPlan: container.decodeIfPresent(CoordinatorMissionPlan.self, forKey: .missionPlan),
+            observedChildPhases: container.decodeIfPresent([UUID: CoordinatorFollowThroughChildPhase].self, forKey: .observedChildPhases) ?? [:],
+            pendingEvents: container.decodeIfPresent([CoordinatorFollowThroughEvent].self, forKey: .pendingEvents) ?? [],
+            handledEventIDs: container.decodeIfPresent(Set<String>.self, forKey: .handledEventIDs) ?? [],
+            lastResume: container.decodeIfPresent(CoordinatorFollowThroughResumeRecord.self, forKey: .lastResume),
+            postApprovalContinuation: container.decodeIfPresent(CoordinatorPostApprovalContinuationRecord.self, forKey: .postApprovalContinuation),
+            childInteractionResponses: container.decodeIfPresent([CoordinatorChildInteractionResponseRecord].self, forKey: .childInteractionResponses) ?? []
+        )
     }
 
     mutating func rememberObjective(
@@ -46,6 +81,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         pendingEvents.removeAll()
         handledEventIDs.removeAll()
         lastResume = nil
+        postApprovalContinuation = nil
         childInteractionResponses.removeAll()
     }
 
@@ -64,92 +100,177 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
     }
 
     mutating func updateMissionPlan(_ update: CoordinatorMissionPlanUpdate) {
-        let existingByID = Dictionary(uniqueKeysWithValues: (missionPlan?.workstreams ?? []).map { ($0.id, $0) })
+        let existingPlan = missionPlan
+        if let existingPlan, existingPlan.status.isTerminal {
+            missionPlan = existingPlan
+            postApprovalContinuation = existingPlan.postApprovalContinuation
+            return
+        }
+        let existingByID = Dictionary(uniqueKeysWithValues: (existingPlan?.workstreams ?? []).map { ($0.id, $0) })
         let existingByTitle = Dictionary(
-            (missionPlan?.workstreams ?? []).map { ($0.title.normalizedMissionPlanTitleKey, $0) },
+            (existingPlan?.workstreams ?? []).map { ($0.title.normalizedMissionPlanTitleKey, $0) },
             uniquingKeysWith: { first, _ in first }
         )
         let workstreams = mergeWorkstreams(
-            existing: missionPlan?.workstreams ?? [],
+            existing: existingPlan?.workstreams ?? [],
             incoming: update.workstreams,
             replace: update.replaceWorkstreams,
             existingByID: existingByID,
             existingByTitle: existingByTitle
         )
+        let previousPostApprovalContinuation = postApprovalContinuation
         let nodes = mergeNodes(
-            existing: missionPlan?.nodes ?? [],
+            existing: existingPlan?.nodes ?? [],
             incoming: update.nodes,
             replace: update.replaceNodes
         )
         let routingDecisions = mergeRoutingDecisions(
-            existing: missionPlan?.routingDecisions ?? [],
+            existing: existingPlan?.routingDecisions ?? [],
             incoming: update.routingDecisions
         )
         let decisions = mergeDecisionRecords(
-            existing: missionPlan?.decisions ?? [],
+            existing: existingPlan?.decisions ?? [],
             incoming: update.decisions
         )
         let evidence = mergeEvidenceRecords(
-            existing: missionPlan?.evidence ?? [],
+            existing: existingPlan?.evidence ?? [],
             incoming: update.evidence
         )
-        let approvalState = update.approvalState ?? missionPlan?.approvalState ?? .notRequired
-        let requestedStatus = update.status ?? missionPlan?.status ?? .draft
+        let autonomy = mergeAutonomy(
+            existing: existingPlan?.autonomy,
+            policySnapshot: update.policySnapshot ?? existingPlan?.policySnapshot,
+            incoming: update.autonomy
+        )
+        let approvalState = existingPlan?.status.isTerminal == true
+            ? (existingPlan?.approvalState ?? .awaitingApproval)
+            : (update.approvalState ?? existingPlan?.approvalState ?? .awaitingApproval)
+        let requestedStatus = update.status ?? existingPlan?.status ?? .draft
         let status = terminalHonestStatus(
             requestedStatus,
             approvalState: approvalState,
-            nodes: nodes
+            nodes: nodes,
+            existingPlan: existingPlan
+        )
+        let effectiveNodes = existingPlan?.status.isTerminal == true ? (existingPlan?.nodes ?? []) : nodes
+        postApprovalContinuation = resolvedPostApprovalContinuation(
+            update: update,
+            existingPlan: existingPlan,
+            previous: previousPostApprovalContinuation,
+            requestedStatus: requestedStatus,
+            mergedNodes: nodes
         )
 
         missionPlan = CoordinatorMissionPlan(
-            id: missionPlan?.id ?? UUID(),
-            revision: (missionPlan?.revision ?? 0) + 1,
+            id: existingPlan?.id ?? UUID(),
+            revision: (existingPlan?.revision ?? 0) + 1,
             missionKey: update.missionKey?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-                ?? missionPlan?.missionKey,
+                ?? existingPlan?.missionKey,
             objective: update.objective?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-                ?? missionPlan?.objective,
-            predecessorMissionID: update.predecessorMissionID ?? missionPlan?.predecessorMissionID,
+                ?? existingPlan?.objective,
+            predecessorMissionID: update.predecessorMissionID ?? existingPlan?.predecessorMissionID,
             predecessorTitle: update.predecessorTitle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-                ?? missionPlan?.predecessorTitle,
+                ?? existingPlan?.predecessorTitle,
             predecessorSummary: update.predecessorSummary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-                ?? missionPlan?.predecessorSummary,
+                ?? existingPlan?.predecessorSummary,
             status: status,
             approvalState: approvalState,
             template: missionTemplate,
-            shapeSummary: update.shapeSummary ?? missionPlan?.shapeSummary,
-            policySnapshot: update.policySnapshot ?? missionPlan?.policySnapshot,
-            autonomy: update.autonomy ?? missionPlan?.autonomy ?? CoordinatorMissionPolicySnapshot.defaultAutonomy,
+            shapeSummary: update.shapeSummary ?? existingPlan?.shapeSummary,
+            policySnapshot: update.policySnapshot ?? existingPlan?.policySnapshot,
+            autonomy: autonomy,
             workstreams: workstreams,
-            nodes: nodes,
+            nodes: effectiveNodes,
             routingDecisions: routingDecisions,
             decisions: decisions,
             evidence: evidence,
-            events: (missionPlan?.events ?? []) + [
+            events: (existingPlan?.events ?? []) + [
                 CoordinatorMissionPlanEvent(
-                    kind: missionPlan == nil ? .created : .revised,
+                    kind: existingPlan == nil ? .created : .revised,
                     timestamp: update.updatedAt,
                     summary: "Mission plan updated"
                 )
             ] + update.events,
+            postApprovalContinuation: postApprovalContinuation,
             updatedAt: update.updatedAt
         )
         if missionPlan?.status == .stopped {
             pendingEvents.removeAll()
+            invalidatePostApprovalContinuation(reason: "Mission stopped.")
         }
     }
 
     private func terminalHonestStatus(
         _ status: CoordinatorMissionPlanStatus,
         approvalState: CoordinatorMissionPlanApprovalState,
-        nodes: [CoordinatorMissionPlanNode]
+        nodes: [CoordinatorMissionPlanNode],
+        existingPlan: CoordinatorMissionPlan?
     ) -> CoordinatorMissionPlanStatus {
+        if let existingPlan, existingPlan.status.isTerminal {
+            return existingPlan.status
+        }
         guard status == .completed,
               nodes.contains(where: { !$0.status.isTerminal })
         else { return status }
-        if approvalState == .approved || approvalState == .notRequired {
+        if approvalState == .approved {
             return .running
         }
-        return missionPlan?.status == .completed ? .draft : (missionPlan?.status ?? .draft)
+        return existingPlan?.status == .completed ? .draft : (existingPlan?.status ?? .draft)
+    }
+
+    private func resolvedPostApprovalContinuation(
+        update: CoordinatorMissionPlanUpdate,
+        existingPlan: CoordinatorMissionPlan?,
+        previous: CoordinatorPostApprovalContinuationRecord?,
+        requestedStatus: CoordinatorMissionPlanStatus,
+        mergedNodes: [CoordinatorMissionPlanNode]
+    ) -> CoordinatorPostApprovalContinuationRecord? {
+        if let continuation = update.postApprovalContinuation {
+            return continuation
+        }
+        guard let previous else { return nil }
+        guard previous.status.canInvalidate else { return previous }
+        if requestedStatus.isTerminal {
+            return previous.updating(
+                status: .invalidated,
+                error: "Mission became terminal.",
+                at: update.updatedAt,
+                countsAsAttempt: false
+            )
+        }
+        if update.approvalState == .revisionRequested || update.approvalState == .awaitingApproval {
+            return previous.updating(
+                status: .invalidated,
+                error: "Mission approval boundary was revised.",
+                at: update.updatedAt,
+                countsAsAttempt: false
+            )
+        }
+        if missionPlanUpdateIndicatesProgress(update: update, existingPlan: existingPlan, mergedNodes: mergedNodes) {
+            return previous.updating(
+                status: .invalidated,
+                error: "Mission progressed after approval.",
+                at: update.updatedAt,
+                countsAsAttempt: false
+            )
+        }
+        return previous
+    }
+
+    private func missionPlanUpdateIndicatesProgress(
+        update: CoordinatorMissionPlanUpdate,
+        existingPlan: CoordinatorMissionPlan?,
+        mergedNodes: [CoordinatorMissionPlanNode]
+    ) -> Bool {
+        guard existingPlan?.approvalState == .approved else { return false }
+        guard update.nodes != nil else { return false }
+        let existingNodesByID = Dictionary(uniqueKeysWithValues: (existingPlan?.nodes ?? []).map { ($0.id, $0) })
+        return mergedNodes.contains(where: { node in
+            guard let existing = existingNodesByID[node.id] else { return node.status != .pending || node.boundSessionID != nil || node.boundInteractionID != nil }
+            return existing.status != node.status
+                || existing.boundSessionID != node.boundSessionID
+                || existing.boundInteractionID != node.boundInteractionID
+                || existing.completionEvidence != node.completionEvidence
+        })
     }
 
     private func mergeWorkstreams(
@@ -159,10 +280,10 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         existingByID: [UUID: CoordinatorMissionWorkstreamSummary],
         existingByTitle: [String: CoordinatorMissionWorkstreamSummary]
     ) -> [CoordinatorMissionWorkstreamSummary] {
-        if replace {
-            return incoming ?? []
-        }
         guard let incoming else { return existing }
+        if replace {
+            return incoming
+        }
         guard !existing.isEmpty else { return incoming }
 
         let normalizedIncoming = incoming.map { workstream -> CoordinatorMissionWorkstreamSummary in
@@ -226,10 +347,21 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         existing: CoordinatorMissionPlanNode,
         incoming: CoordinatorMissionPlanNode
     ) -> CoordinatorMissionPlanNode {
-        guard existing.status.isTerminal,
-              !incoming.status.isTerminal
-        else { return incoming }
+        guard existing.status.isTerminal else { return incoming }
         return existing
+    }
+
+    private func mergeAutonomy(
+        existing: [String: CoordinatorMissionAutonomyMode]?,
+        policySnapshot: CoordinatorMissionPolicySnapshot?,
+        incoming: [String: CoordinatorMissionAutonomyMode]?
+    ) -> [String: CoordinatorMissionAutonomyMode] {
+        var merged = existing ?? policySnapshot?.autonomy ?? CoordinatorMissionPolicySnapshot.defaultAutonomy
+        guard let incoming else { return merged }
+        for (key, value) in incoming {
+            merged[key] = value
+        }
+        return merged
     }
 
     private func mergeRoutingDecisions(
@@ -238,7 +370,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
     ) -> [CoordinatorMissionRoutingDecision] {
         guard let incoming, !incoming.isEmpty else { return existing }
         var mergedByID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
-        for decision in incoming {
+        for decision in incoming where mergedByID[decision.id] == nil {
             mergedByID[decision.id] = decision
         }
         return mergedByID.values.sorted { lhs, rhs in
@@ -278,6 +410,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
     @discardableResult
     mutating func completeSatisfiedCoordinatorOnlyRunningMissionPlanNodes(at date: Date = Date()) -> Bool {
         guard let plan = missionPlan,
+              plan.approvalState == .approved,
               plan.status != .completed,
               !plan.nodes.isEmpty
         else { return false }
@@ -481,6 +614,89 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         }
     }
 
+    mutating func recordPostApprovalContinuation(_ continuation: CoordinatorPostApprovalContinuationRecord) {
+        setPostApprovalContinuation(continuation)
+    }
+
+    @discardableResult
+    mutating func markPostApprovalContinuationDeferred(error: String?, at date: Date = Date()) -> Bool {
+        guard let continuation = postApprovalContinuation,
+              continuation.status.isDeliverable || continuation.status == .dispatching
+        else { return false }
+        let normalizedError = error?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        if continuation.status == .deferred,
+           continuation.lastError == normalizedError
+        {
+            return false
+        }
+        setPostApprovalContinuation(continuation.updating(
+            status: .deferred,
+            error: normalizedError,
+            at: date,
+            countsAsAttempt: false
+        ))
+        return true
+    }
+
+    @discardableResult
+    mutating func markPostApprovalContinuationDispatching(at date: Date = Date()) -> Bool {
+        guard let continuation = postApprovalContinuation,
+              continuation.status.isDeliverable
+        else { return false }
+        setPostApprovalContinuation(continuation.updating(
+            status: .dispatching,
+            error: nil,
+            at: date,
+            countsAsAttempt: true
+        ))
+        return true
+    }
+
+    @discardableResult
+    mutating func markPostApprovalContinuationDelivered(at date: Date = Date()) -> Bool {
+        guard let continuation = postApprovalContinuation,
+              continuation.status == .dispatching
+        else { return false }
+        setPostApprovalContinuation(continuation.updating(
+            status: .delivered,
+            error: nil,
+            at: date,
+            countsAsAttempt: false
+        ))
+        return true
+    }
+
+    @discardableResult
+    mutating func markPostApprovalContinuationFailed(error: String, at date: Date = Date()) -> Bool {
+        guard let continuation = postApprovalContinuation,
+              continuation.status.isDeliverable || continuation.status == .dispatching
+        else { return false }
+        setPostApprovalContinuation(continuation.updating(
+            status: .failed,
+            error: error,
+            at: date,
+            countsAsAttempt: false
+        ))
+        return true
+    }
+
+    mutating func invalidatePostApprovalContinuation(reason: String, at date: Date = Date()) {
+        guard let continuation = postApprovalContinuation,
+              continuation.status.canInvalidate
+        else { return }
+        setPostApprovalContinuation(continuation.updating(
+            status: .invalidated,
+            error: reason,
+            at: date,
+            countsAsAttempt: false
+        ))
+    }
+
+    private mutating func setPostApprovalContinuation(_ continuation: CoordinatorPostApprovalContinuationRecord?) {
+        postApprovalContinuation = continuation
+        missionPlan?.postApprovalContinuation = continuation
+    }
+
     mutating func enqueue(_ event: CoordinatorFollowThroughEvent) {
         guard !handledEventIDs.contains(event.id),
               !pendingEvents.contains(where: { $0.id == event.id })
@@ -575,6 +791,7 @@ struct CoordinatorMissionPlanUpdate: Equatable {
     var decisions: [CoordinatorMissionDecisionRecord]?
     var evidence: [CoordinatorMissionEvidenceRecord]?
     var events: [CoordinatorMissionPlanEvent]
+    var postApprovalContinuation: CoordinatorPostApprovalContinuationRecord?
     var updatedAt: Date
 
     init(
@@ -596,6 +813,7 @@ struct CoordinatorMissionPlanUpdate: Equatable {
         decisions: [CoordinatorMissionDecisionRecord]? = nil,
         evidence: [CoordinatorMissionEvidenceRecord]? = nil,
         events: [CoordinatorMissionPlanEvent] = [],
+        postApprovalContinuation: CoordinatorPostApprovalContinuationRecord? = nil,
         updatedAt: Date = Date()
     ) {
         self.missionKey = missionKey
@@ -616,6 +834,7 @@ struct CoordinatorMissionPlanUpdate: Equatable {
         self.decisions = decisions
         self.evidence = evidence
         self.events = events
+        self.postApprovalContinuation = postApprovalContinuation
         self.updatedAt = updatedAt
     }
 }
@@ -640,6 +859,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
     var decisions: [CoordinatorMissionDecisionRecord]
     var evidence: [CoordinatorMissionEvidenceRecord]
     var events: [CoordinatorMissionPlanEvent]
+    var postApprovalContinuation: CoordinatorPostApprovalContinuationRecord?
     var updatedAt: Date
 
     init(
@@ -651,7 +871,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         predecessorTitle: String? = nil,
         predecessorSummary: String? = nil,
         status: CoordinatorMissionPlanStatus = .draft,
-        approvalState: CoordinatorMissionPlanApprovalState = .notRequired,
+        approvalState: CoordinatorMissionPlanApprovalState = .awaitingApproval,
         template: CoordinatorMissionTemplateSummary? = nil,
         shapeSummary: CoordinatorMissionShapeSummary? = nil,
         policySnapshot: CoordinatorMissionPolicySnapshot? = nil,
@@ -662,6 +882,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         decisions: [CoordinatorMissionDecisionRecord] = [],
         evidence: [CoordinatorMissionEvidenceRecord] = [],
         events: [CoordinatorMissionPlanEvent] = [],
+        postApprovalContinuation: CoordinatorPostApprovalContinuationRecord? = nil,
         updatedAt: Date = Date()
     ) {
         self.id = id
@@ -686,6 +907,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         self.decisions = decisions
         self.evidence = evidence
         self.events = events
+        self.postApprovalContinuation = postApprovalContinuation
         self.updatedAt = updatedAt
     }
 
@@ -694,8 +916,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         updatedAt = date
         nodes = nodes.map { node in
             var next = node
-            let boundSessionWasCancelled = next.boundSessionID.map(cancelledSessionIDs.contains) ?? false
-            if next.status == .running || next.status == .blocked || boundSessionWasCancelled {
+            if !next.status.isTerminal {
                 next.status = .cancelled
             }
             return next
@@ -739,6 +960,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         case decisions
         case evidence
         case events
+        case postApprovalContinuation
         case updatedAt
     }
 
@@ -765,6 +987,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
             decisions: container.decodeIfPresent([CoordinatorMissionDecisionRecord].self, forKey: .decisions) ?? [],
             evidence: container.decodeIfPresent([CoordinatorMissionEvidenceRecord].self, forKey: .evidence) ?? [],
             events: container.decode([CoordinatorMissionPlanEvent].self, forKey: .events),
+            postApprovalContinuation: container.decodeIfPresent(CoordinatorPostApprovalContinuationRecord.self, forKey: .postApprovalContinuation),
             updatedAt: container.decode(Date.self, forKey: .updatedAt)
         )
     }
@@ -1738,6 +1961,156 @@ enum CoordinatorFollowThroughChildPhase: String, Codable, Equatable {
         } else {
             self.init(statusGroup: row.statusGroup)
         }
+    }
+}
+
+struct CoordinatorPostApprovalContinuationRecord: Codable, Equatable, Identifiable {
+    enum Status: String, Codable, Equatable {
+        case pending
+        case deferred
+        case dispatching
+        case delivered
+        case failed
+        case invalidated
+
+        var isDeliverable: Bool {
+            self == .pending || self == .deferred
+        }
+
+        var canInvalidate: Bool {
+            self == .pending || self == .deferred || self == .dispatching
+        }
+    }
+
+    let id: UUID
+    let coordinatorSessionID: UUID
+    let checkpointInstanceID: String
+    let planID: UUID
+    let planRevision: Int
+    let directiveText: String
+    let status: Status
+    let createdAt: Date
+    let updatedAt: Date
+    let attempts: Int
+    let lastError: String?
+    var durableApprovalAuthorityToken: String?
+
+    init(
+        id: UUID = UUID(),
+        coordinatorSessionID: UUID,
+        checkpointInstanceID: String,
+        planID: UUID,
+        planRevision: Int,
+        directiveText: String,
+        status: Status = .pending,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        attempts: Int = 0,
+        lastError: String? = nil,
+        durableApprovalAuthorityToken: String? = nil
+    ) {
+        self.id = id
+        self.coordinatorSessionID = coordinatorSessionID
+        self.checkpointInstanceID = checkpointInstanceID
+        self.planID = planID
+        self.planRevision = planRevision
+        self.directiveText = directiveText.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.status = status
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.attempts = attempts
+        self.lastError = lastError?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.durableApprovalAuthorityToken = durableApprovalAuthorityToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+
+    var expectedDurableApprovalAuthorityToken: String {
+        CoordinatorMissionApprovalAuthority.token(
+            coordinatorSessionID: coordinatorSessionID,
+            planID: planID,
+            planRevision: planRevision,
+            checkpointInstanceID: checkpointInstanceID,
+            continuationID: id
+        )
+    }
+
+    func confirmingDurableApprovalAuthority() -> Self {
+        Self(
+            id: id,
+            coordinatorSessionID: coordinatorSessionID,
+            checkpointInstanceID: checkpointInstanceID,
+            planID: planID,
+            planRevision: planRevision,
+            directiveText: directiveText,
+            status: status,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            attempts: attempts,
+            lastError: lastError,
+            durableApprovalAuthorityToken: expectedDurableApprovalAuthorityToken
+        )
+    }
+
+    func updating(
+        status: Status,
+        error: String?,
+        at date: Date,
+        countsAsAttempt: Bool = false
+    ) -> Self {
+        Self(
+            id: id,
+            coordinatorSessionID: coordinatorSessionID,
+            checkpointInstanceID: checkpointInstanceID,
+            planID: planID,
+            planRevision: planRevision,
+            directiveText: directiveText,
+            status: status,
+            createdAt: createdAt,
+            updatedAt: date,
+            attempts: countsAsAttempt ? attempts + 1 : attempts,
+            lastError: error,
+            durableApprovalAuthorityToken: durableApprovalAuthorityToken
+        )
+    }
+}
+
+enum CoordinatorMissionApprovalAuthority {
+    static func token(
+        coordinatorSessionID: UUID,
+        planID: UUID,
+        planRevision: Int,
+        checkpointInstanceID: String,
+        continuationID: UUID
+    ) -> String {
+        [
+            "coordinator-durable-approval-v1",
+            coordinatorSessionID.uuidString,
+            planID.uuidString,
+            "r\(planRevision)",
+            checkpointInstanceID,
+            continuationID.uuidString
+        ].joined(separator: ":")
+    }
+}
+
+extension CoordinatorMissionPlan {
+    var expectedDurableApprovalAuthorityToken: String? {
+        guard approvalState == .approved,
+              !status.isTerminal,
+              let continuation = postApprovalContinuation,
+              continuation.planID == id,
+              continuation.status != .failed,
+              continuation.status != .invalidated
+        else { return nil }
+        return continuation.expectedDurableApprovalAuthorityToken
+    }
+
+    func hasDurableApprovalAuthority(_ token: String?) -> Bool {
+        guard let token,
+              let expected = expectedDurableApprovalAuthorityToken,
+              token == expected,
+              postApprovalContinuation?.durableApprovalAuthorityToken == expected
+        else { return false }
+        return true
     }
 }
 

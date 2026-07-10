@@ -325,7 +325,8 @@ struct AgentRunMCPToolService {
             requestedModelID: normalizedString(args["model_id"]),
             requestedWorkflowID: workflow?.id,
             requestedWorkflowName: workflow?.displayName,
-            usesCreatedWorktree: worktreeStartRequest.mode == .create
+            usesCreatedWorktree: worktreeStartRequest.mode == .create,
+            durableApprovalAuthorityToken: agentModeVM.mcpCoordinatorDurableApprovalAuthorityToken(sessionID: spawnParentSessionID)
         )
         if case let .requireApprovedMissionPlan(reason) = coordinatorMissionPlanDecision {
             throw MCPError.invalidParams(reason)

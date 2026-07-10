@@ -108,6 +108,18 @@ The system SHALL allow `approval_state` to advance to `approved` only through th
 - **THEN** it MAY advance the Mission Plan to `approval_state:"approved"`
 - **AND** it SHALL record the corresponding user-actor approval decision before ordinary runtime progress or delegation can proceed.
 
+#### Scenario: Compare-and-swap approval is atomic
+- **WHEN** an approval-granting checkpoint action is submitted from a rendered UI button or external user path
+- **THEN** the action SHALL carry the rendered `expected_checkpoint_instance_id`
+- **AND** the app SHALL compare it with the current Mission checkpoint before recording a decision
+- **AND** stale or missing IDs SHALL reject with no user decision, no approval transition, and no runtime resume
+- **AND** a matching ID SHALL append the user decision, transition the current revision to `approved`, publish the updated status/fingerprint, and only then wake or resume runtime work.
+
+#### Scenario: Runtime checkpoint impersonation is rejected
+- **WHEN** a Coordinator runtime caller attempts to submit a checkpoint action as if it were the user
+- **THEN** the system SHALL reject the action
+- **AND** it SHALL NOT record a user decision, approve the plan, or consume the checkpoint.
+
 #### Scenario: Runtime self-approval is rejected
 - **WHEN** a Coordinator runtime or generic `mission_plan` state update attempts to advance `approval_state` to `approved` without the user checkpoint/continuation path
 - **THEN** the system SHALL reject the update or preserve the prior non-approved state
@@ -118,9 +130,24 @@ The system SHALL allow `approval_state` to advance to `approved` only through th
 - **THEN** the system SHALL reject the update or preserve the prior approval-gated state
 - **AND** legacy persisted `not_required` payloads, if decoded for compatibility, SHALL NOT authorize ordinary runtime progress or delegated starts.
 
+#### Scenario: Legacy not_required recovers to an approval boundary
+- **WHEN** a legacy Mission Plan payload decodes with `approval_state:"not_required"`
+- **THEN** the system SHALL treat it as non-authorizing for delegation, runtime progress, and follow-through resume
+- **AND** it SHALL require a fresh visible approval checkpoint or trusted user revision before ordinary work can proceed.
+
 #### Scenario: Approval downgrade after approval is rejected
 - **WHEN** a later runtime update attempts to downgrade an already approved plan to a weaker approval state
 - **THEN** the system SHALL reject that downgrade or preserve the approved state unless a user-authored revision/stop path explicitly changes the Mission boundary.
+
+#### Scenario: Material contract changes require a trusted revision
+- **WHEN** a runtime update after approval attempts to materially change the approved objective, workstream/node contract, sandbox or write authority, policy authority, or done criteria
+- **THEN** the system SHALL reject the material change or preserve the approved contract
+- **AND** the Coordinator SHALL request a trusted user-visible revision that mints a new revision-bound approval checkpoint.
+
+#### Scenario: Runtime progress updates stay runtime-owned
+- **WHEN** a runtime update after approval records node progress, routing decisions, Director decisions, or evidence within the approved contract
+- **THEN** the system MAY accept the update subject to node, evidence, actor, and terminal-state validators
+- **AND** it SHALL NOT treat that runtime-owned progress as authority to rewrite user-owned approval, policy, pace, `childAsk`, or contract fields.
 
 #### Scenario: Approval traceability is discoverable
 - **WHEN** maintainers verify approval-state transitions

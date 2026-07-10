@@ -28,7 +28,8 @@
 - [x] 3.5 Force unknown autonomy classes and irreversible actions to resolve to Ask.
 - [x] 3.6 Expose external user-action parity for pace via `coordinator_chat set_pace`.
 - [x] 3.7 Expose external user-action parity for `childAsk` via `coordinator_chat set_autonomy`.
-- [x] 3.8 Reject runtime callers from user-action parity operations.
+- [x] 3.8 Reject runtime callers from explicit user-action parity operations (`set_pace` and `set_autonomy`).
+- [x] 3.9 Reject generic runtime Mission Plan updates that attempt to mutate user-owned pace, `childAsk`, approval, or policy-authority fields outside trusted app/user paths.
 
 ## 4. `coordinator_chat` control surface
 
@@ -42,12 +43,15 @@
 - [x] 4.8 Implement `list_missions` lifecycle inventory.
 - [x] 4.9 Implement `stop_mission` and `archive_mission` lifecycle operations.
 - [x] 4.10 Support `coordinator_model_id` on fresh Coordinator Mission starts/submits without changing Coordinator identity or policy semantics.
-- [x] 4.11 Scope runtime caller resolution to the caller Mission and fail closed when unresolved.
+- [x] 4.11 Scope existing runtime caller resolution to the caller Mission and fail closed when unresolved.
+- [x] 4.12 Require every runtime Mission-scoped write, checkpoint action, child answer, and status-changing call to derive or validate the owning Mission and reject selected-Mission fallback, cross-Mission IDs, or unresolved caller metadata.
+- [x] 4.13 Classify MCP callers as external, owning Coordinator runtime, or internal non-owner Agent Mode worker; reject internal non-owner workers from ordinary `submit` and `mission_plan` before selected/explicit Mission mutation or user-decision creation.
 
 ## 5. Approval, delegation, and scheduling guardrails
 
 - [x] 5.1 Require Coordinator parents to record a non-empty Mission Plan before normal delegated child starts.
-- [x] 5.2 Require `approval_state: approved` before normal runtime progress or delegated starts.
+- [x] 5.2 Require `approval_state: approved` before normal delegated starts.
+- [x] 5.11 Require `approval_state: approved` before ordinary runtime progress transitions, app follow-through resume, or child start scheduling; treat legacy `not_required` as non-authorizing.
 - [x] 5.3 Allow only the documented pre-approval planning exceptions for workflow-less read-only probes, Investigate/Deep Plan planning nodes, and design critique nodes.
 - [x] 5.4 Require `mission_node_id` for pre-approval exceptions.
 - [x] 5.5 Require matching workflow metadata for workflow-bearing nodes.
@@ -83,11 +87,13 @@
 - [x] 8.1 Include shape, policy, autonomy, decision counts, evidence counts, recent ledgers, ready nodes, dependency satisfaction, active nodes, liveness warnings, checkpoint metadata, events, and routing decisions in Mission status outputs.
 - [x] 8.2 Include every wait-unblocking ledger/status field in compact fingerprints.
 - [x] 8.3 Expose revision-bound plan approval checkpoint instance IDs in compact status.
-- [x] 8.4 Reject stale approval-granting checkpoint submits while accepting stale Stop.
+- [x] 8.4 Reject stale approval-granting checkpoint submits through the external MCP path while accepting stale Stop.
+- [x] 8.9 Bind SwiftUI rendered checkpoint buttons to the rendered `checkpoint_instance_id` and require compare-and-swap approval before any runtime resume.
 - [x] 8.5 Project terminal receipts from Mission-owned state rather than persisted Markdown.
 - [x] 8.6 Include objective/summary, policy, decision counts, evidence, and reserved Spend section in receipt Markdown.
 - [x] 8.7 Preserve receipt, status, events, decisions, evidence, and lineage after archive.
 - [x] 8.8 Reject archive for non-terminal Missions and reject runtime callers from archive.
+- [x] 8.10 Expose post-approval continuation lifecycle (`pending`, `deferred`, `dispatching`, `delivered`, `failed`, `invalidated`) in Mission status and compact fingerprints.
 
 ## 9. Prompt and tool contract alignment
 
@@ -121,18 +127,24 @@
 
 - [ ] 12.1 Full Coordinator-to-Director technical rename.
 - [ ] 12.2 First-class Coordinator role/runtime extraction and durable role/session-visibility policy.
-- [ ] 12.3 Restart durability scenario for pending checkpoints and pending child questions.
+- [ ] 12.3 Restart durability scenario for pending checkpoints, pending child questions, and pending/deferred/dispatching post-approval continuation recovery.
 - [ ] 12.4 Recovery/chaos scenario for steer-not-respawn and killed/stuck child handling.
 - [ ] 12.5 Custom policy CRUD and save-as-policy flow.
 - [ ] 12.6 Spend capture/enforcement beyond the reserved receipt section.
 - [ ] 12.7 Hierarchical Coordinator-of-Coordinators.
 - [ ] 12.8 Broader UI/Command Center layout reshaping not required by the core runtime baseline.
-- [ ] 12.9 UI render-to-click race hardening.
 - [ ] 12.10 Toggle dedup beyond current idempotent ledger behavior.
 - [ ] 12.11 Worktree garbage collection for Coordinator-created child worktrees.
 - [ ] 12.12 Backend fallback between live child providers/backends.
 - [ ] 12.13 Future bounded preauthorization for unattended Mission starts: express `initialPlanReview: required | preauthorized(policyGrantID)` with versioned user grants, app validation of generated concrete plans, scoped tools/budget/writes/evidence/stops, receipt provenance, and irreversible approvals still Ask.
 
-## 13. Approval-boundary hardening
+## 13. Current approval-boundary hardening
 
-- [ ] 13.1 Close the approval boundary completely: reject fresh generic `mission_plan` self-approval, reject runtime creation/transition to `approval_state:"not_required"`, retain legacy `not_required` decoding only as non-authorizing, and add focused service/ViewModel regressions.
+- [x] 13.1 Caller authority and owning-Mission scoping: fail closed when runtime caller metadata is absent or cross-Mission, reject selected-Mission fallback for runtime writes, and ensure checkpoint/child/update operations are scoped to the caller's owning Mission.
+- [x] 13.2 Atomic rendered-checkpoint approval before runtime resume: require the UI and external submit paths to carry the rendered `expected_checkpoint_instance_id`, compare it with the current Mission Plan revision, append the user decision, transition to `approved`, and only then wake or resume the runtime.
+- [ ] 13.3 Fresh defaults and legacy `not_required` retirement: fresh Missions default to concrete-plan approval required; generic runtime paths cannot create or transition to `approval_state:"not_required"`; legacy decoded `not_required` is recovered as non-authorizing and requires a fresh approval boundary. Focused code paths are patched; full legacy recovery coverage remains to be validated.
+- [x] 13.4 Approved-contract immutability and trusted revision flow: after approval, runtime updates cannot materially rewrite the approved objective, predecessor lineage, policy authority, workstream/node contract, sandbox/write authority, or done criteria without a trusted user-visible revision/checkpoint flow that mints a new revision-bound approval instance; terminal Missions reject late receipt-affecting ledger mutations.
+- [x] 13.5 Narrow preapproval planning-node progress: keep only the documented read-only planning/probe/design-critique exceptions before approval, require node binding and sandbox metadata, and reject other runtime status/node progress until approval.
+- [ ] 13.6 Prompt/schema/projection/test alignment: update tool schemas, runtime prompts, Mission status/projection copy, and focused regression coverage so callers see the expected checkpoint ID, authority split, non-authorizing legacy states, and immutable approved contract. Reopened pending final prompt/schema/status audit after the correction pass.
+- [ ] 13.7 App-owned Stop and terminal monotonicity: keep Stop as an app/external user-owned terminal action, accept stale Stop safely, cancel active work, clear pending asks/follow-through, and prevent terminal Mission/node states from reopening through runtime updates. Core runtime invariants are patched; rendered target-bound Stop still needs focused UI validation.
+- [ ] 13.8 Durable post-approval handoff: persist a post-approval continuation with the approval transaction, await a generation-aware persistence barrier before any runtime dispatch, expose pending/deferred/dispatching/delivered/failed/invalidated state in Mission status, avoid repeated-busy attempt churn, revalidate continuation authority at enqueue time, and deliver one accepted same-process continuation at the next ordinary Coordinator boundary without a second external submit. Reopened after S4 because persistence/authority races require the current correction pass and focused validation before this can close again; restart recovery remains deferred to S8.

@@ -133,7 +133,7 @@ struct CoordinatorAutoModeBoundaryClassifier {
         state: CoordinatorFollowThroughState
     ) -> CoordinatorFollowThroughEvent? {
         guard let plan = state.missionPlan,
-              plan.approvalState == .approved || plan.approvalState == .notRequired,
+              plan.approvalState == .approved,
               plan.status == .approved || plan.status == .running
         else { return nil }
 

@@ -75,7 +75,6 @@ The current baseline deliberately leaves these for later OpenSpec changes:
 - consumer/session list visibility refinements (`add-mcp-coordinator-mode-consumer`, `add-coordinator-list-sessions-visibility`);
 - restart durability for pending checkpoints/questions;
 - recovery/chaos flows for stuck or killed children;
-- UI render-to-click race hardening;
 - toggle dedup beyond current idempotent ledger behavior;
 - worktree garbage collection for Coordinator-created child worktrees;
 - backend fallback between live child providers/backends;

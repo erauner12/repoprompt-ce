@@ -18,6 +18,11 @@ The system SHALL expose current user-visible autonomy controls as Mission-owned 
 - **THEN** the system SHALL mutate the Mission-owned policy/autonomy snapshot, bump visible Mission state, and record a user-actor decision
 - **AND** it SHALL NOT mutate the policy library, resend the original directive, or consume unrelated pending checkpoints.
 
+#### Scenario: Generic runtime updates cannot change user-owned routing
+- **WHEN** a Coordinator runtime or generic `mission_plan` update attempts to change user-owned pace or `childAsk` routing
+- **THEN** the system SHALL reject the change or preserve the previous user-owned value
+- **AND** it SHALL require the app/external `set_pace`, `set_autonomy`, or equivalent UI dial path so the user decision is recorded.
+
 #### Scenario: Edited policy label is honest
 - **WHEN** Mission-owned pace or `childAsk` values differ from the library policy with the same snapshot ID
 - **THEN** visible policy copy SHOULD mark the Mission policy as edited

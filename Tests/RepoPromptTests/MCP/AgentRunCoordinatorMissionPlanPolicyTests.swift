@@ -28,6 +28,12 @@ final class AgentRunCoordinatorMissionPlanPolicyTests: XCTestCase {
         )
     }
 
+    func testCoordinatorBlocksLegacyNotRequiredPlan() {
+        XCTAssertRequiresApprovedMissionPlan(
+            decision(missionPlan: plan(approvalState: .notRequired, nodes: [node()]))
+        )
+    }
+
     func testCoordinatorAllowsPreApprovalDesignCritiqueNodeWithFreshWorktree() {
         let critiqueNodeID = uuid(2)
         XCTAssertEqual(
@@ -291,9 +297,19 @@ final class AgentRunCoordinatorMissionPlanPolicyTests: XCTestCase {
         )
     }
 
+    func testCoordinatorBlocksApprovedPlanWithoutDurableAuthorityToken() {
+        XCTAssertRequiresApprovedMissionPlan(
+            AgentRunCoordinatorMissionPlanPolicy.decision(
+                isCoordinatorParent: true,
+                missionPlan: barePlan(approvalState: .approved, nodes: [node()])
+            )
+        )
+    }
+
     func testCoordinatorAllowsApprovedPlanWithNodes() {
+        let approvedPlan = plan(approvalState: .approved, nodes: [node()])
         XCTAssertEqual(
-            decision(missionPlan: plan(approvalState: .approved, nodes: [node()])),
+            decision(missionPlan: approvedPlan),
             .allow
         )
     }
@@ -400,11 +416,38 @@ final class AgentRunCoordinatorMissionPlanPolicyTests: XCTestCase {
             requestedModelID: requestedModelID,
             requestedWorkflowID: requestedWorkflowID,
             requestedWorkflowName: requestedWorkflowName,
-            usesCreatedWorktree: usesCreatedWorktree
+            usesCreatedWorktree: usesCreatedWorktree,
+            durableApprovalAuthorityToken: missionPlan?.expectedDurableApprovalAuthorityToken
         )
     }
 
     private func plan(
+        approvalState: CoordinatorMissionPlanApprovalState,
+        policySnapshot: CoordinatorMissionPolicySnapshot? = nil,
+        nodes: [CoordinatorMissionPlanNode]
+    ) -> CoordinatorMissionPlan {
+        var plan = barePlan(
+            approvalState: approvalState,
+            policySnapshot: policySnapshot,
+            nodes: nodes
+        )
+        if approvalState == .approved {
+            let coordinatorID = uuid(100)
+            let continuation = CoordinatorPostApprovalContinuationRecord(
+                coordinatorSessionID: coordinatorID,
+                checkpointInstanceID: "coordinator:\(coordinatorID.uuidString):plan-approval:r\(plan.revision)",
+                planID: plan.id,
+                planRevision: plan.revision,
+                directiveText: "Proceed.",
+                status: .delivered,
+                attempts: 1
+            ).confirmingDurableApprovalAuthority()
+            plan.postApprovalContinuation = continuation
+        }
+        return plan
+    }
+
+    private func barePlan(
         approvalState: CoordinatorMissionPlanApprovalState,
         policySnapshot: CoordinatorMissionPolicySnapshot? = nil,
         nodes: [CoordinatorMissionPlanNode]

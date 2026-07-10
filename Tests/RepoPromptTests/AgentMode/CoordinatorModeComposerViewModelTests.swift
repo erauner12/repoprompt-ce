@@ -622,11 +622,11 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(stopRequests.first?.sessionIDs, [coordinatorID, visibleChildID, helperChildID, planBoundChildID])
         let stoppedPlan = try XCTUnwrap(state.missionPlan)
         XCTAssertEqual(stoppedPlan.status, .stopped)
-        XCTAssertEqual(stoppedPlan.nodes.map(\.status), [.cancelled, .cancelled, .pending])
-        XCTAssertEqual(stoppedPlan.routingDecisions.suffix(1).map(\.operation), [.agentRunCancel])
+        XCTAssertEqual(stoppedPlan.nodes.map(\.status), [.cancelled, .cancelled, .cancelled])
+        XCTAssertTrue(stoppedPlan.routingDecisions.suffix(4).allSatisfy { $0.operation == .agentRunCancel })
         XCTAssertEqual(
-            Set(stoppedPlan.routingDecisions.suffix(1).compactMap(\.sessionID)),
-            Set([coordinatorID])
+            Set(stoppedPlan.routingDecisions.suffix(4).compactMap(\.sessionID)),
+            Set([coordinatorID, visibleChildID, helperChildID, planBoundChildID])
         )
         XCTAssertEqual(stoppedPlan.decisions.map(\.label), ["stopped the Mission"])
         XCTAssertEqual(stoppedPlan.decisions.first?.checkpointID, "mission-stop")
@@ -650,6 +650,86 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                     id: nodeID,
                     title: "Implement safely",
                     workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree
+                )
+            ]
+        ))
+        var submissions: [CoordinatorDirectiveSubmission] = []
+        var approvalStatesAtSubmission: [CoordinatorMissionPlanApprovalState?] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            coordinatorRuntime: true,
+                            missionPlan: state.missionPlan
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { submission in
+                approvalStatesAtSubmission.append(state.missionPlan?.approvalState)
+                submissions.append(submission)
+                if submission.visibleText.hasPrefix("Revise the plan") {
+                    state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+                        approvalState: .awaitingApproval,
+                        nodes: state.missionPlan?.nodes,
+                        updatedAt: self.date(30)
+                    ))
+                }
+                return .accepted
+            },
+            missionPlanUpdater: { _, update in
+                state.updateMissionPlan(update)
+            }
+        )
+        viewModel.selectCoordinator(sessionID: coordinatorID)
+
+        XCTAssertTrue(state.missionPlan?.decisions.isEmpty == true)
+        let revisionResult = await viewModel.submitPlanRevisionDirective("Revise the plan: keep this read-only first.")
+        let revisedRevision = try XCTUnwrap(state.missionPlan?.revision)
+        let result = await viewModel.submitCoordinatorContinuation(
+            .proceed,
+            expectedCheckpointInstanceID: "coordinator:\(coordinatorID.uuidString):plan-approval:r\(revisedRevision)"
+        )
+
+        XCTAssertEqual(revisionResult, .accepted)
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(submissions.count, 1)
+        XCTAssertEqual(approvalStatesAtSubmission, [.revisionRequested])
+        let decisions = try XCTUnwrap(state.missionPlan?.decisions)
+        XCTAssertEqual(decisions.map(\.label), ["requested plan revision", "approved the Mission plan"])
+        XCTAssertEqual(decisions.map(\.checkpointID), ["plan-approval", "plan-approval"])
+        XCTAssertEqual(decisions.first?.checkpointInstanceID, "coordinator:\(coordinatorID.uuidString):plan-approval:r3")
+        XCTAssertEqual(decisions.last?.checkpointInstanceID, "coordinator:\(coordinatorID.uuidString):plan-approval:r\(revisedRevision)")
+        XCTAssertEqual(state.missionPlan?.approvalState, .approved)
+        XCTAssertEqual(state.missionPlan?.status, .running)
+        XCTAssertTrue(state.missionPlan?.events.contains(where: { $0.kind == .approved }) == true)
+        XCTAssertEqual(state.missionPlan?.postApprovalContinuation?.status, .deferred)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.missionSummary?.decisions.userCount, 2)
+    }
+
+    func testPlanCheckpointApprovalDoesNotResumeWhenPersistenceFails() async {
+        let coordinatorID = uuid(1)
+        let nodeID = uuid(30)
+        let state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 3,
+            objective: "Ship the plan",
+            approvalState: .awaitingApproval,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Implement safely",
+                    workstreamID: uuid(40),
                     executionPolicy: .freshWorktree
                 )
             ]
@@ -679,29 +759,306 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 submissions.append(submission)
                 return .accepted
             },
+            missionPlanUpdater: { _, _ in
+                throw NSError(domain: "CoordinatorModeComposerViewModelTests", code: 1)
+            }
+        )
+        viewModel.selectCoordinator(sessionID: coordinatorID)
+
+        let result = await viewModel.submitCoordinatorContinuation(
+            .proceed,
+            expectedCheckpointInstanceID: "coordinator:\(coordinatorID.uuidString):plan-approval:r3"
+        )
+
+        guard case let .rejected(message) = result else {
+            XCTFail("Expected rejected result when approval append fails.")
+            return
+        }
+        XCTAssertTrue(message.contains("could not be recorded"), message)
+        XCTAssertTrue(submissions.isEmpty)
+    }
+
+    func testApprovedPlanRevisionTransitionsToRevisionRequestedBeforeDispatch() async {
+        let coordinatorID = uuid(1)
+        let nodeID = uuid(30)
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 7,
+            objective: "Revise after approval",
+            status: .running,
+            approvalState: .approved,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Approved work",
+                    workstreamID: uuid(40),
+                    executionPolicy: .freshWorktree,
+                    status: .pending
+                )
+            ]
+        ))
+        var approvalStatesAtSubmission: [CoordinatorMissionPlanApprovalState?] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            coordinatorRuntime: true,
+                            missionPlan: state.missionPlan
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { _ in
+                approvalStatesAtSubmission.append(state.missionPlan?.approvalState)
+                return .accepted
+            },
             missionPlanUpdater: { _, update in
                 state.updateMissionPlan(update)
             }
         )
         viewModel.selectCoordinator(sessionID: coordinatorID)
 
-        XCTAssertTrue(viewModel.queuePlanRevisionDecisionAfterAcceptedDirective())
-        XCTAssertTrue(state.missionPlan?.decisions.isEmpty == true)
-        let revisionResult = await viewModel.submitCoordinatorDirective("Revise the plan: keep this read-only first.")
-        let result = await viewModel.submitCoordinatorContinuation(.proceed)
+        let result = await viewModel.submitPlanRevisionDirective("Revise the plan: split the approved work.")
 
-        XCTAssertEqual(revisionResult, .accepted)
         XCTAssertEqual(result, .accepted)
-        XCTAssertEqual(submissions.count, 2)
-        let decisions = try XCTUnwrap(state.missionPlan?.decisions)
-        XCTAssertEqual(decisions.map(\.label), ["requested plan revision", "approved the Mission plan"])
-        XCTAssertEqual(decisions.map(\.checkpointID), ["plan-approval", "plan-approval"])
-        XCTAssertEqual(decisions.first?.checkpointInstanceID, "coordinator:\(coordinatorID.uuidString):plan-approval:r3")
-        XCTAssertEqual(decisions.last?.checkpointInstanceID, "coordinator:\(coordinatorID.uuidString):plan-approval:r4")
+        XCTAssertEqual(approvalStatesAtSubmission, [.revisionRequested])
+        XCTAssertEqual(state.missionPlan?.approvalState, .revisionRequested)
+        XCTAssertEqual(state.missionPlan?.decisions.map(\.label), ["requested plan revision"])
+        XCTAssertEqual(state.missionPlan?.decisions.first?.checkpointInstanceID, "coordinator:\(coordinatorID.uuidString):plan-revision:r7")
+    }
+
+    func testPlanCheckpointApprovalPersistsDurableHandoffWithoutImmediateMidRunResume() async throws {
+        let coordinatorID = uuid(1)
+        let nodeID = uuid(30)
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 3,
+            objective: "Ship the plan",
+            approvalState: .awaitingApproval,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Implement safely",
+                    workstreamID: uuid(40),
+                    executionPolicy: .freshWorktree
+                )
+            ]
+        ))
+        var submissions: [CoordinatorDirectiveSubmission] = []
+        var barrierTokens: [CoordinatorModeViewModel.PostApprovalContinuationPersistenceToken] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            coordinatorRuntime: true,
+                            missionPlan: state.missionPlan
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { submission in
+                submissions.append(submission)
+                return .rejected(message: "Coordinator is mid-run. Send directives when it reaches an ordinary turn boundary.")
+            },
+            missionPlanUpdater: { _, update in
+                state.updateMissionPlan(update)
+            },
+            postApprovalContinuationPersistenceBarrier: { token in
+                barrierTokens.append(token)
+                XCTAssertEqual(token.coordinatorSessionID, coordinatorID)
+                XCTAssertEqual(token.checkpointInstanceID, "coordinator:\(coordinatorID.uuidString):plan-approval:r3")
+                XCTAssertEqual(token.planRevision, 3)
+                XCTAssertGreaterThan(state.missionPlan?.revision ?? 0, token.planRevision)
+                XCTAssertEqual(state.missionPlan?.approvalState, .approved)
+                XCTAssertEqual(state.missionPlan?.postApprovalContinuation?.status, .deferred)
+                XCTAssertNil(state.missionPlan?.postApprovalContinuation?.durableApprovalAuthorityToken)
+            }
+        )
+        viewModel.selectCoordinator(sessionID: coordinatorID)
+
+        let result = await viewModel.submitCoordinatorContinuation(
+            .proceed,
+            expectedCheckpointInstanceID: "coordinator:\(coordinatorID.uuidString):plan-approval:r3"
+        )
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(barrierTokens.count, 1)
+        XCTAssertEqual(submissions.count, 0)
         XCTAssertEqual(state.missionPlan?.approvalState, .approved)
         XCTAssertEqual(state.missionPlan?.status, .running)
-        XCTAssertEqual(state.missionPlan?.events.last?.kind, .approved)
-        XCTAssertEqual(viewModel.snapshot.coordinatorRail.missionSummary?.decisions.userCount, 2)
+        XCTAssertEqual(state.missionPlan?.decisions.map(\.label), ["approved the Mission plan"])
+        XCTAssertEqual(state.missionPlan?.decisions.first?.checkpointInstanceID, "coordinator:\(coordinatorID.uuidString):plan-approval:r3")
+        let handoff = try XCTUnwrap(state.missionPlan?.postApprovalContinuation)
+        XCTAssertEqual(handoff.checkpointInstanceID, "coordinator:\(coordinatorID.uuidString):plan-approval:r3")
+        XCTAssertEqual(handoff.status, .deferred)
+        XCTAssertEqual(handoff.attempts, 0)
+        XCTAssertEqual(handoff.durableApprovalAuthorityToken, handoff.expectedDurableApprovalAuthorityToken)
+        XCTAssertEqual(viewModel.durableApprovalAuthorityToken(coordinatorSessionID: coordinatorID), handoff.expectedDurableApprovalAuthorityToken)
+        XCTAssertTrue(handoff.directiveText.contains("coordinator_post_approval_continuation"))
+        XCTAssertTrue(handoff.lastError?.contains("queued for the next ordinary turn boundary") == true)
+        XCTAssertEqual(
+            viewModel.postApprovalContinuationStatus,
+            .deferred(checkpointInstanceID: "coordinator:\(coordinatorID.uuidString):plan-approval:r3")
+        )
+        XCTAssertTrue(viewModel.composerNotice?.contains("will be delivered once") == true)
+    }
+
+    func testPlanCheckpointApprovalFailsClosedWhenDurableBarrierFails() async throws {
+        let coordinatorID = uuid(1)
+        let nodeID = uuid(30)
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 3,
+            objective: "Ship the plan",
+            approvalState: .awaitingApproval,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Implement safely",
+                    workstreamID: uuid(40),
+                    executionPolicy: .freshWorktree
+                )
+            ]
+        ))
+        var submissions: [CoordinatorDirectiveSubmission] = []
+        var evaluations: [UUID] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            coordinatorRuntime: true,
+                            missionPlan: state.missionPlan
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { submission in
+                submissions.append(submission)
+                return .accepted
+            },
+            missionPlanUpdater: { _, update in
+                state.updateMissionPlan(update)
+            },
+            followThroughEvaluationHandler: { sessionID in
+                evaluations.append(sessionID)
+            },
+            postApprovalContinuationPersistenceBarrier: { token in
+                XCTAssertEqual(token.coordinatorSessionID, coordinatorID)
+                XCTAssertEqual(token.checkpointInstanceID, "coordinator:\(coordinatorID.uuidString):plan-approval:r3")
+                throw NSError(domain: "CoordinatorModeComposerViewModelTests", code: 99)
+            }
+        )
+        viewModel.selectCoordinator(sessionID: coordinatorID)
+
+        let result = await viewModel.submitCoordinatorContinuation(
+            .proceed,
+            expectedCheckpointInstanceID: "coordinator:\(coordinatorID.uuidString):plan-approval:r3"
+        )
+
+        guard case let .rejected(message) = result else {
+            XCTFail("Expected rejected result when the durable persistence barrier fails.")
+            return
+        }
+        XCTAssertTrue(message.contains("durable continuation persistence failed"), message)
+        XCTAssertTrue(submissions.isEmpty)
+        XCTAssertTrue(evaluations.isEmpty)
+        let continuation = try XCTUnwrap(state.missionPlan?.postApprovalContinuation)
+        XCTAssertEqual(continuation.status, .failed)
+        XCTAssertEqual(continuation.attempts, 0)
+        XCTAssertNil(continuation.durableApprovalAuthorityToken)
+        XCTAssertNil(viewModel.durableApprovalAuthorityToken(coordinatorSessionID: coordinatorID))
+        XCTAssertTrue(continuation.lastError?.contains("durable continuation persistence failed") == true)
+    }
+
+    func testStopMissionDoesNotCancelWhenPersistenceFails() async {
+        let coordinatorID = uuid(1)
+        let nodeID = uuid(30)
+        let state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 3,
+            objective: "Stop safely",
+            status: .running,
+            approvalState: .approved,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Running child",
+                    workstreamID: uuid(40),
+                    executionPolicy: .freshReadOnlyChild,
+                    status: .running,
+                    boundSessionID: uuid(2)
+                )
+            ]
+        ))
+        var stopRequests: [CoordinatorMissionStopRequest] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .running,
+                            coordinatorRuntime: true,
+                            missionPlan: state.missionPlan
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            missionPlanUpdater: { _, _ in
+                throw NSError(domain: "CoordinatorModeComposerViewModelTests", code: 2)
+            },
+            missionStopper: { request in
+                stopRequests.append(request)
+                return CoordinatorMissionStopResult(
+                    requestedSessionIDs: request.sessionIDs,
+                    cancelledSessionIDs: request.sessionIDs,
+                    skippedSessionIDs: []
+                )
+            }
+        )
+        viewModel.selectCoordinator(sessionID: coordinatorID)
+
+        let result = await viewModel.stopCoordinatorMission(targetMissionID: coordinatorID)
+
+        guard case let .rejected(message) = result else {
+            XCTFail("Expected stop rejection when terminal state cannot persist.")
+            return
+        }
+        XCTAssertTrue(message.contains("could not be recorded"), message)
+        XCTAssertTrue(stopRequests.isEmpty)
     }
 
     func testFollowThroughAndChildAnswersRecordUserDecisionsButCoordinatorOwnedPendingInteractionsDoNot() async throws {
@@ -1046,42 +1403,64 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.composerNotice)
     }
 
-    func testProceedContinuationSubmitsVisibleCoordinatorMessage() async {
+    func testProceedContinuationQueuesDurableHandoffWithoutVisibleCoordinatorMessage() async {
         let coordinatorID = uuid(1)
         let coordinatorTab = uuid(101)
-        let input = input(
-            live: [
-                live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(20), state: .idle, isMCP: true)
-            ],
-            demoCoordinatorIDs: [coordinatorID]
-        )
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 2,
+            objective: "Approve visible continuation",
+            approvalState: .awaitingApproval,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: uuid(30),
+                    title: "Continue",
+                    workstreamID: uuid(40),
+                    executionPolicy: .coordinatorOnly
+                )
+            ]
+        ))
         var submissions: [(text: String, sessionID: UUID?, forceNewRuntime: Bool)] = []
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in
-                var next = input
-                next.sortMode = sortMode
-                if let selectedCoordinatorID {
-                    next.selectedCoordinatorID = selectedCoordinatorID
-                }
-                return next
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: coordinatorTab,
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            isMCP: true,
+                            missionPlan: state.missionPlan
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
             },
             dashboardVisibilityHandler: { _ in },
             directiveSubmitter: { submission in
                 submissions.append((submission.providerText, submission.coordinatorSessionID, submission.forceNewRuntime))
                 return .accepted
+            },
+            missionPlanUpdater: { _, update in
+                state.updateMissionPlan(update)
             }
         )
         viewModel.refresh()
 
-        let result = await viewModel.submitCoordinatorContinuation(.proceed)
+        let result = await viewModel.submitCoordinatorContinuation(
+            .proceed,
+            expectedCheckpointInstanceID: "coordinator:\(coordinatorID.uuidString):plan-approval:r2"
+        )
 
         XCTAssertEqual(result, .accepted)
-        XCTAssertEqual(submissions.count, 1)
-        XCTAssertEqual(submissions.first?.text, CoordinatorModeViewModel.ContinuationAction.proceed.directiveText)
-        XCTAssertEqual(submissions.first?.sessionID, coordinatorID)
-        XCTAssertEqual(submissions.first?.forceNewRuntime, false)
-        XCTAssertEqual(viewModel.railTranscriptEntries.map(\.role), [.user])
-        XCTAssertEqual(viewModel.railTranscriptEntries.first?.text, CoordinatorModeViewModel.ContinuationAction.proceed.directiveText)
+        XCTAssertTrue(submissions.isEmpty)
+        XCTAssertEqual(state.missionPlan?.postApprovalContinuation?.status, .deferred)
+        XCTAssertEqual(state.missionPlan?.postApprovalContinuation?.attempts, 0)
+        XCTAssertNotNil(state.missionPlan?.postApprovalContinuation?.durableApprovalAuthorityToken)
+        XCTAssertTrue(viewModel.composerNotice?.contains("queued and will be delivered once") == true)
     }
 
     func testLightweightDiscoveryContinuationSubmitsDiscoveryDirective() async throws {
@@ -1142,9 +1521,30 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
     private func submittedContinuationText(_ action: CoordinatorModeViewModel.ContinuationAction) async throws -> String {
         let coordinatorID = uuid(1)
         let coordinatorTab = uuid(101)
+        let plan = CoordinatorMissionPlan(
+            revision: 2,
+            objective: "Approve continuation action",
+            approvalState: .awaitingApproval,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: uuid(30),
+                    title: "Continue",
+                    workstreamID: uuid(40),
+                    executionPolicy: .coordinatorOnly
+                )
+            ]
+        )
         let input = input(
             live: [
-                live(id: coordinatorID, tab: coordinatorTab, title: "Coordinator", updatedAt: date(20), state: .idle, isMCP: true)
+                live(
+                    id: coordinatorID,
+                    tab: coordinatorTab,
+                    title: "Coordinator",
+                    updatedAt: date(20),
+                    state: .idle,
+                    isMCP: true,
+                    missionPlan: plan
+                )
             ],
             demoCoordinatorIDs: [coordinatorID]
         )
@@ -1166,7 +1566,10 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         )
         viewModel.refresh()
 
-        let result = await viewModel.submitCoordinatorContinuation(action)
+        let result = await viewModel.submitCoordinatorContinuation(
+            action,
+            expectedCheckpointInstanceID: "coordinator:\(coordinatorID.uuidString):plan-approval:r2"
+        )
 
         XCTAssertEqual(result, .accepted)
         let text = try XCTUnwrap(submissions.first?.providerText)

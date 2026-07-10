@@ -65,7 +65,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 events.append("submit:\(message)")
                 return .accepted
             },
-            pendingChild: {
+            pendingChild: { _ in
                 XCTFail("start_mission should not route to an existing pending child interaction")
                 return Self.pendingChildRow(parentCoordinatorID: coordinatorID)
             },
@@ -263,11 +263,12 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                         coordinatorIDs.append(freshID)
                     }
                 },
-                stopSelectedCoordinatorMission: { .accepted },
+                stopCoordinatorMission: { _ in .accepted },
                 submitDirective: { _ in .accepted },
-                submitContinuation: { _ in .accepted },
-                activePendingChildInteractionRow: { nil },
+                submitContinuation: { _, _ in .accepted },
+                activePendingChildInteractionRow: { _ in nil },
                 submitPendingChildInteractionResponse: { _, _, _ in .accepted },
+                durableApprovalAuthorityToken: { missionPlans[$0]?.expectedDurableApprovalAuthorityToken },
                 updateMissionPlan: { sessionID, update in
                     updatedSessionIDs.append(sessionID)
                     var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
@@ -442,6 +443,135 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         }
     }
 
+    func testSubmitRejectsInternalNonOwnerWorkerBeforeSelectionOrUserDecision() async throws {
+        let selectedID = UUID()
+        let explicitID = UUID()
+        var didSelect = false
+        var didSubmit = false
+        var didInspectPendingChild = false
+        let service = makeService(
+            coordinatorIDs: [selectedID, explicitID],
+            selectedID: { selectedID },
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex-worker",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .pair
+                )
+            },
+            select: { _ in didSelect = true },
+            submit: { _ in
+                didSubmit = true
+                return .accepted
+            },
+            pendingChild: { _ in
+                didInspectPendingChild = true
+                return nil
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("submit"),
+                "coordinator_session_id": .string(explicitID.uuidString),
+                "message": .string("Pretend to be the user.")
+            ])
+            XCTFail("Internal non-owner Agent Mode workers must not submit Coordinator user turns.")
+        } catch {
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("Internal non-owner Agent Mode workers cannot submit"), message)
+            XCTAssertFalse(didSelect)
+            XCTAssertFalse(didSubmit)
+            XCTAssertFalse(didInspectPendingChild)
+        }
+    }
+
+    func testSubmitRejectsHeadlessDiscoverRunBeforeSelectionOrUserDecision() async throws {
+        let selectedID = UUID()
+        let explicitID = UUID()
+        var didSelect = false
+        var didSubmit = false
+        var didInspectPendingChild = false
+        let service = makeService(
+            coordinatorIDs: [selectedID, explicitID],
+            selectedID: { selectedID },
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "context-builder",
+                    windowID: 1,
+                    runPurpose: .discoverRun,
+                    taskLabelKind: nil
+                )
+            },
+            select: { _ in didSelect = true },
+            submit: { _ in
+                didSubmit = true
+                return .accepted
+            },
+            pendingChild: { _ in
+                didInspectPendingChild = true
+                return nil
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("submit"),
+                "coordinator_session_id": .string(explicitID.uuidString),
+                "message": .string("Pretend to be the user from discovery.")
+            ])
+            XCTFail("Headless discoverRun callers must not submit Coordinator user turns.")
+        } catch {
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("Internal non-owner Agent Mode workers cannot submit"), message)
+            XCTAssertFalse(didSelect)
+            XCTAssertFalse(didSubmit)
+            XCTAssertFalse(didInspectPendingChild)
+        }
+    }
+
+    func testMissionPlanRejectsHeadlessDiscoverRunBeforeSelectedFallback() async throws {
+        let selectedCoordinatorID = UUID()
+        var didUpdate = false
+        let service = makeService(
+            coordinatorIDs: [selectedCoordinatorID],
+            selectedID: selectedCoordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "context-builder",
+                    windowID: 1,
+                    runPurpose: .discoverRun,
+                    taskLabelKind: nil
+                )
+            },
+            missionPlans: {
+                [selectedCoordinatorID: CoordinatorMissionPlan(
+                    missionKey: "selected",
+                    objective: "Selected Mission",
+                    status: .running,
+                    approvalState: .approved
+                )]
+            },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "objective": .string("Should not land from discovery")
+            ])
+            XCTFail("Headless discoverRun callers must not mutate selected Mission Plans.")
+        } catch {
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("Internal non-owner Agent Mode workers cannot mutate"), message)
+            XCTAssertFalse(didUpdate)
+        }
+    }
+
     func testSetPaceRoutesThroughExternalUserActionPath() async throws {
         let coordinatorID = UUID()
         var missionPlans: [UUID: CoordinatorMissionPlan] = [
@@ -457,7 +587,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
-            pendingChild: {
+            pendingChild: { _ in
                 XCTFail("set_pace should not route through pending child interactions")
                 return Self.pendingChildRow(parentCoordinatorID: coordinatorID)
             },
@@ -594,7 +724,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
-            pendingChild: {
+            pendingChild: { _ in
                 XCTFail("set_autonomy should not route through pending child interactions")
                 return Self.pendingChildRow(parentCoordinatorID: coordinatorID)
             },
@@ -1059,8 +1189,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             coordinatorIDs: [firstID, secondID],
             selectedID: { selectedID },
             select: { selectedID = $0 ?? firstID },
-            stopMission: {
-                stoppedSelection = selectedID
+            stopMission: { targetID in
+                stoppedSelection = targetID
                 return .accepted
             }
         )
@@ -1071,11 +1201,12 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         ])
         let object = try XCTUnwrap(response.objectValue)
 
-        XCTAssertEqual(selectedID, secondID)
+        XCTAssertEqual(selectedID, firstID)
         XCTAssertEqual(stoppedSelection, secondID)
         XCTAssertEqual(object["accepted"]?.boolValue, true)
         XCTAssertEqual(object["routed_to"]?.stringValue, "coordinator_stop")
-        XCTAssertEqual(object["selected_coordinator_session_id"]?.stringValue, secondID.uuidString)
+        XCTAssertEqual(object["coordinator_session_id"]?.stringValue, secondID.uuidString)
+        XCTAssertEqual(object["selected_coordinator_session_id"]?.stringValue, firstID.uuidString)
     }
 
     func testMissionPlanUpdatesStateWithoutSubmittingChatTurn() async throws {
@@ -1099,7 +1230,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     predecessorTitle: update.predecessorTitle,
                     predecessorSummary: update.predecessorSummary,
                     status: update.status ?? .draft,
-                    approvalState: update.approvalState ?? .notRequired,
+                    approvalState: update.approvalState ?? .awaitingApproval,
                     workstreams: update.workstreams ?? [],
                     nodes: update.nodes ?? [],
                     events: update.events,
@@ -1154,15 +1285,57 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(workstream["primary_session_id"]?.stringValue, childID.uuidString)
     }
 
+    func testMissionPlanRejectsInternalNonOwnerWorkerBeforeSelectedFallback() async throws {
+        let selectedCoordinatorID = UUID()
+        var didUpdate = false
+        let service = makeService(
+            coordinatorIDs: [selectedCoordinatorID],
+            selectedID: selectedCoordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex-worker",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .pair
+                )
+            },
+            missionPlans: {
+                [selectedCoordinatorID: CoordinatorMissionPlan(
+                    missionKey: "selected",
+                    objective: "Selected Mission",
+                    status: .running,
+                    approvalState: .approved
+                )]
+            },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "objective": .string("Should not land on selected Mission")
+            ])
+            XCTFail("Internal non-owner Agent Mode workers must not mutate selected Mission Plans.")
+        } catch {
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("Internal non-owner Agent Mode workers cannot mutate"), message)
+            XCTAssertFalse(didUpdate)
+        }
+    }
+
     func testMissionPlanRuntimeCallerDefaultsToCallerMissionNotSelectedMission() async throws {
         let callerCoordinatorID = UUID()
         let selectedCoordinatorID = UUID()
         var missionPlans: [UUID: CoordinatorMissionPlan] = [
-            callerCoordinatorID: CoordinatorMissionPlan(
-                missionKey: "caller",
-                objective: "Caller Mission",
-                status: .running,
-                approvalState: .approved
+            callerCoordinatorID: Self.durablyApprovedPlan(
+                CoordinatorMissionPlan(
+                    missionKey: "caller",
+                    objective: "Caller Mission",
+                    status: .running,
+                    approvalState: .approved
+                ),
+                coordinatorID: callerCoordinatorID
             ),
             selectedCoordinatorID: CoordinatorMissionPlan(
                 missionKey: "selected",
@@ -1194,21 +1367,78 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
                 state.updateMissionPlan(update)
                 missionPlans[sessionID] = state.missionPlan
-            }
+            },
+            durableApprovalAuthorityToken: { missionPlans[$0]?.expectedDurableApprovalAuthorityToken }
         )
 
         let response = try await service.execute(args: [
             "op": .string("mission_plan"),
-            "objective": .string("Caller Mission updated")
+            "routing_decisions": .array([
+                .object([
+                    "decision": .string("hold_for_user"),
+                    "operation": .string("coordinator_hold"),
+                    "reason": .string("Caller scoped hold.")
+                ])
+            ])
         ])
         let object = try XCTUnwrap(response.objectValue)
         let plan = try XCTUnwrap(object["mission_plan"]?.objectValue)
 
         XCTAssertEqual(updatedIDs, [callerCoordinatorID])
         XCTAssertEqual(plan["mission_key"]?.stringValue, "caller")
-        XCTAssertEqual(plan["objective"]?.stringValue, "Caller Mission updated")
-        XCTAssertEqual(missionPlans[callerCoordinatorID]?.objective, "Caller Mission updated")
+        XCTAssertEqual(plan["objective"]?.stringValue, "Caller Mission")
+        XCTAssertEqual(plan["routing_decisions"]?.arrayValue?.count, 1)
+        XCTAssertEqual(missionPlans[callerCoordinatorID]?.routingDecisions.count, 1)
         XCTAssertEqual(missionPlans[selectedCoordinatorID]?.objective, "Selected Mission")
+    }
+
+    func testMissionPlanRuntimeCallerRequiresDurableApprovalAuthorityForProgress() async throws {
+        let coordinatorID = UUID()
+        var didUpdate = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex-runtime",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            resolveRuntimeCoordinatorSessionID: { metadata in
+                metadata.isCoordinatorRuntime ? coordinatorID : nil
+            },
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    missionKey: "caller",
+                    objective: "Caller Mission",
+                    status: .running,
+                    approvalState: .approved
+                )]
+            },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "routing_decisions": .array([
+                    .object([
+                        "decision": .string("hold_for_user"),
+                        "operation": .string("coordinator_hold"),
+                        "reason": .string("Should require durable authority.")
+                    ])
+                ])
+            ])
+            XCTFail("Approved-but-not-durable runtime progress must fail closed.")
+        } catch {
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("durable approval authority token"), message)
+            XCTAssertFalse(didUpdate)
+        }
     }
 
     func testMissionPlanRuntimeCallerWithoutResolvedMissionDoesNotUseSelectedFallback() async throws {
@@ -1250,6 +1480,49 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             XCTAssertFalse(didUpdate)
             let message = String(describing: error)
             XCTAssertTrue(message.contains("cannot resolve the caller Mission"), message)
+        }
+    }
+
+    func testMissionPlanRuntimeCallerRejectsExplicitCrossMissionID() async throws {
+        let callerCoordinatorID = UUID()
+        let otherCoordinatorID = UUID()
+        var didUpdate = false
+        let service = makeService(
+            coordinatorIDs: [callerCoordinatorID, otherCoordinatorID],
+            selectedID: callerCoordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex-runtime",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            resolveRuntimeCoordinatorSessionID: { metadata in
+                metadata.isCoordinatorRuntime ? callerCoordinatorID : nil
+            },
+            missionPlans: {
+                [
+                    callerCoordinatorID: CoordinatorMissionPlan(objective: "Caller", status: .running, approvalState: .approved),
+                    otherCoordinatorID: CoordinatorMissionPlan(objective: "Other", status: .running, approvalState: .approved)
+                ]
+            },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "coordinator_session_id": .string(otherCoordinatorID.uuidString),
+                "objective": .string("Should not cross-write")
+            ])
+            XCTFail("Coordinator runtime mission_plan must reject explicit cross-Mission IDs.")
+        } catch {
+            XCTAssertFalse(didUpdate)
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("cannot write or inspect another Coordinator Mission"), message)
         }
     }
 
@@ -1329,7 +1602,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         _ = try await service.execute(args: [
             "op": .string("mission_plan"),
             "objective": .string("Ship next PR"),
-            "approval_state": .string("approved"),
+            "approval_state": .string("awaiting_approval"),
             "workstreams": .array([
                 .object([
                     "id": .string(staleWorkstreamID.uuidString),
@@ -1346,7 +1619,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     "title": .string("Old platform smoke node"),
                     "workstream_id": .string(staleWorkstreamID.uuidString),
                     "execution_policy": .string("fresh_worktree"),
-                    "status": .string("blocked")
+                    "status": .string("pending")
                 ])
             ])
         ])
@@ -1392,7 +1665,39 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let workstreamID = UUID()
         let nodeID = UUID()
         let childID = UUID()
-        var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
+        let workflow = CoordinatorMissionPlanNodeWorkflowHint(
+            id: "builtin-orchestrate",
+            name: "Orchestrate",
+            iconName: "arrow.triangle.branch",
+            accentColorHex: "#30D158"
+        )
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [
+            coordinatorID: CoordinatorMissionPlan(
+                objective: "Ship DAG",
+                status: .running,
+                approvalState: .approved,
+                workstreams: [
+                    CoordinatorMissionWorkstreamSummary(
+                        id: workstreamID,
+                        title: "Implement",
+                        purpose: "Make the docs change.",
+                        defaultPolicy: .freshWorktree,
+                        worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+                    )
+                ],
+                nodes: [
+                    CoordinatorMissionPlanNode(
+                        id: nodeID,
+                        title: "Docs edit",
+                        workflowHint: workflow,
+                        completionEvidence: "README wording is updated and tests pass.",
+                        workstreamID: workstreamID,
+                        executionPolicy: .freshWorktree,
+                        status: .pending
+                    )
+                ]
+            )
+        ]
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
@@ -1455,9 +1760,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(node["workstream_id"]?.stringValue, workstreamID.uuidString)
         XCTAssertEqual(node["workflow_name"]?.stringValue, "Orchestrate")
         XCTAssertEqual(node["completion_evidence"]?.stringValue, "README wording is updated and tests pass.")
-        let workflow = try XCTUnwrap(node["workflow"]?.objectValue)
-        XCTAssertEqual(workflow["id"]?.stringValue, "builtin-orchestrate")
-        XCTAssertEqual(workflow["icon_name"]?.stringValue, "arrow.triangle.branch")
+        let workflowValue = try XCTUnwrap(node["workflow"]?.objectValue)
+        XCTAssertEqual(workflowValue["id"]?.stringValue, "builtin-orchestrate")
+        XCTAssertEqual(workflowValue["icon_name"]?.stringValue, "arrow.triangle.branch")
         XCTAssertEqual(node["bound_session_id"]?.stringValue, childID.uuidString)
         let events = try XCTUnwrap(plan["events"]?.arrayValue)
         XCTAssertEqual(events.last?.objectValue?["kind"]?.stringValue, "node_started")
@@ -1622,11 +1927,407 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         }
     }
 
-    func testMissionPlanAllowsRuntimeProgressWhenApprovalIsNotRequired() async throws {
+    func testMissionPlanRejectsNotRequiredApprovalWaiver() async throws {
+        let coordinatorID = UUID()
+        var updateCalled = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            updateMissionPlan: { _, _ in updateCalled = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "objective": .string("Legacy no-approval mission."),
+                "approval_state": .string("not_required")
+            ])
+            XCTFail("mission_plan must not create or transition to approval_state not_required.")
+        } catch {
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("cannot set approval_state to not_required"), message)
+        }
+        XCTAssertFalse(updateCalled)
+    }
+
+    func testMissionPlanRejectsApprovedObjectiveRewrite() async throws {
         let coordinatorID = UUID()
         let workstreamID = UUID()
         let nodeID = UUID()
-        var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
+        var didUpdate = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: {
+                [coordinatorID: Self.approvedContractPlan(
+                    objective: "Approved objective.",
+                    workstreamID: workstreamID,
+                    nodeID: nodeID
+                )]
+            },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "objective": .string("Silently rewritten objective")
+            ])
+            XCTFail("Approved Mission objective must be immutable through mission_plan.")
+        } catch {
+            XCTAssertFalse(didUpdate)
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("approved contract field objective"), message)
+            XCTAssertTrue(message.contains("trusted user-visible plan revision"), message)
+        }
+    }
+
+    func testMissionPlanRejectsApprovedPredecessorLineageRewrite() async throws {
+        let coordinatorID = UUID()
+        let predecessorID = UUID()
+        let plan = CoordinatorMissionPlan(
+            objective: "Approved lineage",
+            predecessorMissionID: predecessorID,
+            predecessorTitle: "Original predecessor",
+            predecessorSummary: "Original summary",
+            status: .running,
+            approvalState: .approved
+        )
+        var didUpdate = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "predecessor_title": .string("Rewritten predecessor")
+            ])
+            XCTFail("Approved predecessor lineage must be immutable through mission_plan.")
+        } catch {
+            XCTAssertFalse(didUpdate)
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("predecessor_title"), message)
+            XCTAssertTrue(message.contains("approved contract"), message)
+        }
+    }
+
+    func testMissionPlanRejectsApprovedNodeContractRewrite() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        var didUpdate = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: {
+                [coordinatorID: Self.approvedContractPlan(
+                    objective: "Approved objective.",
+                    workstreamID: workstreamID,
+                    nodeID: nodeID
+                )]
+            },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "nodes": .array([
+                    .object([
+                        "id": .string(nodeID.uuidString),
+                        "title": .string("Implement approved work"),
+                        "workstream_id": .string(workstreamID.uuidString),
+                        "execution_policy": .string("fresh_readonly_child"),
+                        "status": .string("pending")
+                    ])
+                ])
+            ])
+            XCTFail("Approved Mission node execution policy must be immutable through mission_plan.")
+        } catch {
+            XCTAssertFalse(didUpdate)
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("approved contract field nodes"), message)
+        }
+    }
+
+    func testMissionPlanRejectsUserOwnedChildAskAutonomyMutation() async throws {
+        let coordinatorID = UUID()
+        var didUpdate = false
+        var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
+        autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .ask
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Approved Mission.",
+                    status: .running,
+                    approvalState: .approved,
+                    autonomy: autonomy
+                )]
+            },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "autonomy": .object([
+                    CoordinatorMissionDecisionClass.childAsk.rawValue: .string("auto")
+                ])
+            ])
+            XCTFail("mission_plan must not mutate user-owned childAsk routing.")
+        } catch {
+            XCTAssertFalse(didUpdate)
+            XCTAssertTrue(String(describing: error).contains("Mission autonomy authority"))
+        }
+    }
+
+    func testMissionPlanRejectsUserOwnedPolicyAuthorityMutationBeforeApproval() async throws {
+        let coordinatorID = UUID()
+        var didUpdate = false
+        var existingPolicy = CoordinatorMissionPolicySnapshot.defaultPolicy
+        existingPolicy.maxConcurrent = 2
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Awaiting approval.",
+                    status: .draft,
+                    approvalState: .awaitingApproval,
+                    policySnapshot: existingPolicy
+                )]
+            },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "policy_snapshot": .object([
+                    "id": .string(existingPolicy.id),
+                    "name": .string(existingPolicy.name),
+                    "default_pace": .string(existingPolicy.defaultPace.rawValue),
+                    "autonomy": .object(Dictionary(uniqueKeysWithValues: existingPolicy.autonomy.map { key, value in
+                        (key, Value.string(value.rawValue))
+                    })),
+                    "max_concurrent": .int(4)
+                ])
+            ])
+            XCTFail("mission_plan must not mutate policy authority before approval.")
+        } catch {
+            XCTAssertFalse(didUpdate)
+            XCTAssertTrue(String(describing: error).contains("Mission policy authority"))
+        }
+    }
+
+    func testMissionPlanRejectsRuntimeFirstPlanArbitraryPolicyAuthority() async throws {
+        let coordinatorID = UUID()
+        var didUpdate = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "coordinator-runtime",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            resolveRuntimeCoordinatorSessionID: { _ in coordinatorID },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+        var arbitraryPolicy = CoordinatorMissionPolicySnapshot.defaultPolicy
+        arbitraryPolicy.maxConcurrent = 7
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "objective": .string("Runtime-created plan"),
+                "policy_snapshot": .object([
+                    "id": .string(arbitraryPolicy.id),
+                    "name": .string(arbitraryPolicy.name),
+                    "default_pace": .string(arbitraryPolicy.defaultPace.rawValue),
+                    "autonomy": .object(Dictionary(uniqueKeysWithValues: arbitraryPolicy.autonomy.map { key, value in
+                        (key, Value.string(value.rawValue))
+                    })),
+                    "max_concurrent": .int(arbitraryPolicy.maxConcurrent)
+                ])
+            ])
+            XCTFail("Owning runtime must not establish arbitrary first-plan policy authority.")
+        } catch {
+            XCTAssertFalse(didUpdate)
+            XCTAssertTrue(String(describing: error).contains("first plan creation"))
+        }
+    }
+
+    func testMissionPlanAllowsApprovedInitialWorktreeBindingButRejectsRewriteAndClear() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        var plan = Self.approvedContractPlan(
+            objective: "Approved objective.",
+            workstreamID: workstreamID,
+            nodeID: nodeID
+        )
+        var updates: [CoordinatorMissionPlanUpdate] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] },
+            updateMissionPlan: { _, update in
+                updates.append(update)
+                var state = CoordinatorFollowThroughState(missionPlan: plan)
+                state.updateMissionPlan(update)
+                plan = state.missionPlan ?? plan
+            }
+        )
+
+        _ = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "workstreams": .array([
+                .object([
+                    "id": .string(workstreamID.uuidString),
+                    "title": .string("Implementation"),
+                    "purpose": .string("Implement the approved work."),
+                    "default_policy": .string("fresh_worktree"),
+                    "worktree_strategy": .object([
+                        "mode": .string("createIsolated"),
+                        "worktree_id": .string("wt-approved"),
+                        "base_ref": .string("main"),
+                        "base_reason": .string("Approved contract base.")
+                    ])
+                ])
+            ])
+        ])
+        XCTAssertEqual(updates.count, 1)
+        XCTAssertEqual(plan.workstreams.first?.worktreeID, "wt-approved")
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "workstreams": .array([
+                    .object([
+                        "id": .string(workstreamID.uuidString),
+                        "title": .string("Implementation"),
+                        "purpose": .string("Implement the approved work."),
+                        "default_policy": .string("fresh_worktree"),
+                        "worktree_strategy": .object([
+                            "mode": .string("createIsolated"),
+                            "worktree_id": .string("wt-rewrite"),
+                            "base_ref": .string("main"),
+                            "base_reason": .string("Approved contract base.")
+                        ])
+                    ])
+                ])
+            ])
+            XCTFail("Approved worktree target rewrites must be rejected.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("approved contract field workstreams"))
+        }
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "workstreams": .array([
+                    .object([
+                        "id": .string(workstreamID.uuidString),
+                        "title": .string("Implementation"),
+                        "purpose": .string("Implement the approved work."),
+                        "default_policy": .string("fresh_worktree"),
+                        "worktree_strategy": .object([
+                            "mode": .string("createIsolated"),
+                            "worktree_id": .string(""),
+                            "base_ref": .string("main"),
+                            "base_reason": .string("Approved contract base.")
+                        ])
+                    ])
+                ])
+            ])
+            XCTFail("Approved worktree target clears must be rejected.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("approved contract field workstreams"))
+        }
+    }
+
+    func testMissionPlanRejectsApprovedReplaceWorkstreamsWithoutPayload() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        var didUpdate = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Approved Mission.",
+                    status: .running,
+                    approvalState: .approved,
+                    workstreams: [
+                        CoordinatorMissionWorkstreamSummary(
+                            id: workstreamID,
+                            title: "Approved lane",
+                            purpose: "Must remain present.",
+                            defaultPolicy: .freshWorktree,
+                            worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+                        )
+                    ]
+                )]
+            },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "status": .string("running"),
+                "replace_workstreams": .bool(true)
+            ])
+            XCTFail("Approved Mission contracts must reject replace_workstreams even without a payload.")
+        } catch {
+            XCTAssertFalse(didUpdate)
+            XCTAssertTrue(String(describing: error).contains("replace_workstreams"))
+        }
+    }
+
+    func testMissionPlanAllowsPreApprovalWorkflowlessReadOnlyProbeProgressOnNoneReadOnlyWorkstream() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let childID = UUID()
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [
+            coordinatorID: CoordinatorMissionPlan(
+                objective: "Ground the draft plan.",
+                status: .draft,
+                approvalState: .awaitingApproval,
+                workstreams: [
+                    CoordinatorMissionWorkstreamSummary(
+                        id: workstreamID,
+                        title: "Read-only probe",
+                        purpose: "Gather lightweight evidence before approval.",
+                        defaultPolicy: .freshReadOnlyChild,
+                        worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                    )
+                ],
+                nodes: [
+                    CoordinatorMissionPlanNode(
+                        id: nodeID,
+                        title: "Probe plan risk",
+                        completionEvidence: "Probe answer identifies the risk.",
+                        workstreamID: workstreamID,
+                        executionPolicy: .freshReadOnlyChild,
+                        status: .pending
+                    )
+                ]
+            )
+        ]
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
@@ -1640,32 +2341,249 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
 
         let response = try await service.execute(args: [
             "op": .string("mission_plan"),
-            "objective": .string("Legacy no-approval mission."),
-            "status": .string("running"),
-            "approval_state": .string("not_required"),
-            "workstreams": .array([
-                .object([
-                    "id": .string(workstreamID.uuidString),
-                    "title": .string("Probe"),
-                    "purpose": .string("Run without explicit approval."),
-                    "default_policy": .string("coordinator_only"),
-                    "worktree_strategy": .object(["mode": .string("noneReadOnly")])
-                ])
-            ]),
             "nodes": .array([
                 .object([
                     "id": .string(nodeID.uuidString),
-                    "title": .string("Inspect"),
+                    "title": .string("Probe plan risk"),
+                    "completion_evidence": .string("Probe answer identifies the risk."),
                     "workstream_id": .string(workstreamID.uuidString),
-                    "execution_policy": .string("coordinator_only"),
-                    "status": .string("running")
+                    "execution_policy": .string("fresh_readonly_child"),
+                    "status": .string("running"),
+                    "bound_session_id": .string(childID.uuidString)
                 ])
             ])
         ])
 
-        let plan = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue)
-        XCTAssertEqual(plan["status"]?.stringValue, "running")
-        XCTAssertEqual(plan["approval_state"]?.stringValue, "not_required")
+        let node = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue?["nodes"]?.arrayValue?.first?.objectValue)
+        XCTAssertEqual(node["status"]?.stringValue, "running")
+        XCTAssertEqual(node["bound_session_id"]?.stringValue, childID.uuidString)
+    }
+
+    func testMissionPlanAllowsPreApprovalPlanningNodeProgressForExactEligibleNode() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        let childID = UUID()
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [
+            coordinatorID: CoordinatorMissionPlan(
+                objective: "Ground the draft plan.",
+                status: .draft,
+                approvalState: .awaitingApproval,
+                workstreams: [
+                    CoordinatorMissionWorkstreamSummary(
+                        id: workstreamID,
+                        title: "Planning",
+                        purpose: "Gather read-only evidence before approval.",
+                        defaultPolicy: .freshReadOnlyChild,
+                        worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                            mode: .createIsolated,
+                            baseRef: "main",
+                            baseReason: "Preapproval planning uses an isolated worktree."
+                        )
+                    )
+                ],
+                nodes: [
+                    CoordinatorMissionPlanNode(
+                        id: nodeID,
+                        title: "Deepen implementation plan",
+                        workflowHint: CoordinatorMissionPlanNodeWorkflowHint(id: "builtin-deepplan", name: "Deep Plan"),
+                        completionEvidence: "Deep Plan report identifies risks and a safe execution order.",
+                        workstreamID: workstreamID,
+                        executionPolicy: .freshReadOnlyChild,
+                        status: .pending
+                    )
+                ]
+            )
+        ]
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { missionPlans },
+            updateMissionPlan: { sessionID, update in
+                var state = CoordinatorFollowThroughState(missionPlan: missionPlans[sessionID])
+                state.updateMissionPlan(update)
+                missionPlans[sessionID] = state.missionPlan
+            }
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("mission_plan"),
+            "nodes": .array([
+                .object([
+                    "id": .string(nodeID.uuidString),
+                    "title": .string("Deepen implementation plan"),
+                    "workflow": .object([
+                        "id": .string("builtin-deepplan"),
+                        "name": .string("Deep Plan")
+                    ]),
+                    "completion_evidence": .string("Deep Plan report identifies risks and a safe execution order."),
+                    "workstream_id": .string(workstreamID.uuidString),
+                    "execution_policy": .string("fresh_readonly_child"),
+                    "status": .string("running"),
+                    "bound_session_id": .string(childID.uuidString)
+                ])
+            ])
+        ])
+        let node = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue?["nodes"]?.arrayValue?.first?.objectValue)
+        XCTAssertEqual(node["status"]?.stringValue, "running")
+        XCTAssertEqual(node["bound_session_id"]?.stringValue, childID.uuidString)
+        XCTAssertEqual(missionPlans[coordinatorID]?.approvalState, .awaitingApproval)
+    }
+
+    func testMissionPlanRejectsPreApprovalPlanningNodeContractRewrite() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        var didUpdate = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Ground the draft plan.",
+                    status: .draft,
+                    approvalState: .awaitingApproval,
+                    workstreams: [
+                        CoordinatorMissionWorkstreamSummary(
+                            id: workstreamID,
+                            title: "Planning",
+                            purpose: "Gather read-only evidence before approval.",
+                            defaultPolicy: .freshReadOnlyChild,
+                            worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                        )
+                    ],
+                    nodes: [
+                        CoordinatorMissionPlanNode(
+                            id: nodeID,
+                            title: "Probe plan risk",
+                            completionEvidence: "Probe result explains the risk.",
+                            workstreamID: workstreamID,
+                            executionPolicy: .freshReadOnlyChild,
+                            status: .pending
+                        )
+                    ]
+                )]
+            },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "nodes": .array([
+                    .object([
+                        "id": .string(nodeID.uuidString),
+                        "title": .string("Probe a different plan risk"),
+                        "completion_evidence": .string("Probe result explains the risk."),
+                        "workstream_id": .string(workstreamID.uuidString),
+                        "execution_policy": .string("fresh_readonly_child"),
+                        "status": .string("running"),
+                        "bound_session_id": .string(UUID().uuidString)
+                    ])
+                ])
+            ])
+            XCTFail("Preapproval progress must not rewrite the planning node contract.")
+        } catch {
+            XCTAssertFalse(didUpdate)
+            XCTAssertTrue(String(describing: error).contains("exact node-bound pre-approval"))
+        }
+    }
+
+    func testMissionPlanRejectsRuntimeStopAndTerminalReopen() async throws {
+        let coordinatorID = UUID()
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        var didUpdate = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Stopped Mission.",
+                    status: .stopped,
+                    approvalState: .approved,
+                    workstreams: [
+                        CoordinatorMissionWorkstreamSummary(
+                            id: workstreamID,
+                            title: "Stopped workstream",
+                            purpose: "Already stopped.",
+                            defaultPolicy: .freshReadOnlyChild,
+                            worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                        )
+                    ],
+                    nodes: [
+                        CoordinatorMissionPlanNode(
+                            id: nodeID,
+                            title: "Stopped node",
+                            completionEvidence: "Stopped by user.",
+                            workstreamID: workstreamID,
+                            executionPolicy: .freshReadOnlyChild,
+                            status: .cancelled
+                        )
+                    ]
+                )]
+            },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "status": .string("running")
+            ])
+            XCTFail("Terminal Mission status must not reopen.")
+        } catch {
+            XCTAssertFalse(didUpdate)
+            XCTAssertTrue(String(describing: error).contains("cannot reopen a terminal Mission"))
+        }
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "status": .string("stopped")
+            ])
+            XCTFail("Runtime/generic mission_plan must not own Stop.")
+        } catch {
+            XCTAssertFalse(didUpdate)
+            XCTAssertTrue(String(describing: error).contains("Stop is app/external-user owned"))
+        }
+    }
+
+    func testMissionPlanRejectsTerminalReceiptAffectingLedgerMutation() async throws {
+        let coordinatorID = UUID()
+        let decisionID = UUID()
+        let plan = CoordinatorMissionPlan(
+            objective: "Terminal receipt is frozen",
+            status: .completed,
+            approvalState: .approved
+        )
+        var didUpdate = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "decisions": .array([
+                    .object([
+                        "id": .string(decisionID.uuidString),
+                        "actor": .string("director"),
+                        "decision_class": .string("advance"),
+                        "label": .string("late mutation")
+                    ])
+                ])
+            ])
+            XCTFail("Terminal Mission receipt inputs must be frozen.")
+        } catch {
+            XCTAssertFalse(didUpdate)
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("receipt-affecting fields"), message)
+            XCTAssertTrue(message.contains("decisions"), message)
+        }
     }
 
     func testMissionPlanRejectsCompletedNodeWithStaleWaitingEvidence() async throws {
@@ -2293,7 +3211,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         ])
         let updatedDecisions = try XCTUnwrap(updated.objectValue?["mission_plan"]?.objectValue?["routing_decisions"]?.arrayValue)
         XCTAssertEqual(updatedDecisions.count, 2)
-        XCTAssertEqual(updatedDecisions.first?.objectValue?["reason"]?.stringValue, "Corrected route rationale.")
+        XCTAssertEqual(
+            updatedDecisions.first?.objectValue?["reason"]?.stringValue,
+            "The implementation surface is unknown, so start a narrow read-only probe first."
+        )
         XCTAssertEqual(updatedDecisions.last?.objectValue?["operation"]?.stringValue, "coordinator_hold")
     }
 
@@ -2567,7 +3488,13 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let settingNodeID = UUID()
         let reviewNodeID = UUID()
         let childID = UUID()
-        var missionPlans: [UUID: CoordinatorMissionPlan] = [:]
+        var missionPlans: [UUID: CoordinatorMissionPlan] = [
+            coordinatorID: CoordinatorMissionPlan(
+                objective: "Issue 298 provider cleanup",
+                status: .draft,
+                approvalState: .awaitingApproval
+            )
+        ]
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
@@ -2582,8 +3509,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         _ = try await service.execute(args: [
             "op": .string("mission_plan"),
             "objective": .string("Issue 298 provider cleanup"),
-            "status": .string("running"),
-            "approval_state": .string("approved"),
+            "status": .string("draft"),
+            "approval_state": .string("awaiting_approval"),
             "workstreams": .array([
                 .object([
                     "id": .string(discoveryWorkstreamID.uuidString),
@@ -2614,7 +3541,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     "workstream_id": .string(discoveryWorkstreamID.uuidString),
                     "workflow_name": .string("Investigate"),
                     "execution_policy": .string("fresh_readonly_child"),
-                    "status": .string("completed"),
+                    "status": .string("pending"),
                     "completion_evidence": .string("Discovery mapped the cleanup entry points.")
                 ]),
                 .object([
@@ -2651,6 +3578,12 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             ])
         ])
 
+        if var plan = missionPlans[coordinatorID] {
+            plan.status = .running
+            plan.approvalState = .approved
+            missionPlans[coordinatorID] = plan
+        }
+
         let response = try await service.execute(args: [
             "op": .string("mission_plan"),
             "workstreams": .array([
@@ -2677,7 +3610,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         ])
 
         let plan = try XCTUnwrap(response.objectValue?["mission_plan"]?.objectValue)
-        XCTAssertEqual(plan["revision"]?.intValue, 2)
+        XCTAssertEqual(plan["revision"]?.intValue, 3)
         let workstreams = try XCTUnwrap(plan["workstreams"]?.arrayValue)
         XCTAssertEqual(workstreams.count, 3)
         XCTAssertEqual(workstreams.map { $0.objectValue?["id"]?.stringValue }, [
@@ -4281,21 +5214,60 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(object["accepted"]?.boolValue, true)
     }
 
-    func testSubmitWithCheckpointActionUsesContinuationRoute() async throws {
+    func testSubmitWithCheckpointActionRejectsCoordinatorRuntimeCaller() async throws {
         let coordinatorID = UUID()
-        var submittedMessages: [String] = []
+        let plan = Self.approvalPlan(coordinatorID: coordinatorID, revision: 2)
         var submittedActions: [CoordinatorModeViewModel.ContinuationAction] = []
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
-            submit: {
-                submittedMessages.append($0)
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex-runtime",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            resolveRuntimeCoordinatorSessionID: { metadata in
+                metadata.isCoordinatorRuntime ? coordinatorID : nil
+            },
+            submitContinuation: { action, _ in
+                submittedActions.append(action)
                 return .accepted
             },
-            submitContinuation: {
-                submittedActions.append($0)
+            missionPlans: { [coordinatorID: plan] }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("submit"),
+                "coordinator_session_id": .string(coordinatorID.uuidString),
+                "checkpoint_action": .string("proceed"),
+                "expected_checkpoint_instance_id": .string("coordinator:\(coordinatorID.uuidString):plan-approval:r2")
+            ])
+            XCTFail("Coordinator runtime callers must not submit checkpoint actions as the user.")
+        } catch {
+            XCTAssertTrue(submittedActions.isEmpty)
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains("submit Coordinator checkpoint actions"), message)
+        }
+    }
+
+    func testSubmitWithCheckpointActionRejectsMissingExpectedCheckpointInstance() async throws {
+        let coordinatorID = UUID()
+        let plan = Self.approvalPlan(coordinatorID: coordinatorID, revision: 2)
+        var submittedActions: [CoordinatorModeViewModel.ContinuationAction] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submitContinuation: { action, _ in
+                submittedActions.append(action)
                 return .accepted
-            }
+            },
+            missionPlans: { [coordinatorID: plan] }
         )
 
         let response = try await service.execute(args: [
@@ -4306,9 +5278,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         ])
         let object = try XCTUnwrap(response.objectValue)
 
-        XCTAssertTrue(submittedMessages.isEmpty)
-        XCTAssertEqual(submittedActions, [.proceed])
-        XCTAssertEqual(object["accepted"]?.boolValue, true)
+        XCTAssertTrue(submittedActions.isEmpty)
+        XCTAssertEqual(object["accepted"]?.boolValue, false)
+        let error = try XCTUnwrap(object["error"]?.stringValue)
+        XCTAssertTrue(error.contains("expected_checkpoint_instance_id is required"), error)
     }
 
     func testSubmitWithCheckpointActionRejectsStaleExpectedCheckpointInstance() async throws {
@@ -4318,8 +5291,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
-            submitContinuation: {
-                submittedActions.append($0)
+            submitContinuation: { action, _ in
+                submittedActions.append(action)
                 return .accepted
             },
             missionPlans: { [coordinatorID: plan] }
@@ -4349,8 +5322,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
-            submitContinuation: {
-                submittedActions.append($0)
+            submitContinuation: { action, _ in
+                submittedActions.append(action)
                 return .accepted
             },
             missionPlans: { [coordinatorID: plan] }
@@ -4377,8 +5350,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
-            submitContinuation: {
-                submittedActions.append($0)
+            submitContinuation: { action, _ in
+                submittedActions.append(action)
                 return .accepted
             },
             missionPlans: { [coordinatorID: plan] }
@@ -4400,27 +5373,30 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
 
     func testSubmitWithCheckpointActionDoesNotAnswerPendingChildInteraction() async throws {
         let coordinatorID = UUID()
+        let plan = Self.approvalPlan(coordinatorID: coordinatorID, revision: 2)
         let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
         var submittedActions: [CoordinatorModeViewModel.ContinuationAction] = []
         var childResponses: [CoordinatorModeViewModel.ChildInteractionResponseSubmission] = []
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
-            submitContinuation: {
-                submittedActions.append($0)
+            submitContinuation: { action, _ in
+                submittedActions.append(action)
                 return .accepted
             },
-            pendingChild: { childRow },
+            pendingChild: { _ in childRow },
             submitPendingChild: { submission, _, _ in
                 childResponses.append(submission)
                 return .accepted
-            }
+            },
+            missionPlans: { [coordinatorID: plan] }
         )
 
         let response = try await service.execute(args: [
             "op": .string("submit"),
             "coordinator_session_id": .string(coordinatorID.uuidString),
             "checkpoint_action": .string("proceed"),
+            "expected_checkpoint_instance_id": .string("coordinator:\(coordinatorID.uuidString):plan-approval:r2"),
             "message": .string("Approved to proceed with the plan."),
             "compact": .bool(true)
         ])
@@ -4444,7 +5420,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 coordinatorSubmissions.append($0)
                 return .accepted
             },
-            pendingChild: { childRow },
+            pendingChild: { _ in childRow },
             submitPendingChild: { submission, row, actor in
                 childResponses.append((submission, row.sessionID, actor))
                 return .accepted
@@ -4473,6 +5449,16 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
         autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
         var actors: [CoordinatorMissionDecisionActor] = []
+        let plan = Self.durablyApprovedPlan(
+            CoordinatorMissionPlan(
+                objective: "Director-routed child question.",
+                status: .running,
+                approvalState: .approved,
+                policySnapshot: .defaultPolicy,
+                autonomy: autonomy
+            ),
+            coordinatorID: coordinatorID
+        )
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
@@ -4486,20 +5472,16 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     isCoordinatorRuntime: true
                 )
             },
-            pendingChild: { childRow },
+            resolveRuntimeCoordinatorSessionID: { metadata in
+                metadata.isCoordinatorRuntime ? coordinatorID : nil
+            },
+            pendingChild: { _ in childRow },
             submitPendingChild: { _, _, actor in
                 actors.append(actor)
                 return .accepted
             },
-            missionPlans: {
-                [coordinatorID: CoordinatorMissionPlan(
-                    objective: "Director-routed child question.",
-                    status: .running,
-                    approvalState: .approved,
-                    policySnapshot: .defaultPolicy,
-                    autonomy: autonomy
-                )]
-            }
+            missionPlans: { [coordinatorID: plan] },
+            durableApprovalAuthorityToken: { _ in plan.expectedDurableApprovalAuthorityToken }
         )
 
         let response = try await service.execute(args: [
@@ -4513,6 +5495,56 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(actors, [.director])
     }
 
+    func testSubmitRuntimePendingChildInteractionRequiresDurableApprovalAuthority() async throws {
+        let coordinatorID = UUID()
+        let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
+        var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
+        autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
+        var didSubmitChild = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            resolveRuntimeCoordinatorSessionID: { metadata in
+                metadata.isCoordinatorRuntime ? coordinatorID : nil
+            },
+            pendingChild: { _ in childRow },
+            submitPendingChild: { _, _, _ in
+                didSubmitChild = true
+                return .accepted
+            },
+            missionPlans: {
+                [coordinatorID: CoordinatorMissionPlan(
+                    objective: "Director-routed child question.",
+                    status: .running,
+                    approvalState: .approved,
+                    policySnapshot: .defaultPolicy,
+                    autonomy: autonomy
+                )]
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("submit"),
+                "message": .string("Alpha")
+            ])
+            XCTFail("Runtime child answer should require durable approval authority after approval.")
+        } catch {
+            XCTAssertFalse(didSubmitChild)
+            XCTAssertTrue(String(describing: error).contains("durable approval authority token"))
+        }
+    }
+
     func testCoordinatorModelOverrideKeepsRuntimeChildAnswerAttribution() async throws {
         let coordinatorID = UUID()
         let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
@@ -4522,28 +5554,35 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         var actors: [CoordinatorMissionDecisionActor] = []
         var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
         autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
-        let plan = CoordinatorMissionPlan(
-            objective: "Director-routed child question.",
-            status: .running,
-            approvalState: .approved,
-            policySnapshot: .defaultPolicy,
-            autonomy: autonomy
+        let plan = Self.durablyApprovedPlan(
+            CoordinatorMissionPlan(
+                objective: "Director-routed child question.",
+                status: .running,
+                approvalState: .approved,
+                policySnapshot: .defaultPolicy,
+                autonomy: autonomy
+            ),
+            coordinatorID: coordinatorID
         )
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
             captureRequestMetadata: { requestMetadata },
+            resolveRuntimeCoordinatorSessionID: { metadata in
+                metadata.isCoordinatorRuntime ? coordinatorID : nil
+            },
             startNew: { requestedCoordinatorModels.append($0) },
             submit: { message in
                 submittedDirectives.append(message)
                 return .accepted
             },
-            pendingChild: { childRow },
+            pendingChild: { _ in childRow },
             submitPendingChild: { _, _, actor in
                 actors.append(actor)
                 return .accepted
             },
-            missionPlans: { [coordinatorID: plan] }
+            missionPlans: { [coordinatorID: plan] },
+            durableApprovalAuthorityToken: { _ in plan.expectedDurableApprovalAuthorityToken }
         )
 
         let startResponse = try await service.execute(args: [
@@ -4592,7 +5631,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     isCoordinatorRuntime: true
                 )
             },
-            pendingChild: { childRow },
+            resolveRuntimeCoordinatorSessionID: { metadata in
+                metadata.isCoordinatorRuntime ? coordinatorID : nil
+            },
+            pendingChild: { _ in childRow },
             submitPendingChild: { _, _, _ in
                 didSubmitChild = true
                 return .accepted
@@ -4619,7 +5661,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         }
     }
 
-    func testSubmitAgentModeNonCoordinatorPendingChildInteractionRecordsUserActor() async throws {
+    func testSubmitAgentModeNonCoordinatorPendingChildInteractionCannotImpersonateUser() async throws {
         let coordinatorID = UUID()
         let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
         var actors: [CoordinatorMissionDecisionActor] = []
@@ -4636,22 +5678,23 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                     isCoordinatorRuntime: false
                 )
             },
-            pendingChild: { childRow },
+            pendingChild: { _ in childRow },
             submitPendingChild: { _, _, actor in
                 actors.append(actor)
                 return .accepted
             }
         )
 
-        let response = try await service.execute(args: [
-            "op": .string("submit"),
-            "message": .string("Alpha")
-        ])
-        let object = try XCTUnwrap(response.objectValue)
-
-        XCTAssertEqual(object["accepted"]?.boolValue, true)
-        XCTAssertEqual(object["routed_to"]?.stringValue, "child_interaction")
-        XCTAssertEqual(actors, [.user])
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("submit"),
+                "message": .string("Alpha")
+            ])
+            XCTFail("Non-Coordinator Agent Mode workers must not answer child questions as user.")
+        } catch {
+            XCTAssertTrue(actors.isEmpty)
+            XCTAssertTrue(String(describing: error).contains("Internal non-owner Agent Mode workers cannot submit"))
+        }
     }
 
     func testSubmitRoutesStructuredAnswersToPendingChildInteraction() async throws {
@@ -4661,7 +5704,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
-            pendingChild: { childRow },
+            pendingChild: { _ in childRow },
             submitPendingChild: { submission, _, _ in
                 childResponses.append(submission)
                 return .accepted
@@ -4813,6 +5856,62 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         return try XCTUnwrap(response.objectValue?["mission_status"]?.objectValue?["liveness_warnings"]?.arrayValue?.compactMap(\.stringValue))
     }
 
+    private static func durablyApprovedPlan(
+        _ plan: CoordinatorMissionPlan,
+        coordinatorID: UUID
+    ) -> CoordinatorMissionPlan {
+        var plan = plan
+        let continuation = CoordinatorPostApprovalContinuationRecord(
+            coordinatorSessionID: coordinatorID,
+            checkpointInstanceID: "coordinator:\(coordinatorID.uuidString):plan-approval:r\(plan.revision)",
+            planID: plan.id,
+            planRevision: plan.revision,
+            directiveText: "Proceed.",
+            status: .delivered,
+            attempts: 1
+        ).confirmingDurableApprovalAuthority()
+        plan.postApprovalContinuation = continuation
+        return plan
+    }
+
+    private static func approvedContractPlan(
+        objective: String,
+        workstreamID: UUID,
+        nodeID: UUID
+    ) -> CoordinatorMissionPlan {
+        CoordinatorMissionPlan(
+            objective: objective,
+            status: .running,
+            approvalState: .approved,
+            policySnapshot: .defaultPolicy,
+            autonomy: CoordinatorMissionPolicySnapshot.defaultAutonomy,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Implementation",
+                    purpose: "Implement the approved work.",
+                    defaultPolicy: .freshWorktree,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(
+                        mode: .createIsolated,
+                        baseRef: "main",
+                        baseReason: "Approved contract base."
+                    )
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "Implement approved work",
+                    completionEvidence: "Approved work is implemented and validated.",
+                    doneCriteria: "Implementation and validation are complete.",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .pending
+                )
+            ]
+        )
+    }
+
     private func makeService(
         coordinatorIDs: [UUID],
         selectedID: UUID,
@@ -4822,10 +5921,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         resolveRuntimeCoordinatorSessionID: @escaping (MCPServerViewModel.RequestMetadata) async -> UUID? = { _ in nil },
         coordinatorRunState: AgentSessionRunState = .idle,
         startNew: @escaping (String?) -> Void = { _ in },
-        stopMission: @escaping () async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { .accepted },
+        stopMission: @escaping (UUID) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
-        submitContinuation: @escaping (CoordinatorModeViewModel.ContinuationAction) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
-        pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
+        submitContinuation: @escaping (CoordinatorModeViewModel.ContinuationAction, String?) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
+        pendingChild: @escaping (UUID?) -> CoordinatorModeRow? = { _ in nil },
         submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow, CoordinatorMissionDecisionActor) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _ in .accepted },
         counts: CoordinatorModeCounts = .empty,
         rows: [CoordinatorModeRow] = [],
@@ -4834,6 +5933,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         persistedOnly: [UUID: Bool] = [:],
         pinned: [UUID: Bool] = [:],
         updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in },
+        durableApprovalAuthorityToken: @escaping (UUID) -> String? = { _ in nil },
         missionEvents: @escaping (UUID, Int, Int) -> CoordinatorMissionEventJournal.Batch = { _, sinceSeq, _ in
             CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
         },
@@ -4863,6 +5963,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             persistedOnly: persistedOnly,
             pinned: pinned,
             updateMissionPlan: updateMissionPlan,
+            durableApprovalAuthorityToken: durableApprovalAuthorityToken,
             missionEvents: missionEvents,
             setMissionPace: setMissionPace,
             setMissionAutonomy: setMissionAutonomy,
@@ -4883,10 +5984,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         coordinatorRunState: AgentSessionRunState = .idle,
         select: @escaping (UUID?) -> Void = { _ in },
         startNew: @escaping (String?) -> Void = { _ in },
-        stopMission: @escaping () async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { .accepted },
+        stopMission: @escaping (UUID) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
-        submitContinuation: @escaping (CoordinatorModeViewModel.ContinuationAction) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
-        pendingChild: @escaping () -> CoordinatorModeRow? = { nil },
+        submitContinuation: @escaping (CoordinatorModeViewModel.ContinuationAction, String?) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
+        pendingChild: @escaping (UUID?) -> CoordinatorModeRow? = { _ in nil },
         submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow, CoordinatorMissionDecisionActor) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _ in .accepted },
         counts: CoordinatorModeCounts = .empty,
         rows: [CoordinatorModeRow] = [],
@@ -4895,6 +5996,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         persistedOnly: [UUID: Bool] = [:],
         pinned: [UUID: Bool] = [:],
         updateMissionPlan: @escaping (UUID, CoordinatorMissionPlanUpdate) throws -> Void = { _, _ in },
+        durableApprovalAuthorityToken: @escaping (UUID) -> String? = { _ in nil },
         missionEvents: @escaping (UUID, Int, Int) -> CoordinatorMissionEventJournal.Batch = { _, sinceSeq, _ in
             CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
         },
@@ -4930,11 +6032,12 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 refresh: {},
                 selectCoordinator: select,
                 startNewCoordinatorRun: startNew,
-                stopSelectedCoordinatorMission: stopMission,
+                stopCoordinatorMission: stopMission,
                 submitDirective: submit,
                 submitContinuation: submitContinuation,
                 activePendingChildInteractionRow: pendingChild,
                 submitPendingChildInteractionResponse: submitPendingChild,
+                durableApprovalAuthorityToken: durableApprovalAuthorityToken,
                 updateMissionPlan: updateMissionPlan,
                 missionEvents: missionEvents,
                 setMissionPace: setMissionPace,

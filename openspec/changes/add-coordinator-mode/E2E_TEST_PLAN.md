@@ -77,14 +77,20 @@ Use a throwaway workspace root/repository for side-effect assertions. Scenario t
 
 ### S4 — Step pace and checkpoint revision identity
 
-**Purpose:** Prove approval checkpoint instance IDs are revision-bound and stale grants are rejected.
+**Purpose:** Prove approval checkpoint instance IDs are revision-bound, approval is atomic before runtime resume, and non-user approval doors are rejected.
 
 **Expected invariants:**
 
 - Awaiting-approval compact status exposes `checkpoint_instance_id`.
+- Approval-granting Proceed without `expected_checkpoint_instance_id` rejects and records no user decision.
 - A plan revision while still awaiting approval changes the instance ID.
 - Stale approval-granting Proceed using the old expected ID rejects and records no user decision.
-- Current Proceed accepts and records one user plan-approval decision for the current instance.
+- A SwiftUI/rendered-button equivalent using a stale rendered ID rejects the same way as the external MCP path.
+- A Coordinator runtime caller attempting checkpoint action/Proceed as user rejects as impersonation.
+- Generic `mission_plan` self-approval (`approval_state:"approved"`) rejects or preserves the prior non-approved state.
+- Generic runtime creation or transition to `approval_state:"not_required"` rejects; legacy decoded `not_required` is non-authorizing and cannot delegate.
+- Current Proceed accepts only when its expected ID matches the current checkpoint, records one user plan-approval decision for that instance, transitions the plan to `approved`, and only then allows runtime resume/delegation.
+- Live harness target: when Proceed is accepted while the Director revision turn is still active, `mission_status` exposes a durable `post_approval_continuation` with stable continuation/checkpoint/plan identity as deferred, then delivered with `attempts=1`, `last_error:null`, no duplicate delivered transition, and no second external `submit` once the next ordinary turn boundary arrives.
 - Stale Stop remains accepted because it withdraws approval.
 
 ### S5 — childAsk Me and Director parity
@@ -159,9 +165,9 @@ SCRIPTED_CHILD_V1 ask_marker token=<TOKEN> options=Alpha,Beta
 
 ### S8 — Restart durability (deferred)
 
-**Purpose:** Future scenario for relaunch with pending plan approval or pending child question.
+**Purpose:** Future scenario for relaunch with pending plan approval, pending child question, or pending/deferred/dispatching post-approval continuation.
 
-**Required future invariants:** Mission reconstructs from durable state; pending asks remain pending; queue item identity does not duplicate or disappear; compact fingerprint history remains coherent; follow-through does not re-fire duplicate events solely because of restart.
+**Required future invariants:** Mission reconstructs from durable state; pending asks and deferred continuation records remain pending/deferred without being consumed; queue item identity does not duplicate or disappear; completed/stopped receipts remain available.
 
 ### Future bounded preauthorization — unattended Mission starts (deferred)
 

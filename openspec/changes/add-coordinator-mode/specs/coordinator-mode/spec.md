@@ -142,7 +142,9 @@ The system SHALL present the v1 Coordinator work surface as a read-only status b
 #### Scenario: Board remains read-only in v1
 - **WHEN** the v1 board renders session cards
 - **THEN** it SHALL NOT provide drag-to-reorder, drag-to-dispatch, drag-to-change-status, inline child-session approval, inline retry, or direct child-session mutation
-- **AND** Coordinator continuation approval SHALL be surfaced through the Coordinator chat as a visible message.
+- **AND** Coordinator continuation approval SHALL surface as one visible durable user approval decision/event
+- **AND** the app-owned post-approval continuation transport MAY be hidden from the visible user chat
+- **AND** delivery state SHALL be exposed through `coordinator_chat op="mission_status"` rather than requiring a second visible user chat message.
 
 #### Scenario: Group precedence is evaluated
 - **WHEN** a row has signals matching more than one group

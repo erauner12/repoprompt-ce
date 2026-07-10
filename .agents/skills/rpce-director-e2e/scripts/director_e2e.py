@@ -952,12 +952,15 @@ def submit_with_midrun_retry(
     payload: dict[str, Any],
     args: argparse.Namespace,
     action_label: str,
+    wire_attempts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + args.timeout_seconds
     last_error = ""
     obs = observe(client, artifacts, session_id)
     while time.monotonic() < deadline:
         response = client.coordinator(payload, timeout=180)
+        if wire_attempts is not None:
+            wire_attempts.append(response)
         if response.get("accepted") is not False:
             return response
         last_error = str(response.get("error") or "submit was rejected")
@@ -985,6 +988,7 @@ def submit_current_proceed_with_checkpoint_refresh(
 ) -> tuple[dict[str, Any], str, Observation]:
     deadline = time.monotonic() + args.timeout_seconds
     attempts: list[dict[str, Any]] = []
+    wire_attempts: list[dict[str, Any]] = []
     current_obs = obs
     while time.monotonic() < deadline:
         current_checkpoint_id = checkpoint_instance_id(current_obs.compact)
@@ -1002,12 +1006,13 @@ def submit_current_proceed_with_checkpoint_refresh(
             "checkpoint_action": checkpoint_action_id,
             "expected_checkpoint_instance_id": current_checkpoint_id,
             "compact": True,
-        }, args, "S4 current Proceed")
+        }, args, "S4 current Proceed", wire_attempts)
         attempts.append({
             "checkpoint_instance_id": current_checkpoint_id,
             "response": response,
         })
         write_json(artifacts.root / "current_checkpoint_submit_attempts.json", attempts)
+        write_json(artifacts.root / "current_checkpoint_wire_submits.json", wire_attempts)
         if response.get("accepted") is not False:
             return response, current_checkpoint_id, current_obs
         error = str(response.get("error") or "")
@@ -1843,6 +1848,62 @@ def assert_s2(observations: list[Observation], approved_by_runner: bool) -> None
     assert_common_status_integrity(observations)
 
 
+def post_approval_continuation(obs: Observation) -> dict[str, Any]:
+    compact_plan = obs.compact.get("plan") or {}
+    full_plan = obs.full.get("plan") or {}
+    value = compact_plan.get("post_approval_continuation") or full_plan.get("post_approval_continuation") or {}
+    return value if isinstance(value, dict) else {}
+
+
+def assert_s4_post_approval_continuation_lifecycle(
+    observations: list[Observation],
+    *,
+    current_checkpoint_id: str,
+) -> None:
+    records = [
+        (obs.index, post_approval_continuation(obs))
+        for obs in observations
+        if post_approval_continuation(obs)
+    ]
+    if not records:
+        raise E2EFailure("S4 expected mission_status to expose post_approval_continuation after Proceed")
+    statuses = [str(record.get("status") or "") for _, record in records]
+    continuation_ids = {str(record.get("id") or "") for _, record in records}
+    continuation_ids.discard("")
+    if len(continuation_ids) != 1:
+        raise E2EFailure(f"S4 expected one stable continuation id, got {sorted(continuation_ids)}")
+    checkpoint_ids = {str(record.get("checkpoint_instance_id") or "") for _, record in records}
+    if checkpoint_ids != {current_checkpoint_id}:
+        raise E2EFailure(
+            f"S4 expected continuation checkpoint identity {current_checkpoint_id}, got {sorted(checkpoint_ids)}"
+        )
+    plan_keys = {
+        (str(record.get("plan_id") or ""), int(record.get("plan_revision") or 0))
+        for _, record in records
+    }
+    if any(not plan_id or plan_revision <= 0 for plan_id, plan_revision in plan_keys):
+        raise E2EFailure(f"S4 expected non-empty continuation plan identity, got {sorted(plan_keys)}")
+    if len(plan_keys) != 1:
+        raise E2EFailure(f"S4 expected stable continuation plan identity, got {sorted(plan_keys)}")
+    collapsed: list[str] = []
+    for status in statuses:
+        if not collapsed or collapsed[-1] != status:
+            collapsed.append(status)
+    forbidden = {"failed", "invalidated"}.intersection(statuses)
+    if forbidden:
+        raise E2EFailure(f"S4 post-approval continuation reached forbidden status(es): {sorted(forbidden)}")
+    if not any(status in {"pending", "deferred", "dispatching", "delivered"} for status in statuses):
+        raise E2EFailure(f"S4 expected a post-approval continuation lifecycle observation, got {statuses}")
+    if collapsed.count("delivered") != 1 or collapsed[-1] != "delivered":
+        raise E2EFailure(f"S4 expected exactly one delivered transition at the end, got {collapsed}")
+    final_record = records[-1][1]
+    final_attempts = int(final_record.get("attempts") or 0)
+    if final_attempts != 1:
+        raise E2EFailure(f"S4 expected exactly one accepted continuation dispatch attempt, got {final_attempts}")
+    if final_record.get("last_error") is not None:
+        raise E2EFailure(f"S4 expected delivered continuation last_error == null, got {final_record.get('last_error')!r}")
+
+
 def assert_s4_checkpoint_revision(
     observations: list[Observation],
     *,
@@ -1886,6 +1947,10 @@ def assert_s4_checkpoint_revision(
         raise E2EFailure(f"S4 found approval decision stamped with stale checkpoint {stale_checkpoint_id}")
     if token and token not in evidence_text(final.full).lower() and token.lower() not in _stable_json(final.full).lower():
         raise E2EFailure(f"S4 expected final evidence/status to include token {token}")
+    assert_s4_post_approval_continuation_lifecycle(
+        observations,
+        current_checkpoint_id=current_checkpoint_id,
+    )
     assert_common_status_integrity(observations)
 
 
@@ -2479,7 +2544,7 @@ def run_s4(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
     if stale_response.get("accepted") is not False:
         raise E2EFailure(f"S4 stale Proceed submit unexpectedly accepted: {stale_response}")
     stale_error = str(stale_response.get("error") or "")
-    if "Stale checkpoint submit rejected" not in stale_error or revised_checkpoint_id not in stale_error:
+    if not stale_checkpoint_submit_rejected(stale_error):
         raise E2EFailure(f"S4 stale Proceed rejection did not name the current checkpoint: {stale_error}")
     after_stale = observe(client, artifacts, session_id)
     capture_mission_events(client, artifacts, session_id, args.events_mode)
@@ -2497,6 +2562,14 @@ def run_s4(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
         args,
     )
     write_json(artifacts.root / "current_checkpoint_submit_response.json", current_response)
+    current_attempts_path = artifacts.root / "current_checkpoint_submit_attempts.json"
+    current_attempts = json.loads(current_attempts_path.read_text()) if current_attempts_path.exists() else []
+    if len(current_attempts) != 1:
+        raise E2EFailure(f"S4 expected one accepted current Proceed submit attempt, got {len(current_attempts)}")
+    current_wire_submits_path = artifacts.root / "current_checkpoint_wire_submits.json"
+    current_wire_submits = json.loads(current_wire_submits_path.read_text()) if current_wire_submits_path.exists() else []
+    if len(current_wire_submits) != 1:
+        raise E2EFailure(f"S4 expected exactly one current Proceed wire submit, got {len(current_wire_submits)}")
     artifacts.add_checkpoint("current-submit-accepted")
 
     final = wait_until(

@@ -214,7 +214,8 @@ struct AgentExploreMCPToolService {
             isCoordinatorParent: isCoordinatorParent,
             missionPlan: coordinatorMissionPlan,
             operation: .agentExploreStart,
-            missionNodeID: missionNodeID
+            missionNodeID: missionNodeID,
+            durableApprovalAuthorityToken: agentModeVM.mcpCoordinatorDurableApprovalAuthorityToken(sessionID: caller.sourceSessionID)
         )
         if case let .requireApprovedMissionPlan(reason) = coordinatorMissionPlanDecision {
             throw MCPError.invalidParams(reason)

@@ -10,11 +10,12 @@ struct CoordinatorChatMCPToolService {
         var refresh: () -> Void
         var selectCoordinator: (_ sessionID: UUID?) -> Void
         var startNewCoordinatorRun: (_ coordinatorModelID: String?) -> Void
-        var stopSelectedCoordinatorMission: () async -> CoordinatorModeViewModel.DirectiveSubmissionResult
+        var stopCoordinatorMission: (_ targetMissionID: UUID) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var submitDirective: (_ text: String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
-        var submitContinuation: (_ action: CoordinatorModeViewModel.ContinuationAction) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
-        var activePendingChildInteractionRow: () -> CoordinatorModeRow?
+        var submitContinuation: (_ action: CoordinatorModeViewModel.ContinuationAction, _ expectedCheckpointInstanceID: String?) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
+        var activePendingChildInteractionRow: (_ coordinatorSessionID: UUID?) -> CoordinatorModeRow?
         var submitPendingChildInteractionResponse: (_ submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission, _ row: CoordinatorModeRow, _ actor: CoordinatorMissionDecisionActor) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
+        var durableApprovalAuthorityToken: (_ coordinatorSessionID: UUID) -> String?
         var updateMissionPlan: (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
         var missionEvents: (_ coordinatorSessionID: UUID, _ sinceSeq: Int, _ limit: Int) -> CoordinatorMissionEventJournal.Batch
         var setMissionPace: (_ coordinatorSessionID: UUID, _ pace: CoordinatorMissionPolicyPace) -> CoordinatorModeViewModel.DirectiveSubmissionResult
@@ -50,6 +51,17 @@ struct CoordinatorChatMCPToolService {
     private let initialMissionPlanPollIntervalSeconds: TimeInterval
     private let sleep: (UInt64) async -> Void
 
+    private enum CallerClassification: Equatable {
+        case externalCaller
+        case owningCoordinatorRuntime(UUID)
+        case internalNonOwnerAgentModeWorker
+
+        var runtimeCoordinatorSessionID: UUID? {
+            if case let .owningCoordinatorRuntime(sessionID) = self { return sessionID }
+            return nil
+        }
+    }
+
     init(
         toolName: String,
         requireTargetWindow: @escaping MCPWindowToolDependencies.RequireTargetWindow,
@@ -74,11 +86,12 @@ struct CoordinatorChatMCPToolService {
                 refresh: { coordinatorViewModel.refresh() },
                 selectCoordinator: { coordinatorViewModel.selectCoordinator(sessionID: $0) },
                 startNewCoordinatorRun: { coordinatorViewModel.startNewCoordinatorRun(coordinatorModelID: $0) },
-                stopSelectedCoordinatorMission: { await coordinatorViewModel.stopSelectedCoordinatorMission() },
+                stopCoordinatorMission: { await coordinatorViewModel.stopCoordinatorMission(targetMissionID: $0) },
                 submitDirective: { await coordinatorViewModel.submitCoordinatorDirective($0) },
-                submitContinuation: { await coordinatorViewModel.submitCoordinatorContinuation($0) },
-                activePendingChildInteractionRow: { coordinatorViewModel.activePendingChildInteractionRow() },
+                submitContinuation: { await coordinatorViewModel.submitCoordinatorContinuation($0, expectedCheckpointInstanceID: $1) },
+                activePendingChildInteractionRow: { coordinatorViewModel.activePendingChildInteractionRow(coordinatorSessionID: $0) },
                 submitPendingChildInteractionResponse: { await coordinatorViewModel.submitPendingChildInteractionResponse($0, to: $1, actor: $2) },
+                durableApprovalAuthorityToken: { coordinatorViewModel.durableApprovalAuthorityToken(coordinatorSessionID: $0) },
                 updateMissionPlan: { try coordinatorViewModel.updateMissionPlan(coordinatorSessionID: $0, update: $1) },
                 missionEvents: { coordinatorViewModel.missionEvents(coordinatorSessionID: $0, sinceSeq: $1, limit: $2) },
                 setMissionPace: { coordinatorViewModel.setCoordinatorMissionPace(coordinatorSessionID: $0, pace: $1) },
@@ -119,7 +132,23 @@ struct CoordinatorChatMCPToolService {
         switch op {
         case "list":
             environment.refresh()
-            return stateResponse(environment.snapshot())
+            let snapshot = environment.snapshot()
+            if metadata.isCoordinatorRuntime {
+                let coordinatorSessionID = try await resolveCoordinatorSessionID(
+                    args["coordinator_session_id"],
+                    in: snapshot,
+                    metadata: metadata
+                )
+                try validateCoordinatorExists(coordinatorSessionID, in: snapshot)
+                return compactStateResponse(snapshot, extra: [
+                    "runtime_scoped": .bool(true),
+                    "mission_status": compactMissionStatusValue(
+                        coordinatorSessionID: coordinatorSessionID,
+                        snapshot: snapshot
+                    )
+                ])
+            }
+            return stateResponse(snapshot)
 
         case "list_missions":
             environment.refresh()
@@ -156,6 +185,7 @@ struct CoordinatorChatMCPToolService {
             ])
 
         case "select":
+            try validateExternalUserAction(metadata, action: "select Coordinator Missions")
             environment.refresh()
             let sessionID = try requireCoordinatorSessionID(args["coordinator_session_id"])
             try validateCoordinatorExists(sessionID, in: environment.snapshot())
@@ -254,25 +284,31 @@ struct CoordinatorChatMCPToolService {
             }
 
         case "stop_mission":
+            try validateExternalUserAction(metadata, action: "stop Coordinator Missions")
             environment.refresh()
+            let targetMissionID: UUID
             if let rawSessionID = args["coordinator_session_id"] {
-                let sessionID = try requireCoordinatorSessionID(rawSessionID)
-                try validateCoordinatorExists(sessionID, in: environment.snapshot())
-                environment.selectCoordinator(sessionID)
-                environment.refresh()
+                targetMissionID = try requireCoordinatorSessionID(rawSessionID)
+            } else if let selectedID = environment.snapshot().coordinatorRail.coordinatorSessionID {
+                targetMissionID = selectedID
+            } else {
+                throw MCPError.invalidParams("coordinator_session_id is required when no Coordinator Mission is selected.")
             }
-            let result = await environment.stopSelectedCoordinatorMission()
+            try validateCoordinatorExists(targetMissionID, in: environment.snapshot())
+            let result = await environment.stopCoordinatorMission(targetMissionID)
             environment.refresh()
             switch result {
             case .accepted:
                 return stateResponse(environment.snapshot(), extra: [
                     "accepted": .bool(true),
-                    "routed_to": .string("coordinator_stop")
+                    "routed_to": .string("coordinator_stop"),
+                    "coordinator_session_id": .string(targetMissionID.uuidString)
                 ])
             case let .rejected(message):
                 return stateResponse(environment.snapshot(), extra: [
                     "accepted": .bool(false),
                     "routed_to": .string("coordinator_stop"),
+                    "coordinator_session_id": .string(targetMissionID.uuidString),
                     "error": .string(message)
                 ])
             }
@@ -322,31 +358,54 @@ struct CoordinatorChatMCPToolService {
             if expectedCheckpointInstanceID != nil, continuationAction == nil {
                 throw MCPError.invalidParams("expected_checkpoint_instance_id is only valid with checkpoint_action.")
             }
+            let caller = try await classifyCaller(
+                metadata,
+                requiresResolvedRuntime: metadata.isCoordinatorRuntime && !newParent && continuationAction == nil
+            )
             if newParent {
-                try validateExternalMissionCreation(metadata)
+                try validateExternalMissionCreation(caller)
+            }
+            if continuationAction != nil {
+                try validateExternalUserAction(caller, action: "submit Coordinator checkpoint actions")
             }
 
             environment.refresh()
+            if !newParent, continuationAction == nil {
+                try validateInternalNonOwnerCannotSubmit(caller)
+            }
+            var scopedCoordinatorSessionID: UUID?
             if newParent {
                 environment.startNewCoordinatorRun(coordinatorModelID)
-            } else if let rawSessionID = args["coordinator_session_id"] {
-                let sessionID = try requireCoordinatorSessionID(rawSessionID)
+            } else if args["coordinator_session_id"] != nil || metadata.isCoordinatorRuntime {
+                try validateInternalNonOwnerCannotSubmit(caller)
+                let sessionID = try await resolveCoordinatorSessionID(
+                    args["coordinator_session_id"],
+                    in: environment.snapshot(),
+                    metadata: metadata
+                )
                 try validateCoordinatorExists(sessionID, in: environment.snapshot())
-                environment.selectCoordinator(sessionID)
+                scopedCoordinatorSessionID = sessionID
+                if !metadata.isCoordinatorRuntime {
+                    environment.selectCoordinator(sessionID)
+                    environment.refresh()
+                }
             }
 
             let selectedSnapshot = environment.snapshot()
             let pendingChildRow = newParent || continuationAction != nil
                 ? nil
-                : environment.activePendingChildInteractionRow()
+                : environment.activePendingChildInteractionRow(scopedCoordinatorSessionID)
             let result: CoordinatorModeViewModel.DirectiveSubmissionResult
             let routedToChildInteraction: Bool
             if let pendingChildRow {
-                let actor = decisionActor(for: metadata)
+                try validateAgentModeCallerCanAnswerChildInteraction(caller)
+                let actor = try decisionActorForChildSubmit(caller)
                 try validateRuntimeChildInteractionSubmitAllowed(
                     actor: actor,
                     row: pendingChildRow,
-                    snapshot: selectedSnapshot
+                    snapshot: selectedSnapshot,
+                    caller: caller,
+                    durableApprovalAuthorityToken: environment.durableApprovalAuthorityToken
                 )
                 let submission = try pendingChildSubmission(args: args, message: message)
                 result = await environment.submitPendingChildInteractionResponse(
@@ -357,8 +416,7 @@ struct CoordinatorChatMCPToolService {
                 routedToChildInteraction = true
             } else {
                 if let continuationAction {
-                    if shouldRejectStaleCheckpointSubmit(for: continuationAction),
-                       let expectedCheckpointInstanceID,
+                    if shouldValidateCurrentCheckpointSubmit(for: continuationAction),
                        let message = checkpointInstanceMismatchMessage(
                            expected: expectedCheckpointInstanceID,
                            snapshot: selectedSnapshot
@@ -366,10 +424,14 @@ struct CoordinatorChatMCPToolService {
                     {
                         result = .rejected(message: message)
                     } else {
-                        result = await environment.submitContinuation(continuationAction)
+                        result = await environment.submitContinuation(continuationAction, expectedCheckpointInstanceID)
                     }
                     routedToChildInteraction = false
                 } else {
+                    try validateInternalNonOwnerCannotSubmit(caller)
+                    if case .owningCoordinatorRuntime = caller {
+                        throw MCPError.invalidParams("Coordinator runtime submit is limited to owner-scoped childAsk:auto responses. No eligible pending child question is active for this Mission, so the submit was rejected without mutating UI selection or sending a Coordinator user turn.")
+                    }
                     guard let message, !message.isEmpty else {
                         throw MCPError.invalidParams("message is required.")
                     }
@@ -400,6 +462,11 @@ struct CoordinatorChatMCPToolService {
             }
 
         case "mission_plan":
+            let caller = try await classifyCaller(
+                metadata,
+                requiresResolvedRuntime: metadata.isCoordinatorRuntime
+            )
+            try validateInternalNonOwnerCannotUpdateMissionPlan(caller)
             environment.refresh()
             let snapshot = environment.snapshot()
             let coordinatorSessionID = try await resolveCoordinatorSessionID(
@@ -411,7 +478,12 @@ struct CoordinatorChatMCPToolService {
             let existingPlan = snapshot.coordinatorRail.availableCoordinators
                 .first(where: { $0.sessionID == coordinatorSessionID })?
                 .missionPlan
-            let update = try parseMissionPlanUpdate(args, existingPlan: existingPlan)
+            let update = try parseMissionPlanUpdate(
+                args,
+                existingPlan: existingPlan,
+                caller: caller,
+                durableApprovalAuthorityToken: environment.durableApprovalAuthorityToken(coordinatorSessionID)
+            )
             try environment.updateMissionPlan(coordinatorSessionID, update)
             environment.refresh()
             let updatedSnapshot = environment.snapshot()
@@ -616,40 +688,119 @@ struct CoordinatorChatMCPToolService {
         }
     }
 
+    private func classifyCaller(
+        _ metadata: RequestMetadata,
+        requiresResolvedRuntime: Bool = false
+    ) async throws -> CallerClassification {
+        if metadata.isCoordinatorRuntime {
+            if let runtimeCoordinatorID = await resolveRuntimeCoordinatorSessionID(metadata) {
+                return .owningCoordinatorRuntime(runtimeCoordinatorID)
+            }
+            if requiresResolvedRuntime {
+                throw MCPError.invalidParams("Coordinator runtime calls cannot resolve the caller Mission. Runtime Mission-scoped operations do not fall back to the selected UI Mission.")
+            }
+            return .internalNonOwnerAgentModeWorker
+        }
+        if metadata.runPurpose == .agentModeRun || metadata.runPurpose == .discoverRun || metadata.taskLabelKind != nil {
+            return .internalNonOwnerAgentModeWorker
+        }
+        return .externalCaller
+    }
+
     private func validateExternalMissionCreation(_ metadata: RequestMetadata) throws {
-        if metadata.isCoordinatorRuntime || metadata.taskLabelKind == .coordinator || metadata.runPurpose == .agentModeRun {
+        if metadata.isCoordinatorRuntime || metadata.taskLabelKind == .coordinator || metadata.runPurpose == .agentModeRun || metadata.runPurpose == .discoverRun {
+            throw MCPError.invalidParams("Coordinator runtime sessions cannot create other Coordinator Missions. Record a follow-up recommendation in the current Mission and wait for an external user or CLI driver to start it.")
+        }
+    }
+
+    private func validateExternalMissionCreation(_ caller: CallerClassification) throws {
+        guard caller == .externalCaller else {
             throw MCPError.invalidParams("Coordinator runtime sessions cannot create other Coordinator Missions. Record a follow-up recommendation in the current Mission and wait for an external user or CLI driver to start it.")
         }
     }
 
     private func validateExternalUserAction(_ metadata: RequestMetadata, action: String) throws {
-        if metadata.isCoordinatorRuntime || metadata.taskLabelKind == .coordinator || metadata.runPurpose == .agentModeRun {
+        if metadata.isCoordinatorRuntime || metadata.taskLabelKind == .coordinator || metadata.runPurpose == .agentModeRun || metadata.runPurpose == .discoverRun {
             throw MCPError.invalidParams("Coordinator runtime sessions cannot \(action). User-action parity operations must be driven by an external user or CLI driver.")
         }
     }
 
-    private func decisionActor(for metadata: RequestMetadata) -> CoordinatorMissionDecisionActor {
-        if metadata.isCoordinatorRuntime {
-            return .director
+    private func validateExternalUserAction(_ caller: CallerClassification, action: String) throws {
+        guard caller == .externalCaller else {
+            throw MCPError.invalidParams("Coordinator runtime sessions cannot \(action). User-action parity operations must be driven by an external user or CLI driver.")
         }
-        return .user
+    }
+
+    private func validateAgentModeCallerCanAnswerChildInteraction(_ caller: CallerClassification) throws {
+        guard caller != .internalNonOwnerAgentModeWorker else {
+            throw MCPError.invalidParams("Internal Agent Mode callers cannot answer Coordinator Mission child questions as the user. Only the resolved owning Coordinator runtime may answer Director-routed child questions; external user/CLI callers may answer user-routed questions.")
+        }
+    }
+
+    private func validateInternalNonOwnerCannotSubmit(_ caller: CallerClassification) throws {
+        guard caller != .internalNonOwnerAgentModeWorker else {
+            throw MCPError.invalidParams("Internal non-owner Agent Mode workers cannot submit Coordinator user turns, mutate selected or explicit Missions, or produce user decisions. Use the owning Coordinator runtime for Director-routed work, or wait for an external user/CLI caller.")
+        }
+    }
+
+    private func validateInternalNonOwnerCannotUpdateMissionPlan(_ caller: CallerClassification) throws {
+        guard caller != .internalNonOwnerAgentModeWorker else {
+            throw MCPError.invalidParams("Internal non-owner Agent Mode workers cannot mutate Coordinator Mission Plans. mission_plan is restricted to external callers and the owning Coordinator runtime.")
+        }
+    }
+
+    private func decisionActorForChildSubmit(_ caller: CallerClassification) throws -> CoordinatorMissionDecisionActor {
+        switch caller {
+        case .owningCoordinatorRuntime:
+            return .director
+        case .internalNonOwnerAgentModeWorker:
+            throw MCPError.invalidParams("Internal Agent Mode workers cannot answer Coordinator child questions as the external user. Only the owning Coordinator runtime may answer childAsk:auto questions; otherwise wait for a genuine external user/CLI answer.")
+        case .externalCaller:
+            return .user
+        }
     }
 
     private func validateRuntimeChildInteractionSubmitAllowed(
         actor: CoordinatorMissionDecisionActor,
         row: CoordinatorModeRow,
-        snapshot: CoordinatorModeSnapshot
+        snapshot: CoordinatorModeSnapshot,
+        caller: CallerClassification,
+        durableApprovalAuthorityToken: (UUID) -> String?
     ) throws {
         guard actor == .director else { return }
+        guard let runtimeCoordinatorID = caller.runtimeCoordinatorSessionID else {
+            throw MCPError.invalidParams("Coordinator runtime cannot answer child questions because RepoPrompt cannot resolve the caller Mission.")
+        }
         let coordinatorSessionID = row.parentCoordinator?.sessionID ?? snapshot.coordinatorRail.coordinatorSessionID
-        guard let coordinatorSessionID,
-              let plan = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == coordinatorSessionID })?.missionPlan
+        guard coordinatorSessionID == runtimeCoordinatorID else {
+            throw MCPError.invalidParams("Coordinator runtime child answers are scoped to the caller Mission and cannot answer another Mission's child question.")
+        }
+        guard let plan = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == runtimeCoordinatorID })?.missionPlan
         else {
-            throw MCPError.invalidParams("Coordinator runtime cannot answer child questions without a selected Mission Plan that routes child questions to Director.")
+            throw MCPError.invalidParams("Coordinator runtime cannot answer child questions without a Mission Plan that routes child questions to Director.")
         }
         guard plan.resolvedAutonomy(for: .childAsk) == .auto else {
             throw MCPError.invalidParams("Coordinator runtime cannot answer this child question because current Mission Policy routes child questions to Me. Wait for an external answer, or for an external user action to route child questions to Director.")
         }
+        guard (plan.approvalState == .approved && plan.hasDurableApprovalAuthority(durableApprovalAuthorityToken(runtimeCoordinatorID)))
+            || runtimeChildQuestionIsOwnedByEligiblePreapprovalNode(row: row, plan: plan)
+        else {
+            throw MCPError.invalidParams("Coordinator runtime cannot answer this child question before the approved Mission has an app-confirmed durable approval authority token, unless the question is bound to an exact eligible pre-approval planning/evidence node.")
+        }
+    }
+
+    private func runtimeChildQuestionIsOwnedByEligiblePreapprovalNode(
+        row: CoordinatorModeRow,
+        plan: CoordinatorMissionPlan
+    ) -> Bool {
+        guard plan.approvalState == .awaitingApproval else { return false }
+        let interactionID = row.pendingInteraction?.id
+        guard let node = plan.nodes.first(where: { node in
+            node.boundSessionID == row.sessionID
+                || (interactionID != nil && node.boundInteractionID == interactionID)
+        }) else { return false }
+        guard isEligiblePreApprovalPlanningNode(node, workstreams: plan.workstreams) else { return false }
+        return node.boundSessionID == row.sessionID || node.boundInteractionID == interactionID
     }
 
     private func findReusableMissionID(missionKey: String, in snapshot: CoordinatorModeSnapshot) -> UUID? {
@@ -677,7 +828,9 @@ struct CoordinatorChatMCPToolService {
 
     private func parseMissionPlanUpdate(
         _ args: [String: Value],
-        existingPlan: CoordinatorMissionPlan?
+        existingPlan: CoordinatorMissionPlan?,
+        caller: CallerClassification,
+        durableApprovalAuthorityToken: String? = nil
     ) throws -> CoordinatorMissionPlanUpdate {
         let missionKey = normalizedString(args["mission_key"] ?? args["missionKey"])
         let objective = normalizedString(args["objective"])
@@ -736,11 +889,34 @@ struct CoordinatorChatMCPToolService {
         {
             throw MCPError.invalidParams("mission_plan requires at least one of mission_key, objective, predecessor context, status, approval_state, shape_summary, policy_snapshot, autonomy, workstreams, nodes, routing_decisions, decisions, evidence, or events.")
         }
+        try validateTerminalMissionPlanReceiptFreeze(
+            existingPlan: existingPlan,
+            args: args,
+            status: status,
+            approvalState: approvalState
+        )
         try validateMissionPlanUpdateApprovalGate(
             existingPlan: existingPlan,
+            missionKey: missionKey,
+            objective: objective,
+            predecessorMissionID: predecessorUpdate.update.predecessorMissionID,
+            predecessorTitle: predecessorUpdate.update.predecessorTitle,
+            predecessorSummary: predecessorUpdate.update.predecessorSummary,
             status: status,
             approvalState: approvalState,
-            nodes: nodes
+            shapeSummary: shapeSummary,
+            hasShapeSummary: hasShapeSummary,
+            policySnapshot: policySnapshot,
+            hasPolicySnapshot: hasPolicySnapshot,
+            autonomy: autonomy,
+            hasAutonomy: hasAutonomy,
+            workstreams: workstreams,
+            nodes: nodes,
+            effectiveWorkstreams: effectiveWorkstreams,
+            replaceWorkstreams: replaceWorkstreams,
+            replaceNodes: replaceNodes,
+            caller: caller,
+            durableApprovalAuthorityToken: durableApprovalAuthorityToken
         )
         try validateCompletedMissionPlanNodesAreTerminal(
             status: status ?? existingPlan?.status,
@@ -779,15 +955,57 @@ struct CoordinatorChatMCPToolService {
 
     private func validateMissionPlanUpdateApprovalGate(
         existingPlan: CoordinatorMissionPlan?,
+        missionKey: String?,
+        objective: String?,
+        predecessorMissionID: UUID?,
+        predecessorTitle: String?,
+        predecessorSummary: String?,
         status: CoordinatorMissionPlanStatus?,
         approvalState: CoordinatorMissionPlanApprovalState?,
-        nodes: [CoordinatorMissionPlanNode]?
+        shapeSummary: CoordinatorMissionShapeSummary?,
+        hasShapeSummary: Bool,
+        policySnapshot: CoordinatorMissionPolicySnapshot?,
+        hasPolicySnapshot: Bool,
+        autonomy: [String: CoordinatorMissionAutonomyMode]?,
+        hasAutonomy: Bool,
+        workstreams: [CoordinatorMissionWorkstreamSummary]?,
+        nodes: [CoordinatorMissionPlanNode]?,
+        effectiveWorkstreams: [CoordinatorMissionWorkstreamSummary],
+        replaceWorkstreams: Bool,
+        replaceNodes: Bool,
+        caller: CallerClassification,
+        durableApprovalAuthorityToken: String? = nil
     ) throws {
+        if status == .stopped {
+            throw MCPError.invalidParams("mission_plan cannot stop Coordinator Missions; Stop is app/external-user owned. Use coordinator_chat op=stop_mission or checkpoint_action stop.")
+        }
+        if approvalState == .notRequired {
+            throw MCPError.invalidParams("mission_plan cannot set approval_state to not_required; concrete Mission Plans require the user checkpoint approval boundary.")
+        }
+        if approvalState == .approved, existingPlan == nil {
+            throw MCPError.invalidParams("mission_plan cannot create a fresh Mission Plan with approval_state approved; approve through the user checkpoint/continuation path.")
+        }
         if approvalState == .approved,
            let existingApprovalState = existingPlan?.approvalState,
            existingApprovalState != .approved
         {
             throw MCPError.invalidParams("mission_plan cannot advance approval_state to approved; approve the current Mission Plan through the user checkpoint/continuation path.")
+        }
+        try validateMissionPlanUserOwnedPolicyFields(
+            existingPlan: existingPlan,
+            policySnapshot: policySnapshot,
+            hasPolicySnapshot: hasPolicySnapshot,
+            autonomy: autonomy,
+            hasAutonomy: hasAutonomy,
+            caller: caller
+        )
+        if let existingPlan, existingPlan.status.isTerminal {
+            try validateTerminalMissionPlanUpdate(
+                existingPlan: existingPlan,
+                status: status,
+                approvalState: approvalState,
+                nodes: nodes
+            )
         }
         if existingPlan?.approvalState == .approved {
             if let approvalState, approvalState != .approved {
@@ -796,15 +1014,327 @@ struct CoordinatorChatMCPToolService {
             if status == .draft {
                 throw MCPError.invalidParams("mission_plan cannot downgrade an approved Mission status back to draft.")
             }
+            try validateApprovedMissionContractImmutability(
+                existingPlan: existingPlan,
+                missionKey: missionKey,
+                objective: objective,
+                predecessorMissionID: predecessorMissionID,
+                predecessorTitle: predecessorTitle,
+                predecessorSummary: predecessorSummary,
+                shapeSummary: shapeSummary,
+                hasShapeSummary: hasShapeSummary,
+                policySnapshot: policySnapshot,
+                hasPolicySnapshot: hasPolicySnapshot,
+                autonomy: autonomy,
+                hasAutonomy: hasAutonomy,
+                workstreams: workstreams,
+                nodes: nodes,
+                replaceWorkstreams: replaceWorkstreams,
+                replaceNodes: replaceNodes
+            )
         }
-        let effectiveApprovalState = approvalState ?? existingPlan?.approvalState ?? .notRequired
-        guard effectiveApprovalState != .approved, effectiveApprovalState != .notRequired else { return }
-        if let status, missionPlanStatusRequiresApproval(status) {
-            throw MCPError.invalidParams("mission_plan cannot advance status to \(status.rawValue) before approval_state is approved.")
+        let effectiveApprovalState = approvalState ?? existingPlan?.approvalState ?? .awaitingApproval
+        if case .owningCoordinatorRuntime = caller,
+           effectiveApprovalState == .approved,
+           existingPlan?.hasDurableApprovalAuthority(durableApprovalAuthorityToken) != true
+        {
+            throw MCPError.invalidParams("Coordinator runtime Mission updates require the app-confirmed durable approval authority token. Refresh Mission status and wait for the post-approval handoff barrier before recording runtime progress.")
         }
-        if let advancingNode = nodes?.first(where: { missionPlanNodeStatusRequiresApproval($0.status) }) {
-            throw MCPError.invalidParams("nodes[].status \(advancingNode.status.rawValue) requires approval_state approved before runtime progress can be recorded.")
+        guard effectiveApprovalState == .approved else {
+            if let status, missionPlanStatusRequiresApproval(status) {
+                throw MCPError.invalidParams("mission_plan cannot advance status to \(status.rawValue) before approval_state is approved.")
+            }
+            let progressingNodes = nodes?.filter { missionPlanNodeStatusRequiresApproval($0.status) } ?? []
+            if let disallowedNode = progressingNodes.first(where: {
+                !allowsPreApprovalPlanningNodeProgress(
+                    incoming: $0,
+                    existingPlan: existingPlan,
+                    effectiveWorkstreams: effectiveWorkstreams
+                )
+            }) {
+                throw MCPError.invalidParams("nodes[].status \(disallowedNode.status.rawValue) requires approval_state approved before runtime progress can be recorded, except for the exact node-bound pre-approval planning/probe/design-critique exceptions.")
+            }
+            return
         }
+    }
+
+    private func validateTerminalMissionPlanReceiptFreeze(
+        existingPlan: CoordinatorMissionPlan?,
+        args: [String: Value],
+        status: CoordinatorMissionPlanStatus?,
+        approvalState: CoordinatorMissionPlanApprovalState?
+    ) throws {
+        guard let existingPlan, existingPlan.status.isTerminal else { return }
+        if let status, status != existingPlan.status {
+            throw MCPError.invalidParams("mission_plan cannot reopen a terminal Mission that is already \(existingPlan.status.rawValue). Terminal Mission state is monotonic.")
+        }
+        if let approvalState, approvalState != existingPlan.approvalState {
+            throw MCPError.invalidParams("mission_plan cannot change approval_state after a Mission is terminal.")
+        }
+        let allowedKeys: Set = [
+            "op",
+            "coordinator_session_id",
+            "coordinatorSessionID",
+            "status",
+            "approval_state",
+            "approvalState",
+            "updated_at",
+            "updatedAt"
+        ]
+        let receiptAffectingKeys = args.keys.filter { !allowedKeys.contains($0) }.sorted()
+        guard receiptAffectingKeys.isEmpty else {
+            throw MCPError.invalidParams("mission_plan cannot update receipt-affecting fields after a Mission is terminal. Frozen field(s): \(receiptAffectingKeys.joined(separator: ", ")).")
+        }
+    }
+
+    private func validateMissionPlanUserOwnedPolicyFields(
+        existingPlan: CoordinatorMissionPlan?,
+        policySnapshot: CoordinatorMissionPolicySnapshot?,
+        hasPolicySnapshot: Bool,
+        autonomy: [String: CoordinatorMissionAutonomyMode]?,
+        hasAutonomy: Bool,
+        caller: CallerClassification
+    ) throws {
+        guard let existingPlan else {
+            if caller.runtimeCoordinatorSessionID != nil {
+                if hasPolicySnapshot, let policySnapshot, policySnapshot != .defaultPolicy {
+                    throw MCPError.invalidParams("mission_plan cannot establish arbitrary Mission policy authority on first plan creation from the Coordinator runtime. Use app/external user policy defaults or user-action controls.")
+                }
+                if hasAutonomy,
+                   let autonomy,
+                   autonomyContractDiffers(existing: CoordinatorMissionPolicySnapshot.defaultAutonomy, incoming: autonomy)
+                {
+                    throw MCPError.invalidParams("mission_plan cannot establish arbitrary Mission autonomy authority on first plan creation from the Coordinator runtime. Use app/external user policy defaults or user-action controls.")
+                }
+            }
+            return
+        }
+        if hasPolicySnapshot, let policySnapshot {
+            guard let existingPolicy = existingPlan.policySnapshot else {
+                throw MCPError.invalidParams("mission_plan cannot establish or mutate Mission policy authority before approval; choose Mission policy through the app/external user-action controls.")
+            }
+            guard policySnapshot == existingPolicy else {
+                throw MCPError.invalidParams("mission_plan cannot change user-owned Mission policy authority, including pace, autonomy, max_concurrent, standing guidance, pinned skills, or pinned contexts; use external UI/MCP user-action paths so a user decision is recorded.")
+            }
+        }
+        if hasAutonomy,
+           let autonomy,
+           autonomyContractDiffers(existing: existingPlan.autonomy, incoming: autonomy)
+        {
+            throw MCPError.invalidParams("mission_plan cannot change user-owned Mission autonomy authority; use external UI/MCP user-action paths so a user decision is recorded.")
+        }
+    }
+
+    private func validateTerminalMissionPlanUpdate(
+        existingPlan: CoordinatorMissionPlan,
+        status: CoordinatorMissionPlanStatus?,
+        approvalState: CoordinatorMissionPlanApprovalState?,
+        nodes: [CoordinatorMissionPlanNode]?
+    ) throws {
+        if let status, status != existingPlan.status {
+            throw MCPError.invalidParams("mission_plan cannot reopen a terminal Mission that is already \(existingPlan.status.rawValue). Terminal Mission state is monotonic.")
+        }
+        if let approvalState, approvalState != existingPlan.approvalState {
+            throw MCPError.invalidParams("mission_plan cannot change approval_state after a Mission is terminal.")
+        }
+        if let reopeningNode = nodes?.first(where: { !$0.status.isTerminal }) {
+            throw MCPError.invalidParams("mission_plan cannot reopen terminal Mission node \"\(reopeningNode.title)\" with status \(reopeningNode.status.rawValue). Terminal node state is monotonic.")
+        }
+    }
+
+    private func validateApprovedMissionContractImmutability(
+        existingPlan: CoordinatorMissionPlan?,
+        missionKey: String?,
+        objective: String?,
+        predecessorMissionID: UUID?,
+        predecessorTitle: String?,
+        predecessorSummary: String?,
+        shapeSummary: CoordinatorMissionShapeSummary?,
+        hasShapeSummary: Bool,
+        policySnapshot: CoordinatorMissionPolicySnapshot?,
+        hasPolicySnapshot: Bool,
+        autonomy: [String: CoordinatorMissionAutonomyMode]?,
+        hasAutonomy: Bool,
+        workstreams: [CoordinatorMissionWorkstreamSummary]?,
+        nodes: [CoordinatorMissionPlanNode]?,
+        replaceWorkstreams: Bool,
+        replaceNodes: Bool
+    ) throws {
+        guard let existingPlan else { return }
+        if let missionKey, missionKey != existingPlan.missionKey {
+            throw materialApprovedContractChangeError("mission_key")
+        }
+        if let objective, objective != existingPlan.objective {
+            throw materialApprovedContractChangeError("objective")
+        }
+        if let predecessorMissionID, predecessorMissionID != existingPlan.predecessorMissionID {
+            throw materialApprovedContractChangeError("predecessor_mission_id")
+        }
+        if let predecessorTitle, predecessorTitle != existingPlan.predecessorTitle {
+            throw materialApprovedContractChangeError("predecessor_title")
+        }
+        if let predecessorSummary, predecessorSummary != existingPlan.predecessorSummary {
+            throw materialApprovedContractChangeError("predecessor_summary")
+        }
+        if hasShapeSummary, shapeSummary != existingPlan.shapeSummary {
+            throw materialApprovedContractChangeError("shape_summary")
+        }
+        if hasPolicySnapshot, policySnapshot != existingPlan.policySnapshot {
+            throw materialApprovedContractChangeError("policy_snapshot")
+        }
+        if hasAutonomy,
+           let autonomy,
+           autonomyContractDiffers(existing: existingPlan.autonomy, incoming: autonomy)
+        {
+            throw materialApprovedContractChangeError("autonomy")
+        }
+        if replaceWorkstreams {
+            throw materialApprovedContractChangeError("replace_workstreams")
+        }
+        if replaceNodes, nodes != nil {
+            throw materialApprovedContractChangeError("replace_nodes")
+        }
+        let existingWorkstreamsByID = Dictionary(uniqueKeysWithValues: existingPlan.workstreams.map { ($0.id, $0) })
+        for workstream in workstreams ?? [] {
+            guard let existing = existingWorkstreamsByID[workstream.id] else {
+                throw materialApprovedContractChangeError("workstreams")
+            }
+            if workstreamContractDiffers(existing: existing, incoming: workstream) {
+                throw materialApprovedContractChangeError("workstreams")
+            }
+        }
+        let existingNodesByID = Dictionary(uniqueKeysWithValues: existingPlan.nodes.map { ($0.id, $0) })
+        for node in nodes ?? [] {
+            guard let existing = existingNodesByID[node.id] else {
+                throw materialApprovedContractChangeError("nodes")
+            }
+            if nodeContractDiffers(existing: existing, incoming: node) {
+                throw materialApprovedContractChangeError("nodes")
+            }
+        }
+    }
+
+    private func allowsPreApprovalPlanningNodeProgress(
+        incoming: CoordinatorMissionPlanNode,
+        existingPlan: CoordinatorMissionPlan?,
+        effectiveWorkstreams: [CoordinatorMissionWorkstreamSummary]
+    ) -> Bool {
+        guard let existingPlan,
+              existingPlan.approvalState == .awaitingApproval,
+              existingPlan.status == .draft || existingPlan.status == .approved,
+              let existing = existingPlan.nodes.first(where: { $0.id == incoming.id }),
+              !nodeContractDiffers(existing: existing, incoming: incoming)
+        else { return false }
+
+        guard isEligiblePreApprovalPlanningNode(incoming, workstreams: effectiveWorkstreams) else {
+            return false
+        }
+        if incoming.status.isTerminal {
+            guard incoming.boundSessionID != nil || incoming.boundInteractionID != nil else { return false }
+            guard let evidence = incoming.completionEvidence?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !evidence.isEmpty,
+                  !CoordinatorFollowThroughState.isStaleCompletionEvidence(evidence)
+            else { return false }
+        }
+        return true
+    }
+
+    private func isEligiblePreApprovalPlanningNode(
+        _ node: CoordinatorMissionPlanNode,
+        workstreams: [CoordinatorMissionWorkstreamSummary]
+    ) -> Bool {
+        switch node.executionPolicy {
+        case .freshReadOnlyChild:
+            guard let workflowName = node.workflowHint?.name else {
+                return hasPreApprovalReadOnlyMetadata(for: node, workstreams: workstreams)
+            }
+            return isPreApprovalPlanningWorkflow(workflowName)
+                && hasPreApprovalIsolatedWorktreeMetadata(for: node, workstreams: workstreams)
+        case .planCritique:
+            return node.workflowHint == nil
+                && hasPreApprovalIsolatedWorktreeMetadata(for: node, workstreams: workstreams)
+        case .coordinatorOnly, .steerPrimary, .freshSiblingOnSameWorktree, .freshWorktree, .askUser:
+            return false
+        }
+    }
+
+    private func isPreApprovalPlanningWorkflow(_ name: String) -> Bool {
+        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "investigate" || normalized == "deep plan"
+    }
+
+    private func hasPreApprovalReadOnlyMetadata(
+        for node: CoordinatorMissionPlanNode,
+        workstreams: [CoordinatorMissionWorkstreamSummary]
+    ) -> Bool {
+        guard let workstream = workstreams.first(where: { $0.id == node.workstreamID }) else { return false }
+        return workstream.worktreeStrategy.mode == .noneReadOnly
+            || hasPreApprovalIsolatedWorktreeMetadata(for: node, workstreams: workstreams)
+    }
+
+    private func hasPreApprovalIsolatedWorktreeMetadata(
+        for node: CoordinatorMissionPlanNode,
+        workstreams: [CoordinatorMissionWorkstreamSummary]
+    ) -> Bool {
+        guard let workstream = workstreams.first(where: { $0.id == node.workstreamID }) else { return false }
+        return workstream.worktreeStrategy.mode == .createIsolated
+            && workstream.worktreeStrategy.baseRef?.isEmpty == false
+    }
+
+    private func autonomyContractDiffers(
+        existing: [String: CoordinatorMissionAutonomyMode],
+        incoming: [String: CoordinatorMissionAutonomyMode]
+    ) -> Bool {
+        incoming.contains { key, value in
+            CoordinatorMissionPolicySnapshot.resolveAutonomy(existing[key], for: key) != CoordinatorMissionPolicySnapshot.resolveAutonomy(value, for: key)
+        }
+    }
+
+    private func workstreamContractDiffers(
+        existing: CoordinatorMissionWorkstreamSummary,
+        incoming: CoordinatorMissionWorkstreamSummary
+    ) -> Bool {
+        existing.title != incoming.title
+            || existing.purpose != incoming.purpose
+            || existing.role != incoming.role
+            || existing.defaultPolicy != incoming.defaultPolicy
+            || worktreeStrategyContractDiffers(existing: existing.worktreeStrategy, incoming: incoming.worktreeStrategy)
+    }
+
+    private func worktreeStrategyContractDiffers(
+        existing: CoordinatorMissionWorktreeStrategy,
+        incoming: CoordinatorMissionWorktreeStrategy
+    ) -> Bool {
+        existing.mode != incoming.mode
+            || worktreeIDTargetDiffers(existing: existing.worktreeID, incoming: incoming.worktreeID)
+            || existing.baseRef != incoming.baseRef
+            || existing.baseReason != incoming.baseReason
+            || existing.reason != incoming.reason
+    }
+
+    private func worktreeIDTargetDiffers(existing: String?, incoming: String?) -> Bool {
+        if let existing {
+            return incoming != existing
+        }
+        return false
+    }
+
+    private func nodeContractDiffers(
+        existing: CoordinatorMissionPlanNode,
+        incoming: CoordinatorMissionPlanNode
+    ) -> Bool {
+        existing.title != incoming.title
+            || existing.detail != incoming.detail
+            || existing.workflowHint != incoming.workflowHint
+            || existing.doneCriteria != incoming.doneCriteria
+            || existing.workstreamID != incoming.workstreamID
+            || existing.dependsOn != incoming.dependsOn
+            || existing.role != incoming.role
+            || existing.executionPolicy != incoming.executionPolicy
+    }
+
+    private func materialApprovedContractChangeError(_ field: String) -> MCPError {
+        MCPError.invalidParams("mission_plan cannot materially rewrite approved contract field \(field). Request a trusted user-visible plan revision that mints a new revision-bound approval checkpoint before changing objective, shape, workstreams, node contract, worktree strategy, policy/autonomy, or done criteria.")
     }
 
     private func validateCompletedMissionPlanNodesAreTerminal(
@@ -915,7 +1445,7 @@ struct CoordinatorChatMCPToolService {
     }
 
     private func checkpointInstanceMismatchMessage(
-        expected: String,
+        expected: String?,
         snapshot: CoordinatorModeSnapshot
     ) -> String? {
         guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID,
@@ -928,11 +1458,14 @@ struct CoordinatorChatMCPToolService {
             coordinatorSessionID: coordinatorSessionID,
             revision: plan.revision
         )
+        guard let expected else {
+            return "Checkpoint submit rejected: expected_checkpoint_instance_id is required. Refresh coordinator_chat op=mission_status and resubmit with expected_checkpoint_instance_id=\(current)."
+        }
         guard expected != current else { return nil }
-        return "Stale checkpoint submit rejected: expected checkpoint_instance_id \(expected), but current checkpoint_instance_id is \(current). Refresh coordinator_chat op=mission_status and resubmit the current checkpoint action."
+        return "Stale checkpoint submit rejected: expected checkpoint_instance_id \(expected), but current checkpoint_instance_id is \(current). Refresh coordinator_chat op=mission_status and resubmit with expected_checkpoint_instance_id=\(current)."
     }
 
-    private func shouldRejectStaleCheckpointSubmit(for action: CoordinatorModeViewModel.ContinuationAction) -> Bool {
+    private func shouldValidateCurrentCheckpointSubmit(for action: CoordinatorModeViewModel.ContinuationAction) -> Bool {
         // Stale-check consent-granting actions only. Stop withdraws consent and must remain
         // available even if a plan revision races the user's click.
         action != .stopHere
@@ -1856,14 +2389,20 @@ struct CoordinatorChatMCPToolService {
         in snapshot: CoordinatorModeSnapshot,
         metadata: RequestMetadata
     ) async throws -> UUID {
+        if metadata.isCoordinatorRuntime {
+            guard let runtimeCoordinatorID = await resolveRuntimeCoordinatorSessionID(metadata) else {
+                throw MCPError.invalidParams("coordinator_session_id is required for Coordinator runtime calls when RepoPrompt cannot resolve the caller Mission. Runtime Mission-scoped operations do not fall back to the selected UI Mission.")
+            }
+            if let value {
+                let requestedID = try requireCoordinatorSessionID(value)
+                guard requestedID == runtimeCoordinatorID else {
+                    throw MCPError.invalidParams("Coordinator runtime calls are scoped to the caller Mission and cannot write or inspect another Coordinator Mission.")
+                }
+            }
+            return runtimeCoordinatorID
+        }
         if let value {
             return try requireCoordinatorSessionID(value)
-        }
-        if metadata.isCoordinatorRuntime {
-            if let runtimeCoordinatorID = await resolveRuntimeCoordinatorSessionID(metadata) {
-                return runtimeCoordinatorID
-            }
-            throw MCPError.invalidParams("coordinator_session_id is required for Coordinator runtime calls when RepoPrompt cannot resolve the caller Mission. Pass the current Coordinator Mission UUID explicitly.")
         }
         if let selectedID = snapshot.coordinatorRail.coordinatorSessionID {
             return selectedID
@@ -2414,6 +2953,7 @@ struct CoordinatorChatMCPToolService {
                 "predecessor_summary": AgentMCPToolHelpers.stringOrNull(plan.predecessorSummary),
                 "status": .string(plan.status.rawValue),
                 "approval_state": .string(plan.approvalState.rawValue),
+                "post_approval_continuation": postApprovalContinuationValue(plan.postApprovalContinuation),
                 "shape_summary": missionShapeSummaryValue(plan.shapeSummary),
                 "policy_snapshot": missionPolicySnapshotSummaryValue(plan.policySnapshot),
                 "autonomy_summary": missionAutonomySummaryValue(plan.autonomy)
@@ -2670,6 +3210,15 @@ struct CoordinatorChatMCPToolService {
         parts.append(String(plan.policySnapshot?.maxConcurrent ?? CoordinatorMissionPolicySnapshot.defaultMaxConcurrent))
         parts.append(plan.policySnapshot?.definitionOfDone ?? "policy_dod:nil")
         parts.append(plan.policySnapshot?.standingGuidance ?? "policy_guidance:nil")
+        if let continuation = plan.postApprovalContinuation {
+            parts.append(contentsOf: [
+                "post_approval_continuation",
+                continuation.id.uuidString,
+                continuation.status.rawValue,
+                String(continuation.attempts),
+                continuation.lastError ?? "error:nil"
+            ])
+        }
         for (key, mode) in plan.autonomy.sorted(by: { $0.key < $1.key }) {
             parts.append(contentsOf: ["autonomy", key, mode.rawValue])
         }
@@ -3335,6 +3884,7 @@ struct CoordinatorChatMCPToolService {
             "shape_summary": missionShapeSummaryValue(plan.shapeSummary),
             "policy_snapshot": missionPolicySnapshotValue(plan.policySnapshot),
             "autonomy": missionAutonomyMapValue(plan.autonomy),
+            "post_approval_continuation": postApprovalContinuationValue(plan.postApprovalContinuation),
             "updated_at": .string(AgentMCPToolHelpers.timestamp(plan.updatedAt)),
             "workstreams": .array(plan.workstreams.map(missionWorkstreamValue)),
             "nodes": .array(plan.nodes.map(missionPlanNodeValue)),
@@ -3342,6 +3892,22 @@ struct CoordinatorChatMCPToolService {
             "decisions": .array(plan.decisions.map(missionDecisionRecordValue)),
             "evidence": .array(plan.evidence.map(missionEvidenceRecordValue)),
             "events": .array(plan.events.map(missionPlanEventValue))
+        ])
+    }
+
+    private func postApprovalContinuationValue(_ continuation: CoordinatorPostApprovalContinuationRecord?) -> Value {
+        guard let continuation else { return .null }
+        return .object([
+            "id": .string(continuation.id.uuidString),
+            "coordinator_session_id": .string(continuation.coordinatorSessionID.uuidString),
+            "checkpoint_instance_id": .string(continuation.checkpointInstanceID),
+            "plan_id": .string(continuation.planID.uuidString),
+            "plan_revision": .int(continuation.planRevision),
+            "status": .string(continuation.status.rawValue),
+            "attempts": .int(continuation.attempts),
+            "last_error": AgentMCPToolHelpers.stringOrNull(continuation.lastError),
+            "created_at": .string(AgentMCPToolHelpers.timestamp(continuation.createdAt)),
+            "updated_at": .string(AgentMCPToolHelpers.timestamp(continuation.updatedAt))
         ])
     }
 

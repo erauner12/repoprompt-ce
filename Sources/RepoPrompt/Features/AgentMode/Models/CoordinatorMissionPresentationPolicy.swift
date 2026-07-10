@@ -156,9 +156,9 @@ enum CoordinatorMissionPresentationPolicy {
             return .mission(plan.status)
         }
         switch plan.approvalState {
-        case .awaitingApproval, .revisionRequested:
+        case .notRequired, .awaitingApproval, .revisionRequested:
             return .approval(plan.approvalState)
-        case .notRequired, .approved:
+        case .approved:
             return .mission(plan.status)
         }
     }

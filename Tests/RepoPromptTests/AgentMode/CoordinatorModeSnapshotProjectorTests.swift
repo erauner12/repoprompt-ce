@@ -1262,7 +1262,7 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             revision: 1,
             objective: "Stable tie-break",
             status: .running,
-            approvalState: .notRequired,
+            approvalState: .approved,
             routingDecisions: [
                 CoordinatorMissionRoutingDecision(
                     id: uuid(80),

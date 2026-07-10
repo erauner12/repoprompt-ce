@@ -1729,14 +1729,13 @@ struct CoordinatorModeView: View {
         let draft = missionPlanRevisionDraft
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
-              canSubmitMissionPlanRevision(rail),
-              viewModel.queuePlanRevisionDecisionAfterAcceptedDirective()
+              canSubmitMissionPlanRevision(rail)
         else { return }
 
         isSubmittingMissionPlanRevision = true
         isMissionPlanComposerFocused = true
         Task { @MainActor in
-            let result = await viewModel.submitCoordinatorDirective(draft)
+            let result = await viewModel.submitPlanRevisionDirective(draft)
             if result == .accepted {
                 missionPlanRevisionDraft = ""
             }
@@ -3702,7 +3701,7 @@ struct CoordinatorModeView: View {
                 .padding(.horizontal, metrics.cardPadding)
                 .padding(.vertical, metrics.smallSpacing)
             }
-        case .planApproval:
+        case let .planApproval(coordinatorSessionID, expectedCheckpointInstanceID):
             coordinatorDirectorCheckpointTriadCard(
                 badgeTitle: "Mission checkpoint · Plan approval",
                 badgeSystemImage: "flag.checkered",
@@ -3714,13 +3713,13 @@ struct CoordinatorModeView: View {
                 stopDescription: "End this Mission here and record the stop decision.",
                 metrics: metrics,
                 onProceed: {
-                    submitCoordinatorContinuation(.proceed)
+                    submitCoordinatorContinuation(.proceed, expectedCheckpointInstanceID: expectedCheckpointInstanceID)
                 },
                 onRevise: {
                     reviseCoordinatorPlanApprovalCheckpoint()
                 },
                 onStop: {
-                    submitCoordinatorContinuation(.stopHere)
+                    stopCoordinatorMission(targetMissionID: coordinatorSessionID)
                 }
             )
             .disabled(isSubmittingCoordinatorDirective)
@@ -3745,7 +3744,7 @@ struct CoordinatorModeView: View {
                 },
                 onStop: {
                     resolvePendingFollowThroughEvent(event) {
-                        stopCoordinatorMission()
+                        stopCoordinatorMission(targetMissionID: event.coordinatorSessionID)
                     }
                 }
             )
@@ -3759,7 +3758,7 @@ struct CoordinatorModeView: View {
 
     private enum CoordinatorCheckpointPresentation {
         case pendingInteraction(CoordinatorModePendingInteractionSummary)
-        case planApproval
+        case planApproval(coordinatorSessionID: UUID, expectedCheckpointInstanceID: String)
         case stepBoundary(CoordinatorFollowThroughEvent)
     }
 
@@ -3775,10 +3774,17 @@ struct CoordinatorModeView: View {
               !isSubmittingCoordinatorDirective
         else { return nil }
 
-        if let missionPlan = rail.missionPlan,
+        if let coordinatorSessionID = rail.coordinatorSessionID,
+           let missionPlan = rail.missionPlan,
            shouldShowPlanApprovalCheckpoint(missionPlan)
         {
-            return .planApproval
+            return .planApproval(
+                coordinatorSessionID: coordinatorSessionID,
+                expectedCheckpointInstanceID: planApprovalCheckpointInstanceID(
+                    coordinatorSessionID: coordinatorSessionID,
+                    revision: missionPlan.revision
+                )
+            )
         }
 
         if let event = viewModel.activePendingFollowThroughEvent() {
@@ -3793,6 +3799,22 @@ struct CoordinatorModeView: View {
             && !missionPlan.nodes.isEmpty
             && missionPlan.status != .stopped
             && missionPlan.status != .completed
+    }
+
+    private func currentPlanApprovalCheckpointInstanceID() -> String? {
+        let rail = viewModel.snapshot.coordinatorRail
+        guard let coordinatorSessionID = rail.coordinatorSessionID,
+              let plan = rail.missionPlan,
+              shouldShowPlanApprovalCheckpoint(plan)
+        else { return nil }
+        return planApprovalCheckpointInstanceID(
+            coordinatorSessionID: coordinatorSessionID,
+            revision: plan.revision
+        )
+    }
+
+    private func planApprovalCheckpointInstanceID(coordinatorSessionID: UUID, revision: Int) -> String {
+        "coordinator:\(coordinatorSessionID.uuidString):plan-approval:r\(revision)"
     }
 
     private func coordinatorMissionPlanReferenceCard(
@@ -4464,19 +4486,19 @@ struct CoordinatorModeView: View {
         coordinatorOwnedCheckpointQuestionIndex[Self.planApprovalCheckpointDraftKey] = nil
         switch selected {
         case "Proceed":
-            submitCoordinatorContinuation(.proceed)
+            submitCoordinatorContinuation(.proceed, expectedCheckpointInstanceID: currentPlanApprovalCheckpointInstanceID())
         case "Revise":
             reviseCoordinatorPlanApprovalCheckpoint()
         case "Gather evidence":
-            submitCoordinatorContinuation(.runLightweightDiscovery)
+            submitCoordinatorContinuation(.runLightweightDiscovery, expectedCheckpointInstanceID: currentPlanApprovalCheckpointInstanceID())
         case "Deepen plan":
-            submitCoordinatorContinuation(.runDeepPlan)
+            submitCoordinatorContinuation(.runDeepPlan, expectedCheckpointInstanceID: currentPlanApprovalCheckpointInstanceID())
         case "Get independent critique":
-            submitCoordinatorContinuation(.runDesignCritique)
+            submitCoordinatorContinuation(.runDesignCritique, expectedCheckpointInstanceID: currentPlanApprovalCheckpointInstanceID())
         case "Start smaller":
-            submitCoordinatorContinuation(.startSmaller)
+            submitCoordinatorContinuation(.startSmaller, expectedCheckpointInstanceID: currentPlanApprovalCheckpointInstanceID())
         case "Stop":
-            submitCoordinatorContinuation(.stopHere)
+            submitCoordinatorContinuation(.stopHere, expectedCheckpointInstanceID: currentPlanApprovalCheckpointInstanceID())
         default:
             break
         }
@@ -4496,7 +4518,7 @@ struct CoordinatorModeView: View {
             reviseCoordinatorFollowThroughCheckpoint(event)
         case "Stop":
             resolvePendingFollowThroughEvent(event) {
-                stopCoordinatorMission()
+                stopCoordinatorMission(targetMissionID: event.coordinatorSessionID)
             }
         default:
             break
@@ -4517,7 +4539,7 @@ struct CoordinatorModeView: View {
             isMissionPlanComposerFocused = true
             return
         }
-        viewModel.queuePlanRevisionDecisionAfterAcceptedDirective()
+        _ = viewModel.requestSelectedPlanRevision()
         if coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             coordinatorDirectiveDraft = "Revise the plan: "
         }
@@ -6388,7 +6410,10 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func submitCoordinatorContinuation(_ action: CoordinatorModeViewModel.ContinuationAction) {
+    private func submitCoordinatorContinuation(
+        _ action: CoordinatorModeViewModel.ContinuationAction,
+        expectedCheckpointInstanceID: String? = nil
+    ) {
         guard viewModel.snapshot.coordinatorRail.state == .selected,
               viewModel.snapshot.coordinatorRail.isComposerSendEnabled,
               !isSubmittingCoordinatorDirective
@@ -6397,7 +6422,10 @@ struct CoordinatorModeView: View {
         isSubmittingCoordinatorDirective = true
         isCoordinatorComposerFocused = true
         Task { @MainActor in
-            _ = await viewModel.submitCoordinatorContinuation(action)
+            _ = await viewModel.submitCoordinatorContinuation(
+                action,
+                expectedCheckpointInstanceID: expectedCheckpointInstanceID
+            )
             isSubmittingCoordinatorDirective = false
             isCoordinatorComposerFocused = true
         }
@@ -6428,11 +6456,20 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func stopCoordinatorMission() {
-        guard viewModel.canStopSelectedCoordinatorMission, !isStoppingCoordinatorMission else { return }
+    private func stopCoordinatorMission(targetMissionID explicitTargetMissionID: UUID? = nil) {
+        guard !isStoppingCoordinatorMission else { return }
+        guard let targetMissionID = explicitTargetMissionID ?? viewModel.snapshot.coordinatorRail.coordinatorSessionID else { return }
+        if explicitTargetMissionID == nil {
+            guard viewModel.canStopSelectedCoordinatorMission else { return }
+        }
+        stopCoordinatorMission(targetMissionID: targetMissionID)
+    }
+
+    private func stopCoordinatorMission(targetMissionID: UUID) {
+        guard !isStoppingCoordinatorMission else { return }
         isStoppingCoordinatorMission = true
         Task { @MainActor in
-            _ = await viewModel.stopSelectedCoordinatorMission()
+            _ = await viewModel.stopCoordinatorMission(targetMissionID: targetMissionID)
             isStoppingCoordinatorMission = false
             isCoordinatorComposerFocused = true
         }
@@ -7932,7 +7969,7 @@ private extension CoordinatorMissionPlanStatus {
 private extension CoordinatorMissionPlanApprovalState {
     var displayName: String {
         switch self {
-        case .notRequired: "No approval"
+        case .notRequired: "Approval required"
         case .awaitingApproval: "Awaiting approval"
         case .approved: "Approved"
         case .revisionRequested: "Revision requested"
@@ -7941,7 +7978,7 @@ private extension CoordinatorMissionPlanApprovalState {
 
     var tint: Color {
         switch self {
-        case .notRequired: .secondary
+        case .notRequired: .orange
         case .awaitingApproval: .orange
         case .approved: .green
         case .revisionRequested: .purple

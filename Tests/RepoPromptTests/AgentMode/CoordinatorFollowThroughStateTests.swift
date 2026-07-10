@@ -2,6 +2,277 @@
 import XCTest
 
 final class CoordinatorFollowThroughStateTests: XCTestCase {
+    func testPostApprovalContinuationAttemptsOnlyAdvanceOnDispatch() throws {
+        let coordinatorID = UUID()
+        let planID = UUID()
+        let createdAt = Date(timeIntervalSince1970: 10)
+        let firstDeferredAt = Date(timeIntervalSince1970: 20)
+        let repeatedDeferredAt = Date(timeIntervalSince1970: 30)
+        let dispatchAt = Date(timeIntervalSince1970: 40)
+        let deliveredAt = Date(timeIntervalSince1970: 50)
+        let continuation = CoordinatorPostApprovalContinuationRecord(
+            coordinatorSessionID: coordinatorID,
+            checkpointInstanceID: "plan-approval:\(coordinatorID.uuidString):1",
+            planID: planID,
+            planRevision: 1,
+            directiveText: "Proceed with the approved plan.",
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            id: planID,
+            objective: "Approved handoff",
+            status: .running,
+            approvalState: .approved,
+            postApprovalContinuation: continuation
+        ))
+
+        XCTAssertTrue(state.markPostApprovalContinuationDeferred(
+            error: "Coordinator is mid-run.",
+            at: firstDeferredAt
+        ))
+        var record = try XCTUnwrap(state.postApprovalContinuation)
+        XCTAssertEqual(record.status, .deferred)
+        XCTAssertEqual(record.attempts, 0)
+        XCTAssertEqual(record.updatedAt, firstDeferredAt)
+
+        XCTAssertFalse(state.markPostApprovalContinuationDeferred(
+            error: "Coordinator is mid-run.",
+            at: repeatedDeferredAt
+        ))
+        record = try XCTUnwrap(state.postApprovalContinuation)
+        XCTAssertEqual(record.status, .deferred)
+        XCTAssertEqual(record.attempts, 0)
+        XCTAssertEqual(record.updatedAt, firstDeferredAt)
+
+        XCTAssertTrue(state.markPostApprovalContinuationDispatching(at: dispatchAt))
+        record = try XCTUnwrap(state.postApprovalContinuation)
+        XCTAssertEqual(record.status, .dispatching)
+        XCTAssertEqual(record.attempts, 1)
+        XCTAssertEqual(record.updatedAt, dispatchAt)
+
+        XCTAssertTrue(state.markPostApprovalContinuationDelivered(at: deliveredAt))
+        record = try XCTUnwrap(state.postApprovalContinuation)
+        XCTAssertEqual(record.status, .delivered)
+        XCTAssertEqual(record.attempts, 1)
+        XCTAssertEqual(record.updatedAt, deliveredAt)
+    }
+
+    func testFollowThroughDecodeReconcilesTopLevelPostApprovalContinuationIntoPlanMirror() throws {
+        let coordinatorID = UUID()
+        let planID = UUID()
+        let continuationID = UUID()
+        let payload = """
+        {
+          "missionPlan": {
+            "id": "\(planID.uuidString)",
+            "revision": 4,
+            "objective": "Decode top-level continuation",
+            "status": "running",
+            "approvalState": "approved",
+            "workstreams": [],
+            "nodes": [],
+            "events": [],
+            "updatedAt": 10
+          },
+          "observedChildPhases": [],
+          "pendingEvents": [],
+          "handledEventIDs": [],
+          "postApprovalContinuation": {
+            "id": "\(continuationID.uuidString)",
+            "coordinatorSessionID": "\(coordinatorID.uuidString)",
+            "checkpointInstanceID": "coordinator:\(coordinatorID.uuidString):plan-approval:r4",
+            "planID": "\(planID.uuidString)",
+            "planRevision": 4,
+            "directiveText": "Proceed.",
+            "status": "deferred",
+            "createdAt": 10,
+            "updatedAt": 11,
+            "attempts": 0,
+            "lastError": "queued"
+          },
+          "childInteractionResponses": []
+        }
+        """
+
+        let decoded = try JSONDecoder().decode(CoordinatorFollowThroughState.self, from: Data(payload.utf8))
+
+        XCTAssertEqual(decoded.postApprovalContinuation?.id, continuationID)
+        XCTAssertEqual(decoded.missionPlan?.postApprovalContinuation?.id, continuationID)
+    }
+
+    func testFollowThroughDecodeReconcilesPlanOnlyPostApprovalContinuationIntoCanonicalOwner() throws {
+        let coordinatorID = UUID()
+        let planID = UUID()
+        let continuationID = UUID()
+        let payload = """
+        {
+          "missionPlan": {
+            "id": "\(planID.uuidString)",
+            "revision": 5,
+            "objective": "Decode plan mirror continuation",
+            "status": "running",
+            "approvalState": "approved",
+            "workstreams": [],
+            "nodes": [],
+            "events": [],
+            "postApprovalContinuation": {
+              "id": "\(continuationID.uuidString)",
+              "coordinatorSessionID": "\(coordinatorID.uuidString)",
+              "checkpointInstanceID": "coordinator:\(coordinatorID.uuidString):plan-approval:r5",
+              "planID": "\(planID.uuidString)",
+              "planRevision": 5,
+              "directiveText": "Proceed.",
+              "status": "pending",
+              "createdAt": 20,
+              "updatedAt": 20,
+              "attempts": 0
+            },
+            "updatedAt": 20
+          },
+          "observedChildPhases": [],
+          "pendingEvents": [],
+          "handledEventIDs": [],
+          "childInteractionResponses": []
+        }
+        """
+
+        let decoded = try JSONDecoder().decode(CoordinatorFollowThroughState.self, from: Data(payload.utf8))
+
+        XCTAssertEqual(decoded.postApprovalContinuation?.id, continuationID)
+        XCTAssertEqual(decoded.missionPlan?.postApprovalContinuation?.id, continuationID)
+    }
+
+    func testDeliveredPostApprovalContinuationSurvivesTerminalMissionProgress() throws {
+        let coordinatorID = UUID()
+        let planID = UUID()
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            id: planID,
+            objective: "Complete after accepted handoff",
+            status: .running,
+            approvalState: .approved,
+            postApprovalContinuation: CoordinatorPostApprovalContinuationRecord(
+                coordinatorSessionID: coordinatorID,
+                checkpointInstanceID: "plan-approval:\(coordinatorID.uuidString):1",
+                planID: planID,
+                planRevision: 1,
+                directiveText: "Proceed.",
+                status: .delivered,
+                attempts: 1
+            )
+        ))
+
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            status: .completed,
+            updatedAt: Date(timeIntervalSince1970: 60)
+        ))
+
+        let continuation = try XCTUnwrap(state.postApprovalContinuation)
+        XCTAssertEqual(continuation.status, .delivered)
+        XCTAssertEqual(continuation.attempts, 1)
+    }
+
+    func testFailedPostApprovalContinuationSurvivesStopInvalidation() throws {
+        let coordinatorID = UUID()
+        let planID = UUID()
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            id: planID,
+            objective: "Failed handoff",
+            status: .running,
+            approvalState: .approved,
+            postApprovalContinuation: CoordinatorPostApprovalContinuationRecord(
+                coordinatorSessionID: coordinatorID,
+                checkpointInstanceID: "plan-approval:\(coordinatorID.uuidString):1",
+                planID: planID,
+                planRevision: 1,
+                directiveText: "Proceed.",
+                status: .failed,
+                attempts: 1,
+                lastError: "Transport rejected."
+            )
+        ))
+
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            status: .stopped,
+            updatedAt: Date(timeIntervalSince1970: 70)
+        ))
+
+        let continuation = try XCTUnwrap(state.postApprovalContinuation)
+        XCTAssertEqual(continuation.status, .failed)
+        XCTAssertEqual(continuation.lastError, "Transport rejected.")
+    }
+
+    func testTrustedRevisionInvalidatesOnlyLivePostApprovalContinuation() throws {
+        let coordinatorID = UUID()
+        let planID = UUID()
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            id: planID,
+            objective: "Revise handoff",
+            status: .running,
+            approvalState: .approved,
+            postApprovalContinuation: CoordinatorPostApprovalContinuationRecord(
+                coordinatorSessionID: coordinatorID,
+                checkpointInstanceID: "plan-approval:\(coordinatorID.uuidString):1",
+                planID: planID,
+                planRevision: 1,
+                directiveText: "Proceed.",
+                status: .deferred
+            )
+        ))
+
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            approvalState: .revisionRequested,
+            updatedAt: Date(timeIntervalSince1970: 80)
+        ))
+
+        let continuation = try XCTUnwrap(state.postApprovalContinuation)
+        XCTAssertEqual(continuation.status, .invalidated)
+        XCTAssertEqual(continuation.lastError, "Mission approval boundary was revised.")
+    }
+
+    func testTerminalMissionPlanUpdatePreservesReceiptInputsInSharedMerge() throws {
+        let coordinatorID = UUID()
+        let planID = UUID()
+        let decision = CoordinatorMissionDecisionRecord(
+            userDecision: .approvedMissionPlan,
+            decisionClass: .plan,
+            checkpointInstanceID: "plan-approval:\(coordinatorID.uuidString):1"
+        )
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            id: planID,
+            objective: "Frozen receipt",
+            status: .completed,
+            approvalState: .approved,
+            decisions: [decision],
+            evidence: [CoordinatorMissionEvidenceRecord(verdict: .meets, summary: "Done.")],
+            postApprovalContinuation: CoordinatorPostApprovalContinuationRecord(
+                coordinatorSessionID: coordinatorID,
+                checkpointInstanceID: "plan-approval:\(coordinatorID.uuidString):1",
+                planID: planID,
+                planRevision: 1,
+                directiveText: "Proceed.",
+                status: .delivered,
+                attempts: 1
+            )
+        ))
+        let before = try XCTUnwrap(state.missionPlan)
+
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            objective: "Reopened objective",
+            status: .running,
+            decisions: [CoordinatorMissionDecisionRecord(
+                userDecision: .stoppedMission,
+                decisionClass: .irreversible,
+                checkpointInstanceID: "late-stop"
+            )],
+            evidence: [CoordinatorMissionEvidenceRecord(verdict: .short, summary: "Late mutation.")],
+            updatedAt: Date(timeIntervalSince1970: 90)
+        ))
+
+        XCTAssertEqual(state.missionPlan, before)
+        XCTAssertEqual(state.postApprovalContinuation?.status, .delivered)
+    }
+
     func testMissionPlanDecodesFromOlderPayloadAndResetsForNewObjective() throws {
         let oldPayload = """
         {
@@ -182,6 +453,72 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
         XCTAssertEqual(replacedPlan.nodes.first?.boundSessionID, childID)
     }
 
+    func testReplaceWorkstreamsWithoutPayloadPreservesExistingWorkstreams() throws {
+        let workstreamID = UUID()
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Preserve workstreams",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Existing lane",
+                    purpose: "Keep this lane.",
+                    defaultPolicy: .freshWorktree,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+                )
+            ]
+        ))
+
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            replaceWorkstreams: true,
+            updatedAt: Date(timeIntervalSince1970: 20)
+        ))
+
+        let plan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(plan.workstreams.map(\.id), [workstreamID])
+        XCTAssertEqual(plan.workstreams.first?.title, "Existing lane")
+    }
+
+    func testCoordinatorOnlyStateCompletionRequiresApprovedPlan() {
+        let workstreamID = UUID()
+        let nodeID = UUID()
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Do not bypass approval",
+            status: .running,
+            approvalState: .awaitingApproval,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Coordinator lane",
+                    purpose: "State-only work.",
+                    defaultPolicy: .coordinatorOnly,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: nodeID,
+                    title: "State-only step",
+                    workstreamID: workstreamID,
+                    executionPolicy: .coordinatorOnly,
+                    status: .running
+                )
+            ]
+        ))
+
+        XCTAssertFalse(state.completeSatisfiedCoordinatorOnlyRunningMissionPlanNodes())
+        XCTAssertEqual(state.missionPlan?.nodes.first?.status, .running)
+
+        state.updateMissionPlan(CoordinatorMissionPlanUpdate(
+            approvalState: .approved,
+            updatedAt: Date(timeIntervalSince1970: 20)
+        ))
+
+        XCTAssertTrue(state.completeSatisfiedCoordinatorOnlyRunningMissionPlanNodes())
+        XCTAssertEqual(state.missionPlan?.nodes.first?.status, .completed)
+    }
+
     func testResumeDirectiveContainsMissionEligibilityCapAndIdempotencyClauses() {
         let event = CoordinatorFollowThroughEvent(
             id: "resume-1",
@@ -352,7 +689,7 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
 
         let decisions = try XCTUnwrap(state.missionPlan?.routingDecisions)
         XCTAssertEqual(decisions.map(\.id), [firstID, secondID])
-        XCTAssertEqual(decisions.map(\.reason), ["Ask before discovery.", "Updated discovery route."])
+        XCTAssertEqual(decisions.map(\.reason), ["Ask before discovery.", "Initial discovery."])
         XCTAssertEqual(state.missionPlan?.status, .running)
     }
 
@@ -558,7 +895,7 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
 
         let stoppedPlan = try XCTUnwrap(state.missionPlan)
         XCTAssertEqual(stoppedPlan.status, .stopped)
-        XCTAssertEqual(stoppedPlan.nodes.map(\.status), [.cancelled, .cancelled, .pending])
+        XCTAssertEqual(stoppedPlan.nodes.map(\.status), [.cancelled, .cancelled, .cancelled])
         XCTAssertEqual(stoppedPlan.routingDecisions.last?.operation, .agentRunCancel)
         XCTAssertEqual(stoppedPlan.routingDecisions.last?.sessionID, cancelledSessionID)
         XCTAssertTrue(state.pendingEvents.isEmpty)
@@ -700,6 +1037,7 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
             revision: 1,
             objective: "DAG smoke",
             status: .running,
+            approvalState: .approved,
             workstreams: [
                 CoordinatorMissionWorkstreamSummary(
                     id: workstreamID,
@@ -756,6 +1094,7 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
             revision: 3,
             objective: "DAG smoke",
             status: .running,
+            approvalState: .approved,
             workstreams: [
                 CoordinatorMissionWorkstreamSummary(
                     id: workstreamID,

@@ -13,7 +13,7 @@ enum AgentRunCoordinatorMissionPlanPolicy {
     }
 
     static let approvedMissionPlanRequiredMessage = """
-    Coordinator missions must record and approve a concrete Mission Plan before launching delegated Agent Mode sessions. Use coordinator_chat op=mission_plan to create DAG-lite nodes for the user's actual deliverables, set approval_state to "awaiting_approval", and ask the user: Proceed / Revise / Gather evidence / Deepen plan / Get independent critique / Start smaller / Stop. Proceed advances the next planned phase; if that phase is mutable work, update the Mission Plan to approval_state "approved" before starting implementation/review child sessions with agent_run.start or agent_explore.start. A planning delegate is not a Mission Plan. The only pre-approval child exceptions are node-bound planning actions: agent_explore.start with mission_node_id bound to a workflow-less fresh_readonly_child node, agent_run.start with workflow_name:"Investigate" or workflow_name:"Deep Plan" and mission_node_id bound to a matching fresh_readonly_child node, or agent_run.start with model_id:"design" and mission_node_id bound to a workflow-less plan_critique node. Investigate, Deep Plan, and design critique launches must use worktree_create:true.
+    Coordinator missions must record and approve a concrete Mission Plan before launching delegated Agent Mode sessions. Use coordinator_chat op=mission_plan to create DAG-lite nodes for the user's actual deliverables, set approval_state to "awaiting_approval", and ask the user: Proceed / Revise / Gather evidence / Deepen plan / Get independent critique / Start smaller / Stop. Proceed advances the next planned phase; the app/user checkpoint transaction persists approval_state "approved" and a durable approval authority token before runtime continuation, so do not write approval_state yourself. Wait for that app-persisted approval before starting implementation/review child sessions with agent_run.start or agent_explore.start. A planning delegate is not a Mission Plan. The only pre-approval child exceptions are node-bound planning actions: agent_explore.start with mission_node_id bound to a workflow-less fresh_readonly_child node, agent_run.start with workflow_name:"Investigate" or workflow_name:"Deep Plan" and mission_node_id bound to a matching fresh_readonly_child node, or agent_run.start with model_id:"design" and mission_node_id bound to a workflow-less plan_critique node. Investigate, Deep Plan, and design critique launches must use worktree_create:true.
     """
 
     static func decision(
@@ -24,7 +24,8 @@ enum AgentRunCoordinatorMissionPlanPolicy {
         requestedModelID: String? = nil,
         requestedWorkflowID: String? = nil,
         requestedWorkflowName: String? = nil,
-        usesCreatedWorktree: Bool = false
+        usesCreatedWorktree: Bool = false,
+        durableApprovalAuthorityToken: String? = nil
     ) -> Decision {
         guard isCoordinatorParent else { return .allow }
         guard let missionPlan else {
@@ -51,7 +52,9 @@ enum AgentRunCoordinatorMissionPlanPolicy {
         {
             return .allow
         }
-        guard missionPlan.approvalState == .approved else {
+        guard missionPlan.approvalState == .approved,
+              missionPlan.hasDurableApprovalAuthority(durableApprovalAuthorityToken)
+        else {
             return .requireApprovedMissionPlan(approvedMissionPlanRequiredMessage)
         }
         return .allow

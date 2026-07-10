@@ -21,8 +21,8 @@ The runtime is intentionally not a separate non-tab agent runtime yet. A Coordin
 - Renaming Coordinator technical contracts to Director.
 - Extracting a first-class Coordinator role/runtime outside Agent Mode.
 - Reopening old mock-only UI behavior that did not ship; shipped surface/UI behavior is captured in the `coordinator-mode` capability.
-- Implementing restart durability, recovery chaos, UI render-to-click race hardening, toggle dedup beyond current idempotent ledgers, worktree garbage collection, backend fallback, spend enforcement, custom policy CRUD, or hierarchical Coordinator delegation.
-- Modifying Swift code in this artifact-alignment pass.
+- Implementing restart durability, recovery chaos, toggle dedup beyond current idempotent ledgers, worktree garbage collection, backend fallback, spend enforcement, custom policy CRUD, or hierarchical Coordinator delegation.
+- Treating this tranche as docs-only; the active approval-boundary hardening includes Swift runtime, MCP, harness, and test changes.
 
 ## Runtime Model
 
@@ -33,12 +33,13 @@ A Coordinator Mission is represented by a Coordinator backing session. Its persi
 - `originalObjectiveSummary`
 - optional `missionTemplate`
 - optional `missionPlan`
+- a persisted `postApprovalContinuation` record mirrored into `missionPlan.postApprovalContinuation` for status/receipt projection;
 - observed child phases
 - pending and handled follow-through event IDs
 - last resume result
 - child interaction response records
 
-Starting a fresh objective normally resets the Mission Plan and follow-through bookkeeping. Follow-up turns may preserve the existing Mission Plan when they are part of the same Mission.
+`CoordinatorFollowThroughState` is the canonical owner for restart decoding and reset semantics; the Mission Plan field is a mirror used by MCP/status/projection surfaces. Decode reconciles the two by preserving an existing continuation from either location. Starting a fresh objective resets the Mission Plan, continuation, and follow-through bookkeeping. Follow-up turns may preserve the existing Mission Plan when they are part of the same Mission.
 
 ### Mission Plan
 
@@ -100,13 +101,13 @@ Before normal delegated child starts, Coordinator parents must have a recorded M
 - `agent_run.start` may launch approved pre-approval Investigate or Deep Plan read-only planning nodes when the real workflow ID/name matches the node and `worktree_create:true` is used.
 - `agent_run.start` may launch a `plan_critique` node with `model_id:"design"`, no workflow, `mission_node_id`, and `worktree_create:true`.
 
-Plan approval checkpoints expose a revision-bound `checkpoint_instance_id`. Approval-granting stale checkpoint submits are rejected; `stop` remains stale-tolerant so users can always stop the Mission.
+Plan approval checkpoints expose a revision-bound `checkpoint_instance_id`. Approval-granting actions from both external MCP and SwiftUI rendered buttons must carry the rendered `expected_checkpoint_instance_id`; the app compares it with the current checkpoint, appends the user decision, transitions the plan to `approved`, and only then wakes or resumes the runtime. Stale or missing approval-granting IDs are rejected without recording a user decision. `stop` remains stale-tolerant because it withdraws consent, is app/external-user owned, and can always stop the Mission.
 
 ## Delegation Guardrails
 
 Delegated starts from Coordinator parents are subject to these invariants:
 
-- Mission Plan approval is required except for the pre-approval planning exceptions above.
+- Mission Plan approval is required before ordinary runtime progress, follow-through resume, or delegated starts except for the pre-approval planning exceptions above.
 - `maxConcurrent` counts running Mission nodes, not bound sessions, and denies new `agent_run.start` / `agent_explore.start` when the cap is reached.
 - Mutable delegated work requires explicit child execution isolation (`worktree_create:true` or explicit `worktree_id`) before child session creation; inherited binding alone is not enough.
 - Workflow-bearing nodes must use `agent_run` with matching workflow metadata; workflow-less narrow probes may use `agent_explore`.
@@ -119,7 +120,7 @@ Delegated starts from Coordinator parents are subject to these invariants:
 
 The decision ledger records both user and Director decisions. User decision IDs are deterministic from `(checkpointInstanceID, label)`; plan approval checkpoint instances include Mission Plan revision. Retried submits for the same checkpoint instance and label dedupe; revision changes mint a new checkpoint instance.
 
-The app and external `coordinator_chat submit`, `set_pace`, `set_autonomy`, and stop paths record user-actor decisions. Runtime `mission_plan` updates record Director-actor decisions and evidence only. Runtime `mission_plan` must not forge user decisions.
+The app and external `coordinator_chat submit`, `set_pace`, `set_autonomy`, and stop paths record user-actor decisions. Runtime `mission_plan` updates record Director-actor decisions and evidence only. Runtime `mission_plan` must not forge user decisions, self-approve a plan, write user-owned pace/childAsk/policy-authority fields, or create/transition to `approval_state:"not_required"`. Legacy decoded `not_required` exists only for compatibility and is non-authorizing until recovered through a fresh approval boundary.
 
 Evidence records distinguish `meets` and `short`, may reference node/workstream/session/interaction/decision IDs, and may include a source and judgment bundle. Judgment bundles are bounded and receipt-ready: done criteria, structured evidence, optional diff stats, optional probe answer, and explicit `not_transcript_summary` framing. Probe evidence records the answer/summary/export reference, not the probe transcript or selection.
 
@@ -180,7 +181,7 @@ This backend is test infrastructure only. It must reuse the real Agent Mode run 
 
 ## Deferred Scope
 
-The current baseline explicitly defers S8 restart durability for pending checkpoints/questions, UI render-to-click race hardening, toggle dedup beyond current idempotent ledger behavior, worktree garbage collection for Coordinator-created child worktrees, backend fallback between live providers, recovery chaos, spend enforcement, custom policy CRUD, and hierarchical Coordinators.
+The current baseline explicitly defers S8 restart durability for pending checkpoints/questions and pending/deferred/dispatching post-approval continuations, toggle dedup beyond current idempotent ledger behavior, worktree garbage collection for Coordinator-created child worktrees, backend fallback between live providers, recovery chaos, spend enforcement, custom policy CRUD, and hierarchical Coordinators. UI render-to-click race hardening and same-process post-approval handoff durability are current approval-boundary hardening, not deferred scope.
 
 ## Risks / Trade-offs
 

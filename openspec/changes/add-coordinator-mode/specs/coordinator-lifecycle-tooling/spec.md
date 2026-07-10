@@ -11,6 +11,17 @@ The system SHALL support stopping and archiving Missions without deleting Missio
 - **AND** pending follow-through events SHALL be cleared
 - **AND** a user stop decision SHALL be recorded.
 
+#### Scenario: Stop is app-owned
+- **WHEN** a Coordinator runtime caller attempts to stop a Mission or submit Stop as if it were the user
+- **THEN** the system SHALL reject the runtime stop request
+- **AND** Stop authority SHALL remain with app/external user lifecycle paths, including stale checkpoint Stop that withdraws consent.
+
+#### Scenario: Terminal state cannot be reopened
+- **WHEN** a Mission is completed, stopped, or archived
+- **AND** a later runtime update attempts to reopen it or regress terminal node status to pending/running
+- **THEN** the system SHALL preserve terminal Mission and node state
+- **AND** it SHALL NOT resume follow-through, delegation, or pending Decisions from that stale update.
+
 #### Scenario: Non-terminal Mission is archived
 - **WHEN** `archive_mission` targets a Mission whose plan status is not terminal
 - **THEN** the system SHALL reject the archive request and instruct the caller to stop the Mission first.
@@ -86,12 +97,10 @@ The system SHALL keep side-effect-free capability discovery and validation bound
 The system SHALL keep known deferrals outside the current core runtime contract unless a later OpenSpec change promotes them.
 
 #### Scenario: Restart durability is deferred
-- **WHEN** S8 restart durability for pending checkpoints and pending child questions is needed
-- **THEN** it SHALL remain deferred to a later change or scenario rather than being silently included in this baseline.
-
-#### Scenario: UI render-to-click race is deferred
-- **WHEN** render-to-click timing/race hardening for Coordinator UI affordances is needed
-- **THEN** it SHALL remain a deferred UI robustness item outside this spec split.
+- **WHEN** S8 restart durability for pending checkpoints, pending child questions, or pending/deferred/dispatching post-approval continuations is needed
+- **THEN** it SHALL remain deferred to a later change or scenario rather than being silently included in this baseline
+- **AND** pending/deferred/dispatching post-approval continuation recovery after restart SHALL remain deferred
+- **AND** same-process durable handoff SHALL guarantee one accepted delivery without external resubmission only after the approval transaction and continuation record are persisted.
 
 #### Scenario: Toggle dedup is deferred
 - **WHEN** repeated pace/childAsk toggle deduplication beyond current idempotent ledger behavior is needed

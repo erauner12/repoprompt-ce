@@ -14,8 +14,18 @@ The system SHALL persist Coordinator Mission runtime state on Coordinator-backed
 - **THEN** the system MAY update the visible objective summary without clearing the current Mission Plan.
 
 #### Scenario: Older persisted state decodes
-- **WHEN** persisted Coordinator follow-through state lacks Mission Plan, routing, decision, evidence, or autonomy fields
+- **WHEN** persisted Coordinator follow-through state lacks Mission Plan, routing, decision, evidence, autonomy, or post-approval continuation fields
 - **THEN** the system SHALL decode it successfully with safe defaults.
+
+#### Scenario: Post-approval continuation has a canonical owner and mirror
+- **WHEN** a post-approval continuation exists
+- **THEN** `CoordinatorFollowThroughState.postApprovalContinuation` SHALL be the canonical persisted owner for reset and decode semantics
+- **AND** `CoordinatorMissionPlan.postApprovalContinuation` SHALL mirror the same record for status, wait fingerprint, and projection serialization
+- **AND** decode SHALL reconcile older payloads by preserving a continuation found in either location.
+
+#### Scenario: Fresh Mission reset clears continuation
+- **WHEN** a fresh Coordinator Mission objective resets follow-through state
+- **THEN** the system SHALL clear pending/deferred/dispatching/delivered/failed/invalidated post-approval continuation records along with prior Mission Plan and follow-through bookkeeping.
 
 ### Requirement: Mission Plan is the durable source of intent and audit state
 The system SHALL store Mission intent, execution state, routing, ledgers, and receipt inputs in `CoordinatorMissionPlan`.

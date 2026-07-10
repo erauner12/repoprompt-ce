@@ -10401,7 +10401,7 @@ final class AgentModeViewModel: ObservableObject {
         session.saveDebounceTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second debounce
             guard !Task.isCancelled else { return }
-            await self?.saveSession(for: tabID)
+            _ = await self?.saveSession(for: tabID)
         }
     }
 
@@ -10470,6 +10470,10 @@ final class AgentModeViewModel: ObservableObject {
         return ownerValidatedSessionIndex[sessionID]?.coordinatorMissionPlan
     }
 
+    func mcpCoordinatorDurableApprovalAuthorityToken(sessionID: UUID?) -> String? {
+        coordinatorModeViewModel.durableApprovalAuthorityToken(coordinatorSessionID: sessionID)
+    }
+
     private func mcpCoordinatorMissionID(
         boundToChildSessionID sessionID: UUID,
         interactionID: UUID
@@ -10529,7 +10533,8 @@ final class AgentModeViewModel: ObservableObject {
         )
     }
 
-    private func saveSession(for tabID: UUID) async {
+    @discardableResult
+    private func saveSession(for tabID: UUID) async -> Bool {
         #if DEBUG
             let diagnosticsStartMS = AgentModePerfDiagnostics.timestampMSIfEnabled()
             AgentModePerfDiagnostics.increment("save.session.invoked", tabID: tabID)
@@ -10538,7 +10543,7 @@ final class AgentModeViewModel: ObservableObject {
             #if DEBUG
                 AgentModePerfDiagnostics.event("save.session.skipped", tabID: tabID, fields: ["reason": "suppressed"])
             #endif
-            return
+            return true
         }
         guard let session = sessions[tabID],
               let workspace = workspaceManager?.activeWorkspace,
@@ -10547,20 +10552,20 @@ final class AgentModeViewModel: ObservableObject {
             #if DEBUG
                 AgentModePerfDiagnostics.event("save.session.skipped", tabID: tabID, fields: ["reason": "missingOrClean"])
             #endif
-            return
+            return true
         }
 
         let hasConversationContent = !session.items.isEmpty || !session.transcript.turns.isEmpty || session.runState.isActive || session.hasPendingQuestionUI || session.pendingApproval != nil || session.pendingPermissionsRequest != nil || session.pendingApplyEditsReview != nil || session.pendingWorktreeMergeReview != nil || session.worktreeMergeOperations.contains { $0.status.isActive }
         if session.activeAgentSessionID == nil, !hasConversationContent {
-            return
+            return true
         }
         guard let sessionID = ensureSessionBoundToTab(session) else {
-            return
+            return false
         }
         session.saveRequestGeneration &+= 1
         if saveInFlightSessionIDs.contains(sessionID) {
             saveRequestedWhileInFlightSessionIDs.insert(sessionID)
-            return
+            return false
         }
         saveInFlightSessionIDs.insert(sessionID)
         defer {
@@ -10780,7 +10785,7 @@ final class AgentModeViewModel: ObservableObject {
               isSaveCommitTokenCurrent(saveToken)
         else {
             requestFreshSaveForCurrentOwner(sessionID: sessionID, fallbackSession: session)
-            return
+            return false
         }
 
         do {
@@ -10793,7 +10798,7 @@ final class AgentModeViewModel: ObservableObject {
             agentSession.fileURL = fileURL
             guard isSaveCommitTokenCurrent(saveToken) else {
                 requestFreshSaveForCurrentOwner(sessionID: sessionID, fallbackSession: session)
-                return
+                return false
             }
             session.isDirty = false
             session.lastUserMessageAt = lastUserMessageAt
@@ -10832,18 +10837,34 @@ final class AgentModeViewModel: ObservableObject {
                     )
                 }
             #endif
+            return true
         } catch {
             #if DEBUG
                 AgentModePerfDiagnostics.event("save.session.error", tabID: tabID, fields: ["error": String(describing: error)])
             #endif
             print("[AgentModeVM] Failed to save session: \(error)")
+            return false
         }
     }
 
-    func flushSave(for tabID: UUID) async {
-        guard let session = sessions[tabID] else { return }
+    @discardableResult
+    func flushSave(for tabID: UUID) async -> Bool {
+        guard let session = sessions[tabID] else { return true }
         session.saveDebounceTask?.cancel()
-        await saveSession(for: tabID)
+        return await saveSession(for: tabID)
+    }
+
+    @discardableResult
+    func flushSave(for tabID: UUID, requiringMinimumSaveGeneration minimumGeneration: UInt64) async -> Bool {
+        guard let session = sessions[tabID] else { return false }
+        session.saveDebounceTask?.cancel()
+        let saved = await saveSession(for: tabID)
+        guard saved,
+              sessions[tabID] === session,
+              session.saveRequestGeneration >= minimumGeneration,
+              !session.isDirty
+        else { return false }
+        return true
     }
 
     private func persistCurrentSession() {
@@ -10891,11 +10912,13 @@ final class AgentModeViewModel: ObservableObject {
     @discardableResult
     func submitUserTurnCreatingSessionIfNeeded(
         text: String,
-        target: AgentComposerSubmitTarget
+        target: AgentComposerSubmitTarget,
+        beforeSubmit: (@MainActor () throws -> Void)? = nil
     ) async -> UserTurnSubmissionResult {
         await submitUserTurnCreatingSessionIfNeeded(
             text: text,
             target: target,
+            beforeSubmit: beforeSubmit,
             createAndActivateSessionTab: { [weak self] in
                 await self?.createAndActivateSessionTab()
             }
@@ -10906,6 +10929,7 @@ final class AgentModeViewModel: ObservableObject {
     func submitUserTurnCreatingSessionIfNeeded(
         text: String,
         target: AgentComposerSubmitTarget,
+        beforeSubmit: (@MainActor () throws -> Void)? = nil,
         createAndActivateSessionTab: () async -> UUID?
     ) async -> UserTurnSubmissionResult {
         let attempt = AgentComposerSubmitAttempt(
@@ -10920,6 +10944,7 @@ final class AgentModeViewModel: ObservableObject {
             return await executeComposerSubmitAttempt(
                 text: text,
                 claim: claim,
+                beforeSubmit: beforeSubmit,
                 createAndActivateSessionTab: createAndActivateSessionTab
             )
         case .rejected:
@@ -10945,6 +10970,7 @@ final class AgentModeViewModel: ObservableObject {
     func executeComposerSubmitAttempt(
         text: String,
         claim: AgentComposerSubmitClaim,
+        beforeSubmit: (@MainActor () throws -> Void)? = nil,
         createAndActivateSessionTab: () async -> UUID?
     ) async -> UserTurnSubmissionResult {
         let target = claim.attempt.target
@@ -10978,6 +11004,11 @@ final class AgentModeViewModel: ObservableObject {
                   initialLocation != .local,
                   pendingState.initialStartLocation == initialLocation
             else {
+                do {
+                    try beforeSubmit?()
+                } catch {
+                    return .blocked(message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+                }
                 let result = submitUserTurn(text: text, tabID: target.tabID)
                 if result == .submitted {
                     clearComposerDraftIfUnchanged(for: claim)
@@ -11040,6 +11071,11 @@ final class AgentModeViewModel: ObservableObject {
             preparedSession.pendingInitialStartLocation = .local
             if target.tabID == currentTabID {
                 applySessionToBindings(preparedSession)
+            }
+            do {
+                try beforeSubmit?()
+            } catch {
+                return .blocked(message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             }
             let result = submitUserTurn(text: text, tabID: target.tabID)
             if result == .submitted {
@@ -11169,6 +11205,12 @@ final class AgentModeViewModel: ObservableObject {
             destinationSession.pendingInitialStartLocation = .local
             if destinationTabID == currentTabID {
                 applySessionToBindings(destinationSession)
+            }
+            do {
+                try beforeSubmit?()
+            } catch {
+                clearPendingUserTurnState(on: destinationSession)
+                return .blocked(message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             }
             let result = submitUserTurn(text: text, tabID: destinationTabID)
             guard result == .submitted else {
