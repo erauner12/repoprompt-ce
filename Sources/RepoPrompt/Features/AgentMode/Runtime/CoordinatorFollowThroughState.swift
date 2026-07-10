@@ -85,6 +85,157 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         childInteractionResponses.removeAll()
     }
 
+    @discardableResult
+    mutating func appendRevisionProposal(
+        _ request: CoordinatorMissionRevisionProposalRequest,
+        filedAt: Date = Date()
+    ) throws -> CoordinatorMissionRevisionProposalAppendResult {
+        guard var plan = missionPlan else {
+            throw CoordinatorMissionRevisionProposalLedgerError.missionPlanMissing
+        }
+        guard !plan.status.isTerminal else {
+            throw CoordinatorMissionRevisionProposalLedgerError.missionTerminal
+        }
+        guard request.expectedBasePlanID == plan.id else {
+            throw CoordinatorMissionRevisionProposalLedgerError.staleBasePlan
+        }
+
+        let baseSnapshot = plan.materialContractSnapshot
+        let baseFingerprint = try baseSnapshot.sha256Fingerprint()
+        guard request.expectedBaseContractFingerprint == baseFingerprint else {
+            throw CoordinatorMissionRevisionProposalLedgerError.staleBaseContract
+        }
+
+        let affectedFields = CoordinatorMissionRevisionProposalIdentity
+            .canonicalAffectedFields(request.affectedFields)
+        let remedy = CoordinatorMissionRevisionProposalIdentity.canonicalRemedy(request.remedy)
+        let evidenceIDs = CoordinatorMissionRevisionProposalIdentity
+            .canonicalEvidenceIDs(request.supportingEvidenceIDs)
+        let requestedChange = CoordinatorMissionCanonicalRequestedChange(rawValue: request.requestedChange)
+        guard !request.summary.isEmpty else {
+            throw CoordinatorMissionRevisionProposalLedgerError.invalidRequest("summary is required")
+        }
+        guard !affectedFields.isEmpty else {
+            throw CoordinatorMissionRevisionProposalLedgerError.invalidRequest("affected fields are required")
+        }
+        guard !remedy.isEmpty else {
+            throw CoordinatorMissionRevisionProposalLedgerError.invalidRequest("remedy is required")
+        }
+        guard !requestedChange.value.isEmpty else {
+            throw CoordinatorMissionRevisionProposalLedgerError.invalidRequest("requested change is required")
+        }
+
+        let canonicalRequestIdentity = try CoordinatorMissionRevisionProposalIdentity
+            .canonicalRequestIdentity(
+                baseContractFingerprint: baseFingerprint,
+                affectedFields: affectedFields,
+                remedy: remedy,
+                supportingEvidenceIDs: evidenceIDs,
+                requestedChange: requestedChange
+            )
+
+        if let pending = plan.pendingRevisionProposal {
+            guard pending.canonicalRequestIdentity == canonicalRequestIdentity else {
+                throw CoordinatorMissionRevisionProposalLedgerError
+                    .differentProposalPending(pending.id)
+            }
+            return CoordinatorMissionRevisionProposalAppendResult(
+                proposalID: pending.id,
+                disposition: .existingPendingRetry
+            )
+        }
+
+        let proposalID = UUID()
+        plan.revisionProposals.append(CoordinatorMissionRevisionProposal(
+            id: proposalID,
+            canonicalRequestIdentity: canonicalRequestIdentity,
+            canonicalRequestIdentityVersion: CoordinatorMissionRevisionProposal
+                .canonicalRequestIdentityVersion,
+            basePlanID: plan.id,
+            baseContractSnapshot: baseSnapshot,
+            baseContractFingerprint: baseFingerprint,
+            representation: .summaryOnly,
+            summary: request.summary,
+            rationale: request.rationale,
+            affectedFields: affectedFields,
+            remedy: remedy,
+            supportingEvidenceIDs: evidenceIDs,
+            requestedChange: requestedChange,
+            actor: request.actor,
+            filedAt: filedAt
+        ))
+        plan.events.append(CoordinatorMissionPlanEvent(
+            kind: .revisionProposalFiled,
+            sessionID: request.actor.runtimeSessionID,
+            proposalID: proposalID,
+            timestamp: filedAt,
+            summary: "Director runtime filed revision proposal \(proposalID.uuidString)."
+        ))
+        plan.revision += 1
+        plan.updatedAt = filedAt
+        missionPlan = plan
+        return CoordinatorMissionRevisionProposalAppendResult(
+            proposalID: proposalID,
+            disposition: .appended
+        )
+    }
+
+    @discardableResult
+    mutating func resolveRevisionProposal(
+        _ request: CoordinatorMissionRevisionProposalResolutionRequest,
+        resolvedAt: Date = Date(),
+        fingerprintProvider: (CoordinatorMissionPlan) throws -> String = {
+            try $0.materialContractFingerprint()
+        }
+    ) throws -> CoordinatorMissionRevisionProposalResolutionResult {
+        guard var plan = missionPlan else {
+            throw CoordinatorMissionRevisionProposalLedgerError.missionPlanMissing
+        }
+        guard !plan.status.isTerminal else {
+            throw CoordinatorMissionRevisionProposalLedgerError.missionTerminal
+        }
+        guard plan.revisionProposals.contains(where: { $0.id == request.proposalID }) else {
+            throw CoordinatorMissionRevisionProposalLedgerError
+                .proposalNotFound(request.proposalID)
+        }
+        if let existing = plan.revisionProposalResolution(for: request.proposalID) {
+            guard Self.resolution(existing, matches: request) else {
+                throw CoordinatorMissionRevisionProposalLedgerError
+                    .conflictingResolution(request.proposalID)
+            }
+            return CoordinatorMissionRevisionProposalResolutionResult(
+                resolutionID: existing.id,
+                disposition: .existingResolutionRetry
+            )
+        }
+
+        let resultingContractFingerprint = try fingerprintProvider(plan)
+        let resolution = plan.makeRevisionProposalResolution(
+            request,
+            resultingContractFingerprint: resultingContractFingerprint,
+            resolvedAt: resolvedAt
+        )
+        plan.revisionProposalResolutions.append(resolution)
+        plan.revision += 1
+        plan.updatedAt = resolvedAt
+        missionPlan = plan
+        return CoordinatorMissionRevisionProposalResolutionResult(
+            resolutionID: resolution.id,
+            disposition: .appended
+        )
+    }
+
+    private static func resolution(
+        _ resolution: CoordinatorMissionRevisionProposalResolution,
+        matches request: CoordinatorMissionRevisionProposalResolutionRequest
+    ) -> Bool {
+        resolution.proposalID == request.proposalID
+            && resolution.outcome == request.outcome
+            && resolution.userDecisionID == request.userDecisionID
+            && resolution.checkpointID == request.checkpointID
+            && resolution.checkpointInstanceID == request.checkpointInstanceID
+    }
+
     mutating func updateMissionPlan(
         objective: String?,
         workstreams incomingWorkstreams: [CoordinatorMissionWorkstreamSummary],
@@ -160,7 +311,8 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             mergedNodes: nodes
         )
 
-        missionPlan = CoordinatorMissionPlan(
+        let terminalStatus = status.isTerminal ? status : nil
+        var nextPlan = CoordinatorMissionPlan(
             id: existingPlan?.id ?? UUID(),
             revision: (existingPlan?.revision ?? 0) + 1,
             missionKey: update.missionKey?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
@@ -172,7 +324,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
                 ?? existingPlan?.predecessorTitle,
             predecessorSummary: update.predecessorSummary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                 ?? existingPlan?.predecessorSummary,
-            status: status,
+            status: terminalStatus == nil ? status : (existingPlan?.status ?? .draft),
             approvalState: approvalState,
             template: missionTemplate,
             shapeSummary: update.shapeSummary ?? existingPlan?.shapeSummary,
@@ -183,6 +335,8 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             routingDecisions: routingDecisions,
             decisions: decisions,
             evidence: evidence,
+            revisionProposals: existingPlan?.revisionProposals ?? [],
+            revisionProposalResolutions: existingPlan?.revisionProposalResolutions ?? [],
             events: (existingPlan?.events ?? []) + [
                 CoordinatorMissionPlanEvent(
                     kind: existingPlan == nil ? .created : .revised,
@@ -193,6 +347,16 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             postApprovalContinuation: postApprovalContinuation,
             updatedAt: update.updatedAt
         )
+        if let terminalStatus {
+            let outcome: CoordinatorMissionRevisionProposalResolutionOutcome =
+                terminalStatus == .stopped ? .stopped : .invalidatedMissionTerminal
+            nextPlan.resolvePendingRevisionProposalForTerminal(
+                outcome: outcome,
+                resolvedAt: update.updatedAt
+            )
+            nextPlan.status = terminalStatus
+        }
+        missionPlan = nextPlan
         if missionPlan?.status == .stopped {
             pendingEvents.removeAll()
             invalidatePostApprovalContinuation(reason: "Mission stopped.")
@@ -858,6 +1022,8 @@ struct CoordinatorMissionPlan: Codable, Equatable {
     var routingDecisions: [CoordinatorMissionRoutingDecision]
     var decisions: [CoordinatorMissionDecisionRecord]
     var evidence: [CoordinatorMissionEvidenceRecord]
+    var revisionProposals: [CoordinatorMissionRevisionProposal]
+    var revisionProposalResolutions: [CoordinatorMissionRevisionProposalResolution]
     var events: [CoordinatorMissionPlanEvent]
     var postApprovalContinuation: CoordinatorPostApprovalContinuationRecord?
     var updatedAt: Date
@@ -881,6 +1047,8 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         routingDecisions: [CoordinatorMissionRoutingDecision] = [],
         decisions: [CoordinatorMissionDecisionRecord] = [],
         evidence: [CoordinatorMissionEvidenceRecord] = [],
+        revisionProposals: [CoordinatorMissionRevisionProposal] = [],
+        revisionProposalResolutions: [CoordinatorMissionRevisionProposalResolution] = [],
         events: [CoordinatorMissionPlanEvent] = [],
         postApprovalContinuation: CoordinatorPostApprovalContinuationRecord? = nil,
         updatedAt: Date = Date()
@@ -906,12 +1074,19 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         }
         self.decisions = decisions
         self.evidence = evidence
+        self.revisionProposals = revisionProposals
+        self.revisionProposalResolutions = revisionProposalResolutions
         self.events = events
         self.postApprovalContinuation = postApprovalContinuation
         self.updatedAt = updatedAt
     }
 
     mutating func stopMission(cancelledSessionIDs: Set<UUID>, at date: Date = Date()) {
+        guard !status.isTerminal else { return }
+        resolvePendingRevisionProposalForTerminal(
+            outcome: .stopped,
+            resolvedAt: date
+        )
         status = .stopped
         updatedAt = date
         nodes = nodes.map { node in
@@ -959,6 +1134,8 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         case routingDecisions
         case decisions
         case evidence
+        case revisionProposals
+        case revisionProposalResolutions
         case events
         case postApprovalContinuation
         case updatedAt
@@ -986,6 +1163,14 @@ struct CoordinatorMissionPlan: Codable, Equatable {
             routingDecisions: container.decodeIfPresent([CoordinatorMissionRoutingDecision].self, forKey: .routingDecisions) ?? [],
             decisions: container.decodeIfPresent([CoordinatorMissionDecisionRecord].self, forKey: .decisions) ?? [],
             evidence: container.decodeIfPresent([CoordinatorMissionEvidenceRecord].self, forKey: .evidence) ?? [],
+            revisionProposals: container.decodeIfPresent(
+                [CoordinatorMissionRevisionProposal].self,
+                forKey: .revisionProposals
+            ) ?? [],
+            revisionProposalResolutions: container.decodeIfPresent(
+                [CoordinatorMissionRevisionProposalResolution].self,
+                forKey: .revisionProposalResolutions
+            ) ?? [],
             events: container.decode([CoordinatorMissionPlanEvent].self, forKey: .events),
             postApprovalContinuation: container.decodeIfPresent(CoordinatorPostApprovalContinuationRecord.self, forKey: .postApprovalContinuation),
             updatedAt: container.decode(Date.self, forKey: .updatedAt)
@@ -1821,6 +2006,7 @@ struct CoordinatorMissionPlanEvent: Codable, Equatable, Identifiable {
     var nodeID: UUID?
     var sessionID: UUID?
     var interactionID: UUID?
+    var proposalID: UUID?
     var timestamp: Date
     var summary: String?
 
@@ -1830,6 +2016,7 @@ struct CoordinatorMissionPlanEvent: Codable, Equatable, Identifiable {
         nodeID: UUID? = nil,
         sessionID: UUID? = nil,
         interactionID: UUID? = nil,
+        proposalID: UUID? = nil,
         timestamp: Date = Date(),
         summary: String? = nil
     ) {
@@ -1838,6 +2025,7 @@ struct CoordinatorMissionPlanEvent: Codable, Equatable, Identifiable {
         self.nodeID = nodeID
         self.sessionID = sessionID
         self.interactionID = interactionID
+        self.proposalID = proposalID
         self.timestamp = timestamp
         self.summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }
@@ -1847,6 +2035,7 @@ enum CoordinatorMissionPlanEventKind: String, Codable, Equatable, CaseIterable {
     case created
     case revised
     case approved
+    case revisionProposalFiled = "revision_proposal_filed"
     case nodeStarted = "node_started"
     case nodeCompleted = "node_completed"
     case nodeBlocked = "node_blocked"

@@ -15,14 +15,14 @@
 
 ## 3. Proposal and Resolution Ledger
 
-- [ ] 3.1 Add Codable summary-only proposal records with app-owned stable proposal IDs, deterministic `canonicalRequestIdentity`, base plan/snapshot/fingerprint, representation kind, summary/rationale, advisory categories/remedy/evidence/change metadata, runtime actor metadata, and app-owned filing time.
-- [ ] 3.2 Add separate append-only resolution records with app-owned identity/time, user decision/checkpoint linkage, resulting contract identity, and accepted-for-concrete-revision/rejected/invalidated/stopped outcomes.
-- [ ] 3.3 Implement dedicated append and resolve mutators with one-pending enforcement, exact current-pending request retry idempotency, first-resolution-wins, conflicting resolution rejection, and terminal resolution before freezing.
-- [ ] 3.4 Derive `canonicalRequestIdentity` server-side from identity version, base contract, sorted affected fields, remedy, sorted evidence IDs, and raw `requested_change` canonicalized with Unicode NFC, surrounding trim, and whitespace-run collapse while preserving case/punctuation; exclude summary, rationale, timestamps, and app-owned metadata and reject caller-authored identity fields.
-- [ ] 3.5 Return the existing proposal ID for an exact logical retry while pending, report the pending ID for a different canonical request while pending, and allow a new proposal occurrence after resolution without any prior-rejection lookup or suppression state.
-- [ ] 3.6 Keep proposal/resolution fields out of `CoordinatorMissionPlanUpdate`; preserve them across generic updates and reject injection/resolution attempts.
-- [ ] 3.7 Add empty decode defaults, fresh-Mission reset clearing, restart persistence, and exactly one non-decision Director/runtime-attributed proposal event for receipt honesty; reject decision-record shapes and all user-decision metadata at filing.
-- [ ] 3.8 Add reducer/serialization tests for Unicode NFC/trim/whitespace exact retry identity, case and punctuation preservation, summary/rationale exclusion, differently written request IDs, post-resolution re-proposal without suppression, identity-version stability, one-pending rules, reset/decode/restart, generic-update back doors, and terminal races.
+- [x] 3.1 Add Codable summary-only proposal records with app-owned stable proposal IDs, deterministic `canonicalRequestIdentity`, base plan/snapshot/fingerprint, representation kind, summary/rationale, advisory categories/remedy/evidence/change metadata, runtime actor metadata, and app-owned filing time.
+- [x] 3.2 Add separate append-only resolution records with app-owned identity/time, user decision/checkpoint linkage, resulting contract identity, and accepted-for-concrete-revision/rejected/invalidated/stopped outcomes.
+- [x] 3.3 Implement dedicated append and resolve mutators with one-pending enforcement, exact current-pending request retry idempotency, first-resolution-wins, conflicting resolution rejection, and terminal resolution before freezing.
+- [x] 3.4 Derive `canonicalRequestIdentity` server-side from identity version, base contract, sorted affected fields, remedy, sorted evidence IDs, and raw `requested_change` canonicalized with Unicode NFC, surrounding trim, and whitespace-run collapse while preserving case/punctuation; exclude summary, rationale, timestamps, and app-owned metadata and reject caller-authored identity fields.
+- [x] 3.5 Return the existing proposal ID for an exact logical retry while pending, report the pending ID for a different canonical request while pending, and allow a new proposal occurrence after resolution without any prior-rejection lookup or suppression state.
+- [x] 3.6 Keep proposal/resolution fields out of `CoordinatorMissionPlanUpdate`; preserve them across generic updates and reject injection/resolution attempts.
+- [x] 3.7 Add empty decode defaults, fresh-Mission reset clearing, restart persistence, and exactly one non-decision Director/runtime-attributed proposal event for receipt honesty; reject decision-record shapes and all user-decision metadata at filing.
+- [x] 3.8 Add reducer/serialization tests for Unicode NFC/trim/whitespace exact retry identity, case and punctuation preservation, summary/rationale exclusion, differently written request IDs, post-resolution re-proposal without suppression, identity-version stability, one-pending rules, reset/decode/restart, generic-update back doors, and terminal races.
 
 ## 4. MCP Proposal Ingress and Public Schema
 

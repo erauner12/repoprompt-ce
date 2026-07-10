@@ -126,7 +126,7 @@ Proposal storage belongs under `CoordinatorMissionPlan`, not checkpoint UI state
 
 A proposal record contains:
 
-- app-owned stable `proposalID`, deterministically minted from Mission/base/request identity plus the next ledger occurrence;
+- app-generated random stable `proposalID`, persisted on first append and reused only for exact retries of that pending record;
 - deterministic `canonicalRequestIdentity` used only to recognize exact logical retries of the current pending request;
 - `basePlanID`;
 - versioned `baseContractSnapshot`;

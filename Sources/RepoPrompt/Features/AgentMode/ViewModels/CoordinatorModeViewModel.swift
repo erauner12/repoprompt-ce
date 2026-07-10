@@ -3916,7 +3916,7 @@ private extension CoordinatorMissionPlanEventKind {
         switch self {
         case .created, .revised:
             true
-        case .approved, .nodeStarted, .nodeCompleted, .nodeBlocked, .sessionBound, .gateCleared:
+        case .approved, .revisionProposalFiled, .nodeStarted, .nodeCompleted, .nodeBlocked, .sessionBound, .gateCleared:
             false
         }
     }
@@ -3925,7 +3925,7 @@ private extension CoordinatorMissionPlanEventKind {
         switch self {
         case .nodeStarted, .nodeCompleted, .sessionBound:
             true
-        case .created, .revised, .approved, .nodeBlocked, .gateCleared:
+        case .created, .revised, .approved, .revisionProposalFiled, .nodeBlocked, .gateCleared:
             false
         }
     }

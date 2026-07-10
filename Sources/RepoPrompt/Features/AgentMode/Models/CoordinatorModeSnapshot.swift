@@ -634,6 +634,8 @@ struct CoordinatorModePlanUpdateSummary: Equatable {
             "Plan recorded"
         case .revised:
             "Plan updated"
+        case .revisionProposalFiled:
+            "Revision proposed"
         case .approved:
             "Plan approved"
         case .nodeStarted, .nodeCompleted, .nodeBlocked, .sessionBound, .gateCleared:

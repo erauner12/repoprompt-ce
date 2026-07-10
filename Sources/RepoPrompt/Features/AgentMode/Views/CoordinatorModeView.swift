@@ -8037,6 +8037,7 @@ private extension CoordinatorMissionPlanEventKind {
         switch self {
         case .created: "Created"
         case .revised: "Revised"
+        case .revisionProposalFiled: "Revision proposed"
         case .approved: "Approved"
         case .nodeStarted: "Node started"
         case .nodeCompleted: "Node completed"
