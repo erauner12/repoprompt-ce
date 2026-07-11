@@ -235,7 +235,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             description: """
             External test/control surface for Coordinator Mode. This mirrors the visible Coordinator UI: list parent threads, inspect tooling capabilities, select a parent thread, start a fresh parent thread, idempotently ensure or atomically start a fresh Mission with an initial directive, stop/archive terminal Missions, submit a directive to the selected parent, change selected Mission dials as external user actions, or record/read/wait on the selected Mission Plan.
 
-            **Operations**: list | list_missions | doctor | select | new | ensure_mission | start_mission | stop_mission | archive_mission | submit | mission_plan | mission_status | mission_events | receipt | set_pace | set_autonomy | wait_for_update
+            **Operations**: list | list_missions | doctor | select | new | ensure_mission | start_mission | stop_mission | archive_mission | submit | mission_plan | propose_revision | mission_status | mission_events | receipt | set_pace | set_autonomy | wait_for_update
 
             - `list`: Return current Coordinator parent selection, available parents, and board counts.
             - `list_missions`: Return compact lifecycle inventory for live and archived Coordinator Missions. External callers see the fleet for cleanup; Coordinator runtime callers are scoped to their own Mission.
@@ -248,6 +248,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
             - `archive_mission`: External lifecycle cleanup for completed/stopped Missions. Hides the Mission from ordinary live rail surfaces without deleting receipt, decisions, evidence, events, or lineage. Runtime sessions must not call this.
             - `submit`: Send a directive to the selected parent, to `coordinator_session_id`, or to a fresh parent when `new_parent=true`. Checkpoint actions are external-user only; every non-stop checkpoint action must include the current `expected_checkpoint_instance_id` from compact `mission_status`.
             - `mission_plan`: Create or update the selected Coordinator Mission's DAG-lite plan. Use `approval_state:"awaiting_approval"` for fresh/runtime plans; `approved` is output-only from the trusted checkpoint path and `not_required` is legacy output-only/non-authorizing. After approval, runtime/generic updates may record progress, routing, Director decisions, and evidence, but cannot materially rewrite the approved objective, shape, workstreams, node contract, worktree strategy, policy/autonomy, or done criteria; request a trusted visible revision instead.
+            - `propose_revision`: Owning Coordinator runtime only. File a summary-only proposal when the requested remedy changes the approved material contract. Requires the current base plan/contract identity, summary, advisory affected fields and remedy, optional rationale/evidence IDs, and raw requested change; it never approves or replaces the contract.
             - `mission_status`: Read back the selected Coordinator Mission's current plan, node status, and newest 20 routing decisions. Use `compact=true` for polling from external automation.
             - `mission_events`: Read a sequenced in-memory journal of compact Mission transitions since `since_seq`. This is for external observation and test harnesses; it does not mutate Mission state.
             - `receipt`: Read the terminal Mission receipt using the same Markdown projection as the visible UI copy action.
@@ -273,6 +274,7 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 **archive_mission**: coordinator_session_id (required); external-only retention cleanup for completed/stopped Missions.
                 **submit**: message (required unless checkpoint_action is present), coordinator_session_id? or new_parent?, coordinator_model_id? with new_parent, checkpoint_action? (proceed|gather_evidence|deepen_plan|independent_critique|start_smaller|stop), expected_checkpoint_instance_id required for every non-stop checkpoint action.
                 **mission_plan**: coordinator_session_id? plus one or more of mission_key, objective, predecessor context, status, approval_state, workstreams, nodes, routing_decisions, events. replace_workstreams/replace_nodes may be true only before approval for deliberate draft rewrites; approved contracts are immutable except runtime progress fields.
+                **propose_revision**: coordinator_session_id?, base_plan_id, base_contract_fingerprint, summary, rationale?, affected_fields, remedy, supporting_evidence_ids?, requested_change; owning Coordinator runtime only and summary-only.
                 **mission_status**: coordinator_session_id?, compact?; returns current plan state and routing_decisions_recent newest-first, max 20. compact=true returns a smaller polling summary with liveness warnings, checkpoint submit hints, and short recent history.
                 **mission_events**: coordinator_session_id?, since_seq?, limit?; returns sequenced compact transition events for external observers.
                 **receipt**: coordinator_session_id?, format?; returns terminal Mission receipt Markdown when ready.
@@ -281,8 +283,8 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                 **wait_for_update**: coordinator_session_id?, since_fingerprint?, timeout_seconds?; waits until compact mission_status.fingerprint changes and returns compact status.
                 """,
                 properties: [
-                    "op": .string(description: "Operation.", enum: ["list", "list_missions", "doctor", "select", "new", "ensure_mission", "start_mission", "stop_mission", "archive_mission", "submit", "mission_plan", "mission_status", "mission_events", "receipt", "set_pace", "set_autonomy", "wait_for_update"]),
-                    "coordinator_session_id": .string(description: "[select, stop_mission, archive_mission, list_missions, submit, mission_plan, mission_status, mission_events, receipt, set_pace, set_autonomy, wait_for_update] Existing Coordinator parent session UUID. External callers default to the selected Coordinator for mission_plan/mission_status/mission_events/receipt/set_pace/set_autonomy/wait_for_update; Coordinator runtime callers default to their own Mission or fail closed if the caller Mission cannot be resolved. For list_missions, runtime callers may only pass their own Mission UUID."),
+                    "op": .string(description: "Operation.", enum: ["list", "list_missions", "doctor", "select", "new", "ensure_mission", "start_mission", "stop_mission", "archive_mission", "submit", "mission_plan", "propose_revision", "mission_status", "mission_events", "receipt", "set_pace", "set_autonomy", "wait_for_update"]),
+                    "coordinator_session_id": .string(description: "[select, stop_mission, archive_mission, list_missions, submit, mission_plan, propose_revision, mission_status, mission_events, receipt, set_pace, set_autonomy, wait_for_update] Existing Coordinator parent session UUID. External callers default to the selected Coordinator for mission_plan/mission_status/mission_events/receipt/set_pace/set_autonomy/wait_for_update; Coordinator runtime callers default to their own Mission or fail closed if the caller Mission cannot be resolved. For list_missions, runtime callers may only pass their own Mission UUID."),
                     "include_archived": .boolean(description: "[list_missions] Include archived/persisted-only Missions in lifecycle inventory. Default true."),
                     "message": .string(description: "[ensure_mission, start_mission, submit] Directive text to send to the fresh, selected, or requested Coordinator parent."),
                     "coordinator_model_id": .string(description: "[new, ensure_mission, start_mission, submit with new_parent] Optional role label from agent_manage.list_agents task_labels (for example engineer or design), or explicit compound model_id, used only for the fresh Coordinator runtime's underlying model. The session remains a Coordinator runtime with Coordinator prompt/tools/policy identity. Existing Missions are not reconfigured."),
@@ -299,6 +301,20 @@ final class MCPAgentControlToolProvider: MCPWindowToolProviding {
                     "mode": .string(description: "[set_autonomy] Mission autonomy mode to apply.", enum: ["ask", "auto"]),
                     "since_fingerprint": .string(description: "[wait_for_update] Last compact mission_status.fingerprint observed by the caller. If omitted, returns immediately."),
                     "timeout_seconds": .number(description: "[wait_for_update] Maximum seconds to wait before returning the current compact status. Default 30, max 300."),
+                    "base_plan_id": .string(description: "[propose_revision] Required current Mission Plan UUID used to reject stale proposal requests."),
+                    "base_contract_fingerprint": .string(description: "[propose_revision] Required current material-contract fingerprint from Mission state."),
+                    "summary": .string(description: "[propose_revision] Required concise summary of the contract-changing remedy."),
+                    "rationale": .string(description: "[propose_revision] Optional rationale for reconsidering the approved contract."),
+                    "affected_fields": .array(
+                        description: "[propose_revision] Required non-empty advisory material-contract field categories.",
+                        items: .string(description: "Material-contract field category.")
+                    ),
+                    "remedy": .string(description: "[propose_revision] Required remedy category."),
+                    "supporting_evidence_ids": .array(
+                        description: "[propose_revision] Optional supporting Mission evidence UUIDs.",
+                        items: .string(description: "Mission evidence UUID.")
+                    ),
+                    "requested_change": .string(description: "[propose_revision] Required raw summary-only requested change; exact replacement plans or diffs are unsupported."),
                     "objective": .string(description: "[mission_plan] User-specific Mission objective."),
                     "predecessor_mission_id": .string(description: "[ensure_mission, start_mission, mission_plan] Optional prior Mission UUID when this Mission is a follow-up."),
                     "predecessor_title": .string(description: "[ensure_mission, start_mission, mission_plan] Optional prior Mission title shown as follow-up context."),

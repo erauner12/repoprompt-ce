@@ -896,6 +896,15 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertTrue(ops.contains("doctor"))
         XCTAssertTrue(ops.contains("list_missions"))
         XCTAssertTrue(ops.contains("archive_mission"))
+        XCTAssertTrue(ops.contains("propose_revision"))
+        let revisionProposals = try XCTUnwrap(features["revision_proposals"]?.objectValue)
+        XCTAssertEqual(Set(revisionProposals.keys), ["version", "representation", "actions"])
+        XCTAssertEqual(revisionProposals["version"]?.intValue, 1)
+        XCTAssertEqual(revisionProposals["representation"]?.stringValue, "summary_only")
+        XCTAssertEqual(
+            revisionProposals["actions"]?.arrayValue?.compactMap(\.stringValue),
+            ["revise_plan", "keep_current_plan", "stop_mission"]
+        )
         XCTAssertEqual(features["mission_events"]?.boolValue, true)
         XCTAssertEqual(features["receipt_markdown"]?.boolValue, true)
         XCTAssertEqual(features["list_missions"]?.boolValue, true)

@@ -36,6 +36,7 @@ struct CoordinatorChatMCPToolService {
         "archive_mission",
         "submit",
         "mission_plan",
+        "propose_revision",
         "mission_status",
         "mission_events",
         "receipt",
@@ -2978,7 +2979,16 @@ struct CoordinatorChatMCPToolService {
                     "structured_child_input": .bool(true),
                     "scripted_child": .bool(scriptedChildAvailable),
                     "list_missions": .bool(true),
-                    "archive_mission": .bool(true)
+                    "archive_mission": .bool(true),
+                    "revision_proposals": .object([
+                        "version": .int(1),
+                        "representation": .string("summary_only"),
+                        "actions": .array([
+                            .string("revise_plan"),
+                            .string("keep_current_plan"),
+                            .string("stop_mission")
+                        ])
+                    ])
                 ]),
                 "runtime_gate": .object([
                     "external_user_actions_block_runtime": .bool(true),
