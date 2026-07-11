@@ -1612,6 +1612,94 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(active.mcpAwareness.inFlightToolCallCount, 2)
     }
 
+    func testPendingRevisionProposalIsUniqueHighestPriorityAndHoldsChildQuestion() throws {
+        let coordinatorID = uuid(10)
+        let childID = uuid(11)
+        let childTabID = uuid(111)
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Ship approved work",
+            status: .running,
+            approvalState: .approved,
+            updatedAt: date(20)
+        ))
+        let plan = try XCTUnwrap(state.missionPlan)
+        let appended = try state.appendRevisionProposal(CoordinatorMissionRevisionProposalRequest(
+            expectedBasePlanID: plan.id,
+            expectedBaseContractFingerprint: plan.materialContractFingerprint(),
+            summary: "Change the approved scope",
+            rationale: "Continuing would be unsafe because the prerequisite changed.",
+            affectedFields: ["objective", "workstreams"],
+            remedy: "safety_risk",
+            supportingEvidenceIDs: [uuid(90)],
+            requestedChange: "Revise the approved scope.",
+            actor: CoordinatorMissionRevisionProposalActor(
+                coordinatorSessionID: coordinatorID,
+                runtimeSessionID: coordinatorID
+            )
+        ), filedAt: date(30))
+        let pendingPlan = try XCTUnwrap(state.missionPlan)
+        let proposal = try XCTUnwrap(pendingPlan.pendingRevisionProposal)
+        let interaction = AgentRunMCPSnapshot.Interaction(
+            id: uuid(200),
+            kind: .question,
+            responseType: .structured,
+            title: "Child needs direction",
+            prompt: "Choose a path.",
+            context: nil,
+            allowsMultiple: nil,
+            options: [],
+            fields: [],
+            details: []
+        )
+
+        let snapshot = projector.project(input(
+            live: [
+                live(
+                    id: coordinatorID,
+                    tab: uuid(110),
+                    title: "Coordinator Runtime Demo",
+                    updatedAt: date(40),
+                    state: .idle,
+                    coordinatorRuntime: true,
+                    missionPlan: pendingPlan
+                ),
+                live(
+                    id: childID,
+                    tab: childTabID,
+                    title: "Child",
+                    updatedAt: date(35),
+                    state: .waitingForQuestion,
+                    parent: coordinatorID
+                )
+            ],
+            mcpSnapshots: [
+                childID: mcpSnapshot(
+                    sessionID: childID,
+                    tabID: childTabID,
+                    interaction: interaction,
+                    parent: coordinatorID
+                )
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+
+        XCTAssertEqual(snapshot.decisionQueue.count(where: { $0.source == .revisionProposal }), 1)
+        XCTAssertEqual(snapshot.decisionQueue.first?.source, .revisionProposal)
+        XCTAssertEqual(snapshot.decisionQueue.first?.detail, proposal.summary)
+        XCTAssertFalse(snapshot.decisionQueue.contains { $0.source == .interaction })
+        let held = try XCTUnwrap(allRows(in: snapshot).first(where: { $0.sessionID == childID })?.pendingInteraction)
+        XCTAssertFalse(held.isAvailable)
+        XCTAssertEqual(held.unavailableReason, CoordinatorMissionRevisionProposalPause.heldReason)
+        XCTAssertEqual(
+            CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                coordinatorSessionID: coordinatorID,
+                proposal: proposal
+            ),
+            "coordinator:\(coordinatorID.uuidString):revision-proposal:\(appended.proposalID.uuidString):contract-\(proposal.baseContractFingerprint)"
+        )
+    }
+
     private func input(
         workspaceID: UUID? = UUID(uuidString: "00000000-0000-0000-0000-000000000090"),
         persisted: [CoordinatorModeSnapshotProjector.PersistedSession] = [],

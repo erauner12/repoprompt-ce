@@ -578,6 +578,39 @@ final class CoordinatorModeViewModel: ObservableObject {
     }
 
     @discardableResult
+    func submitRevisionProposalAction(
+        coordinatorSessionID: UUID,
+        action: CoordinatorMissionRevisionProposalResolutionAction,
+        proposalID: UUID,
+        expectedContractFingerprint: String,
+        expectedCheckpointInstanceID: String
+    ) async -> DirectiveSubmissionResult {
+        refresh()
+        guard let plan = snapshot.coordinatorRail.availableCoordinators
+            .first(where: { $0.sessionID == coordinatorSessionID })?
+            .missionPlan,
+            let proposal = plan.pendingRevisionProposal,
+            proposal.id == proposalID,
+            proposal.baseContractFingerprint == expectedContractFingerprint,
+            CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                coordinatorSessionID: coordinatorSessionID,
+                proposal: proposal
+            ) == expectedCheckpointInstanceID
+        else {
+            let message = "Stale revision proposal checkpoint. Refresh Mission status before retrying."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        return await resolveRevisionProposal(CoordinatorMissionRevisionProposalTrustedResolutionRequest(
+            coordinatorSessionID: coordinatorSessionID,
+            action: action,
+            proposalID: proposalID,
+            expectedContractFingerprint: expectedContractFingerprint,
+            expectedCheckpointInstanceID: expectedCheckpointInstanceID
+        ))
+    }
+
+    @discardableResult
     func setCoordinatorMissionPace(
         coordinatorSessionID: UUID,
         pace: CoordinatorMissionPolicyPace
@@ -1174,14 +1207,29 @@ final class CoordinatorModeViewModel: ObservableObject {
     }
 
     @discardableResult
-    func submitCoordinatorDirective(_ text: String) async -> DirectiveSubmissionResult {
+    func submitCoordinatorDirective(
+        _ text: String,
+        targetCoordinatorSessionID: UUID? = nil
+    ) async -> DirectiveSubmissionResult {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             composerNotice = nil
             return .rejected(message: "")
         }
-        let forceNewRuntime = isFreshCoordinatorRunPending || snapshot.coordinatorRail.state == .chooseCoordinator
-        let coordinatorSessionID = forceNewRuntime ? nil : snapshot.coordinatorRail.coordinatorSessionID
+        let forceNewRuntime = targetCoordinatorSessionID == nil
+            && (isFreshCoordinatorRunPending || snapshot.coordinatorRail.state == .chooseCoordinator)
+        let coordinatorSessionID = forceNewRuntime
+            ? nil
+            : targetCoordinatorSessionID ?? snapshot.coordinatorRail.coordinatorSessionID
+        if let targetCoordinatorSessionID,
+           !snapshot.coordinatorRail.availableCoordinators.contains(where: {
+               $0.sessionID == targetCoordinatorSessionID && $0.isLiveInCurrentWindow
+           })
+        {
+            let message = "Coordinator session \(targetCoordinatorSessionID.uuidString) is no longer available in this window."
+            composerNotice = message
+            return .rejected(message: message)
+        }
         let previousCoordinatorIDs = Set(snapshot.coordinatorRail.availableCoordinators.map(\.sessionID))
         let submissionWorkspaceID = snapshot.workspaceID
         if snapshot.coordinatorRail.state == .selected, !forceNewRuntime {
@@ -1345,19 +1393,36 @@ final class CoordinatorModeViewModel: ObservableObject {
     @discardableResult
     func submitPlanRevisionDirective(_ text: String) async -> DirectiveSubmissionResult {
         do {
+            let targetCoordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID
             let revisionResult: DirectiveSubmissionResult
-            if snapshot.coordinatorRail.missionPlan?.approvalState == .approved {
+            if let coordinatorSessionID = targetCoordinatorSessionID,
+               let proposal = snapshot.coordinatorRail.missionPlan?.pendingRevisionProposal
+            {
+                revisionResult = await submitRevisionProposalAction(
+                    coordinatorSessionID: coordinatorSessionID,
+                    action: .revisePlan,
+                    proposalID: proposal.id,
+                    expectedContractFingerprint: proposal.baseContractFingerprint,
+                    expectedCheckpointInstanceID: CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                        coordinatorSessionID: coordinatorSessionID,
+                        proposal: proposal
+                    )
+                )
+            } else if snapshot.coordinatorRail.missionPlan?.approvalState == .approved {
                 revisionResult = try requestApprovedPlanRevision()
             } else {
                 let context = try currentPlanApprovalCheckpointContext(expected: nil, requireExpectedInstance: false)
                 revisionResult = requestPlanRevision(context)
             }
             guard revisionResult == .accepted else { return revisionResult }
-            let submitResult = await submitCoordinatorDirective(text)
+            let submitResult = await submitCoordinatorDirective(
+                text,
+                targetCoordinatorSessionID: targetCoordinatorSessionID
+            )
             if case let .rejected(message) = submitResult {
                 composerNotice = "Plan revision requested. Director could not be resumed automatically: \(message)"
             }
-            return .accepted
+            return submitResult
         } catch {
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             composerNotice = message

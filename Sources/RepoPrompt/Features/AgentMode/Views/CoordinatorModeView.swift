@@ -3673,6 +3673,40 @@ struct CoordinatorModeView: View {
         metrics: CoordinatorVisualMetrics
     ) -> some View {
         switch activeCoordinatorCheckpoint(for: rail) {
+        case let .revisionProposal(
+            coordinatorSessionID,
+            proposalID,
+            expectedContractFingerprint,
+            expectedCheckpointInstanceID
+        ):
+            if let proposal = rail.missionPlan?.revisionProposals.first(where: { $0.id == proposalID }) {
+                coordinatorRevisionProposalCheckpointCard(
+                    proposal: proposal,
+                    metrics: metrics,
+                    onRevise: Self.renderedRevisionProposalAction(
+                        coordinatorSessionID: coordinatorSessionID,
+                        action: .revisePlan,
+                        proposalID: proposalID,
+                        expectedContractFingerprint: expectedContractFingerprint,
+                        expectedCheckpointInstanceID: expectedCheckpointInstanceID,
+                        perform: submitRevisionProposalAction
+                    ),
+                    onKeep: Self.renderedRevisionProposalAction(
+                        coordinatorSessionID: coordinatorSessionID,
+                        action: .keepCurrentPlan,
+                        proposalID: proposalID,
+                        expectedContractFingerprint: expectedContractFingerprint,
+                        expectedCheckpointInstanceID: expectedCheckpointInstanceID,
+                        perform: submitRevisionProposalAction
+                    ),
+                    onStop: Self.renderedPlanApprovalStopAction(coordinatorSessionID: coordinatorSessionID) {
+                        stopCoordinatorMission(targetMissionID: $0)
+                    }
+                )
+                .disabled(isSubmittingCoordinatorDirective)
+                .padding(.horizontal, metrics.cardPadding)
+                .padding(.vertical, metrics.smallSpacing)
+            }
         case let .pendingInteraction(pendingInteraction):
             if let pending = coordinatorPendingAskUserState(for: pendingInteraction) {
                 coordinatorCompactCheckpointCard(
@@ -3762,6 +3796,112 @@ struct CoordinatorModeView: View {
         }
     }
 
+    private func coordinatorRevisionProposalCheckpointCard(
+        proposal: CoordinatorMissionRevisionProposal,
+        metrics: CoordinatorVisualMetrics,
+        onRevise: @escaping () -> Void,
+        onKeep: @escaping () -> Void,
+        onStop: @escaping () -> Void
+    ) -> some View {
+        let fields = proposal.affectedFields.isEmpty
+            ? "Not specified"
+            : proposal.affectedFields.joined(separator: ", ")
+        let evidence = proposal.supportingEvidenceIDs.isEmpty
+            ? "None referenced"
+            : proposal.supportingEvidenceIDs.map { String($0.uuidString.prefix(8)) }.joined(separator: ", ")
+        let normalizedRisk = "\(proposal.remedy) \(proposal.summary) \(proposal.rationale ?? "")".lowercased()
+        let continuingImpact = normalizedRisk.contains("unsafe")
+            || normalizedRisk.contains("safety")
+            || normalizedRisk.contains("risk")
+            ? "Unsafe"
+            : "Inefficient"
+
+        return VStack(alignment: .leading, spacing: metrics.controlSpacing) {
+            Label("Mission checkpoint · Plan revision", systemImage: "arrow.triangle.2.circlepath")
+                .font(metrics.microMedium)
+                .foregroundStyle(Color.orange)
+
+            Text("Review the proposed Mission plan change")
+                .font(metrics.bodySemibold)
+            Text(proposal.summary)
+                .font(metrics.body)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                coordinatorRevisionProposalDetail("Why", proposal.rationale ?? "No additional rationale supplied.", metrics: metrics)
+                coordinatorRevisionProposalDetail("Affected contract areas", fields, metrics: metrics)
+                coordinatorRevisionProposalDetail("Supporting evidence", evidence, metrics: metrics)
+                coordinatorRevisionProposalDetail("Continuing would be", continuingImpact, metrics: metrics)
+            }
+
+            HStack(spacing: 4) {
+                coordinatorDirectorCheckpointActionButton(
+                    label: "Revise plan",
+                    systemImage: "square.and.pencil",
+                    description: "Request a concrete revised plan. This does not approve replacement terms.",
+                    accentColor: Color.orange,
+                    metrics: metrics,
+                    action: onRevise
+                )
+                coordinatorDirectorCheckpointActionButton(
+                    label: "Keep current plan",
+                    systemImage: "arrow.forward.circle.fill",
+                    description: "Reject this proposal and continue under the current approved plan.",
+                    accentColor: Color.accentColor,
+                    metrics: metrics,
+                    action: onKeep
+                )
+                coordinatorDirectorCheckpointActionButton(
+                    label: "Stop Mission",
+                    systemImage: "stop.fill",
+                    description: "Withdraw consent and stop this Mission.",
+                    accentColor: Color.red,
+                    metrics: metrics,
+                    action: onStop
+                )
+            }
+        }
+        .padding(metrics.cardPadding)
+        .background(CoordinatorTheme.Palette.elevatedPanelBackground)
+        .clipShape(RoundedRectangle(cornerRadius: metrics.cardCornerRadius, style: .continuous))
+    }
+
+    private func coordinatorRevisionProposalDetail(
+        _ label: String,
+        _ value: String,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(metrics.microMedium)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(metrics.micro)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    static func renderedRevisionProposalAction(
+        coordinatorSessionID: UUID,
+        action: CoordinatorMissionRevisionProposalResolutionAction,
+        proposalID: UUID,
+        expectedContractFingerprint: String,
+        expectedCheckpointInstanceID: String,
+        perform: @escaping (UUID, CoordinatorMissionRevisionProposalResolutionAction, UUID, String, String) -> Void
+    ) -> () -> Void {
+        {
+            perform(
+                coordinatorSessionID,
+                action,
+                proposalID,
+                expectedContractFingerprint,
+                expectedCheckpointInstanceID
+            )
+        }
+    }
+
     static func renderedPlanApprovalStopAction(
         coordinatorSessionID: UUID,
         perform: @escaping (UUID) -> Void
@@ -3782,6 +3922,12 @@ struct CoordinatorModeView: View {
     }
 
     private enum CoordinatorCheckpointPresentation {
+        case revisionProposal(
+            coordinatorSessionID: UUID,
+            proposalID: UUID,
+            expectedContractFingerprint: String,
+            expectedCheckpointInstanceID: String
+        )
         case pendingInteraction(CoordinatorModePendingInteractionSummary)
         case planApproval(coordinatorSessionID: UUID, expectedCheckpointInstanceID: String)
         case stepBoundary(CoordinatorFollowThroughEvent)
@@ -3790,7 +3936,24 @@ struct CoordinatorModeView: View {
     private func activeCoordinatorCheckpoint(
         for rail: CoordinatorModeCoordinatorRail
     ) -> CoordinatorCheckpointPresentation? {
-        if let pendingInteraction = rail.pendingInteraction {
+        if rail.state == .selected,
+           let coordinatorSessionID = rail.coordinatorSessionID,
+           let proposal = rail.missionPlan?.pendingRevisionProposal
+        {
+            return .revisionProposal(
+                coordinatorSessionID: coordinatorSessionID,
+                proposalID: proposal.id,
+                expectedContractFingerprint: proposal.baseContractFingerprint,
+                expectedCheckpointInstanceID: CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                    coordinatorSessionID: coordinatorSessionID,
+                    proposal: proposal
+                )
+            )
+        }
+
+        if let pendingInteraction = rail.pendingInteraction,
+           pendingInteraction.isAvailable
+        {
             return .pendingInteraction(pendingInteraction)
         }
 
@@ -6453,6 +6616,27 @@ struct CoordinatorModeView: View {
             )
             isSubmittingCoordinatorDirective = false
             isCoordinatorComposerFocused = true
+        }
+    }
+
+    private func submitRevisionProposalAction(
+        coordinatorSessionID: UUID,
+        action: CoordinatorMissionRevisionProposalResolutionAction,
+        proposalID: UUID,
+        expectedContractFingerprint: String,
+        expectedCheckpointInstanceID: String
+    ) {
+        guard !isSubmittingCoordinatorDirective else { return }
+        isSubmittingCoordinatorDirective = true
+        Task { @MainActor in
+            _ = await viewModel.submitRevisionProposalAction(
+                coordinatorSessionID: coordinatorSessionID,
+                action: action,
+                proposalID: proposalID,
+                expectedContractFingerprint: expectedContractFingerprint,
+                expectedCheckpointInstanceID: expectedCheckpointInstanceID
+            )
+            isSubmittingCoordinatorDirective = false
         }
     }
 

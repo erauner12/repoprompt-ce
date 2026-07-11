@@ -278,6 +278,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 appendRevisionProposal: { _, _ in
                     throw MCPError.invalidParams("Revision proposals are unavailable in this test.")
                 },
+                resolveRevisionProposal: { _, _, _, _, _ in .accepted },
                 missionEvents: { _, sinceSeq, _ in
                     CoordinatorMissionEventJournal.Batch(
                         events: [],
@@ -4691,6 +4692,132 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertTrue(proceed["mission_plan_append_guidance"]?.stringValue?.contains("overruled_decision_id") == true)
     }
 
+    func testMissionStatusAndSubmitProjectRevisionProposalActionParity() async throws {
+        let coordinatorID = UUID()
+        let evidenceID = UUID()
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Ship approved work",
+            status: .running,
+            approvalState: .approved
+        ))
+        let basePlan = try XCTUnwrap(state.missionPlan)
+        _ = try state.appendRevisionProposal(CoordinatorMissionRevisionProposalRequest(
+            expectedBasePlanID: basePlan.id,
+            expectedBaseContractFingerprint: basePlan.materialContractFingerprint(),
+            summary: "Change the approved workstream",
+            rationale: "Continuing would be unsafe after the prerequisite changed.",
+            affectedFields: ["workstreams", "done_criteria"],
+            remedy: "safety_risk",
+            supportingEvidenceIDs: [evidenceID],
+            requestedChange: "Use the replacement prerequisite before implementation.",
+            actor: CoordinatorMissionRevisionProposalActor(
+                coordinatorSessionID: coordinatorID,
+                runtimeSessionID: coordinatorID
+            )
+        ))
+        let plan = try XCTUnwrap(state.missionPlan)
+        let proposal = try XCTUnwrap(plan.pendingRevisionProposal)
+        let checkpointID = CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+            coordinatorSessionID: coordinatorID,
+            proposal: proposal
+        )
+        var resolvedAction: CoordinatorMissionRevisionProposalResolutionAction?
+        var resolvedProposalID: UUID?
+        var resolvedContract: String?
+        var resolvedCheckpoint: String?
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: plan] },
+            resolveRevisionProposal: { sessionID, action, proposalID, contract, checkpoint in
+                XCTAssertEqual(sessionID, coordinatorID)
+                resolvedAction = action
+                resolvedProposalID = proposalID
+                resolvedContract = contract
+                resolvedCheckpoint = checkpoint
+                return .accepted
+            }
+        )
+
+        let statusResponse = try await service.execute(args: [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ])
+        let status = try XCTUnwrap(statusResponse.objectValue?["mission_status"]?.objectValue)
+        let checkpoint = try XCTUnwrap(status["checkpoint"]?.objectValue)
+        let actions = try XCTUnwrap(checkpoint["actions"]?.arrayValue?.compactMap(\.objectValue))
+
+        XCTAssertEqual(checkpoint["kind"]?.stringValue, "revision_proposal")
+        XCTAssertEqual(checkpoint["checkpoint_instance_id"]?.stringValue, checkpointID)
+        XCTAssertEqual(checkpoint["what_changed"]?.stringValue, proposal.summary)
+        XCTAssertEqual(checkpoint["why"]?.stringValue, proposal.rationale)
+        XCTAssertEqual(checkpoint["continuing_would_be"]?.stringValue, "unsafe")
+        XCTAssertEqual(
+            actions.compactMap { $0["label"]?.stringValue },
+            ["Revise plan", "Keep current plan", "Stop Mission"]
+        )
+        XCTAssertFalse(String(describing: checkpoint).contains("Approve revised plan"))
+        let stop = try XCTUnwrap(actions.first { $0["label"]?.stringValue == "Stop Mission" })
+        XCTAssertEqual(stop["coordinator_session_id"]?.stringValue, coordinatorID.uuidString)
+        XCTAssertNil(checkpoint["replacement_plan"])
+        XCTAssertNil(checkpoint["replacement_diff"])
+
+        let response = try await service.execute(args: [
+            "op": .string("submit"),
+            "coordinator_session_id": .string(coordinatorID.uuidString),
+            "checkpoint_action": .string("revise_plan"),
+            "proposal_id": .string(proposal.id.uuidString),
+            "expected_contract_fingerprint": .string(proposal.baseContractFingerprint),
+            "expected_checkpoint_instance_id": .string(checkpointID)
+        ])
+
+        XCTAssertEqual(response.objectValue?["accepted"]?.boolValue, true)
+        XCTAssertEqual(resolvedAction, .revisePlan)
+        XCTAssertEqual(resolvedProposalID, proposal.id)
+        XCTAssertEqual(resolvedContract, proposal.baseContractFingerprint)
+        XCTAssertEqual(resolvedCheckpoint, checkpointID)
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("submit"),
+                "coordinator_session_id": .string(coordinatorID.uuidString),
+                "checkpoint_action": .string("keep_current_plan"),
+                "proposal_id": .string(proposal.id.uuidString),
+                "expected_contract_fingerprint": .string(proposal.baseContractFingerprint),
+                "expected_checkpoint_instance_id": .string(checkpointID),
+                "message": .string("This must not be silently ignored.")
+            ])
+            XCTFail("Expected proposal action payload rejection.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("identity fields only"))
+        }
+    }
+
+    func testRevisionProposalSubmitRequiresAllIdentities() async throws {
+        let coordinatorID = UUID()
+        var didResolve = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            resolveRevisionProposal: { _, _, _, _, _ in
+                didResolve = true
+                return .accepted
+            }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("submit"),
+                "coordinator_session_id": .string(coordinatorID.uuidString),
+                "checkpoint_action": .string("keep_current_plan")
+            ])
+            XCTFail("Expected missing proposal identity rejection.")
+        } catch {
+            XCTAssertFalse(didResolve)
+            XCTAssertTrue(String(describing: error).contains("proposal_id is required"))
+        }
+    }
+
     func testMissionStatusCompactFlagsFreshSessionDriftAfterPrimaryExists() async throws {
         let coordinatorID = UUID()
         let workstreamID = UUID()
@@ -6579,6 +6706,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         appendRevisionProposal: @escaping (UUID, CoordinatorMissionRevisionProposalRequest) async throws -> CoordinatorMissionRevisionProposalAppendResult = { _, _ in
             throw MCPError.invalidParams("Revision proposals are unavailable in this test.")
         },
+        resolveRevisionProposal: @escaping (UUID, CoordinatorMissionRevisionProposalResolutionAction, UUID, String, String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _, _, _ in .accepted },
         durableApprovalAuthorityToken: @escaping (UUID) -> String? = { _ in nil },
         missionEvents: @escaping (UUID, Int, Int) -> CoordinatorMissionEventJournal.Batch = { _, sinceSeq, _ in
             CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
@@ -6610,6 +6738,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             pinned: pinned,
             updateMissionPlan: updateMissionPlan,
             appendRevisionProposal: appendRevisionProposal,
+            resolveRevisionProposal: resolveRevisionProposal,
             durableApprovalAuthorityToken: durableApprovalAuthorityToken,
             missionEvents: missionEvents,
             setMissionPace: setMissionPace,
@@ -6646,6 +6775,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         appendRevisionProposal: @escaping (UUID, CoordinatorMissionRevisionProposalRequest) async throws -> CoordinatorMissionRevisionProposalAppendResult = { _, _ in
             throw MCPError.invalidParams("Revision proposals are unavailable in this test.")
         },
+        resolveRevisionProposal: @escaping (UUID, CoordinatorMissionRevisionProposalResolutionAction, UUID, String, String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _, _, _ in .accepted },
         durableApprovalAuthorityToken: @escaping (UUID) -> String? = { _ in nil },
         missionEvents: @escaping (UUID, Int, Int) -> CoordinatorMissionEventJournal.Batch = { _, sinceSeq, _ in
             CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
@@ -6690,6 +6820,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 durableApprovalAuthorityToken: durableApprovalAuthorityToken,
                 updateMissionPlan: updateMissionPlan,
                 appendRevisionProposal: appendRevisionProposal,
+                resolveRevisionProposal: resolveRevisionProposal,
                 missionEvents: missionEvents,
                 setMissionPace: setMissionPace,
                 setMissionAutonomy: setMissionAutonomy,

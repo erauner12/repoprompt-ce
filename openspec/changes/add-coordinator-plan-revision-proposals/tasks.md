@@ -63,12 +63,12 @@
 
 ## 8. Needs You Projection and User Actions
 
-- [ ] 8.1 After the Item 1 audit confirms hard integration prerequisites 13.7 and 13.8 are available, project exactly one revision-proposal decision item as the highest-priority active checkpoint; keep child questions persisted but unavailable/disabled with the hold reason.
-- [ ] 8.2 Build stable checkpoint identity from Coordinator session, proposal ID, and base contract fingerprint; resolve display payload from `rail.missionPlan` by proposal ID at render time.
-- [ ] 8.3 Add the proposal-specific card with exact labels **Revise plan**, **Keep current plan**, and **Stop Mission**, with no exact replacement payload or **Approve revised plan** action.
-- [ ] 8.4 Enforce checkpoint precedence: revision proposal first; selected-Mission child interaction only when no proposal is pending; then concrete plan approval and step boundary.
-- [ ] 8.5 Extend external `submit` with `revise_plan` and `keep_current_plan` plus required proposal/contract/checkpoint identities; retain app-owned Stop parity and reject runtime self-resolution.
-- [ ] 8.6 Add projection/UI/MCP tests for proposal-first uniqueness/precedence, disabled held-question rendering/reason, answer rejection without recording, stable identity, outcome transitions, stale rendering, labels, action parity, restart reprojection, trusted contract-dial invalidation/removal, required re-proposal, and absence of exact replacement payload.
+- [x] 8.1 After the Item 1 audit confirms hard integration prerequisites 13.7 and 13.8 are available, project exactly one revision-proposal decision item as the highest-priority active checkpoint; keep child questions persisted but unavailable/disabled with the hold reason.
+- [x] 8.2 Build stable checkpoint identity from Coordinator session, proposal ID, and base contract fingerprint; resolve display payload from `rail.missionPlan` by proposal ID at render time.
+- [x] 8.3 Add the proposal-specific card with exact labels **Revise plan**, **Keep current plan**, and **Stop Mission**, with no exact replacement payload or **Approve revised plan** action.
+- [x] 8.4 Enforce checkpoint precedence: revision proposal first; selected-Mission child interaction only when no proposal is pending; then concrete plan approval and step boundary.
+- [x] 8.5 Extend external `submit` with `revise_plan` and `keep_current_plan` plus required proposal/contract/checkpoint identities; retain app-owned Stop parity and reject runtime self-resolution.
+- [x] 8.6 Add projection/UI/MCP tests for proposal-first uniqueness/precedence, disabled held-question rendering/reason, answer rejection without recording, stable identity, outcome transitions, stale rendering, labels, action parity, restart reprojection, trusted contract-dial invalidation/removal, required re-proposal, and absence of exact replacement payload.
 
 ## 9. Status, Waits, Events, and Migration Safety
 

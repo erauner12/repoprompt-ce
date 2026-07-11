@@ -4064,6 +4064,52 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(resolutionBarrierAttempts, 4)
     }
 
+    func testRevisionProposalActionResolvesLiveIdentityAndRejectsStaleCheckpoint() async throws {
+        let harness = await makeRevisionProposalPersistenceHarness()
+        harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }
+        _ = try await harness.coordinatorModeViewModel.appendRevisionProposal(
+            coordinatorSessionID: harness.coordinatorID,
+            request: harness.request
+        )
+        let proposal = try XCTUnwrap(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.pendingRevisionProposal
+        )
+        let checkpoint = CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+            coordinatorSessionID: harness.coordinatorID,
+            proposal: proposal
+        )
+
+        let stale = await harness.coordinatorModeViewModel.submitRevisionProposalAction(
+            coordinatorSessionID: harness.coordinatorID,
+            action: .keepCurrentPlan,
+            proposalID: proposal.id,
+            expectedContractFingerprint: proposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: checkpoint + "-stale"
+        )
+        guard case let .rejected(message) = stale else {
+            return XCTFail("Expected stale checkpoint rejection.")
+        }
+        XCTAssertTrue(message.contains("Stale revision proposal checkpoint"))
+        XCTAssertEqual(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.revisionProposalResolutions,
+            []
+        )
+
+        let accepted = await harness.coordinatorModeViewModel.submitRevisionProposalAction(
+            coordinatorSessionID: harness.coordinatorID,
+            action: .keepCurrentPlan,
+            proposalID: proposal.id,
+            expectedContractFingerprint: proposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: checkpoint
+        )
+        XCTAssertEqual(accepted, .accepted)
+        XCTAssertNil(harness.session.coordinatorFollowThroughState?.missionPlan?.pendingRevisionProposal)
+        XCTAssertEqual(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.revisionProposalResolutions.last?.outcome,
+            .rejected
+        )
+    }
+
     func testStopAndContractChangeRetriesRecoverFailedProposalPersistence() async throws {
         let stopHarness = await makeRevisionProposalPersistenceHarness()
         stopHarness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }
@@ -5055,6 +5101,29 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 AgentRunMCPSnapshot.Interaction.Detail(label: "Workflow", value: "Deep Plan", isCode: false)
             ]
         )
+    }
+
+    func testRenderedRevisionProposalActionCapturesOnlyStableIdentities() {
+        let coordinatorID = uuid(1)
+        let proposalID = uuid(2)
+        var captured: (UUID, CoordinatorMissionRevisionProposalResolutionAction, UUID, String, String)?
+        let action = CoordinatorModeView.renderedRevisionProposalAction(
+            coordinatorSessionID: coordinatorID,
+            action: .revisePlan,
+            proposalID: proposalID,
+            expectedContractFingerprint: "contract-fingerprint",
+            expectedCheckpointInstanceID: "checkpoint-instance"
+        ) {
+            captured = ($0, $1, $2, $3, $4)
+        }
+
+        action()
+
+        XCTAssertEqual(captured?.0, coordinatorID)
+        XCTAssertEqual(captured?.1, .revisePlan)
+        XCTAssertEqual(captured?.2, proposalID)
+        XCTAssertEqual(captured?.3, "contract-fingerprint")
+        XCTAssertEqual(captured?.4, "checkpoint-instance")
     }
 
     func testRenderedPlanAndStepStopActionsRetainMissionAcrossSelectionChangeAndRemainIdempotent() async throws {

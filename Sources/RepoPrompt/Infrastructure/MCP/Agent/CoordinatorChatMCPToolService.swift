@@ -18,6 +18,7 @@ struct CoordinatorChatMCPToolService {
         var durableApprovalAuthorityToken: (_ coordinatorSessionID: UUID) -> String?
         var updateMissionPlan: (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
         var appendRevisionProposal: (_ coordinatorSessionID: UUID, _ request: CoordinatorMissionRevisionProposalRequest) async throws -> CoordinatorMissionRevisionProposalAppendResult
+        var resolveRevisionProposal: (_ coordinatorSessionID: UUID, _ action: CoordinatorMissionRevisionProposalResolutionAction, _ proposalID: UUID, _ expectedContractFingerprint: String, _ expectedCheckpointInstanceID: String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var missionEvents: (_ coordinatorSessionID: UUID, _ sinceSeq: Int, _ limit: Int) -> CoordinatorMissionEventJournal.Batch
         var setMissionPace: (_ coordinatorSessionID: UUID, _ pace: CoordinatorMissionPolicyPace) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var setMissionAutonomy: (_ coordinatorSessionID: UUID, _ autonomyClassKey: String, _ mode: CoordinatorMissionAutonomyMode) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
@@ -96,6 +97,15 @@ struct CoordinatorChatMCPToolService {
                 durableApprovalAuthorityToken: { coordinatorViewModel.durableApprovalAuthorityToken(coordinatorSessionID: $0) },
                 updateMissionPlan: { try coordinatorViewModel.updateMissionPlan(coordinatorSessionID: $0, update: $1) },
                 appendRevisionProposal: { try await coordinatorViewModel.appendRevisionProposal(coordinatorSessionID: $0, request: $1) },
+                resolveRevisionProposal: {
+                    await coordinatorViewModel.submitRevisionProposalAction(
+                        coordinatorSessionID: $0,
+                        action: $1,
+                        proposalID: $2,
+                        expectedContractFingerprint: $3,
+                        expectedCheckpointInstanceID: $4
+                    )
+                },
                 missionEvents: { coordinatorViewModel.missionEvents(coordinatorSessionID: $0, sinceSeq: $1, limit: $2) },
                 setMissionPace: { await coordinatorViewModel.setCoordinatorMissionPace(coordinatorSessionID: $0, pace: $1) },
                 setMissionAutonomy: { await coordinatorViewModel.setCoordinatorMissionAutonomy(coordinatorSessionID: $0, autonomyClassKey: $1, mode: $2) },
@@ -347,7 +357,11 @@ struct CoordinatorChatMCPToolService {
 
         case "submit":
             let message = normalizedString(args["message"] ?? args["response"])
-            let continuationAction = try parseCheckpointContinuationAction(args)
+            let proposalAction = try parseRevisionProposalAction(args)
+            let continuationAction = proposalAction == nil
+                ? try parseCheckpointContinuationAction(args)
+                : nil
+            let hasCheckpointAction = continuationAction != nil || proposalAction != nil
             let expectedCheckpointInstanceID = try parseExpectedCheckpointInstanceID(args)
             let newParent = AgentMCPToolHelpers.parseBool(args["new_parent"]) ?? false
             let coordinatorModelID = normalizedString(args["coordinator_model_id"] ?? args["coordinatorModelID"])
@@ -355,25 +369,35 @@ struct CoordinatorChatMCPToolService {
             if newParent, message == nil {
                 throw MCPError.invalidParams("message is required.")
             }
-            if newParent, continuationAction != nil {
+            if let proposalAction,
+               message != nil
+               || args["answers"] != nil
+               || args["answers_by_question_id"] != nil
+               || args["skip"] != nil
+            {
+                throw MCPError.invalidParams(
+                    "\(proposalAction.rawValue) accepts identity fields only; message, answers, and skip are not delivered."
+                )
+            }
+            if newParent, hasCheckpointAction {
                 throw MCPError.invalidParams("checkpoint_action is only valid for existing Coordinator Missions.")
             }
-            if expectedCheckpointInstanceID != nil, continuationAction == nil {
+            if expectedCheckpointInstanceID != nil, !hasCheckpointAction {
                 throw MCPError.invalidParams("expected_checkpoint_instance_id is only valid with checkpoint_action.")
             }
             let caller = try await classifyCaller(
                 metadata,
-                requiresResolvedRuntime: metadata.isCoordinatorRuntime && !newParent && continuationAction == nil
+                requiresResolvedRuntime: metadata.isCoordinatorRuntime && !newParent && !hasCheckpointAction
             )
             if newParent {
                 try validateExternalMissionCreation(caller)
             }
-            if continuationAction != nil {
+            if hasCheckpointAction {
                 try validateExternalUserAction(caller, action: "submit Coordinator checkpoint actions")
             }
 
             environment.refresh()
-            if !newParent, continuationAction == nil {
+            if !newParent, !hasCheckpointAction {
                 try validateInternalNonOwnerCannotSubmit(caller)
             }
             var scopedCoordinatorSessionID: UUID?
@@ -396,16 +420,16 @@ struct CoordinatorChatMCPToolService {
 
             let selectedSnapshot = environment.snapshot()
             if !newParent,
-               continuationAction == nil,
+               !hasCheckpointAction,
                let coordinatorSessionID = scopedCoordinatorSessionID ?? selectedSnapshot.coordinatorRail.coordinatorSessionID,
                selectedSnapshot.coordinatorRail.availableCoordinators
                .first(where: { $0.sessionID == coordinatorSessionID })?
                .missionPlan?
-               .pendingRevisionProposal != nil
+               .holdsChildInteractionsForRevisionProposal == true
             {
                 throw MCPError.invalidParams(CoordinatorMissionRevisionProposalPause.heldReason)
             }
-            let pendingChildRow = newParent || continuationAction != nil
+            let pendingChildRow = newParent || hasCheckpointAction
                 ? nil
                 : environment.activePendingChildInteractionRow(scopedCoordinatorSessionID)
             let result: CoordinatorModeViewModel.DirectiveSubmissionResult
@@ -428,7 +452,35 @@ struct CoordinatorChatMCPToolService {
                 )
                 routedToChildInteraction = true
             } else {
-                if let continuationAction {
+                if let proposalAction {
+                    guard let coordinatorSessionID = scopedCoordinatorSessionID
+                        ?? selectedSnapshot.coordinatorRail.coordinatorSessionID
+                    else {
+                        throw MCPError.invalidParams("coordinator_session_id is required for revision proposal actions.")
+                    }
+                    guard let proposalID = try optionalUUID(
+                        args["proposal_id"] ?? args["proposalID"],
+                        name: "proposal_id"
+                    ) else {
+                        throw MCPError.invalidParams("proposal_id is required for revision proposal actions.")
+                    }
+                    guard let expectedContractFingerprint = normalizedString(
+                        args["expected_contract_fingerprint"] ?? args["expectedContractFingerprint"]
+                    ) else {
+                        throw MCPError.invalidParams("expected_contract_fingerprint is required for revision proposal actions.")
+                    }
+                    guard let expectedCheckpointInstanceID else {
+                        throw MCPError.invalidParams("expected_checkpoint_instance_id is required for revision proposal actions.")
+                    }
+                    result = await environment.resolveRevisionProposal(
+                        coordinatorSessionID,
+                        proposalAction,
+                        proposalID,
+                        expectedContractFingerprint,
+                        expectedCheckpointInstanceID
+                    )
+                    routedToChildInteraction = false
+                } else if let continuationAction {
                     if shouldValidateCurrentCheckpointSubmit(for: continuationAction),
                        let message = checkpointInstanceMismatchMessage(
                            expected: expectedCheckpointInstanceID,
@@ -1691,6 +1743,25 @@ struct CoordinatorChatMCPToolService {
         }
     }
 
+    private func parseRevisionProposalAction(
+        _ args: [String: Value]
+    ) throws -> CoordinatorMissionRevisionProposalResolutionAction? {
+        guard let raw = normalizedString(
+            args["checkpoint_action"]
+                ?? args["checkpointAction"]
+                ?? args["checkpoint_action_id"]
+                ?? args["checkpointActionID"]
+        ) else { return nil }
+        return switch raw {
+        case CoordinatorMissionRevisionProposalResolutionAction.revisePlan.rawValue:
+            .revisePlan
+        case CoordinatorMissionRevisionProposalResolutionAction.keepCurrentPlan.rawValue:
+            .keepCurrentPlan
+        default:
+            nil
+        }
+    }
+
     private func parseCheckpointContinuationAction(_ args: [String: Value]) throws -> CoordinatorModeViewModel.ContinuationAction? {
         guard let raw = normalizedString(
             args["checkpoint_action"]
@@ -1699,7 +1770,7 @@ struct CoordinatorChatMCPToolService {
                 ?? args["checkpointActionID"]
         ) else { return nil }
         guard let action = CoordinatorModeViewModel.ContinuationAction(checkpointActionID: raw) else {
-            throw MCPError.invalidParams("checkpoint_action must be one of: proceed, gather_evidence, deepen_plan, independent_critique, start_smaller, stop.")
+            throw MCPError.invalidParams("checkpoint_action must be one of: revise_plan, keep_current_plan, proceed, gather_evidence, deepen_plan, independent_critique, start_smaller, stop.")
         }
         return action
     }
@@ -3740,6 +3811,47 @@ struct CoordinatorChatMCPToolService {
     }
 
     private func compactMissionCheckpointValue(_ plan: CoordinatorMissionPlan, coordinatorSessionID: UUID) -> Value {
+        if let proposal = plan.pendingRevisionProposal {
+            let checkpointInstanceID = CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                coordinatorSessionID: coordinatorSessionID,
+                proposal: proposal
+            )
+            let continuingImpact = revisionProposalContinuingImpact(proposal)
+            return .object([
+                "kind": .string("revision_proposal"),
+                "checkpoint_id": .string(CoordinatorMissionRevisionProposalCheckpoint.checkpointID),
+                "checkpoint_instance_id": .string(checkpointInstanceID),
+                "proposal_id": .string(proposal.id.uuidString),
+                "expected_contract_fingerprint": .string(proposal.baseContractFingerprint),
+                "title": .string("Review Mission plan revision proposal"),
+                "what_changed": .string(proposal.summary),
+                "why": AgentMCPToolHelpers.stringOrNull(proposal.rationale),
+                "affected_contract_areas": .array(proposal.affectedFields.map(Value.string)),
+                "supporting_evidence_ids": .array(proposal.supportingEvidenceIDs.map { .string($0.uuidString) }),
+                "continuing_would_be": .string(continuingImpact),
+                "actions": .array([
+                    compactRevisionProposalCheckpointAction(
+                        label: "Revise plan",
+                        action: .revisePlan,
+                        proposal: proposal,
+                        checkpointInstanceID: checkpointInstanceID
+                    ),
+                    compactRevisionProposalCheckpointAction(
+                        label: "Keep current plan",
+                        action: .keepCurrentPlan,
+                        proposal: proposal,
+                        checkpointInstanceID: checkpointInstanceID
+                    ),
+                    .object([
+                        "label": .string("Stop Mission"),
+                        "submit_op": .string("submit"),
+                        "coordinator_session_id": .string(coordinatorSessionID.uuidString),
+                        "checkpoint_action": .string(CoordinatorModeViewModel.ContinuationAction.stopHere.checkpointActionID)
+                    ])
+                ])
+            ])
+        }
+
         guard plan.approvalState == .awaitingApproval,
               !plan.nodes.isEmpty,
               plan.status != .stopped,
@@ -3799,6 +3911,31 @@ struct CoordinatorChatMCPToolService {
                     message: CoordinatorModeViewModel.ContinuationAction.stopHere.directiveText
                 )
             ])
+        ])
+    }
+
+    private func revisionProposalContinuingImpact(
+        _ proposal: CoordinatorMissionRevisionProposal
+    ) -> String {
+        let value = "\(proposal.remedy) \(proposal.summary) \(proposal.rationale ?? "")".lowercased()
+        return value.contains("unsafe") || value.contains("safety") || value.contains("risk")
+            ? "unsafe"
+            : "inefficient"
+    }
+
+    private func compactRevisionProposalCheckpointAction(
+        label: String,
+        action: CoordinatorMissionRevisionProposalResolutionAction,
+        proposal: CoordinatorMissionRevisionProposal,
+        checkpointInstanceID: String
+    ) -> Value {
+        .object([
+            "label": .string(label),
+            "submit_op": .string("submit"),
+            "checkpoint_action": .string(action.rawValue),
+            "proposal_id": .string(proposal.id.uuidString),
+            "expected_contract_fingerprint": .string(proposal.baseContractFingerprint),
+            "expected_checkpoint_instance_id": .string(checkpointInstanceID)
         ])
     }
 
