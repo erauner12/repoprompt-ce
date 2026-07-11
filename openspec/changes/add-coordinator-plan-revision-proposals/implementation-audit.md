@@ -56,7 +56,7 @@ Recorded 2026-07-10 against committed feature range `e2576618..c2fb618a`, plus t
 | Projection and actions | Snapshot, MCP, and view-model tests cover one highest-priority proposal checkpoint, stable identity, child-question suppression, exact labels, external action parity, identity-only capture, restart projection, and absence of replacement plan/diff or **Approve revised plan**. | Covered |
 | Observability and receipts | MCP status/wait/journal tests cover append/resolution fingerprints without plan revision, wait wakeups, status lifecycle/held state, and event candidates; receipt tests cover runtime proposal plus trusted resolution without approval/execution claims. | Covered |
 | Prompt/schema/doctor | `SystemPromptServiceCoordinatorModeTests` and `CoordinatorChatMCPToolServiceTests` cover proposal doctrine, self-resolution prohibition, public schema, and doctor feature advertisement. | Covered |
-| Live narrative harness | New `s8` asserts stable proposal/base-contract/checkpoint identities across repeated paused observations, zero running work, no intervening decision/self-resolution, identity-only actions/no exact replacement payload, external Revise, accepted resolution, a materially changed concrete plan awaiting a distinct exact approval, external Proceed, and terminal completion. | Harness ready; live run remains task 10.3 |
+| Live narrative | PASS: `s8` artifact `tmp/director-e2e-runs/20260711T034319Z-s8-6da7a2` reached `plan-visible`, `plan-approved`, `revision-proposal-visible`, `revision-proposal-paused`, `revision-requested`, `revision-drafting-submitted`, `revision-visible`, `current-submit-accepted`, and `completed`, with required events and receipts. | Covered |
 
 Coordinated validation completed successfully:
 
@@ -69,4 +69,6 @@ Coordinated validation completed successfully:
 
 Final Oracle review found a Stop-versus-non-Stop-durability-hold race. The narrow correction makes Stop supersede any proposal durability hold while preserving an already-written append-only proposal resolution, installs and persists a stopped hold before cancellation, keeps retries idempotent, and fails contract dials closed during other unresolved holds. Reducer coverage spans accepted, rejected, and contract-invalidated holds; production view-model coverage exercises accepted-hold persistence failure through external Stop.
 
-Repository policy requires the smallest relevant coordinated tests/builds for routine changes; it does not require a full-root run for this focused handoff. Task 10.3 remains intentionally unchecked pending the parent-run visible-app narrative.
+Live S8 used `.agents/skills/rpce-director-e2e/scripts/director_e2e.py --scenario s8 --workspace homelab-garden --window 1 --events-mode required --receipt-mode required`. The run discovered an accepted-Revise stale submit gate; commit `84ae4a65` fixed it, and the final run passed.
+
+Repository policy requires the smallest relevant coordinated tests/builds for routine changes; it does not require a full-root run for this focused handoff.
