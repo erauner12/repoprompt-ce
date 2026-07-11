@@ -357,7 +357,7 @@ enum CoordinatorMissionRevisionProposalIdentity {
 }
 
 enum CoordinatorMissionRevisionProposalPause {
-    static let heldReason = "held pending revision proposal"
+    static let heldReason = "Waiting until the plan decision is resolved."
 }
 
 extension CoordinatorMissionPlan {
@@ -385,6 +385,11 @@ extension CoordinatorMissionPlan {
             return nil
         }
         return resolution
+    }
+
+    var acceptedRevisionDraftingProposal: CoordinatorMissionRevisionProposal? {
+        guard let resolution = acceptedRevisionDraftingResolution else { return nil }
+        return revisionProposals.first { $0.id == resolution.proposalID }
     }
 
     var pendingRevisionProposal: CoordinatorMissionRevisionProposal? {

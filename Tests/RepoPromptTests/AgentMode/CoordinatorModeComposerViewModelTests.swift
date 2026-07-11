@@ -2320,6 +2320,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                 CoordinatorMissionPlanEvent(
                     id: uuid(7054),
                     kind: .revised,
+                    isBookkeepingOnly: true,
                     timestamp: date(23),
                     summary: "Mission plan updated"
                 )
@@ -2339,6 +2340,85 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(updates.first?.foldedEventCount, 3)
         XCTAssertNil(updates.first?.summary)
         XCTAssertEqual(viewModel.railTranscriptEntries.filter { $0.ledger != nil }.map(\.id), [uuid(7054)])
+    }
+
+    func testMissionLedgerRunLengthCollapsesAdjacentBookkeepingRevisions() {
+        let coordinatorID = uuid(1)
+        let plan = CoordinatorMissionPlan(
+            id: uuid(7055),
+            revision: 8,
+            events: [
+                CoordinatorMissionPlanEvent(
+                    id: uuid(7056),
+                    kind: .revised,
+                    isBookkeepingOnly: true,
+                    timestamp: date(20),
+                    summary: "Mission plan updated"
+                ),
+                CoordinatorMissionPlanEvent(
+                    id: uuid(7057),
+                    kind: .nodeCompleted,
+                    timestamp: date(21),
+                    summary: "Bookkeeping progress"
+                ),
+                CoordinatorMissionPlanEvent(
+                    id: uuid(7058),
+                    kind: .revised,
+                    isBookkeepingOnly: true,
+                    timestamp: date(22),
+                    summary: "Mission plan updated"
+                ),
+                CoordinatorMissionPlanEvent(
+                    id: uuid(7059),
+                    kind: .revised,
+                    timestamp: date(23),
+                    summary: "Mission contract updated"
+                )
+            ],
+            updatedAt: date(24)
+        )
+        let viewModel = ledgerTestViewModel(coordinatorID: coordinatorID, plan: { plan })
+
+        viewModel.refresh()
+
+        let updates = planUpdateLedgerEntries(in: viewModel)
+        XCTAssertEqual(updates.count, 2)
+        XCTAssertEqual(updates[0].id, uuid(7056))
+        XCTAssertEqual(updates[0].previousRevision, 5)
+        XCTAssertEqual(updates[0].revision, 7)
+        XCTAssertEqual(updates[0].foldedEventCount, 1)
+        XCTAssertNil(updates[0].summary)
+        XCTAssertEqual(updates[1].summary, "Mission contract updated")
+        XCTAssertEqual(updates[1].previousRevision, 7)
+        XCTAssertEqual(updates[1].revision, 8)
+    }
+
+    func testMissionLedgerPreservesUnclassifiedLegacyRevisions() {
+        let coordinatorID = uuid(1)
+        let plan = CoordinatorMissionPlan(
+            id: uuid(7060),
+            revision: 3,
+            events: [
+                CoordinatorMissionPlanEvent(
+                    id: uuid(7061),
+                    kind: .revised,
+                    timestamp: date(20),
+                    summary: "Mission plan updated"
+                ),
+                CoordinatorMissionPlanEvent(
+                    id: uuid(7062),
+                    kind: .revised,
+                    timestamp: date(21),
+                    summary: "Mission plan updated"
+                )
+            ],
+            updatedAt: date(22)
+        )
+        let viewModel = ledgerTestViewModel(coordinatorID: coordinatorID, plan: { plan })
+
+        viewModel.refresh()
+
+        XCTAssertEqual(planUpdateLedgerEntries(in: viewModel).map(\.id), [uuid(7061), uuid(7062)])
     }
 
     func testMissionLedgerKeepsBlockingPlanEventsVisible() {
@@ -4089,7 +4169,29 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         guard case let .rejected(message) = stale else {
             return XCTFail("Expected stale checkpoint rejection.")
         }
-        XCTAssertTrue(message.contains("Stale revision proposal checkpoint"))
+        XCTAssertTrue(message.contains("checkpoint is stale"))
+        XCTAssertTrue(
+            harness.coordinatorModeViewModel.revisionProposalActionNotice?.message
+                .contains("Mission state was refreshed") == true
+        )
+        XCTAssertNil(harness.coordinatorModeViewModel.composerNotice)
+        let currentPlan = try XCTUnwrap(harness.session.coordinatorFollowThroughState?.missionPlan)
+        let presentation = try XCTUnwrap(CoordinatorPlanRevisionPresentation.project(
+            coordinatorSessionID: harness.coordinatorID,
+            plan: currentPlan
+        ))
+        XCTAssertNil(harness.coordinatorModeViewModel.revisionProposalActionNotice(for: presentation))
+        let stalePresentation = CoordinatorPlanRevisionPresentation(
+            coordinatorSessionID: presentation.coordinatorSessionID,
+            proposalID: presentation.proposalID,
+            proposalSummary: presentation.proposalSummary,
+            phase: .pendingDecision,
+            expectedContractFingerprint: presentation.expectedContractFingerprint,
+            expectedCheckpointInstanceID: checkpoint + "-stale",
+            classifiedDeltaLines: [],
+            reviseGuidanceDraft: nil
+        )
+        XCTAssertNotNil(harness.coordinatorModeViewModel.revisionProposalActionNotice(for: stalePresentation))
         XCTAssertEqual(
             harness.session.coordinatorFollowThroughState?.missionPlan?.revisionProposalResolutions,
             []
@@ -4107,6 +4209,87 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(
             harness.session.coordinatorFollowThroughState?.missionPlan?.revisionProposalResolutions.last?.outcome,
             .rejected
+        )
+    }
+
+    func testRevisionProposalActionUsesAuthoritativeMissionStateDespiteLaggingProjection() async throws {
+        let harness = await makeRevisionProposalPersistenceHarness()
+        let coordinatorID = harness.coordinatorID
+        _ = try await harness.coordinatorModeViewModel.appendRevisionProposal(
+            coordinatorSessionID: coordinatorID,
+            request: harness.request
+        )
+        let proposal = try XCTUnwrap(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.pendingRevisionProposal
+        )
+        let checkpoint = CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+            coordinatorSessionID: coordinatorID,
+            proposal: proposal
+        )
+        var resolverAttempts = 0
+        let laggingProjectionPlan = harness.session.coordinatorFollowThroughState?.missionPlan.map { plan in
+            var lagging = plan
+            lagging.revisionProposals = []
+            return lagging
+        }
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(20),
+                            state: .idle,
+                            isMCP: true,
+                            coordinatorRuntime: true,
+                            missionPlan: laggingProjectionPlan
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            revisionProposalResolver: { request in
+                resolverAttempts += 1
+                var authoritativeState = try XCTUnwrap(harness.session.coordinatorFollowThroughState)
+                let result = try authoritativeState.resolveRevisionProposal(CoordinatorMissionRevisionProposalResolutionRequest(
+                    proposalID: request.proposalID,
+                    outcome: request.action.outcome,
+                    userDecisionID: CoordinatorMissionRevisionProposalCheckpoint.userDecisionID(
+                        proposalID: request.proposalID,
+                        outcome: request.action.outcome
+                    ),
+                    checkpointID: CoordinatorMissionRevisionProposalCheckpoint.checkpointID,
+                    checkpointInstanceID: request.expectedCheckpointInstanceID
+                ))
+                harness.session.coordinatorFollowThroughState = authoritativeState
+                return result
+            }
+        )
+        viewModel.refresh()
+        XCTAssertNil(viewModel.snapshot.coordinatorRail.missionPlan?.pendingRevisionProposal)
+
+        let result = await viewModel.submitRevisionProposalAction(
+            coordinatorSessionID: coordinatorID,
+            action: .revisePlan,
+            proposalID: proposal.id,
+            expectedContractFingerprint: proposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: checkpoint
+        )
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(resolverAttempts, 1)
+        XCTAssertEqual(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.revisionProposalResolutions.count,
+            1
+        )
+        XCTAssertEqual(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.revisionProposalResolutions.last?.outcome,
+            .acceptedForConcreteRevision
         )
     }
 

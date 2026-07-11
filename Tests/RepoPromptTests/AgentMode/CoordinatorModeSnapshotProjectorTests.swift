@@ -1688,7 +1688,11 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
         XCTAssertEqual(snapshot.decisionQueue.first?.source, .revisionProposal)
         XCTAssertEqual(snapshot.decisionQueue.first?.detail, proposal.summary)
         XCTAssertFalse(snapshot.decisionQueue.contains { $0.source == .interaction })
-        let held = try XCTUnwrap(allRows(in: snapshot).first(where: { $0.sessionID == childID })?.pendingInteraction)
+        XCTAssertEqual(snapshot.counts.needsYou, 1)
+        XCTAssertEqual(snapshot.coordinatorRail.childCounts.needsYou, 1)
+        let heldRow = try XCTUnwrap(allRows(in: snapshot).first(where: { $0.sessionID == childID }))
+        XCTAssertEqual(heldRow.statusGroup, .working)
+        let held = try XCTUnwrap(heldRow.pendingInteraction)
         XCTAssertFalse(held.isAvailable)
         XCTAssertEqual(held.unavailableReason, CoordinatorMissionRevisionProposalPause.heldReason)
         XCTAssertEqual(
@@ -1697,6 +1701,65 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
                 proposal: proposal
             ),
             "coordinator:\(coordinatorID.uuidString):revision-proposal:\(appended.proposalID.uuidString):contract-\(proposal.baseContractFingerprint)"
+        )
+
+        let resolution = try state.resolveRevisionProposalTransaction(
+            CoordinatorMissionRevisionProposalTrustedResolutionRequest(
+                coordinatorSessionID: coordinatorID,
+                action: .revisePlan,
+                proposalID: proposal.id,
+                expectedContractFingerprint: proposal.baseContractFingerprint,
+                expectedCheckpointInstanceID: CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                    coordinatorSessionID: coordinatorID,
+                    proposal: proposal
+                )
+            ),
+            resolvedAt: date(41)
+        )
+        XCTAssertTrue(state.clearRevisionProposalDurabilityHold(
+            transactionID: resolution.resolutionID,
+            at: date(42)
+        ))
+        let draftingPlan = try XCTUnwrap(state.missionPlan)
+        let draftingSnapshot = projector.project(input(
+            live: [
+                live(
+                    id: coordinatorID,
+                    tab: uuid(110),
+                    title: "Coordinator Runtime Demo",
+                    updatedAt: date(43),
+                    state: .idle,
+                    coordinatorRuntime: true,
+                    missionPlan: draftingPlan
+                ),
+                live(
+                    id: childID,
+                    tab: childTabID,
+                    title: "Child",
+                    updatedAt: date(35),
+                    state: .waitingForQuestion,
+                    parent: coordinatorID
+                )
+            ],
+            mcpSnapshots: [
+                childID: mcpSnapshot(
+                    sessionID: childID,
+                    tabID: childTabID,
+                    interaction: interaction,
+                    parent: coordinatorID
+                )
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        XCTAssertEqual(draftingSnapshot.counts.needsYou, 0)
+        XCTAssertEqual(draftingSnapshot.coordinatorRail.childCounts.needsYou, 0)
+        XCTAssertEqual(
+            CoordinatorPlanRevisionPresentation.project(
+                coordinatorSessionID: coordinatorID,
+                plan: draftingPlan
+            )?.phase,
+            .drafting
         )
     }
 

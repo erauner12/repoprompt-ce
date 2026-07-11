@@ -39,6 +39,14 @@ final class CoordinatorMissionRevisionProposalLedgerTests: XCTestCase {
         XCTAssertEqual(proposal.affectedFields, ["objective", "policy"])
         XCTAssertEqual(proposal.supportingEvidenceIDs, [evidenceA, evidenceB])
         XCTAssertEqual(state.missionPlan?.events.count(where: { $0.kind == .revisionProposalFiled }), 1)
+        XCTAssertEqual(
+            state.missionPlan?.events.first(where: { $0.kind == .revisionProposalFiled })?.summary,
+            "Revision proposed: First summary"
+        )
+        XCTAssertEqual(
+            state.missionPlan?.events.first(where: { $0.kind == .revisionProposalFiled })?.proposalID,
+            first.proposalID
+        )
         XCTAssertEqual(state.missionPlan?.decisions, [])
 
         XCTAssertThrowsError(try state.appendRevisionProposal(
@@ -616,6 +624,20 @@ final class CoordinatorMissionRevisionProposalLedgerTests: XCTestCase {
         XCTAssertEqual(state.missionPlan?.postApprovalContinuation?.status, .invalidated)
         XCTAssertTrue(state.missionPlan?.holdsChildInteractionsForRevisionProposal == true)
         XCTAssertTrue(state.pendingEvents.isEmpty)
+        XCTAssertTrue(state.clearRevisionProposalDurabilityHold(
+            transactionID: result.resolutionID,
+            at: date(4)
+        ))
+        let draftingPlan = try XCTUnwrap(state.missionPlan)
+        XCTAssertEqual(draftingPlan.acceptedRevisionDraftingProposal?.summary, proposal.summary)
+        let presentation = try XCTUnwrap(CoordinatorPlanRevisionPresentation.project(
+            coordinatorSessionID: coordinatorID,
+            plan: draftingPlan
+        ))
+        XCTAssertEqual(presentation.phase, .drafting)
+        XCTAssertEqual(presentation.proposalSummary, proposal.summary)
+        XCTAssertTrue(presentation.classifiedDeltaLines.isEmpty)
+        XCTAssertNil(presentation.reviseGuidanceDraft)
 
         let keep = CoordinatorMissionRevisionProposalTrustedResolutionRequest(
             coordinatorSessionID: coordinatorID,
@@ -639,7 +661,7 @@ final class CoordinatorMissionRevisionProposalLedgerTests: XCTestCase {
         ))) {
             XCTAssertEqual($0 as? CoordinatorMissionRevisionProposalLedgerError, .staleCheckpoint)
         }
-        XCTAssertTrue(state.clearRevisionProposalDurabilityHold(transactionID: result.resolutionID))
+        XCTAssertFalse(state.clearRevisionProposalDurabilityHold(transactionID: result.resolutionID))
         XCTAssertTrue(state.missionPlan?.holdsChildInteractionsForRevisionProposal == true)
     }
 

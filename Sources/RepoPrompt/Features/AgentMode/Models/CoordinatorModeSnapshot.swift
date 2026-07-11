@@ -620,6 +620,72 @@ enum CoordinatorModeLedgerEntryPayload: Equatable {
     case wrapUp(userCount: Int, directorCount: Int)
 }
 
+struct CoordinatorPlanRevisionPresentation: Equatable {
+    enum Phase: Equatable {
+        case pendingDecision
+        case drafting
+        case revisedPlanReady
+        case approvedCollapsed
+    }
+
+    let coordinatorSessionID: UUID
+    let proposalID: UUID
+    let proposalSummary: String
+    let phase: Phase
+    let expectedContractFingerprint: String?
+    let expectedCheckpointInstanceID: String?
+
+    // Reserved for the next UX chunks; the container can add these without replacement.
+    let classifiedDeltaLines: [String]
+    let reviseGuidanceDraft: String?
+
+    static func project(
+        coordinatorSessionID: UUID,
+        plan: CoordinatorMissionPlan
+    ) -> Self? {
+        if let proposal = plan.pendingRevisionProposal {
+            return Self(
+                coordinatorSessionID: coordinatorSessionID,
+                proposalID: proposal.id,
+                proposalSummary: proposal.summary,
+                phase: .pendingDecision,
+                expectedContractFingerprint: proposal.baseContractFingerprint,
+                expectedCheckpointInstanceID: CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                    coordinatorSessionID: coordinatorSessionID,
+                    proposal: proposal
+                ),
+                classifiedDeltaLines: [],
+                reviseGuidanceDraft: nil
+            )
+        }
+        guard let resolution = plan.revisionProposalResolutions.last,
+              resolution.outcome == .acceptedForConcreteRevision,
+              let proposal = plan.revisionProposals.first(where: { $0.id == resolution.proposalID })
+        else { return nil }
+
+        let phase: Phase
+        if plan.acceptedRevisionDraftingResolution != nil {
+            phase = .drafting
+        } else if plan.approvalState == .awaitingApproval {
+            phase = .revisedPlanReady
+        } else if plan.approvalState == .approved {
+            phase = .approvedCollapsed
+        } else {
+            return nil
+        }
+        return Self(
+            coordinatorSessionID: coordinatorSessionID,
+            proposalID: proposal.id,
+            proposalSummary: proposal.summary,
+            phase: phase,
+            expectedContractFingerprint: nil,
+            expectedCheckpointInstanceID: nil,
+            classifiedDeltaLines: [],
+            reviseGuidanceDraft: nil
+        )
+    }
+}
+
 struct CoordinatorModePlanUpdateSummary: Equatable {
     let id: UUID
     let eventKind: CoordinatorMissionPlanEventKind

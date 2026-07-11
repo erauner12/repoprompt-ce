@@ -169,7 +169,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             sessionID: request.actor.runtimeSessionID,
             proposalID: proposalID,
             timestamp: filedAt,
-            summary: "Director runtime filed revision proposal \(proposalID.uuidString)."
+            summary: "Revision proposed: \(request.summary)"
         ))
         plan.revision += 1
         plan.updatedAt = filedAt
@@ -766,6 +766,13 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             postApprovalContinuation: postApprovalContinuation,
             updatedAt: update.updatedAt
         )
+        if let existingPlan {
+            let contractChanged = existingPlan.materialContractSnapshot != nextPlan.materialContractSnapshot
+            nextPlan.events[existingPlan.events.count].isBookkeepingOnly = !contractChanged
+            if contractChanged {
+                nextPlan.events[existingPlan.events.count].summary = "Mission contract updated"
+            }
+        }
         if let terminalStatus {
             let outcome: CoordinatorMissionRevisionProposalResolutionOutcome =
                 terminalStatus == .stopped ? .stopped : .invalidatedMissionTerminal
@@ -2477,6 +2484,7 @@ struct CoordinatorMissionPlanEvent: Codable, Equatable, Identifiable {
     var sessionID: UUID?
     var interactionID: UUID?
     var proposalID: UUID?
+    var isBookkeepingOnly: Bool?
     var timestamp: Date
     var summary: String?
 
@@ -2487,6 +2495,7 @@ struct CoordinatorMissionPlanEvent: Codable, Equatable, Identifiable {
         sessionID: UUID? = nil,
         interactionID: UUID? = nil,
         proposalID: UUID? = nil,
+        isBookkeepingOnly: Bool? = nil,
         timestamp: Date = Date(),
         summary: String? = nil
     ) {
@@ -2496,6 +2505,7 @@ struct CoordinatorMissionPlanEvent: Codable, Equatable, Identifiable {
         self.sessionID = sessionID
         self.interactionID = interactionID
         self.proposalID = proposalID
+        self.isBookkeepingOnly = isBookkeepingOnly
         self.timestamp = timestamp
         self.summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }

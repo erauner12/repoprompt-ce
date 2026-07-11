@@ -292,6 +292,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     @Published private(set) var railTranscriptEntries: [CoordinatorModeRailTranscriptEntry] = []
     @Published private(set) var currentRailActivityText: String?
     @Published private(set) var composerNotice: String?
+    @Published private(set) var revisionProposalActionNotice: RevisionProposalActionNotice?
     @Published private(set) var isFreshCoordinatorRunPending = false
     @Published private(set) var executionPace: CoordinatorExecutionPace
     @Published private(set) var missionPaceSelection: CoordinatorMissionPolicyPace
@@ -375,6 +376,13 @@ final class CoordinatorModeViewModel: ObservableObject {
     private var pendingFreshCoordinatorModelID: String?
     private var draftDialOverridesPolicy = false
     private(set) var isVisible = false
+
+    struct RevisionProposalActionNotice: Equatable {
+        let coordinatorSessionID: UUID
+        let proposalID: UUID
+        let checkpointInstanceID: String
+        let message: String
+    }
 
     private struct PendingMissionUserDecision {
         let coordinatorSessionID: UUID
@@ -606,29 +614,68 @@ final class CoordinatorModeViewModel: ObservableObject {
         expectedContractFingerprint: String,
         expectedCheckpointInstanceID: String
     ) async -> DirectiveSubmissionResult {
-        refresh()
-        guard let plan = snapshot.coordinatorRail.availableCoordinators
-            .first(where: { $0.sessionID == coordinatorSessionID })?
-            .missionPlan,
-            let proposal = plan.pendingRevisionProposal,
-            proposal.id == proposalID,
-            proposal.baseContractFingerprint == expectedContractFingerprint,
-            CoordinatorMissionRevisionProposalCheckpoint.instanceID(
-                coordinatorSessionID: coordinatorSessionID,
-                proposal: proposal
-            ) == expectedCheckpointInstanceID
-        else {
-            let message = "Stale revision proposal checkpoint. Refresh Mission status before retrying."
-            composerNotice = message
-            return .rejected(message: message)
-        }
-        return await resolveRevisionProposal(CoordinatorMissionRevisionProposalTrustedResolutionRequest(
+        let request = CoordinatorMissionRevisionProposalTrustedResolutionRequest(
             coordinatorSessionID: coordinatorSessionID,
             action: action,
             proposalID: proposalID,
             expectedContractFingerprint: expectedContractFingerprint,
             expectedCheckpointInstanceID: expectedCheckpointInstanceID
-        ))
+        )
+
+        do {
+            _ = try await revisionProposalResolver(request)
+            refresh()
+            composerNotice = nil
+            revisionProposalActionNotice = nil
+            if action == .keepCurrentPlan {
+                Task { @MainActor [followThroughEvaluationHandler] in
+                    await followThroughEvaluationHandler(coordinatorSessionID)
+                }
+            }
+            return .accepted
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            refresh()
+            if Self.isRevisionProposalRenderRace(error) {
+                revisionProposalActionNotice = RevisionProposalActionNotice(
+                    coordinatorSessionID: coordinatorSessionID,
+                    proposalID: proposalID,
+                    checkpointInstanceID: expectedCheckpointInstanceID,
+                    message: "This plan decision changed while you were deciding. Mission state was refreshed; review the current Plan Revision card."
+                )
+                composerNotice = nil
+            } else {
+                revisionProposalActionNotice = nil
+                composerNotice = message
+            }
+            return .rejected(message: message)
+        }
+    }
+
+    func refreshRevisionProposalCard() {
+        refresh()
+    }
+
+    func revisionProposalActionNotice(
+        for presentation: CoordinatorPlanRevisionPresentation
+    ) -> String? {
+        guard let notice = revisionProposalActionNotice,
+              notice.coordinatorSessionID == presentation.coordinatorSessionID,
+              notice.proposalID == presentation.proposalID,
+              notice.checkpointInstanceID == presentation.expectedCheckpointInstanceID
+        else { return nil }
+        return notice.message
+    }
+
+    private static func isRevisionProposalRenderRace(_ error: Error) -> Bool {
+        guard let ledgerError = error as? CoordinatorMissionRevisionProposalLedgerError else { return false }
+        return switch ledgerError {
+        case .staleBasePlan, .staleBaseContract, .staleCheckpoint, .proposalNotFound, .conflictingResolution,
+             .missionTerminal:
+            true
+        case .missionPlanMissing, .durabilityHoldActive, .invalidRequest, .differentProposalPending:
+            false
+        }
     }
 
     @discardableResult
@@ -2725,7 +2772,50 @@ final class CoordinatorModeViewModel: ObservableObject {
         let firstRenderedRevision = max(1, plan.revision - revisionEvents.count + 1)
         var renderedRevisionIndex = 0
         var foldedProgressEventCount = 0
+        var pendingBookkeepingRun: (
+            event: CoordinatorMissionPlanEvent,
+            previousRevision: Int,
+            revision: Int,
+            foldedEventCount: Int
+        )?
         var entries: [CoordinatorModeRailTranscriptEntry] = []
+
+        func appendUpdate(
+            event: CoordinatorMissionPlanEvent,
+            previousRevision: Int?,
+            revision: Int,
+            summary: String?,
+            foldedEventCount: Int
+        ) {
+            let update = CoordinatorModePlanUpdateSummary(
+                id: event.id,
+                eventKind: event.kind,
+                previousRevision: previousRevision,
+                revision: revision,
+                summary: summary,
+                foldedEventCount: foldedEventCount
+            )
+            entries.append(CoordinatorModeRailTranscriptEntry(
+                id: event.id,
+                role: .event,
+                text: [update.title, update.revisionText].compactMap(\.self).joined(separator: " · "),
+                createdAt: event.timestamp,
+                action: nil,
+                ledger: .planUpdate(update)
+            ))
+        }
+
+        func flushBookkeepingRun() {
+            guard let run = pendingBookkeepingRun else { return }
+            appendUpdate(
+                event: run.event,
+                previousRevision: run.previousRevision,
+                revision: run.revision,
+                summary: nil,
+                foldedEventCount: run.foldedEventCount
+            )
+            pendingBookkeepingRun = nil
+        }
 
         for event in events {
             if event.kind.isFoldedTranscriptProgress {
@@ -2737,26 +2827,41 @@ final class CoordinatorModeViewModel: ObservableObject {
                 let revision = firstRenderedRevision + renderedRevisionIndex
                 let previousRevision = event.kind == .revised ? max(1, revision - 1) : nil
                 renderedRevisionIndex += 1
-                let update = CoordinatorModePlanUpdateSummary(
-                    id: event.id,
-                    eventKind: event.kind,
+                let summary = Self.usefulPlanEventSummary(event.summary)
+
+                if event.kind == .revised, event.isBookkeepingOnly == true, summary == nil {
+                    if let run = pendingBookkeepingRun {
+                        pendingBookkeepingRun = (
+                            event: run.event,
+                            previousRevision: run.previousRevision,
+                            revision: revision,
+                            foldedEventCount: run.foldedEventCount + foldedProgressEventCount
+                        )
+                    } else {
+                        pendingBookkeepingRun = (
+                            event: event,
+                            previousRevision: previousRevision ?? revision,
+                            revision: revision,
+                            foldedEventCount: foldedProgressEventCount
+                        )
+                    }
+                    foldedProgressEventCount = 0
+                    continue
+                }
+
+                flushBookkeepingRun()
+                appendUpdate(
+                    event: event,
                     previousRevision: previousRevision,
                     revision: revision,
-                    summary: Self.usefulPlanEventSummary(event.summary),
+                    summary: summary,
                     foldedEventCount: foldedProgressEventCount
                 )
                 foldedProgressEventCount = 0
-                entries.append(CoordinatorModeRailTranscriptEntry(
-                    id: event.id,
-                    role: .event,
-                    text: [update.title, update.revisionText].compactMap(\.self).joined(separator: " · "),
-                    createdAt: event.timestamp,
-                    action: nil,
-                    ledger: .planUpdate(update)
-                ))
                 continue
             }
 
+            flushBookkeepingRun()
             foldedProgressEventCount = 0
             entries.append(CoordinatorModeRailTranscriptEntry(
                 id: event.id,
@@ -2768,6 +2873,7 @@ final class CoordinatorModeViewModel: ObservableObject {
             ))
         }
 
+        flushBookkeepingRun()
         return entries
     }
 
