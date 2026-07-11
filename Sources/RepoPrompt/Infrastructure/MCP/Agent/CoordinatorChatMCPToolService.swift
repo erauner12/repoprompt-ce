@@ -12,6 +12,8 @@ struct CoordinatorChatMCPToolService {
         var startNewCoordinatorRun: (_ coordinatorModelID: String?) -> Void
         var stopCoordinatorMission: (_ targetMissionID: UUID) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var submitDirective: (_ text: String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
+        var acceptedRevisionDraftingResolutionID: (_ coordinatorSessionID: UUID) -> UUID?
+        var holdsRevisionProposalAuthority: (_ coordinatorSessionID: UUID) -> Bool
         var submitAcceptedRevisionDraftingDirective: (_ text: String, _ coordinatorSessionID: UUID, _ expectedResolutionID: UUID) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var submitContinuation: (_ action: CoordinatorModeViewModel.ContinuationAction, _ expectedCheckpointInstanceID: String?) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var activePendingChildInteractionRow: (_ coordinatorSessionID: UUID?) -> CoordinatorModeRow?
@@ -92,6 +94,12 @@ struct CoordinatorChatMCPToolService {
                 startNewCoordinatorRun: { coordinatorViewModel.startNewCoordinatorRun(coordinatorModelID: $0) },
                 stopCoordinatorMission: { await coordinatorViewModel.stopCoordinatorMission(targetMissionID: $0) },
                 submitDirective: { await coordinatorViewModel.submitCoordinatorDirective($0) },
+                acceptedRevisionDraftingResolutionID: {
+                    coordinatorViewModel.acceptedRevisionDraftingResolutionID(coordinatorSessionID: $0)
+                },
+                holdsRevisionProposalAuthority: {
+                    coordinatorViewModel.holdsRevisionProposalAuthority(coordinatorSessionID: $0)
+                },
                 submitAcceptedRevisionDraftingDirective: {
                     await coordinatorViewModel.submitAcceptedRevisionDraftingDirective(
                         $0,
@@ -426,7 +434,13 @@ struct CoordinatorChatMCPToolService {
                 )
                 try validateCoordinatorExists(sessionID, in: environment.snapshot())
                 scopedCoordinatorSessionID = sessionID
-                if !metadata.isCoordinatorRuntime {
+                let isAcceptedDraftingTarget = caller == .externalCaller
+                    && message != nil
+                    && args["answers"] == nil
+                    && args["answers_by_question_id"] == nil
+                    && args["skip"] == nil
+                    && environment.acceptedRevisionDraftingResolutionID(sessionID) != nil
+                if !metadata.isCoordinatorRuntime, !isAcceptedDraftingTarget {
                     environment.selectCoordinator(sessionID)
                     environment.refresh()
                 }
@@ -440,15 +454,27 @@ struct CoordinatorChatMCPToolService {
                     .first(where: { $0.sessionID == coordinatorSessionID })?
                     .missionPlan
             }
-            let acceptedRevisionDraftingResolution = selectedPlan?.acceptedRevisionDraftingResolution
+            let acceptedRevisionDraftingResolutionID = selectedCoordinatorSessionID.flatMap {
+                environment.acceptedRevisionDraftingResolutionID($0)
+            }
+            let holdsRevisionProposalAuthority = selectedCoordinatorSessionID.map {
+                environment.holdsRevisionProposalAuthority($0)
+            } ?? false
+            let isAcceptedRevisionDraftingDirective = acceptedRevisionDraftingResolutionID != nil
+                && caller == .externalCaller
+                && message != nil
+                && args["answers"] == nil
+                && args["answers_by_question_id"] == nil
+                && args["skip"] == nil
             if !newParent,
                !hasCheckpointAction,
-               selectedPlan?.holdsChildInteractionsForRevisionProposal == true,
-               acceptedRevisionDraftingResolution == nil
+               holdsRevisionProposalAuthority
+               || selectedPlan?.holdsChildInteractionsForRevisionProposal == true,
+               !isAcceptedRevisionDraftingDirective
             {
                 throw MCPError.invalidParams(CoordinatorMissionRevisionProposalPause.heldReason)
             }
-            let pendingChildRow = newParent || hasCheckpointAction
+            let pendingChildRow = newParent || hasCheckpointAction || isAcceptedRevisionDraftingDirective
                 ? nil
                 : environment.activePendingChildInteractionRow(scopedCoordinatorSessionID)
             let result: CoordinatorModeViewModel.DirectiveSubmissionResult
@@ -520,13 +546,14 @@ struct CoordinatorChatMCPToolService {
                     guard let message, !message.isEmpty else {
                         throw MCPError.invalidParams("message is required.")
                     }
-                    if let coordinatorSessionID = selectedCoordinatorSessionID,
-                       let resolution = acceptedRevisionDraftingResolution
+                    if isAcceptedRevisionDraftingDirective,
+                       let coordinatorSessionID = selectedCoordinatorSessionID,
+                       let resolutionID = acceptedRevisionDraftingResolutionID
                     {
                         result = await environment.submitAcceptedRevisionDraftingDirective(
                             message,
                             coordinatorSessionID,
-                            resolution.id
+                            resolutionID
                         )
                     } else {
                         result = await environment.submitDirective(message)

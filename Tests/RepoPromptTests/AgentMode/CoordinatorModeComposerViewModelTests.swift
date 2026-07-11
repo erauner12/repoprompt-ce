@@ -4324,6 +4324,87 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(submissions.first?.visibleText, "Preserve the read-only first step.")
     }
 
+    func testUnifiedMissionComposerUsesAuthoritativeAcceptedDraftingIdentityWhenProjectionIsUnselected() async {
+        let coordinatorID = uuid(9804)
+        let otherCoordinatorID = uuid(9805)
+        let resolutionID = uuid(9806)
+        var submissions: [CoordinatorDirectiveSubmission] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(9807),
+                            title: "Drafting Mission",
+                            updatedAt: self.date(1),
+                            state: .idle,
+                            isMCP: true,
+                            coordinatorRuntime: true,
+                            missionPlan: nil
+                        ),
+                        self.live(
+                            id: otherCoordinatorID,
+                            tab: self.uuid(9808),
+                            title: "Selected Mission",
+                            updatedAt: self.date(2),
+                            state: .idle,
+                            isMCP: true,
+                            coordinatorRuntime: true,
+                            missionPlan: CoordinatorMissionPlan(status: .running, approvalState: .approved)
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID, otherCoordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { submission in
+                submissions.append(submission)
+                return .accepted
+            },
+            revisionProposalAuthorityProvider: { sessionID in
+                CoordinatorModeViewModel.RevisionProposalAuthority(
+                    acceptedDraftingResolutionID: sessionID == coordinatorID ? resolutionID : nil,
+                    holdsInteractions: sessionID == coordinatorID
+                )
+            }
+        )
+        viewModel.selectCoordinator(sessionID: otherCoordinatorID)
+        let context = CoordinatorModeViewModel.MissionComposerContext(
+            route: .acceptedRevisionDrafting(
+                coordinatorSessionID: coordinatorID,
+                resolutionID: resolutionID
+            ),
+            placeholder: "Add guidance for the revised plan..."
+        )
+
+        let result = await viewModel.submitMissionComposerDirective(
+            "Resume the old plan and start implementation.",
+            context: context
+        )
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(viewModel.snapshot.coordinatorRail.coordinatorSessionID, otherCoordinatorID)
+        XCTAssertEqual(submissions.count, 1)
+        XCTAssertEqual(submissions.first?.coordinatorSessionID, coordinatorID)
+        XCTAssertEqual(submissions.first?.acceptedRevisionDraftingResolutionID, resolutionID)
+        XCTAssertEqual(submissions.first?.visibleText, "Resume the old plan and start implementation.")
+        XCTAssertNotEqual(submissions.first?.providerText, submissions.first?.visibleText)
+        XCTAssertTrue(submissions.first?.providerText.contains(resolutionID.uuidString) == true)
+        XCTAssertTrue(submissions.first?.providerText.contains("Do not resume the old contract") == true)
+        XCTAssertTrue(submissions.first?.providerText.contains("only as guidance") == true)
+
+        let stale = await viewModel.submitAcceptedRevisionDraftingDirective(
+            "Do not bypass the accepted resolution.",
+            coordinatorSessionID: coordinatorID,
+            expectedResolutionID: uuid(9809)
+        )
+        XCTAssertEqual(stale, .rejected(message: CoordinatorMissionRevisionProposalPause.heldReason))
+        XCTAssertEqual(submissions.count, 1)
+    }
+
     func testRevisionGuidanceWaitsForDurableResolutionBeforeTrustedDraftingDirective() async throws {
         let harness = await makeRevisionProposalPersistenceHarness()
         harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }

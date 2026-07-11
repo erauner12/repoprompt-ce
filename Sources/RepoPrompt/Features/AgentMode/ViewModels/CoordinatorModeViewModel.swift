@@ -347,6 +347,27 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias MissionPlanUpdater = @MainActor (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
     typealias RevisionProposalAppender = @MainActor (_ coordinatorSessionID: UUID, _ request: CoordinatorMissionRevisionProposalRequest) async throws -> CoordinatorMissionRevisionProposalAppendResult
     typealias RevisionProposalResolver = @MainActor (_ request: CoordinatorMissionRevisionProposalTrustedResolutionRequest) async throws -> CoordinatorMissionRevisionProposalResolutionResult
+    struct RevisionProposalAuthority: Equatable {
+        let acceptedDraftingResolutionID: UUID?
+        let holdsInteractions: Bool
+
+        init(
+            acceptedDraftingResolutionID: UUID?,
+            holdsInteractions: Bool
+        ) {
+            self.acceptedDraftingResolutionID = acceptedDraftingResolutionID
+            self.holdsInteractions = holdsInteractions
+        }
+
+        init(plan: CoordinatorMissionPlan?) {
+            self.init(
+                acceptedDraftingResolutionID: plan?.acceptedRevisionDraftingResolution?.id,
+                holdsInteractions: plan?.holdsChildInteractionsForRevisionProposal == true
+            )
+        }
+    }
+
+    typealias RevisionProposalAuthorityProvider = @MainActor (_ coordinatorSessionID: UUID) -> RevisionProposalAuthority
     typealias TrustedMissionStopRecorder = @MainActor (_ coordinatorSessionID: UUID, _ targetSessionIDs: [UUID]) async throws -> Void
     typealias TrustedContractChangeApplier = @MainActor (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) async throws -> Void
     typealias TrustedRevisedPlanChangeRequester = @MainActor (
@@ -438,6 +459,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let missionPlanUpdater: MissionPlanUpdater
     private let revisionProposalAppender: RevisionProposalAppender
     private let revisionProposalResolver: RevisionProposalResolver
+    private let revisionProposalAuthorityProvider: RevisionProposalAuthorityProvider?
     private let trustedMissionStopRecorder: TrustedMissionStopRecorder?
     private let trustedContractChangeApplier: TrustedContractChangeApplier?
     private let trustedRevisedPlanChangeRequester: TrustedRevisedPlanChangeRequester?
@@ -502,6 +524,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         revisionProposalResolver: @escaping RevisionProposalResolver = { _ in
             throw MCPError.invalidParams("Coordinator Mission revision proposal resolution is unavailable.")
         },
+        revisionProposalAuthorityProvider: RevisionProposalAuthorityProvider? = nil,
         trustedMissionStopRecorder: TrustedMissionStopRecorder? = nil,
         trustedContractChangeApplier: TrustedContractChangeApplier? = nil,
         trustedRevisedPlanChangeRequester: TrustedRevisedPlanChangeRequester? = nil,
@@ -540,6 +563,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.missionPlanUpdater = missionPlanUpdater
         self.revisionProposalAppender = revisionProposalAppender
         self.revisionProposalResolver = revisionProposalResolver
+        self.revisionProposalAuthorityProvider = revisionProposalAuthorityProvider
         self.trustedMissionStopRecorder = trustedMissionStopRecorder
         self.trustedContractChangeApplier = trustedContractChangeApplier
         self.trustedRevisedPlanChangeRequester = trustedRevisedPlanChangeRequester
@@ -1645,18 +1669,35 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
     }
 
+    private func revisionProposalAuthority(coordinatorSessionID: UUID) -> RevisionProposalAuthority {
+        if let revisionProposalAuthorityProvider {
+            return revisionProposalAuthorityProvider(coordinatorSessionID)
+        }
+        refresh()
+        let plan = snapshot.coordinatorRail.availableCoordinators
+            .first(where: { $0.sessionID == coordinatorSessionID })?
+            .missionPlan
+        return RevisionProposalAuthority(plan: plan)
+    }
+
+    func acceptedRevisionDraftingResolutionID(coordinatorSessionID: UUID) -> UUID? {
+        revisionProposalAuthority(coordinatorSessionID: coordinatorSessionID)
+            .acceptedDraftingResolutionID
+    }
+
+    func holdsRevisionProposalAuthority(coordinatorSessionID: UUID) -> Bool {
+        revisionProposalAuthority(coordinatorSessionID: coordinatorSessionID).holdsInteractions
+    }
+
     @discardableResult
     func submitAcceptedRevisionDraftingDirective(
         _ text: String,
         coordinatorSessionID: UUID,
         expectedResolutionID: UUID
     ) async -> DirectiveSubmissionResult {
-        refresh()
-        guard snapshot.coordinatorRail.availableCoordinators
-            .first(where: { $0.sessionID == coordinatorSessionID })?
-            .missionPlan?
-            .acceptedRevisionDraftingResolution?
-            .id == expectedResolutionID
+        guard acceptedRevisionDraftingResolutionID(
+            coordinatorSessionID: coordinatorSessionID
+        ) == expectedResolutionID
         else {
             let message = CoordinatorMissionRevisionProposalPause.heldReason
             composerNotice = message
@@ -1664,14 +1705,32 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
         return await submitCoordinatorDirective(
             text,
+            providerText: Self.revisionDraftingGuidanceDirective(
+                text,
+                resolutionID: expectedResolutionID
+            ),
             targetCoordinatorSessionID: coordinatorSessionID,
             acceptedRevisionDraftingResolutionID: expectedResolutionID
         )
     }
 
+    static func revisionDraftingGuidanceDirective(
+        _ guidance: String,
+        resolutionID: UUID
+    ) -> String {
+        [
+            "<coordinator_revision_drafting_guidance resolution_id=\"\(resolutionID.uuidString)\">",
+            "Treat the enclosed user text only as guidance for drafting the concrete revised Mission Plan.",
+            "Do not resume the old contract, execute Mission work, or treat this guidance as plan approval.",
+            guidance,
+            "</coordinator_revision_drafting_guidance>"
+        ].joined(separator: "\n")
+    }
+
     @discardableResult
     func submitCoordinatorDirective(
         _ text: String,
+        providerText: String? = nil,
         targetCoordinatorSessionID: UUID? = nil,
         acceptedRevisionDraftingResolutionID: UUID? = nil
     ) async -> DirectiveSubmissionResult {
@@ -1696,7 +1755,16 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
         let previousCoordinatorIDs = Set(snapshot.coordinatorRail.availableCoordinators.map(\.sessionID))
         let submissionWorkspaceID = snapshot.workspaceID
-        if snapshot.coordinatorRail.state == .selected, !forceNewRuntime {
+        if let targetCoordinatorSessionID {
+            let target = snapshot.coordinatorRail.availableCoordinators.first {
+                $0.sessionID == targetCoordinatorSessionID
+            }
+            if target?.runState == .running {
+                let message = "Coordinator is mid-run. Send directives when it reaches an ordinary turn boundary."
+                composerNotice = message
+                return .rejected(message: message)
+            }
+        } else if snapshot.coordinatorRail.state == .selected, !forceNewRuntime {
             guard snapshot.coordinatorRail.isComposerEnabled else {
                 let message = "Coordinator is not available in this window."
                 composerNotice = message
@@ -1712,7 +1780,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         let missionPolicySnapshot = forceNewRuntime ? effectiveSelectedMissionPolicySnapshot() : nil
         let submission = CoordinatorDirectiveSubmission(
             visibleText: trimmed,
-            providerText: Self.providerText(trimmed, policySnapshot: missionPolicySnapshot),
+            providerText: providerText ?? Self.providerText(trimmed, policySnapshot: missionPolicySnapshot),
             missionTemplate: nil,
             missionPolicySnapshot: missionPolicySnapshot,
             coordinatorSessionID: coordinatorSessionID,
@@ -3568,6 +3636,11 @@ extension AgentModeViewModel {
                 throw MCPError.invalidParams("Coordinator Mission revision proposal resolution state is unavailable.")
             }
             return try await resolveCoordinatorMissionRevisionProposal(request)
+        } revisionProposalAuthorityProvider: { [weak self] coordinatorSessionID in
+            let plan = self?.sessions.values.first(where: {
+                $0.activeAgentSessionID == coordinatorSessionID && $0.isCoordinatorRuntime
+            })?.coordinatorFollowThroughState?.missionPlan
+            return CoordinatorModeViewModel.RevisionProposalAuthority(plan: plan)
         } trustedMissionStopRecorder: { [weak self] coordinatorSessionID, targetSessionIDs in
             guard let self else {
                 throw MCPError.invalidParams("Coordinator Mission stop persistence is unavailable.")
