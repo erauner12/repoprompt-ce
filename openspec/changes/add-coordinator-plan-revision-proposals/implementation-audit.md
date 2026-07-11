@@ -41,3 +41,32 @@ Lifecycle ownership seams audited for later work:
 2. Prompt, public schema, doctor discovery, and overlapping tests wait for 13.6.
 3. Pause/resolution/Stop/continuation/child-interaction/projection integration in sections 5–8 waits for both 13.7 and 13.8.
 4. Task 13.3 remains soft/independent because this audit found no shared proposal authority path. Its unchecked status is not promoted to a blocker.
+
+# Section 10 validation-matrix audit
+
+Recorded 2026-07-10 against committed feature range `e2576618..c2fb618a`, plus the non-live S8 harness addition.
+
+| Matrix area | Implementation and focused evidence | Result |
+| --- | --- | --- |
+| Canonical contract identity | `CoordinatorMissionMaterialContract` is shared by ingress/CAS/status/checkpoint logic; `CoordinatorMissionMaterialContractTests` covers every ratified material field, runtime exclusions, deterministic ordering, evidence-only stability, Unicode normalization, and stale structural CAS. | Covered |
+| Proposal ingress and canonical request identity | `CoordinatorChatMCPToolService` restricts `propose_revision` to the owning runtime and dedicated persisted callback; MCP and ledger tests cover approved/nonterminal/base checks, summary parsing, exact payload/authority rejection, Unicode/whitespace identity, case/punctuation preservation, exact pending retry, and post-resolution occurrence. | Covered |
+| Ledger, persistence, and migration | Dedicated append/resolve mutators preserve append-only history and generic-update isolation; ledger/view-model tests cover empty decode defaults, reset, round trip, restart reprojection, terminal invalidation, persistence failure, reentrant corruption, and identical retry recovery. | Covered |
+| Pause gates and held questions | Run policy blocks starts before capacity including preapproval exceptions; classifier holds before `childAsk:auto`; reducer/MCP/view-model tests cover bindings/progress/contract/Director-decision rejection, continuation/final-enqueue holds, existing/new disabled questions, answer rejection without record, and terminal bookkeeping. | Covered |
+| Revise, Keep, Stop, and stale actions | Ledger and production view-model transactions cover accepted `revisionRequested`, unchanged Keep restoration/evaluate-once, target-bound Stop/terminal races, stale checkpoint/contract rejection, conflicting first-writer decisions, atomic trusted contract-change invalidation, durability ordering, and retry after persistence failure. | Covered |
+| Projection and actions | Snapshot, MCP, and view-model tests cover one highest-priority proposal checkpoint, stable identity, child-question suppression, exact labels, external action parity, identity-only capture, restart projection, and absence of replacement plan/diff or **Approve revised plan**. | Covered |
+| Observability and receipts | MCP status/wait/journal tests cover append/resolution fingerprints without plan revision, wait wakeups, status lifecycle/held state, and event candidates; receipt tests cover runtime proposal plus trusted resolution without approval/execution claims. | Covered |
+| Prompt/schema/doctor | `SystemPromptServiceCoordinatorModeTests` and `CoordinatorChatMCPToolServiceTests` cover proposal doctrine, self-resolution prohibition, public schema, and doctor feature advertisement. | Covered |
+| Live narrative harness | New `s8` asserts stable proposal/base-contract/checkpoint identities across repeated paused observations, zero running work, no intervening decision/self-resolution, identity-only actions/no exact replacement payload, external Revise, accepted resolution, a materially changed concrete plan awaiting a distinct exact approval, external Proceed, and terminal completion. | Harness ready; live run remains task 10.3 |
+
+Coordinated validation completed successfully:
+
+- `make dev-format` (initial audit: 0/1224 changed; final review correction formatted 1 file, then 0).
+- Nine focused `make dev-test FILTER=...` lanes: 346 tests, 0 failures after the final review correction.
+- `make dev-swift-build PRODUCT=RepoPrompt`.
+- `make dev-swift-build PRODUCT=repoprompt-mcp`.
+- `make dev-lint` (0 formatter findings, 0 strict SwiftLint violations).
+- `openspec validate add-coordinator-plan-revision-proposals --strict`.
+
+Final Oracle review found a Stop-versus-non-Stop-durability-hold race. The narrow correction makes Stop supersede any proposal durability hold while preserving an already-written append-only proposal resolution, installs and persists a stopped hold before cancellation, keeps retries idempotent, and fails contract dials closed during other unresolved holds. Reducer coverage spans accepted, rejected, and contract-invalidated holds; production view-model coverage exercises accepted-hold persistence failure through external Stop.
+
+Repository policy requires the smallest relevant coordinated tests/builds for routine changes; it does not require a full-root run for this focused handoff. Task 10.3 remains intentionally unchecked pending the parent-run visible-app narrative.

@@ -668,6 +668,55 @@ final class CoordinatorMissionRevisionProposalLedgerTests: XCTestCase {
         XCTAssertEqual(stopRetry.resolutionID, stopResult.resolutionID)
         XCTAssertEqual(stopRetry.disposition, .existingResolutionRetry)
 
+        for action in [
+            CoordinatorMissionRevisionProposalResolutionAction.revisePlan,
+            .keepCurrentPlan
+        ] {
+            var resolved = try makeState()
+            let appended = try resolved.appendRevisionProposal(request(for: resolved), filedAt: date(1))
+            let proposal = try XCTUnwrap(resolved.missionPlan?.pendingRevisionProposal)
+            let resolution = try resolved.resolveRevisionProposalTransaction(
+                CoordinatorMissionRevisionProposalTrustedResolutionRequest(
+                    coordinatorSessionID: coordinatorID,
+                    action: action,
+                    proposalID: proposal.id,
+                    expectedContractFingerprint: proposal.baseContractFingerprint,
+                    expectedCheckpointInstanceID: CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                        coordinatorSessionID: coordinatorID,
+                        proposal: proposal
+                    )
+                ),
+                resolvedAt: date(2)
+            )
+            let originalOutcome = action.outcome
+            let stoppedAfterResolution = try XCTUnwrap(try resolved.stopMissionTransaction(
+                coordinatorSessionID: coordinatorID,
+                cancelledSessionIDs: [uuid(12)],
+                stoppedAt: date(3)
+            ))
+            XCTAssertEqual(resolved.missionPlan?.status, .stopped)
+            XCTAssertEqual(resolved.missionPlan?.revisionProposalResolutions.count, 1)
+            XCTAssertEqual(
+                resolved.missionPlan?.revisionProposalResolution(for: appended.proposalID)?.outcome,
+                originalOutcome
+            )
+            XCTAssertNotEqual(stoppedAfterResolution.resolutionID, resolution.resolutionID)
+            XCTAssertEqual(resolved.missionPlan?.revisionProposalDurabilityHold?.outcome, .stopped)
+            XCTAssertEqual(
+                resolved.missionPlan?.decisions.count {
+                    $0.label == CoordinatorMissionUserDecisionLabel.stoppedMission.rawValue
+                },
+                1
+            )
+            let retry = try XCTUnwrap(try resolved.stopMissionTransaction(
+                coordinatorSessionID: coordinatorID,
+                cancelledSessionIDs: [uuid(12)],
+                stoppedAt: date(4)
+            ))
+            XCTAssertEqual(retry.resolutionID, stoppedAfterResolution.resolutionID)
+            XCTAssertEqual(retry.disposition, .existingResolutionRetry)
+        }
+
         var changed = try makeState()
         let changedProposal = try changed.appendRevisionProposal(request(for: changed), filedAt: date(1))
         var policy = changed.missionPlan?.policySnapshot ?? .defaultPolicy
@@ -698,6 +747,21 @@ final class CoordinatorMissionRevisionProposalLedgerTests: XCTestCase {
         ))
         XCTAssertEqual(changeRetry.resolutionID, changeResult.resolutionID)
         XCTAssertEqual(changeRetry.disposition, .existingResolutionRetry)
+
+        var stoppedAfterContractChange = changed
+        let supersedingStop = try XCTUnwrap(try stoppedAfterContractChange.stopMissionTransaction(
+            coordinatorSessionID: coordinatorID,
+            cancelledSessionIDs: [uuid(12)],
+            stoppedAt: date(4)
+        ))
+        XCTAssertEqual(stoppedAfterContractChange.missionPlan?.status, .stopped)
+        XCTAssertEqual(
+            stoppedAfterContractChange.missionPlan?.revisionProposalResolution(for: changedProposal.proposalID)?.outcome,
+            .invalidatedContractChanged
+        )
+        XCTAssertEqual(stoppedAfterContractChange.missionPlan?.revisionProposalDurabilityHold?.outcome, .stopped)
+        XCTAssertNotEqual(supersedingStop.resolutionID, changeResult.resolutionID)
+
         XCTAssertTrue(changed.clearRevisionProposalDurabilityHold(transactionID: changeResult.resolutionID))
         XCTAssertFalse(changed.missionPlan?.holdsChildInteractionsForRevisionProposal == true)
     }

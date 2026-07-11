@@ -450,9 +450,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             )
         }
         guard !plan.status.isTerminal else { return nil }
-        guard plan.revisionProposalDurabilityHold == nil else {
-            throw CoordinatorMissionRevisionProposalLedgerError.durabilityHoldActive
-        }
+        let supersededHold = plan.revisionProposalDurabilityHold
         let decisionID = CoordinatorMissionStableIdentity.uuid(
             namespace: "coordinator-mission-stop-user-decision",
             parts: [coordinatorSessionID.uuidString, plan.id.uuidString]
@@ -491,6 +489,17 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             )
             result = CoordinatorMissionRevisionProposalResolutionResult(
                 resolutionID: resolution.id,
+                disposition: .appended
+            )
+        } else if let supersededHold {
+            plan.revisionProposalDurabilityHold = CoordinatorMissionRevisionProposalDurabilityHold(
+                transactionID: decisionID,
+                proposalID: supersededHold.proposalID,
+                outcome: .stopped,
+                installedAt: stoppedAt
+            )
+            result = CoordinatorMissionRevisionProposalResolutionResult(
+                resolutionID: decisionID,
                 disposition: .appended
             )
         }
@@ -540,9 +549,18 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         at date: Date = Date()
     ) -> Bool {
         guard var plan = missionPlan,
-              plan.revisionProposalDurabilityHold?.transactionID == transactionID,
-              plan.revisionProposalResolutions.contains(where: { $0.id == transactionID })
+              let hold = plan.revisionProposalDurabilityHold,
+              hold.transactionID == transactionID
         else { return false }
+        let transactionRecorded = plan.revisionProposalResolutions.contains(where: { $0.id == transactionID })
+            || (
+                hold.outcome == .stopped
+                    && plan.decisions.contains {
+                        $0.id == transactionID
+                            && $0.label == CoordinatorMissionUserDecisionLabel.stoppedMission.rawValue
+                    }
+            )
+        guard transactionRecorded else { return false }
         plan.revisionProposalDurabilityHold = nil
         plan.revision += 1
         plan.updatedAt = date

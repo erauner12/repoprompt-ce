@@ -80,8 +80,8 @@
 
 ## 10. Validation and Handoff
 
-- [ ] 10.1 Run focused reducer, MCP, policy, classifier, view-model, projection, persistence, status, wait, event-journal, and prompt/schema test lanes covering the design validation matrix.
-- [ ] 10.2 Run the smallest coordinated Swift builds and tests for affected products, then coordinated formatter and strict lint for Swift changes.
+- [x] 10.1 Run focused reducer, MCP, policy, classifier, view-model, projection, persistence, status, wait, event-journal, and prompt/schema test lanes covering the design validation matrix.
+- [x] 10.2 Run the smallest coordinated Swift builds and tests for affected products, then coordinated formatter and strict lint for Swift changes.
 - [ ] 10.3 Run one live CE narrative: Director proposes revision → Needs You → Revise plan → trusted revision flow → concrete plan → user approval → execution resumes.
-- [ ] 10.4 Keep Keep current, Stop, stale actions, pause gates, retries, and decode/restart as required focused/integration coverage even when omitted from the first live narrative.
-- [ ] 10.5 Run `openspec validate add-coordinator-plan-revision-proposals --strict` and resolve every validation error before implementation handoff.
+- [x] 10.4 Keep Keep current, Stop, stale actions, pause gates, retries, and decode/restart as required focused/integration coverage even when omitted from the first live narrative.
+- [x] 10.5 Run `openspec validate add-coordinator-plan-revision-proposals --strict` and resolve every validation error before implementation handoff.

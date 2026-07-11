@@ -635,6 +635,11 @@ final class CoordinatorModeViewModel: ObservableObject {
                 childAsk: nil
             )
         }
+        if plan.revisionProposalDurabilityHold != nil {
+            let message = CoordinatorMissionRevisionProposalPause.heldReason
+            composerNotice = message
+            return .rejected(message: message)
+        }
         guard !plan.status.isTerminal else {
             let message = "Mission pace cannot be changed after the Mission is \(plan.status.rawValue)."
             composerNotice = message
@@ -683,6 +688,11 @@ final class CoordinatorModeViewModel: ObservableObject {
                 pace: nil,
                 childAsk: mode
             )
+        }
+        if plan.revisionProposalDurabilityHold != nil {
+            let message = CoordinatorMissionRevisionProposalPause.heldReason
+            composerNotice = message
+            return .rejected(message: message)
         }
         guard !plan.status.isTerminal else {
             let message = "Mission autonomy cannot be changed after the Mission is \(plan.status.rawValue)."
@@ -823,7 +833,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         let stoppedAt = Date()
         do {
             if plan.pendingRevisionProposal != nil
-                || plan.revisionProposalDurabilityHold?.outcome == .stopped,
+                || plan.revisionProposalDurabilityHold != nil,
                 let trustedMissionStopRecorder
             {
                 try await trustedMissionStopRecorder(coordinatorSessionID, targetSessionIDs)

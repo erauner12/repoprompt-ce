@@ -52,6 +52,12 @@ For stop semantics against a live child, use the hidden scripted child:
 .agents/skills/rpce-director-e2e/scripts/director_e2e.py --scenario s7 --workspace homelab-garden --window 1 --events-mode required --child-model-id scripted
 ```
 
+For the trusted post-approval revision-proposal narrative:
+
+```bash
+.agents/skills/rpce-director-e2e/scripts/director_e2e.py --scenario s8 --workspace homelab-garden --window 1 --events-mode required --receipt-mode required
+```
+
 To capture capabilities and clean up a successful run:
 
 ```bash
@@ -96,6 +102,7 @@ Do not compare cheap-tier pass rates directly with default-tier pass rates; prom
 - `s5`: Me/Director child-question parity. Runs the same child Agent Mode mission twice. By default, the Coordinator is instructed to pass an exact, simple prompt to the selected child: call the structured RepoPrompt MCP `ask_user` tool now (`request_user_input` is only an alternate when `ask_user` is not advertised), wait for the pending interaction to be answered, report the selected marker, and stop. With `--child-model-id scripted`, the Coordinator must copy the exact `SCRIPTED_CHILD_V1 ask_marker token=<TOKEN> options=Alpha,Beta` line and the hidden scripted child creates the real pending question deterministically. The parent/Director owns Me-vs-Director routing and answer attribution, and the runner sets pace to Auto before approval so the child can launch. In Ask/Me mode it expects a visible pending child question, `coordinator_chat submit` routing to `child_interaction`, and a user childAsk answer decision. In Auto/Director mode it expects completion without a user-facing pending child question and a director childAsk decision/evidence record. Both variants require a fresh `agent_run.start`, bound child session/interaction IDs, unique marker evidence, and disjoint child refs. If a live child reports `S5_USER_INPUT_TOOL_UNAVAILABLE`, the selected child backend cannot create structured pending user input; switch to a backend or scripted child before treating S5/S6 as a Coordinator failure.
 - `s6`: Dial flip semantics. Runs a pace slice that drives `coordinator_chat set_pace` while approval is pending and expects the checkpoint to remain pending, plus a childAsk slice that starts with Me, waits for a real pending child question, flips to Director through `coordinator_chat set_autonomy`, and expects the same interaction to be answered once by the Director after the user dial-change decision.
 - `s7`: Stop semantics. Starts a deterministic child question, stops the Mission through `coordinator_chat stop_mission`, and expects a user irreversible stop decision, `agent_run.cancel` routing for active child work, stopped mission status, no running/ready work, no pending decision row, at least one cancelled node, and receipt capture when requested.
+- `s8`: Trusted revision-proposal lifecycle. Approves an initial plan, waits for the owning Director to file a summary-only proposal, proves stable proposal/contract/checkpoint identities and a no-execution/no-self-resolution pause across repeated observations, submits external `revise_plan` using identity-only action fields, requires a concrete materially revised plan at a distinct exact-approval checkpoint, approves it externally, and expects execution to resume and complete with the accepted proposal resolution preserved.
 - `smoke`: runs `s1` then `s2` with the same options.
 
 ## Visual Checkpoints

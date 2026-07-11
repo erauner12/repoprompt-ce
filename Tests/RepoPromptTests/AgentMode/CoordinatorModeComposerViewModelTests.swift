@@ -4110,6 +4110,69 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         )
     }
 
+    func testStopSupersedesAcceptedResolutionHoldAndContractDialsFailClosed() async throws {
+        let harness = await makeRevisionProposalPersistenceHarness()
+        harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }
+        _ = try await harness.coordinatorModeViewModel.appendRevisionProposal(
+            coordinatorSessionID: harness.coordinatorID,
+            request: harness.request
+        )
+        let proposal = try XCTUnwrap(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.pendingRevisionProposal
+        )
+        let request = CoordinatorMissionRevisionProposalTrustedResolutionRequest(
+            coordinatorSessionID: harness.coordinatorID,
+            action: .revisePlan,
+            proposalID: proposal.id,
+            expectedContractFingerprint: proposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                coordinatorSessionID: harness.coordinatorID,
+                proposal: proposal
+            )
+        )
+        var barrierAttempts = 0
+        harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in
+            barrierAttempts += 1
+            return barrierAttempts != 2
+        }
+        guard case .rejected = await harness.coordinatorModeViewModel.resolveRevisionProposal(request) else {
+            return XCTFail("Expected durability-hold clearance failure.")
+        }
+        XCTAssertEqual(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.revisionProposalDurabilityHold?.outcome,
+            .acceptedForConcreteRevision
+        )
+
+        let pace = await harness.coordinatorModeViewModel.setCoordinatorMissionPace(
+            coordinatorSessionID: harness.coordinatorID,
+            pace: .auto
+        )
+        XCTAssertEqual(pace, .rejected(message: CoordinatorMissionRevisionProposalPause.heldReason))
+        let autonomy = await harness.coordinatorModeViewModel.setCoordinatorMissionAutonomy(
+            coordinatorSessionID: harness.coordinatorID,
+            autonomyClassKey: CoordinatorMissionAutonomyClasses.childAsk.key,
+            mode: .auto
+        )
+        XCTAssertEqual(autonomy, .rejected(message: CoordinatorMissionRevisionProposalPause.heldReason))
+
+        harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }
+        let stop = await harness.coordinatorModeViewModel.stopCoordinatorMission(
+            targetMissionID: harness.coordinatorID
+        )
+        XCTAssertEqual(stop, .accepted)
+        let stoppedPlan = try XCTUnwrap(harness.session.coordinatorFollowThroughState?.missionPlan)
+        XCTAssertEqual(stoppedPlan.status, .stopped)
+        XCTAssertNil(stoppedPlan.revisionProposalDurabilityHold)
+        XCTAssertEqual(stoppedPlan.revisionProposalResolutions.count, 1)
+        XCTAssertEqual(stoppedPlan.revisionProposalResolutions.first?.outcome, .acceptedForConcreteRevision)
+        XCTAssertEqual(
+            stoppedPlan.decisions.count {
+                $0.label == CoordinatorMissionUserDecisionLabel.stoppedMission.rawValue
+            },
+            1
+        )
+    }
+
     func testStopAndContractChangeRetriesRecoverFailedProposalPersistence() async throws {
         let stopHarness = await makeRevisionProposalPersistenceHarness()
         stopHarness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }

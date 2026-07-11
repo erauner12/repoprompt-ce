@@ -1189,6 +1189,55 @@ def plan_advanced_past_initial_approval(status: dict[str, Any]) -> bool:
     return approval_state == "approved"
 
 
+def revision_proposal_status(status: dict[str, Any]) -> dict[str, Any]:
+    value = status.get("revision_proposal") or {}
+    return value if isinstance(value, dict) else {}
+
+
+def pending_revision_proposal(status: dict[str, Any]) -> dict[str, Any] | None:
+    value = revision_proposal_status(status).get("pending")
+    return value if isinstance(value, dict) else None
+
+
+def recent_revision_proposal_resolution(status: dict[str, Any]) -> dict[str, Any] | None:
+    value = revision_proposal_status(status).get("recent_resolution")
+    return value if isinstance(value, dict) else None
+
+
+def assert_summary_only_revision_checkpoint(status: dict[str, Any]) -> None:
+    checkpoint = status.get("checkpoint") or {}
+    pending = pending_revision_proposal(status)
+    if checkpoint.get("kind") != "revision_proposal" or pending is None:
+        raise E2EFailure("S8 expected a pending revision_proposal checkpoint")
+    labels = [
+        str(action.get("label") or "")
+        for action in checkpoint.get("actions") or []
+        if isinstance(action, dict)
+    ]
+    if labels != ["Revise plan", "Keep current plan", "Stop Mission"]:
+        raise E2EFailure(f"S8 expected exact proposal actions, got {labels}")
+    forbidden_keys = {"replacement_plan", "replacement_diff", "requested_change", "exact_replacement"}
+    serialized = _stable_json({"checkpoint": checkpoint, "pending": pending})
+    if forbidden_keys.intersection(checkpoint) or forbidden_keys.intersection(pending):
+        raise E2EFailure("S8 proposal checkpoint exposed an exact replacement payload")
+    if "Approve revised plan" in serialized:
+        raise E2EFailure("S8 proposal checkpoint exposed an exact replacement approval action")
+    for action in checkpoint.get("actions") or []:
+        if not isinstance(action, dict) or action.get("label") == "Stop Mission":
+            continue
+        allowed = {
+            "label",
+            "submit_op",
+            "checkpoint_action",
+            "proposal_id",
+            "expected_contract_fingerprint",
+            "expected_checkpoint_instance_id",
+        }
+        extras = set(action).difference(allowed)
+        if extras:
+            raise E2EFailure(f"S8 proposal action duplicated non-identity payload fields: {sorted(extras)}")
+
+
 def plan_childask_mode(status: dict[str, Any]) -> str:
     plan = status.get("plan") or {}
     autonomy_summary = plan.get("autonomy_summary") or {}
@@ -2267,6 +2316,27 @@ def s4_message(token: str) -> str:
     )
 
 
+def s8_message(token: str) -> str:
+    return (
+        "Run this as a scoped Director mission for the trusted revision-proposal lifecycle. Record a visible "
+        'Mission Plan with approval_state:"awaiting_approval" before doing work. Use two coordinator-only nodes: '
+        f"first S8 inspect premise {token}, then dependent S8 execute revised contract {token}. After initial "
+        "approval, complete only the premise inspection with evidence that the approved assumption is stale. Then "
+        "call coordinator_chat propose_revision exactly once against the current approved material-contract identity. "
+        "Use representation summary_only, summary 'Replace the stale premise before execution', affected_fields "
+        "['objective', 'nodes', 'done_criteria'], remedy 'changed_assumption', and requested_change "
+        f"'Use the verified S8 premise {token} before execution.' Do not include a replacement plan or diff. After "
+        "filing, do not resolve the proposal, impersonate a user decision, mutate the approved contract, start or "
+        "complete the execution node, or call propose_revision again. Wait for the external Revise plan action. "
+        "When the trusted app reports revisionRequested, write one concrete revised Mission Plan that retains token "
+        f"{token}, changes the objective and execution node to require the verified premise, sets "
+        'approval_state:"awaiting_approval", and waits for exact user approval. Do not execute before that approval. '
+        f"After the revised plan is approved, complete its coordinator-only execution node with evidence containing {token}, "
+        "then complete the Mission. Do not start child sessions, edit files, run validation, commit, push, open PRs, "
+        "merge, deploy, or start a follow-up Mission."
+    )
+
+
 def scripted_child_contract_line(token: str) -> str:
     return f"SCRIPTED_CHILD_V1 ask_marker token={token} options=Alpha,Beta"
 
@@ -2599,6 +2669,164 @@ def run_s4(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
         "revision_after": plan_revision(accepted_checkpoint_observation.compact),
         "stale_checkpoint_instance_id": stale_checkpoint_id,
         "current_checkpoint_instance_id": current_checkpoint_id,
+    })
+
+
+def run_s8(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace) -> None:
+    artifacts.record_timing("started")
+    token = f"S8-revision-proposal-{uuid.uuid4().hex[:8]}"
+    session_id = start_mission(
+        client,
+        f"Director E2E S8 trusted revision proposal {token}",
+        s8_message(token),
+        "s8",
+        args.coordinator_model_id,
+    )
+    approve_initial_plan(client, artifacts, session_id, args)
+
+    proposed = wait_until(
+        client,
+        artifacts,
+        session_id,
+        lambda item: (
+            pending_revision_proposal(item.compact) is not None
+            and (item.compact.get("checkpoint") or {}).get("kind") == "revision_proposal"
+            and plan_approval_state(item.compact) == "approved"
+        ),
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("revision-proposal-visible")
+    assert_summary_only_revision_checkpoint(proposed.compact)
+    pending = pending_revision_proposal(proposed.compact) or {}
+    proposal_id = str(pending.get("proposal_id") or "")
+    contract_fingerprint = str(pending.get("base_contract_fingerprint") or "")
+    proposal_checkpoint_id = checkpoint_instance_id(proposed.compact) or ""
+    if not proposal_id or not contract_fingerprint or not proposal_checkpoint_id:
+        raise E2EFailure("S8 proposal status omitted stable proposal/contract/checkpoint identity")
+    current_contract = revision_proposal_status(proposed.compact).get("current_contract") or {}
+    if str(current_contract.get("fingerprint") or "") != contract_fingerprint:
+        raise E2EFailure("S8 pending proposal base does not match the current approved contract")
+    decisions_before_pause = decision_ids(proposed.full)
+    node_counts_before_pause = dict(node_counts(proposed))
+    if int(node_counts_before_pause.get("running") or 0) != 0:
+        raise E2EFailure(f"S8 execution was still running at proposal pause: {node_counts_before_pause}")
+
+    time.sleep(1)
+    paused = observe(client, artifacts, session_id)
+    capture_mission_events(client, artifacts, session_id, args.events_mode)
+    assert_summary_only_revision_checkpoint(paused.compact)
+    paused_pending = pending_revision_proposal(paused.compact) or {}
+    stable_identity = (
+        str(paused_pending.get("proposal_id") or ""),
+        str(paused_pending.get("base_contract_fingerprint") or ""),
+        checkpoint_instance_id(paused.compact) or "",
+    )
+    if stable_identity != (proposal_id, contract_fingerprint, proposal_checkpoint_id):
+        raise E2EFailure(
+            "S8 proposal identities changed while awaiting external resolution: "
+            f"{(proposal_id, contract_fingerprint, proposal_checkpoint_id)} -> {stable_identity}"
+        )
+    if recent_revision_proposal_resolution(paused.compact) is not None:
+        raise E2EFailure("S8 Director self-resolved the proposal before external action")
+    if decision_ids(paused.full) != decisions_before_pause:
+        raise E2EFailure("S8 proposal pause recorded a decision before external resolution")
+    if int(node_counts(paused).get("running") or 0) != 0:
+        raise E2EFailure(f"S8 execution advanced while proposal was pending: {node_counts(paused)}")
+    artifacts.add_checkpoint("revision-proposal-paused")
+
+    revise_action = checkpoint_action(paused.compact, "Revise plan")
+    if not revise_action:
+        raise E2EFailure("S8 pending proposal did not expose Revise plan")
+    response = client.coordinator({
+        "op": "submit",
+        "coordinator_session_id": session_id,
+        "checkpoint_action": str(revise_action.get("checkpoint_action") or ""),
+        "proposal_id": str(revise_action.get("proposal_id") or ""),
+        "expected_contract_fingerprint": str(revise_action.get("expected_contract_fingerprint") or ""),
+        "expected_checkpoint_instance_id": str(revise_action.get("expected_checkpoint_instance_id") or ""),
+        "compact": True,
+    }, timeout=180)
+    write_json(artifacts.root / "revise_plan_response.json", response)
+    if response.get("accepted") is False:
+        raise E2EFailure(f"S8 external Revise plan rejected: {response.get('error') or response}")
+    artifacts.add_checkpoint("revision-requested")
+
+    revised = wait_until(
+        client,
+        artifacts,
+        session_id,
+        lambda item: (
+            plan_approval_state(item.compact) == "awaiting_approval"
+            and (item.compact.get("checkpoint") or {}).get("kind") == "plan_approval"
+            and has_checkpoint_action(item.compact, "Proceed")
+            and pending_revision_proposal(item.compact) is None
+            and (recent_revision_proposal_resolution(item.compact) or {}).get("outcome")
+            == "accepted_for_concrete_revision"
+            and plan_or_nodes_mention_token(item.full, token)
+        ),
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("revision-visible")
+    revised_checkpoint_id = checkpoint_instance_id(revised.compact) or ""
+    if not revised_checkpoint_id or revised_checkpoint_id == proposal_checkpoint_id:
+        raise E2EFailure("S8 concrete revised plan did not expose a distinct exact-approval checkpoint")
+    revised_contract = (
+        revision_proposal_status(revised.compact).get("current_contract") or {}
+    ).get("fingerprint")
+    if not revised_contract or revised_contract == contract_fingerprint:
+        raise E2EFailure("S8 concrete revised plan did not change material contract identity")
+
+    proceed = checkpoint_action(revised.compact, "Proceed")
+    if not proceed:
+        raise E2EFailure("S8 revised plan did not expose Proceed")
+    approval_response = submit_with_midrun_retry(client, artifacts, session_id, {
+        "op": "submit",
+        "coordinator_session_id": session_id,
+        "message": str(proceed.get("submit_message") or "Approved to proceed."),
+        "checkpoint_action": str(proceed.get("checkpoint_action") or "proceed"),
+        "expected_checkpoint_instance_id": revised_checkpoint_id,
+        "compact": True,
+    }, args, "S8 revised-plan approval")
+    write_json(artifacts.root / "revised_plan_approval_response.json", approval_response)
+    if approval_response.get("accepted") is False:
+        raise E2EFailure(f"S8 revised-plan approval rejected: {approval_response.get('error') or approval_response}")
+    artifacts.add_checkpoint("current-submit-accepted")
+
+    final = wait_until(
+        client,
+        artifacts,
+        session_id,
+        terminal_completed,
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    artifacts.add_checkpoint("completed")
+    resolution = recent_revision_proposal_resolution(final.compact) or {}
+    if str(resolution.get("proposal_id") or "") != proposal_id:
+        raise E2EFailure("S8 final status lost the proposal-to-resolution identity")
+    if str(resolution.get("outcome") or "") != "accepted_for_concrete_revision":
+        raise E2EFailure(f"S8 final resolution outcome was not accepted: {resolution}")
+    final_decisions = decision_ids(final.full)
+    if len(final_decisions.difference(decisions_before_pause)) < 2:
+        raise E2EFailure("S8 expected separate external Revise and revised-plan approval decisions")
+    if not plan_or_nodes_mention_token(final.full, token):
+        raise E2EFailure(f"S8 final plan/evidence omitted token {token}")
+    capture_receipt(client, artifacts, session_id, args.receipt_mode)
+    artifacts.finalize(True, "s8", {
+        "coordinator_session_id": session_id,
+        "final_status": final.status,
+        "variant_token": token,
+        "proposal_id": proposal_id,
+        "base_contract_fingerprint": contract_fingerprint,
+        "proposal_checkpoint_instance_id": proposal_checkpoint_id,
+        "revised_contract_fingerprint": revised_contract,
+        "revised_plan_checkpoint_instance_id": revised_checkpoint_id,
+        "resolution_id": resolution.get("resolution_id"),
     })
 
 
@@ -3146,6 +3374,8 @@ def run_scenario(client: RpcClient, artifacts: RunArtifacts, args: argparse.Name
         run_s6(client, artifacts, args)
     elif args.scenario == "s7":
         run_s7(client, artifacts, args)
+    elif args.scenario == "s8":
+        run_s8(client, artifacts, args)
     elif args.scenario == "smoke":
         s1_artifacts = RunArtifacts(artifacts.root / "s1")
         s1_client = RpcClient(client.cli, client.window, client.repo_root, s1_artifacts)
@@ -3164,7 +3394,7 @@ def run_scenario(client: RpcClient, artifacts: RunArtifacts, args: argparse.Name
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run live Director mission E2E scenarios.")
-    parser.add_argument("--scenario", choices=["s1", "s2", "s4", "s5", "s6", "s7", "smoke"], default="s1")
+    parser.add_argument("--scenario", choices=["s1", "s2", "s4", "s5", "s6", "s7", "s8", "smoke"], default="s1")
     parser.add_argument("--workspace", default="homelab-garden")
     parser.add_argument("--window", type=int, default=1)
     parser.add_argument("--timeout-seconds", type=int, default=900)
