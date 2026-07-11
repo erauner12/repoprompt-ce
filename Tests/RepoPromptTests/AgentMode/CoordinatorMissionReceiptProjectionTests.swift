@@ -20,6 +20,53 @@ final class CoordinatorMissionReceiptProjectionTests: XCTestCase {
         XCTAssertTrue(markdown.contains("Not tracked in v1 — reserved for per-session usage across this Mission."))
     }
 
+    func testRevisionProposalHistoryIncludesResolutionAndReferencedEvidenceWithoutApprovalClaims() throws {
+        var plan = makePlan()
+        plan.status = .running
+        var state = CoordinatorFollowThroughState(missionPlan: plan)
+        let base = try XCTUnwrap(state.missionPlan)
+        let appended = try state.appendRevisionProposal(
+            CoordinatorMissionRevisionProposalRequest(
+                expectedBasePlanID: base.id,
+                expectedBaseContractFingerprint: base.materialContractFingerprint(),
+                summary: "Reconsider flaky-test scope",
+                rationale: "The evidence changed.",
+                affectedFields: ["objective"],
+                remedy: "revise_scope",
+                supportingEvidenceIDs: [uuid("00000000-0000-0000-0000-000000000201")],
+                requestedChange: "Include scheduler stabilization.",
+                actor: CoordinatorMissionRevisionProposalActor(
+                    coordinatorSessionID: uuid("00000000-0000-0000-0000-000000000301"),
+                    runtimeSessionID: uuid("00000000-0000-0000-0000-000000000302")
+                )
+            ),
+            filedAt: Date(timeIntervalSince1970: 40)
+        )
+        _ = try state.resolveRevisionProposal(
+            CoordinatorMissionRevisionProposalResolutionRequest(
+                proposalID: appended.proposalID,
+                outcome: .rejected,
+                userDecisionID: uuid("00000000-0000-0000-0000-000000000303"),
+                checkpointID: "revision-proposal",
+                checkpointInstanceID: "checkpoint"
+            ),
+            resolvedAt: Date(timeIntervalSince1970: 41)
+        )
+        let markdown = try CoordinatorMissionReceiptProjection(
+            plan: XCTUnwrap(state.missionPlan)
+        ).markdown
+
+        XCTAssertTrue(markdown.contains("## Revision proposal history"))
+        XCTAssertTrue(markdown.contains("Director/runtime proposal"))
+        XCTAssertTrue(markdown.contains("(non-decision event)"))
+        XCTAssertTrue(markdown.contains("Trusted user resolution"))
+        XCTAssertTrue(markdown.contains(": rejected."))
+        XCTAssertTrue(markdown.contains("Referenced evidence 00000000-0000-0000-0000-000000000201"))
+        XCTAssertTrue(markdown.contains("[meets] Fixed ordering issue."))
+        XCTAssertFalse(markdown.contains("exact revised plan approved"))
+        XCTAssertFalse(markdown.contains("deployed"))
+    }
+
     func testEvidenceFallbackWhenNoEvidenceExists() {
         let plan = makePlan(evidence: [])
 

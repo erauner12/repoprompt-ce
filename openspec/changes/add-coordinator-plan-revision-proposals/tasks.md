@@ -72,11 +72,11 @@
 
 ## 9. Status, Waits, Events, and Migration Safety
 
-- [ ] 9.1 Expose pending proposal ID, base contract identity, summary representation, summary, material fields, lifecycle/outcome, checkpoint instance, submit hints, held child-question state/reason, and recent resolution identity/outcome in Mission status surfaces.
-- [ ] 9.2 Add proposal lifecycle parts directly to compact status/wait fingerprints and event-journal candidates so append and resolution wake `wait_for_update`.
-- [ ] 9.3 Add minimal receipt history explaining the non-decision Director/runtime proposal event and trusted user resolution without broad receipt redesign, Director decision-ledger entries, user-decision impersonation, or claims of exact approval/execution/merge/deployment.
-- [ ] 9.4 Document and test the rollback rule that pending proposals must be resolved or the Mission stopped before reverting to a pre-feature binary.
-- [ ] 9.5 Add status/fingerprint/wait/journal/receipt tests for append, each resolution outcome, evidence-only changes, restart, and backward decode.
+- [x] 9.1 Expose pending proposal ID, base contract identity, summary representation, summary, material fields, lifecycle/outcome, checkpoint instance, submit hints, held child-question state/reason, and recent resolution identity/outcome in Mission status surfaces.
+- [x] 9.2 Add proposal lifecycle parts directly to compact status/wait fingerprints and event-journal candidates so append and resolution wake `wait_for_update`.
+- [x] 9.3 Add minimal receipt history explaining the non-decision Director/runtime proposal event and trusted user resolution without broad receipt redesign, Director decision-ledger entries, user-decision impersonation, or claims of exact approval/execution/merge/deployment.
+- [x] 9.4 Document and test the rollback rule that pending proposals must be resolved or the Mission stopped before reverting to a pre-feature binary.
+- [x] 9.5 Add status/fingerprint/wait/journal/receipt tests for append, each resolution outcome, evidence-only changes, restart, and backward decode.
 
 ## 10. Validation and Handoff
 

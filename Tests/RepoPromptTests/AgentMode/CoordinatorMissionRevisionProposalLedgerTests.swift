@@ -162,6 +162,33 @@ final class CoordinatorMissionRevisionProposalLedgerTests: XCTestCase {
         let legacy = try JSONDecoder().decode(CoordinatorFollowThroughState.self, from: legacyData)
         XCTAssertEqual(legacy.missionPlan?.revisionProposals, [])
         XCTAssertEqual(legacy.missionPlan?.revisionProposalResolutions, [])
+
+        var proposalOnlyObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        var proposalOnlyPlan = try XCTUnwrap(proposalOnlyObject["missionPlan"] as? [String: Any])
+        proposalOnlyPlan.removeValue(forKey: "revisionProposalResolutions")
+        proposalOnlyObject["missionPlan"] = proposalOnlyPlan
+        let proposalOnly = try JSONDecoder().decode(
+            CoordinatorFollowThroughState.self,
+            from: JSONSerialization.data(withJSONObject: proposalOnlyObject)
+        )
+        XCTAssertEqual(proposalOnly.missionPlan?.revisionProposals.count, 1)
+        XCTAssertEqual(proposalOnly.missionPlan?.revisionProposalResolutions, [])
+        XCTAssertEqual(proposalOnly.missionPlan?.pendingRevisionProposal?.id, result.proposalID)
+
+        var resolutionOnlyObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        var resolutionOnlyPlan = try XCTUnwrap(resolutionOnlyObject["missionPlan"] as? [String: Any])
+        resolutionOnlyPlan.removeValue(forKey: "revisionProposals")
+        resolutionOnlyObject["missionPlan"] = resolutionOnlyPlan
+        let resolutionOnly = try JSONDecoder().decode(
+            CoordinatorFollowThroughState.self,
+            from: JSONSerialization.data(withJSONObject: resolutionOnlyObject)
+        )
+        XCTAssertEqual(resolutionOnly.missionPlan?.revisionProposals, [])
+        XCTAssertEqual(resolutionOnly.missionPlan?.revisionProposalResolutions, [])
     }
 
     func testGenericMissionPlanUpdatePreservesLedgerAndFreshMissionResetClearsIt() throws {
@@ -197,8 +224,31 @@ final class CoordinatorMissionRevisionProposalLedgerTests: XCTestCase {
         )
         XCTAssertEqual(state.missionPlan?.events.count, eventCount + 1)
 
+        let pendingState = state
+        state.rememberObjective("Follow up", resetMissionPlan: false)
+        XCTAssertEqual(state.missionPlan, pendingState.missionPlan)
+
         state.rememberObjective("A fresh Mission", resetMissionPlan: true)
         XCTAssertNil(state.missionPlan)
+        XCTAssertTrue(state.observedChildPhases.isEmpty)
+        XCTAssertTrue(state.pendingEvents.isEmpty)
+        XCTAssertTrue(state.handledEventIDs.isEmpty)
+        XCTAssertNil(state.postApprovalContinuation)
+        XCTAssertTrue(state.childInteractionResponses.isEmpty)
+    }
+
+    func testPendingProposalSurvivesRestartAndMustResolveOrStopBeforeRollback() throws {
+        var state = try makeState()
+        let appended = try state.appendRevisionProposal(request(for: state), filedAt: date(1))
+
+        let data = try JSONEncoder().encode(state)
+        let restored = try JSONDecoder().decode(CoordinatorFollowThroughState.self, from: data)
+
+        XCTAssertEqual(restored.missionPlan?.pendingRevisionProposal?.id, appended.proposalID)
+        XCTAssertTrue(restored.missionPlan?.holdsChildInteractionsForRevisionProposal == true)
+        XCTAssertFalse(restored.missionPlan?.status.isTerminal == true)
+        // Operational rollback to a binary that predates revision proposals is unsafe here:
+        // resolve with Keep/Revise or stop the Mission before installing the older build.
     }
 
     func testTerminalUpdatesResolvePendingProposalBeforeFreezingAndCannotOverwriteFirstResolution() throws {

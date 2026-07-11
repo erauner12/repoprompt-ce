@@ -28,6 +28,10 @@ final class CoordinatorMissionEventJournal {
         let routingDecisionIDs: [UUID]
         let decisionIDs: [UUID]
         let evidenceIDs: [UUID]
+        let pendingRevisionProposalID: UUID?
+        let baseContractFingerprint: String?
+        let recentRevisionProposalResolutionID: UUID?
+        let recentRevisionProposalResolutionOutcome: String?
         let livenessWarnings: [String]
     }
 
@@ -140,6 +144,10 @@ final class CoordinatorMissionEventJournal {
             routingDecisionIDs: source.routingDecisionIDs,
             decisionIDs: source.decisionIDs,
             evidenceIDs: source.evidenceIDs,
+            pendingRevisionProposalID: source.pendingRevisionProposalID,
+            baseContractFingerprint: source.baseContractFingerprint,
+            recentRevisionProposalResolutionID: source.recentRevisionProposalResolutionID,
+            recentRevisionProposalResolutionOutcome: source.recentRevisionProposalResolutionOutcome,
             livenessWarnings: source.livenessWarnings
         )
     }
@@ -207,6 +215,10 @@ final class CoordinatorMissionEventJournal {
             routingDecisionIDs: candidate.routingDecisionIDs,
             decisionIDs: candidate.decisionIDs,
             evidenceIDs: candidate.evidenceIDs,
+            pendingRevisionProposalID: candidate.pendingRevisionProposalID,
+            baseContractFingerprint: candidate.baseContractFingerprint,
+            recentRevisionProposalResolutionID: candidate.recentRevisionProposalResolutionID,
+            recentRevisionProposalResolutionOutcome: candidate.recentRevisionProposalResolutionOutcome,
             livenessWarnings: candidate.livenessWarnings
         )
     }
@@ -244,6 +256,10 @@ final class CoordinatorMissionEventJournal {
                 routingDecisionIDs: [],
                 decisionIDs: [],
                 evidenceIDs: [],
+                pendingRevisionProposalID: nil,
+                baseContractFingerprint: nil,
+                recentRevisionProposalResolutionID: nil,
+                recentRevisionProposalResolutionOutcome: nil,
                 livenessWarnings: []
             )
         }
@@ -326,6 +342,37 @@ final class CoordinatorMissionEventJournal {
         fingerprintParts.append(String(plan.workstreams.count))
         fingerprintParts.append(String(plan.decisions.count))
         fingerprintParts.append(String(plan.evidence.count))
+        fingerprintParts.append("revision_proposals")
+        fingerprintParts.append(plan.holdsChildInteractionsForRevisionProposal ? "held:true" : "held:false")
+        if let hold = plan.revisionProposalDurabilityHold {
+            fingerprintParts.append(contentsOf: [
+                "durability_hold",
+                hold.transactionID.uuidString,
+                hold.proposalID.uuidString,
+                hold.outcome.rawValue
+            ])
+        } else {
+            fingerprintParts.append("durability_hold:nil")
+        }
+        fingerprintParts.append(String(plan.revisionProposals.count))
+        for proposal in plan.revisionProposals {
+            fingerprintParts.append(contentsOf: [
+                proposal.id.uuidString,
+                proposal.baseContractFingerprint,
+                proposal.representation.rawValue,
+                proposal.summary
+            ])
+        }
+        fingerprintParts.append("revision_proposal_resolutions")
+        fingerprintParts.append(String(plan.revisionProposalResolutions.count))
+        for resolution in plan.revisionProposalResolutions {
+            fingerprintParts.append(contentsOf: [
+                resolution.id.uuidString,
+                resolution.proposalID.uuidString,
+                resolution.outcome.rawValue,
+                resolution.resultingContractFingerprint
+            ])
+        }
         fingerprintParts.append("ready")
         fingerprintParts.append(readyNodeIDs.map(\.uuidString).joined(separator: ","))
         fingerprintParts.append("active")
@@ -352,6 +399,11 @@ final class CoordinatorMissionEventJournal {
             ])
         }
         let fingerprint = stableFingerprint(fingerprintParts)
+        let pendingProposal = plan.pendingRevisionProposal
+        let recentResolution = plan.revisionProposalResolutions.sorted { lhs, rhs in
+            if lhs.resolvedAt == rhs.resolvedAt { return lhs.id.uuidString < rhs.id.uuidString }
+            return lhs.resolvedAt > rhs.resolvedAt
+        }.first
 
         return Entry(
             seq: 0,
@@ -378,6 +430,10 @@ final class CoordinatorMissionEventJournal {
             routingDecisionIDs: routingDecisionIDs,
             decisionIDs: decisionIDs,
             evidenceIDs: evidenceIDs,
+            pendingRevisionProposalID: pendingProposal?.id,
+            baseContractFingerprint: pendingProposal?.baseContractFingerprint,
+            recentRevisionProposalResolutionID: recentResolution?.id,
+            recentRevisionProposalResolutionOutcome: recentResolution?.outcome.rawValue,
             livenessWarnings: []
         )
     }

@@ -4052,6 +4052,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let childID = UUID()
         let decisionID = UUID()
         let evidenceID = UUID()
+        let proposalID = UUID()
+        let resolutionID = UUID()
         let entry = CoordinatorMissionEventJournal.Entry(
             seq: 2,
             observedAt: Date(timeIntervalSince1970: 12),
@@ -4100,6 +4102,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             routingDecisionIDs: [UUID()],
             decisionIDs: [decisionID],
             evidenceIDs: [evidenceID],
+            pendingRevisionProposalID: proposalID,
+            baseContractFingerprint: "contract-fingerprint",
+            recentRevisionProposalResolutionID: resolutionID,
+            recentRevisionProposalResolutionOutcome: "rejected",
             livenessWarnings: []
         )
         let plan = CoordinatorMissionPlan(
@@ -4148,6 +4154,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(first["ready_node_ids"]?.arrayValue?.compactMap(\.stringValue), [childID.uuidString])
         XCTAssertEqual(first["decision_ids"]?.arrayValue?.compactMap(\.stringValue), [decisionID.uuidString])
         XCTAssertEqual(first["evidence_ids"]?.arrayValue?.compactMap(\.stringValue), [evidenceID.uuidString])
+        XCTAssertEqual(first["pending_revision_proposal_id"]?.stringValue, proposalID.uuidString)
+        XCTAssertEqual(first["base_contract_fingerprint"]?.stringValue, "contract-fingerprint")
+        XCTAssertEqual(first["recent_revision_proposal_resolution_id"]?.stringValue, resolutionID.uuidString)
+        XCTAssertEqual(first["recent_revision_proposal_resolution_outcome"]?.stringValue, "rejected")
         XCTAssertEqual(nodes[1]["deps_satisfied"]?.boolValue, true)
         XCTAssertEqual(nodes[1]["depends_on"]?.arrayValue?.compactMap(\.stringValue), [parentID.uuidString])
     }
@@ -4746,7 +4756,25 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let status = try XCTUnwrap(statusResponse.objectValue?["mission_status"]?.objectValue)
         let checkpoint = try XCTUnwrap(status["checkpoint"]?.objectValue)
         let actions = try XCTUnwrap(checkpoint["actions"]?.arrayValue?.compactMap(\.objectValue))
+        let proposalStatus = try XCTUnwrap(status["revision_proposal"]?.objectValue)
+        let pendingStatus = try XCTUnwrap(proposalStatus["pending"]?.objectValue)
+        let currentContract = try XCTUnwrap(proposalStatus["current_contract"]?.objectValue)
+        let submitHints = try XCTUnwrap(pendingStatus["submit_hints"]?.objectValue)
 
+        XCTAssertEqual(pendingStatus["proposal_id"]?.stringValue, proposal.id.uuidString)
+        XCTAssertEqual(pendingStatus["representation"]?.stringValue, "summary_only")
+        XCTAssertEqual(pendingStatus["summary"]?.stringValue, proposal.summary)
+        XCTAssertEqual(pendingStatus["material_fields"]?.arrayValue?.compactMap(\.stringValue), proposal.affectedFields)
+        XCTAssertEqual(pendingStatus["checkpoint_instance_id"]?.stringValue, checkpointID)
+        XCTAssertEqual(submitHints["expected_contract_fingerprint"]?.stringValue, proposal.baseContractFingerprint)
+        XCTAssertEqual(currentContract["plan_id"]?.stringValue, plan.id.uuidString)
+        XCTAssertEqual(proposalStatus["history"]?.arrayValue?.count, 1)
+        XCTAssertEqual(
+            proposalStatus["held_child_questions"]?.objectValue?["reason"]?.stringValue,
+            CoordinatorMissionRevisionProposalPause.heldReason
+        )
+        XCTAssertNil(pendingStatus["replacement_plan"])
+        XCTAssertNil(pendingStatus["requested_change"])
         XCTAssertEqual(checkpoint["kind"]?.stringValue, "revision_proposal")
         XCTAssertEqual(checkpoint["checkpoint_instance_id"]?.stringValue, checkpointID)
         XCTAssertEqual(checkpoint["what_changed"]?.stringValue, proposal.summary)
@@ -4791,6 +4819,137 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         } catch {
             XCTAssertTrue(String(describing: error).contains("identity fields only"))
         }
+    }
+
+    func testProposalAppendAndResolutionMoveStatusWaitAndJournalFingerprintsWithoutPlanRevision() async throws {
+        let coordinatorID = UUID()
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            revision: 7,
+            objective: "Observe proposal lifecycle",
+            status: .running,
+            approvalState: .approved
+        ))
+        var currentPlan = try XCTUnwrap(state.missionPlan)
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: currentPlan] }
+        )
+        let statusArgs: [String: Value] = [
+            "op": .string("mission_status"),
+            "compact": .bool(true)
+        ]
+        let initial = try await service.execute(args: statusArgs)
+        let initialFingerprint = try XCTUnwrap(
+            initial.objectValue?["mission_status"]?.objectValue?["fingerprint"]?.stringValue
+        )
+
+        let base = try XCTUnwrap(state.missionPlan)
+        let appended = try state.appendRevisionProposal(
+            CoordinatorMissionRevisionProposalRequest(
+                expectedBasePlanID: base.id,
+                expectedBaseContractFingerprint: base.materialContractFingerprint(),
+                summary: "Change the objective",
+                affectedFields: ["objective"],
+                remedy: "revise_scope",
+                requestedChange: "Change the objective.",
+                actor: CoordinatorMissionRevisionProposalActor(
+                    coordinatorSessionID: coordinatorID,
+                    runtimeSessionID: coordinatorID
+                )
+            )
+        )
+        currentPlan = try XCTUnwrap(state.missionPlan)
+        currentPlan.revision = 7
+
+        let waitAfterAppend = try await service.execute(args: [
+            "op": .string("wait_for_update"),
+            "since_fingerprint": .string(initialFingerprint),
+            "timeout_seconds": .int(0)
+        ])
+        let appendStatus = try XCTUnwrap(waitAfterAppend.objectValue?["mission_status"]?.objectValue)
+        let appendFingerprint = try XCTUnwrap(appendStatus["fingerprint"]?.stringValue)
+        XCTAssertEqual(waitAfterAppend.objectValue?["changed"]?.boolValue, true)
+        XCTAssertNotEqual(appendFingerprint, initialFingerprint)
+        XCTAssertEqual(
+            appendStatus["revision_proposal"]?.objectValue?["pending"]?.objectValue?["proposal_id"]?.stringValue,
+            appended.proposalID.uuidString
+        )
+
+        let journal = CoordinatorMissionEventJournal(capacity: 8)
+        journal.record(snapshot: Self.snapshot(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            coordinatorRunState: .running,
+            missionPlans: [coordinatorID: currentPlan]
+        ))
+        let proposal = try XCTUnwrap(state.missionPlan?.pendingRevisionProposal)
+        let checkpointInstanceID = CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+            coordinatorSessionID: coordinatorID,
+            proposal: proposal
+        )
+        let resolution = try state.resolveRevisionProposalTransaction(
+            CoordinatorMissionRevisionProposalTrustedResolutionRequest(
+                coordinatorSessionID: coordinatorID,
+                action: .keepCurrentPlan,
+                proposalID: appended.proposalID,
+                expectedContractFingerprint: proposal.baseContractFingerprint,
+                expectedCheckpointInstanceID: checkpointInstanceID
+            )
+        )
+        currentPlan = try XCTUnwrap(state.missionPlan)
+        currentPlan.revision = 7
+        journal.record(snapshot: Self.snapshot(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            coordinatorRunState: .running,
+            missionPlans: [coordinatorID: currentPlan]
+        ))
+
+        let waitAfterResolution = try await service.execute(args: [
+            "op": .string("wait_for_update"),
+            "since_fingerprint": .string(appendFingerprint),
+            "timeout_seconds": .int(0)
+        ])
+        let resolvedStatus = try XCTUnwrap(waitAfterResolution.objectValue?["mission_status"]?.objectValue)
+        let resolvedFingerprint = try XCTUnwrap(resolvedStatus["fingerprint"]?.stringValue)
+        let proposalStatus = try XCTUnwrap(resolvedStatus["revision_proposal"]?.objectValue)
+        let recentResolution = try XCTUnwrap(proposalStatus["recent_resolution"]?.objectValue)
+        XCTAssertEqual(waitAfterResolution.objectValue?["changed"]?.boolValue, true)
+        XCTAssertNotEqual(resolvedFingerprint, appendFingerprint)
+        XCTAssertEqual(recentResolution["outcome"]?.stringValue, "rejected")
+        XCTAssertNotNil(proposalStatus["durability_hold"]?.objectValue)
+        XCTAssertNil(proposalStatus["pending"]?.objectValue)
+
+        XCTAssertTrue(state.clearRevisionProposalDurabilityHold(transactionID: resolution.resolutionID))
+        currentPlan = try XCTUnwrap(state.missionPlan)
+        currentPlan.revision = 7
+        journal.record(snapshot: Self.snapshot(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            coordinatorRunState: .running,
+            missionPlans: [coordinatorID: currentPlan]
+        ))
+        let waitAfterHoldClear = try await service.execute(args: [
+            "op": .string("wait_for_update"),
+            "since_fingerprint": .string(resolvedFingerprint),
+            "timeout_seconds": .int(0)
+        ])
+        let releasedStatus = try XCTUnwrap(waitAfterHoldClear.objectValue?["mission_status"]?.objectValue)
+        XCTAssertEqual(waitAfterHoldClear.objectValue?["changed"]?.boolValue, true)
+        XCTAssertNil(releasedStatus["revision_proposal"]?.objectValue?["durability_hold"]?.objectValue)
+        XCTAssertEqual(
+            releasedStatus["revision_proposal"]?.objectValue?["held_child_questions"]?.objectValue?["held"]?.boolValue,
+            false
+        )
+
+        let journalEvents = journal.events(for: coordinatorID, sinceSeq: 0, limit: 8).events
+        XCTAssertEqual(journalEvents.count, 3)
+        XCTAssertNotEqual(journalEvents[0].fingerprint, journalEvents[1].fingerprint)
+        XCTAssertNotEqual(journalEvents[1].fingerprint, journalEvents[2].fingerprint)
+        XCTAssertEqual(journalEvents[0].pendingRevisionProposalID, appended.proposalID)
+        XCTAssertNil(journalEvents[1].pendingRevisionProposalID)
+        XCTAssertEqual(journalEvents[1].recentRevisionProposalResolutionOutcome, "rejected")
     }
 
     func testRevisionProposalSubmitRequiresAllIdentities() async throws {

@@ -3176,6 +3176,10 @@ struct CoordinatorChatMCPToolService {
             "decision_counts_by_actor": missionDecisionCountsByActorValue(plan.decisions),
             "evidence_counts": missionEvidenceCountsValue(plan.evidence),
             "recent_ledger_entries": missionRecentLedgerEntriesValue(plan: plan, limit: 20),
+            "revision_proposal": missionRevisionProposalStatusValue(
+                plan,
+                coordinatorSessionID: coordinatorSessionID
+            ),
             "receipt_ready_summary": missionReceiptReadySummaryValue(plan),
             "node_counts": missionPlanNodeCountsValue(nodeCounts),
             "workstreams": .array(plan.workstreams.map { workstream in
@@ -3322,6 +3326,10 @@ struct CoordinatorChatMCPToolService {
             "decision_counts_by_actor": missionDecisionCountsByActorValue(plan.decisions),
             "evidence_counts": missionEvidenceCountsValue(plan.evidence),
             "recent_ledger_entries": missionRecentLedgerEntriesValue(plan: plan, limit: 5),
+            "revision_proposal": missionRevisionProposalStatusValue(
+                plan,
+                coordinatorSessionID: coordinatorSessionID
+            ),
             "receipt_ready_summary": missionReceiptReadySummaryValue(plan),
             "node_counts": missionPlanNodeCountsValue(nodeCounts),
             "workstreams": .array(plan.workstreams.map { workstream in
@@ -3428,6 +3436,16 @@ struct CoordinatorChatMCPToolService {
             "routing_decision_ids": .array(entry.routingDecisionIDs.map { .string($0.uuidString) }),
             "decision_ids": .array(entry.decisionIDs.map { .string($0.uuidString) }),
             "evidence_ids": .array(entry.evidenceIDs.map { .string($0.uuidString) }),
+            "pending_revision_proposal_id": AgentMCPToolHelpers.stringOrNull(
+                entry.pendingRevisionProposalID?.uuidString
+            ),
+            "base_contract_fingerprint": AgentMCPToolHelpers.stringOrNull(entry.baseContractFingerprint),
+            "recent_revision_proposal_resolution_id": AgentMCPToolHelpers.stringOrNull(
+                entry.recentRevisionProposalResolutionID?.uuidString
+            ),
+            "recent_revision_proposal_resolution_outcome": AgentMCPToolHelpers.stringOrNull(
+                entry.recentRevisionProposalResolutionOutcome
+            ),
             "liveness_warnings": .array(entry.livenessWarnings.map(Value.string))
         ])
     }
@@ -3557,6 +3575,38 @@ struct CoordinatorChatMCPToolService {
         parts.append(String(plan.workstreams.count))
         parts.append(String(plan.decisions.count))
         parts.append(String(plan.evidence.count))
+        parts.append("revision_proposals")
+        parts.append(plan.holdsChildInteractionsForRevisionProposal ? "held:true" : "held:false")
+        if let hold = plan.revisionProposalDurabilityHold {
+            parts.append(contentsOf: [
+                "durability_hold",
+                hold.transactionID.uuidString,
+                hold.proposalID.uuidString,
+                hold.outcome.rawValue
+            ])
+        } else {
+            parts.append("durability_hold:nil")
+        }
+        parts.append(String(plan.revisionProposals.count))
+        for proposal in plan.revisionProposals {
+            parts.append(contentsOf: [
+                proposal.id.uuidString,
+                proposal.canonicalRequestIdentity,
+                proposal.baseContractFingerprint,
+                proposal.representation.rawValue,
+                proposal.summary
+            ])
+        }
+        parts.append("revision_proposal_resolutions")
+        parts.append(String(plan.revisionProposalResolutions.count))
+        for resolution in plan.revisionProposalResolutions {
+            parts.append(contentsOf: [
+                resolution.id.uuidString,
+                resolution.proposalID.uuidString,
+                resolution.outcome.rawValue,
+                resolution.resultingContractFingerprint
+            ])
+        }
         parts.append(plan.missionKey ?? "mission_key:nil")
         parts.append(plan.predecessorMissionID?.uuidString ?? "predecessor:nil")
         parts.append(plan.predecessorTitle ?? "predecessor_title:nil")
@@ -3808,6 +3858,95 @@ struct CoordinatorChatMCPToolService {
             hash &*= 1_099_511_628_211
         }
         return String(format: "%016llx", hash)
+    }
+
+    private func missionRevisionProposalStatusValue(
+        _ plan: CoordinatorMissionPlan,
+        coordinatorSessionID: UUID
+    ) -> Value {
+        let currentContractFingerprint = try? plan.materialContractFingerprint()
+        let pending = plan.pendingRevisionProposal
+        let checkpointInstanceID = pending.map {
+            CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                coordinatorSessionID: coordinatorSessionID,
+                proposal: $0
+            )
+        }
+        let pendingValue: Value = pending.map { proposal in
+            .object([
+                "proposal_id": .string(proposal.id.uuidString),
+                "base_plan_id": .string(proposal.basePlanID.uuidString),
+                "base_contract_fingerprint": .string(proposal.baseContractFingerprint),
+                "representation": .string(proposal.representation.rawValue),
+                "summary": .string(proposal.summary),
+                "material_fields": .array(proposal.affectedFields.map(Value.string)),
+                "lifecycle": .string("pending"),
+                "checkpoint_instance_id": AgentMCPToolHelpers.stringOrNull(checkpointInstanceID),
+                "submit_hints": .object([
+                    "submit_op": .string("submit"),
+                    "proposal_id": .string(proposal.id.uuidString),
+                    "expected_contract_fingerprint": .string(proposal.baseContractFingerprint),
+                    "expected_checkpoint_instance_id": AgentMCPToolHelpers.stringOrNull(checkpointInstanceID),
+                    "actions": .array([
+                        .string(CoordinatorMissionRevisionProposalResolutionAction.revisePlan.rawValue),
+                        .string(CoordinatorMissionRevisionProposalResolutionAction.keepCurrentPlan.rawValue)
+                    ])
+                ])
+            ])
+        } ?? .null
+        let history = plan.revisionProposals.map { proposal -> Value in
+            let resolution = plan.revisionProposalResolution(for: proposal.id)
+            return .object([
+                "proposal_id": .string(proposal.id.uuidString),
+                "base_contract_fingerprint": .string(proposal.baseContractFingerprint),
+                "representation": .string(proposal.representation.rawValue),
+                "summary": .string(proposal.summary),
+                "material_fields": .array(proposal.affectedFields.map(Value.string)),
+                "lifecycle": .string(resolution == nil ? "pending" : "resolved"),
+                "resolution_id": AgentMCPToolHelpers.stringOrNull(resolution?.id.uuidString),
+                "outcome": AgentMCPToolHelpers.stringOrNull(resolution?.outcome.rawValue)
+            ])
+        }
+        let recentResolution = plan.revisionProposalResolutions.sorted { lhs, rhs in
+            if lhs.resolvedAt == rhs.resolvedAt { return lhs.id.uuidString < rhs.id.uuidString }
+            return lhs.resolvedAt > rhs.resolvedAt
+        }.first
+        let heldInteractionIDs = plan.holdsChildInteractionsForRevisionProposal
+            ? plan.nodes.compactMap(\.boundInteractionID)
+            : []
+
+        return .object([
+            "current_contract": .object([
+                "plan_id": .string(plan.id.uuidString),
+                "fingerprint": AgentMCPToolHelpers.stringOrNull(currentContractFingerprint)
+            ]),
+            "pending": pendingValue,
+            "history": .array(history),
+            "durability_hold": plan.revisionProposalDurabilityHold.map { hold in
+                .object([
+                    "transaction_id": .string(hold.transactionID.uuidString),
+                    "proposal_id": .string(hold.proposalID.uuidString),
+                    "outcome": .string(hold.outcome.rawValue),
+                    "authority_released": .bool(false)
+                ])
+            } ?? .null,
+            "recent_resolution": recentResolution.map { resolution in
+                .object([
+                    "resolution_id": .string(resolution.id.uuidString),
+                    "proposal_id": .string(resolution.proposalID.uuidString),
+                    "outcome": .string(resolution.outcome.rawValue),
+                    "resulting_plan_id": .string(resolution.resultingPlanID.uuidString),
+                    "resulting_contract_fingerprint": .string(resolution.resultingContractFingerprint)
+                ])
+            } ?? .null,
+            "held_child_questions": .object([
+                "held": .bool(plan.holdsChildInteractionsForRevisionProposal),
+                "reason": plan.holdsChildInteractionsForRevisionProposal
+                    ? .string(CoordinatorMissionRevisionProposalPause.heldReason)
+                    : .null,
+                "interaction_ids": .array(heldInteractionIDs.map { .string($0.uuidString) })
+            ])
+        ])
     }
 
     private func compactMissionCheckpointValue(_ plan: CoordinatorMissionPlan, coordinatorSessionID: UUID) -> Value {

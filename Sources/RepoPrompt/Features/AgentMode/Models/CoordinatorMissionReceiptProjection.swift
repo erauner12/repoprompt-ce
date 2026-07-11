@@ -8,6 +8,7 @@ struct CoordinatorMissionReceiptProjection: Equatable {
     var summary: String?
     var policy: PolicySummary?
     var decisionCounts: DecisionCounts
+    var revisionProposalHistory: [RevisionProposalHistorySummary]
     var evidence: [EvidenceSummary]
 
     init(plan: CoordinatorMissionPlan) {
@@ -16,6 +17,14 @@ struct CoordinatorMissionReceiptProjection: Equatable {
         summary = Self.trimmedNonEmpty(plan.predecessorSummary)
         policy = plan.policySnapshot.map(PolicySummary.init(policy:))
         decisionCounts = DecisionCounts(decisions: plan.decisions)
+        let evidenceByID = Dictionary(uniqueKeysWithValues: plan.evidence.map { ($0.id, $0) })
+        revisionProposalHistory = plan.revisionProposals.map { proposal in
+            RevisionProposalHistorySummary(
+                proposal: proposal,
+                resolution: plan.revisionProposalResolution(for: proposal.id),
+                evidenceByID: evidenceByID
+            )
+        }
         evidence = plan.evidence
             .sorted { lhs, rhs in
                 if lhs.timestamp == rhs.timestamp { return lhs.id.uuidString < rhs.id.uuidString }
@@ -62,6 +71,29 @@ struct CoordinatorMissionReceiptProjection: Equatable {
             lines.append("- By class: \(decisionCounts.byClass.map { "\($0.name) \($0.count)" }.joined(separator: ", "))")
         }
         lines.append("")
+
+        if !revisionProposalHistory.isEmpty {
+            lines.append("## Revision proposal history")
+            for item in revisionProposalHistory {
+                lines.append("- Director/runtime proposal \(item.proposalID.uuidString): \(item.summary) (non-decision event).")
+                if let resolutionID = item.resolutionID, let outcome = item.outcome {
+                    let authority = item.wasTrustedUserResolution
+                        ? "Trusted user resolution"
+                        : "App lifecycle resolution"
+                    lines.append("  - \(authority) \(resolutionID.uuidString): \(outcome).")
+                } else {
+                    lines.append("  - Outcome: pending.")
+                }
+                if item.referencedEvidence.isEmpty {
+                    lines.append("  - Referenced evidence: none.")
+                } else {
+                    for evidence in item.referencedEvidence {
+                        lines.append("  - Referenced evidence \(evidence.id.uuidString): [\(evidence.verdict)] \(evidence.summary)")
+                    }
+                }
+            }
+            lines.append("")
+        }
 
         lines.append("## Evidence")
         if evidence.isEmpty {
@@ -154,6 +186,42 @@ extension CoordinatorMissionReceiptProjection {
                 .map { ClassCount(name: $0.key, count: $0.value) }
                 .sorted { $0.name < $1.name }
             byClass = knownClassCounts + unknownClassCounts
+        }
+    }
+
+    struct RevisionProposalHistorySummary: Equatable {
+        struct ReferencedEvidence: Equatable {
+            var id: UUID
+            var verdict: String
+            var summary: String
+        }
+
+        var proposalID: UUID
+        var summary: String
+        var resolutionID: UUID?
+        var outcome: String?
+        var wasTrustedUserResolution: Bool
+        var referencedEvidence: [ReferencedEvidence]
+
+        init(
+            proposal: CoordinatorMissionRevisionProposal,
+            resolution: CoordinatorMissionRevisionProposalResolution?,
+            evidenceByID: [UUID: CoordinatorMissionEvidenceRecord]
+        ) {
+            proposalID = proposal.id
+            summary = proposal.summary
+            resolutionID = resolution?.id
+            outcome = resolution?.outcome.rawValue
+            wasTrustedUserResolution = resolution?.userDecisionID != nil
+            referencedEvidence = proposal.supportingEvidenceIDs.compactMap { evidenceID in
+                evidenceByID[evidenceID].map {
+                    ReferencedEvidence(
+                        id: evidenceID,
+                        verdict: $0.verdict.rawValue,
+                        summary: $0.summary
+                    )
+                }
+            }
         }
     }
 

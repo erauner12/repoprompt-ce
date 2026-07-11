@@ -74,9 +74,9 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
     ) {
         originalObjectiveSummary = Self.summary(from: text)
         self.missionTemplate = missionTemplate
-        if resetMissionPlan {
-            missionPlan = nil
-        }
+        guard resetMissionPlan else { return }
+
+        missionPlan = nil
         observedChildPhases.removeAll()
         pendingEvents.removeAll()
         handledEventIDs.removeAll()
@@ -1586,6 +1586,16 @@ struct CoordinatorMissionPlan: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let revisionProposals = try container.decodeIfPresent(
+            [CoordinatorMissionRevisionProposal].self,
+            forKey: .revisionProposals
+        ) ?? []
+        let proposalIDs = Set(revisionProposals.map(\.id))
+        let revisionProposalResolutions = try container.decodeIfPresent(
+            [CoordinatorMissionRevisionProposalResolution].self,
+            forKey: .revisionProposalResolutions
+        )?.filter { proposalIDs.contains($0.proposalID) } ?? []
+
         try self.init(
             id: container.decode(UUID.self, forKey: .id),
             revision: container.decode(Int.self, forKey: .revision),
@@ -1606,14 +1616,8 @@ struct CoordinatorMissionPlan: Codable, Equatable {
             routingDecisions: container.decodeIfPresent([CoordinatorMissionRoutingDecision].self, forKey: .routingDecisions) ?? [],
             decisions: container.decodeIfPresent([CoordinatorMissionDecisionRecord].self, forKey: .decisions) ?? [],
             evidence: container.decodeIfPresent([CoordinatorMissionEvidenceRecord].self, forKey: .evidence) ?? [],
-            revisionProposals: container.decodeIfPresent(
-                [CoordinatorMissionRevisionProposal].self,
-                forKey: .revisionProposals
-            ) ?? [],
-            revisionProposalResolutions: container.decodeIfPresent(
-                [CoordinatorMissionRevisionProposalResolution].self,
-                forKey: .revisionProposalResolutions
-            ) ?? [],
+            revisionProposals: revisionProposals,
+            revisionProposalResolutions: revisionProposalResolutions,
             revisionProposalDurabilityHold: container.decodeIfPresent(
                 CoordinatorMissionRevisionProposalDurabilityHold.self,
                 forKey: .revisionProposalDurabilityHold
