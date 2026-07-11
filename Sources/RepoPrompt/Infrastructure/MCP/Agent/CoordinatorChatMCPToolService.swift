@@ -395,6 +395,16 @@ struct CoordinatorChatMCPToolService {
             }
 
             let selectedSnapshot = environment.snapshot()
+            if !newParent,
+               continuationAction == nil,
+               let coordinatorSessionID = scopedCoordinatorSessionID ?? selectedSnapshot.coordinatorRail.coordinatorSessionID,
+               selectedSnapshot.coordinatorRail.availableCoordinators
+               .first(where: { $0.sessionID == coordinatorSessionID })?
+               .missionPlan?
+               .pendingRevisionProposal != nil
+            {
+                throw MCPError.invalidParams(CoordinatorMissionRevisionProposalPause.heldReason)
+            }
             let pendingChildRow = newParent || continuationAction != nil
                 ? nil
                 : environment.activePendingChildInteractionRow(scopedCoordinatorSessionID)
@@ -844,6 +854,9 @@ struct CoordinatorChatMCPToolService {
         else {
             throw MCPError.invalidParams("Coordinator runtime cannot answer child questions without a Mission Plan that routes child questions to Director.")
         }
+        guard plan.pendingRevisionProposal == nil else {
+            throw MCPError.invalidParams(CoordinatorMissionRevisionProposalPause.heldReason)
+        }
         guard plan.resolvedAutonomy(for: .childAsk) == .auto else {
             throw MCPError.invalidParams("Coordinator runtime cannot answer this child question because current Mission Policy routes child questions to Me. Wait for an external answer, or for an external user action to route child questions to Director.")
         }
@@ -1195,7 +1208,7 @@ struct CoordinatorChatMCPToolService {
             decisions: decisions,
             evidence: evidence
         )
-        return try CoordinatorMissionPlanUpdate(
+        let update = try CoordinatorMissionPlanUpdate(
             objective: objective,
             missionKey: missionKey,
             predecessorMissionID: predecessorUpdate.update.predecessorMissionID,
@@ -1216,6 +1229,13 @@ struct CoordinatorChatMCPToolService {
             events: events,
             updatedAt: parseOptionalDate(args["updated_at"] ?? args["updatedAt"], name: "updated_at") ?? Date()
         )
+        do {
+            try CoordinatorFollowThroughState(missionPlan: existingPlan)
+                .validateMissionPlanUpdateDuringPendingRevisionProposal(update)
+        } catch let error as CoordinatorMissionRevisionProposalPauseError {
+            throw MCPError.invalidParams(error.localizedDescription)
+        }
+        return update
     }
 
     private func validateMissionPlanUpdateApprovalGate(

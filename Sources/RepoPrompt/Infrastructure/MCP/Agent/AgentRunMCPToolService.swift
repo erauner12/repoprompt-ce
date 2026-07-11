@@ -331,6 +331,9 @@ struct AgentRunMCPToolService {
         if case let .requireApprovedMissionPlan(reason) = coordinatorMissionPlanDecision {
             throw MCPError.invalidParams(reason)
         }
+        if case let .holdPendingRevisionProposal(reason) = coordinatorMissionPlanDecision {
+            throw MCPError.invalidParams(reason)
+        }
         if case let .denyFlightCapReached(reason) = coordinatorMissionPlanDecision {
             throw MCPError.invalidParams(reason)
         }

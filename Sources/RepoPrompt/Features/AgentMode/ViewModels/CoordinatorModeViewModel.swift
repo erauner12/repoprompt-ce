@@ -556,6 +556,11 @@ final class CoordinatorModeViewModel: ObservableObject {
             composerNotice = message
             return .rejected(message: message)
         }
+        guard plan.pendingRevisionProposal == nil else {
+            let message = CoordinatorMissionRevisionProposalPause.heldReason
+            composerNotice = message
+            return .rejected(message: message)
+        }
         guard !plan.status.isTerminal else {
             let message = "Mission pace cannot be changed after the Mission is \(plan.status.rawValue)."
             composerNotice = message
@@ -587,6 +592,11 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
         guard let plan = option.missionPlan else {
             let message = "Coordinator session \(coordinatorSessionID.uuidString) does not have a Mission Plan yet."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        guard plan.pendingRevisionProposal == nil else {
+            let message = CoordinatorMissionRevisionProposalPause.heldReason
             composerNotice = message
             return .rejected(message: message)
         }
@@ -1998,7 +2008,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         return coordinatorModeRowsForRouting(in: snapshot)
             .filter { row in
                 row.parentCoordinator?.sessionID == coordinatorSessionID
-                    && row.pendingInteraction != nil
+                    && row.pendingInteraction?.isAvailable == true
                     && row.runState == .waitingForQuestion
                     && !row.isPersistedOnly
             }
@@ -2111,6 +2121,17 @@ final class CoordinatorModeViewModel: ObservableObject {
         }
         guard row.pendingInteraction != nil else {
             let message = "This child session is no longer waiting for input."
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        let coordinatorSessionID = row.parentCoordinator?.sessionID ?? snapshot.coordinatorRail.coordinatorSessionID
+        let pendingPlan = coordinatorSessionID.flatMap { coordinatorID in
+            snapshot.coordinatorRail.availableCoordinators
+                .first(where: { $0.sessionID == coordinatorID })?
+                .missionPlan
+        }
+        if row.pendingInteraction?.isAvailable == false || pendingPlan?.pendingRevisionProposal != nil {
+            let message = CoordinatorMissionRevisionProposalPause.heldReason
             composerNotice = message
             return .rejected(message: message)
         }
@@ -3035,8 +3056,7 @@ extension AgentModeViewModel {
         guard state.originalObjectiveSummary?.isEmpty == false else { return }
         guard state.missionPlan?.status.isTerminal != true else { return }
         guard let plan = state.missionPlan,
-              plan.approvalState == .approved,
-              plan.hasDurableApprovalAuthority(coordinatorModeViewModel.durableApprovalAuthorityToken(coordinatorSessionID: coordinatorSessionID))
+              plan.approvalState == .approved
         else { return }
         let shouldAutoSubmit = state.missionPlan?.policySnapshot?.defaultPace == .auto
 
@@ -3053,6 +3073,22 @@ extension AgentModeViewModel {
             persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
             coordinatorModeViewModel.refreshIfVisible()
         }
+
+        if state.missionPlan?.pendingRevisionProposal != nil {
+            if state.postApprovalContinuation?.status == .dispatching
+                || state.postApprovalContinuation?.status.isDeliverable == true,
+                state.markPostApprovalContinuationDeferred(
+                    error: CoordinatorMissionRevisionProposalPause.heldReason
+                )
+            {
+                persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+            }
+            return
+        }
+
+        guard plan.hasDurableApprovalAuthority(
+            coordinatorModeViewModel.durableApprovalAuthorityToken(coordinatorSessionID: coordinatorSessionID)
+        ) else { return }
 
         if let continuation = state.postApprovalContinuation,
            continuation.status == .dispatching
@@ -3275,7 +3311,9 @@ extension AgentModeViewModel {
                 acceptedCoordinatorPostApprovalContinuationReceipts.remove(identity)
             }
         case let .blocked(message):
-            let changed = if message.localizedCaseInsensitiveContains("mid-run") {
+            let changed = if message.localizedCaseInsensitiveContains("mid-run")
+                || message.localizedCaseInsensitiveContains(CoordinatorMissionRevisionProposalPause.heldReason)
+            {
                 state.markPostApprovalContinuationDeferred(error: message)
             } else {
                 state.markPostApprovalContinuationFailed(error: message)
@@ -3403,7 +3441,7 @@ extension AgentModeViewModel {
         let tabID = match.key
         let session = match.value
         var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
-        state.updateMissionPlan(update)
+        try state.applyMissionPlanUpdate(update)
         clearAcceptedCoordinatorPostApprovalContinuationReceiptsIfSafelyInvalidated(
             coordinatorSessionID: coordinatorSessionID,
             state: state
@@ -3668,6 +3706,9 @@ extension AgentModeViewModel {
         else {
             throw MCPError.invalidParams("Post-approval continuation enqueue rejected because the continuation identity changed.")
         }
+        guard plan.pendingRevisionProposal == nil else {
+            throw MCPError.invalidParams(CoordinatorMissionRevisionProposalPause.heldReason)
+        }
         guard continuation.status == .dispatching,
               plan.id == expected.planID,
               plan.approvalState == .approved,
@@ -3766,7 +3807,13 @@ extension AgentModeViewModel {
                         amendment: nil,
                         answersByQuestionID: [:],
                         elicitationActionRaw: text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    )
+                    ),
+                    beforeResolve: { [weak self] in
+                        guard let self else {
+                            throw MCPError.invalidParams("Coordinator child-answer authority is unavailable.")
+                        }
+                        try validateChildInteractionAnswerAuthority(row: row)
+                    }
                 )
                 return .submitted
             } catch {
@@ -3781,6 +3828,21 @@ extension AgentModeViewModel {
         }
         return await submitUserTurnCreatingSessionIfNeeded(text: text, target: target) {
             nil
+        }
+    }
+
+    @MainActor
+    private func validateChildInteractionAnswerAuthority(row: CoordinatorModeRow) throws {
+        guard let coordinatorSessionID = row.parentCoordinator?.sessionID,
+              let coordinatorSession = sessions.values.first(where: {
+                  $0.activeAgentSessionID == coordinatorSessionID && $0.isCoordinatorRuntime
+              }),
+              let plan = coordinatorSession.coordinatorFollowThroughState?.missionPlan
+        else {
+            throw MCPError.invalidParams("Coordinator child-answer authority is unavailable.")
+        }
+        guard plan.pendingRevisionProposal == nil else {
+            throw MCPError.invalidParams(CoordinatorMissionRevisionProposalPause.heldReason)
         }
     }
 
@@ -3815,7 +3877,13 @@ extension AgentModeViewModel {
                     askUserAnswersByQuestionID: submission.answersByQuestionID,
                     hasStructuredAnswerObjects: submission.hasStructuredAnswers,
                     elicitationActionRaw: submission.text
-                )
+                ),
+                beforeResolve: { [weak self] in
+                    guard let self else {
+                        throw MCPError.invalidParams("Coordinator child-answer authority is unavailable.")
+                    }
+                    try validateChildInteractionAnswerAuthority(row: row)
+                }
             )
             return .submitted
         } catch {

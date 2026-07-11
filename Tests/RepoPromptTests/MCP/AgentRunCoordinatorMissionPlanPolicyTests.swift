@@ -34,6 +34,33 @@ final class AgentRunCoordinatorMissionPlanPolicyTests: XCTestCase {
         )
     }
 
+    func testPendingRevisionProposalBlocksApprovedStartsBeforeCapacity() throws {
+        var policy = CoordinatorMissionPolicySnapshot.defaultPolicy
+        policy.maxConcurrent = 1
+        let heldPlan = try planWithPendingProposal(
+            approvalState: .approved,
+            policySnapshot: policy,
+            nodes: [node(status: .running)]
+        )
+
+        XCTAssertPendingRevisionProposalHold(decision(missionPlan: heldPlan))
+    }
+
+    func testPendingRevisionProposalBlocksPreapprovalPlanningAndProbeExceptions() throws {
+        let planningNodeID = uuid(77)
+        var heldPlan = try planWithPendingProposal(
+            approvalState: .approved,
+            nodes: [node(id: planningNodeID, executionPolicy: .freshReadOnlyChild)]
+        )
+        heldPlan.approvalState = .awaitingApproval
+
+        XCTAssertPendingRevisionProposalHold(decision(
+            missionPlan: heldPlan,
+            operation: .agentExploreStart,
+            missionNodeID: planningNodeID
+        ))
+    }
+
     func testCoordinatorAllowsPreApprovalDesignCritiqueNodeWithFreshWorktree() {
         let critiqueNodeID = uuid(2)
         XCTAssertEqual(
@@ -447,6 +474,33 @@ final class AgentRunCoordinatorMissionPlanPolicyTests: XCTestCase {
         return plan
     }
 
+    private func planWithPendingProposal(
+        approvalState: CoordinatorMissionPlanApprovalState,
+        policySnapshot: CoordinatorMissionPolicySnapshot? = nil,
+        nodes: [CoordinatorMissionPlanNode]
+    ) throws -> CoordinatorMissionPlan {
+        var state = CoordinatorFollowThroughState(missionPlan: plan(
+            approvalState: approvalState,
+            policySnapshot: policySnapshot,
+            nodes: nodes
+        ))
+        let current = try XCTUnwrap(state.missionPlan)
+        _ = try state.appendRevisionProposal(CoordinatorMissionRevisionProposalRequest(
+            expectedBasePlanID: current.id,
+            expectedBaseContractFingerprint: current.materialContractFingerprint(),
+            summary: "Revise approved scope",
+            affectedFields: ["objective"],
+            remedy: "revise_scope",
+            supportingEvidenceIDs: [],
+            requestedChange: "Revise approved scope.",
+            actor: CoordinatorMissionRevisionProposalActor(
+                coordinatorSessionID: uuid(100),
+                runtimeSessionID: uuid(100)
+            )
+        ))
+        return try XCTUnwrap(state.missionPlan)
+    }
+
     private func barePlan(
         approvalState: CoordinatorMissionPlanApprovalState,
         policySnapshot: CoordinatorMissionPolicySnapshot? = nil,
@@ -495,6 +549,18 @@ final class AgentRunCoordinatorMissionPlanPolicyTests: XCTestCase {
 
     private func uuid(_ suffix: UInt8) -> UUID {
         UUID(uuid: (0x9A, 0x2B, 0x55, 0x55, 0x00, 0x00, 0x40, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, suffix))
+    }
+
+    private func XCTAssertPendingRevisionProposalHold(
+        _ decision: AgentRunCoordinatorMissionPlanPolicy.Decision,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard case let .holdPendingRevisionProposal(reason) = decision else {
+            XCTFail("Expected pending revision proposal hold, got \(decision)", file: file, line: line)
+            return
+        }
+        XCTAssertEqual(reason, CoordinatorMissionRevisionProposalPause.heldReason, file: file, line: line)
     }
 
     private func XCTAssertFlightCapReached(

@@ -329,6 +329,107 @@ final class CoordinatorMissionRevisionProposalLedgerTests: XCTestCase {
         }
     }
 
+    func testPendingProposalReducerBlocksAdvancementButAllowsBookkeepingAndTerminalReconciliation() throws {
+        let workstreamID = uuid(70)
+        let runningNodeID = uuid(71)
+        let pendingNodeID = uuid(72)
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            id: uuid(10),
+            revision: 1,
+            objective: "Ship the approved objective",
+            status: .running,
+            approvalState: .approved,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Implementation",
+                    purpose: "Finish existing work honestly.",
+                    defaultPolicy: .freshWorktree,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .createIsolated)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    id: runningNodeID,
+                    title: "Already running",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .running,
+                    boundSessionID: uuid(73)
+                ),
+                CoordinatorMissionPlanNode(
+                    id: pendingNodeID,
+                    title: "Not started",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshWorktree,
+                    status: .pending
+                )
+            ]
+        ))
+        _ = try state.appendRevisionProposal(request(for: state), filedAt: date(1))
+        let heldPlan = try XCTUnwrap(state.missionPlan)
+        let runningNode = try XCTUnwrap(heldPlan.nodes.first(where: { $0.id == runningNodeID }))
+        let pendingNode = try XCTUnwrap(heldPlan.nodes.first(where: { $0.id == pendingNodeID }))
+
+        var newlyBound = pendingNode
+        newlyBound.boundSessionID = uuid(74)
+        XCTAssertThrowsError(try state.applyMissionPlanUpdate(.init(nodes: [newlyBound]))) {
+            XCTAssertEqual($0 as? CoordinatorMissionRevisionProposalPauseError, .binding)
+        }
+
+        var started = pendingNode
+        started.status = .running
+        XCTAssertThrowsError(try state.applyMissionPlanUpdate(.init(nodes: [started]))) {
+            XCTAssertEqual($0 as? CoordinatorMissionRevisionProposalPauseError, .advancement)
+        }
+        XCTAssertThrowsError(try state.applyMissionPlanUpdate(.init(status: .approved))) {
+            XCTAssertEqual($0 as? CoordinatorMissionRevisionProposalPauseError, .advancement)
+        }
+        XCTAssertThrowsError(try state.applyMissionPlanUpdate(.init(objective: "Changed contract"))) {
+            XCTAssertEqual($0 as? CoordinatorMissionRevisionProposalPauseError, .contractChange)
+        }
+        XCTAssertThrowsError(try state.applyMissionPlanUpdate(.init(decisions: [
+            CoordinatorMissionDecisionRecord(
+                decisionClass: CoordinatorMissionDecisionClass.childAsk.rawValue,
+                actor: .director,
+                label: "answered child question",
+                timestamp: date(2)
+            )
+        ]))) {
+            XCTAssertEqual($0 as? CoordinatorMissionRevisionProposalPauseError, .directorDecision)
+        }
+
+        try state.applyMissionPlanUpdate(.init(
+            evidence: [CoordinatorMissionEvidenceRecord(verdict: .meets, summary: "Observed evidence")],
+            events: [CoordinatorMissionPlanEvent(kind: .revised, summary: "Recorded changed assumption")],
+            updatedAt: date(3)
+        ))
+        XCTAssertNotNil(state.missionPlan?.pendingRevisionProposal)
+        XCTAssertEqual(state.missionPlan?.evidence.last?.summary, "Observed evidence")
+
+        var blocked = runningNode
+        blocked.status = .blocked
+        try state.applyMissionPlanUpdate(.init(nodes: [blocked], updatedAt: date(4)))
+        XCTAssertEqual(state.missionPlan?.nodes.first(where: { $0.id == runningNodeID })?.status, .blocked)
+
+        var completed = blocked
+        completed.status = .completed
+        completed.completionEvidence = "Terminal output received."
+        var cancelled = pendingNode
+        cancelled.status = .cancelled
+        XCTAssertThrowsError(try state.applyMissionPlanUpdate(.init(nodes: [cancelled]))) {
+            XCTAssertEqual($0 as? CoordinatorMissionRevisionProposalPauseError, .advancement)
+        }
+        try state.applyMissionPlanUpdate(.init(
+            status: .completed,
+            nodes: [completed],
+            evidence: [CoordinatorMissionEvidenceRecord(verdict: .meets, summary: "Terminal output")],
+            updatedAt: date(5)
+        ))
+        XCTAssertEqual(state.missionPlan?.nodes.first(where: { $0.id == runningNodeID })?.status, .completed)
+        XCTAssertNotNil(state.missionPlan?.pendingRevisionProposal)
+    }
+
     func testDirectStopResolvesPendingProposalOnceBeforeTerminalization() throws {
         var state = try makeState()
         let proposal = try state.appendRevisionProposal(

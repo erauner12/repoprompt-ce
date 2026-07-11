@@ -696,6 +696,8 @@ struct CoordinatorModeView: View {
         let detail = item.detail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !detail.isEmpty { return detail }
         switch item.source {
+        case .revisionProposal:
+            return "Review the pending Mission plan revision proposal before work continues."
         case .planApproval:
             return "Review the Mission checkpoint before work continues."
         case .followThroughBoundary:
@@ -724,7 +726,7 @@ struct CoordinatorModeView: View {
 
     private func openDecisionQueueItem(_ item: CoordinatorModeDecisionQueueItem) {
         switch item.source {
-        case .planApproval, .followThroughBoundary, .blockedUserAction:
+        case .revisionProposal, .planApproval, .followThroughBoundary, .blockedUserAction:
             openDecisionMissionTarget(item)
         case .interaction, .review:
             if item.sessionID == item.coordinatorSessionID {
@@ -7739,6 +7741,8 @@ private extension View {
 private extension CoordinatorModeDecisionQueueItem.Source {
     var displayLabel: String {
         switch self {
+        case .revisionProposal:
+            "Plan revision"
         case .planApproval:
             "Plan"
         case .followThroughBoundary:
@@ -7754,6 +7758,8 @@ private extension CoordinatorModeDecisionQueueItem.Source {
 
     var tint: Color {
         switch self {
+        case .revisionProposal:
+            Color.orange
         case .planApproval:
             Color.accentColor
         case .followThroughBoundary, .interaction:

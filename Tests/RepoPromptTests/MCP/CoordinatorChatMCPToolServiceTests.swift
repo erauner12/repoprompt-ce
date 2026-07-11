@@ -5666,6 +5666,117 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(actors, [.director])
     }
 
+    func testSubmitExternalAnswerCannotFallThroughToCoordinatorDirectiveDuringProposalHold() async throws {
+        let coordinatorID = UUID()
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Hold child answers.",
+            status: .running,
+            approvalState: .approved
+        ))
+        let plan = try XCTUnwrap(state.missionPlan)
+        _ = try state.appendRevisionProposal(CoordinatorMissionRevisionProposalRequest(
+            expectedBasePlanID: plan.id,
+            expectedBaseContractFingerprint: plan.materialContractFingerprint(),
+            summary: "Revise child direction",
+            affectedFields: ["objective"],
+            remedy: "revise_scope",
+            supportingEvidenceIDs: [],
+            requestedChange: "Revise child direction.",
+            actor: CoordinatorMissionRevisionProposalActor(
+                coordinatorSessionID: coordinatorID,
+                runtimeSessionID: coordinatorID
+            )
+        ))
+        var didSubmitDirective = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submit: { _ in
+                didSubmitDirective = true
+                return .accepted
+            },
+            pendingChild: { _ in nil },
+            missionPlans: { [coordinatorID: state.missionPlan!] }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("submit"),
+                "message": .string("Do not reroute this held answer.")
+            ])
+            XCTFail("Held child answer must not fall through to a Coordinator directive.")
+        } catch {
+            XCTAssertFalse(didSubmitDirective)
+            XCTAssertTrue(String(describing: error).contains(CoordinatorMissionRevisionProposalPause.heldReason))
+        }
+    }
+
+    func testSubmitRuntimePendingChildInteractionRejectsPendingRevisionProposalWithoutAnswerRecord() async throws {
+        let coordinatorID = UUID()
+        let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
+        var autonomy = CoordinatorMissionPolicySnapshot.defaultAutonomy
+        autonomy[CoordinatorMissionDecisionClass.childAsk.rawValue] = .auto
+        var state = CoordinatorFollowThroughState(missionPlan: Self.durablyApprovedPlan(
+            CoordinatorMissionPlan(
+                objective: "Director-routed child question.",
+                status: .running,
+                approvalState: .approved,
+                autonomy: autonomy
+            ),
+            coordinatorID: coordinatorID
+        ))
+        let plan = try XCTUnwrap(state.missionPlan)
+        _ = try state.appendRevisionProposal(CoordinatorMissionRevisionProposalRequest(
+            expectedBasePlanID: plan.id,
+            expectedBaseContractFingerprint: plan.materialContractFingerprint(),
+            summary: "Revise child direction",
+            affectedFields: ["objective"],
+            remedy: "revise_scope",
+            supportingEvidenceIDs: [],
+            requestedChange: "Revise child direction.",
+            actor: CoordinatorMissionRevisionProposalActor(
+                coordinatorSessionID: coordinatorID,
+                runtimeSessionID: coordinatorID
+            )
+        ))
+        var didSubmitChild = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            captureRequestMetadata: {
+                MCPServerViewModel.RequestMetadata(
+                    connectionID: UUID(),
+                    clientName: "codex",
+                    windowID: 1,
+                    runPurpose: .agentModeRun,
+                    taskLabelKind: .coordinator,
+                    isCoordinatorRuntime: true
+                )
+            },
+            resolveRuntimeCoordinatorSessionID: { _ in coordinatorID },
+            pendingChild: { _ in childRow },
+            submitPendingChild: { _, _, _ in
+                didSubmitChild = true
+                return .accepted
+            },
+            missionPlans: { [coordinatorID: state.missionPlan!] },
+            durableApprovalAuthorityToken: { _ in state.missionPlan?.expectedDurableApprovalAuthorityToken }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("submit"),
+                "message": .string("Do not record this answer.")
+            ])
+            XCTFail("Pending revision proposal must block childAsk:auto answers.")
+        } catch {
+            XCTAssertFalse(didSubmitChild)
+            XCTAssertTrue(String(describing: error).contains(CoordinatorMissionRevisionProposalPause.heldReason))
+            XCTAssertEqual(state.missionPlan?.decisions, [])
+            XCTAssertEqual(state.missionPlan?.evidence, [])
+        }
+    }
+
     func testSubmitRuntimePendingChildInteractionRejectsWhenChildAskRoutesToMe() async throws {
         let coordinatorID = UUID()
         let childRow = Self.pendingChildRow(parentCoordinatorID: coordinatorID)
@@ -5927,6 +6038,48 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             1
         )
         XCTAssertEqual(try missionPlans[coordinatorID]?.materialContractFingerprint(), baseFingerprint)
+    }
+
+    func testMissionPlanMCPRejectsAdvancementWhileRevisionProposalIsPending() async throws {
+        let coordinatorID = UUID()
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Implement approved work.",
+            status: .running,
+            approvalState: .approved
+        ))
+        let plan = try XCTUnwrap(state.missionPlan)
+        _ = try state.appendRevisionProposal(CoordinatorMissionRevisionProposalRequest(
+            expectedBasePlanID: plan.id,
+            expectedBaseContractFingerprint: plan.materialContractFingerprint(),
+            summary: "Revise approved work",
+            affectedFields: ["objective"],
+            remedy: "revise_scope",
+            supportingEvidenceIDs: [],
+            requestedChange: "Revise approved work.",
+            actor: CoordinatorMissionRevisionProposalActor(
+                coordinatorSessionID: coordinatorID,
+                runtimeSessionID: coordinatorID
+            )
+        ))
+        var didUpdate = false
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            missionPlans: { [coordinatorID: state.missionPlan!] },
+            updateMissionPlan: { _, _ in didUpdate = true }
+        )
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("mission_plan"),
+                "status": .string("approved")
+            ])
+            XCTFail("Pending proposal must block Mission Plan advancement.")
+        } catch {
+            XCTAssertFalse(didUpdate)
+            let message = String(describing: error)
+            XCTAssertTrue(message.contains(CoordinatorMissionRevisionProposalPause.heldReason), message)
+        }
     }
 
     func testProposeRevisionExactRetryUsesServerDerivedIdentityAndExistingProposalID() async throws {

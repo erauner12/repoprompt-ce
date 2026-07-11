@@ -6426,7 +6426,8 @@ final class AgentModeViewModel: ObservableObject {
         sessionID: UUID,
         interactionID: UUID,
         payload: MCPInteractionResponsePayload,
-        workflow: AgentWorkflowDefinition? = nil
+        workflow: AgentWorkflowDefinition? = nil,
+        beforeResolve: (() throws -> Void)? = nil
     ) async throws -> MCPInstructionDispatch? {
         guard let session = mcpControlledSession(sessionID: sessionID) else {
             throw MCPError.invalidParams("The requested agent run is no longer active.")
@@ -6462,6 +6463,7 @@ final class AgentModeViewModel: ObservableObject {
             else {
                 throw MCPError.invalidParams("The pending question no longer matches interaction_id.")
             }
+            try beforeResolve?()
             if payload.skip {
                 skipAskUser(tabID: session.tabID, interactionID: interactionID)
             } else {

@@ -35,12 +35,12 @@
 
 ## 5. Pending-Proposal Advancement Pause
 
-- [ ] 5.1 After the Item 1 audit confirms hard integration prerequisites 13.7 and 13.8 are available, block delegated starts, including preapproval planning/probe exceptions, before capacity checks in the Coordinator Mission run policy.
-- [ ] 5.2 Add an early proposal-specific hold to Auto-mode classification that blocks `childAsk:auto` and other automatic user-surrogate decisions.
-- [ ] 5.3 Hold follow-through after terminal reconciliation but before continuation delivery, resume, coordinator-only completion, or other advancement.
-- [ ] 5.4 Enforce the pending transition table in MCP and reducer layers: reject new starts/bindings, pending/blocked-to-running, advancement status, contract changes, and Director-authored user decisions.
-- [ ] 5.5 Persist existing and newly arriving questions from already-running children as unavailable/disabled with reason `held pending revision proposal`; fail all answer submits without recording or queuing an answer, while continuing terminal/evidence bookkeeping and removing obsolete questions when children terminalize.
-- [ ] 5.6 Add policy/classifier/MCP/reducer/view-model tests for every blocked/allowed pause row, proposal-first checkpoint priority, existing/new child-question holds, fail-closed answer submits with no answer record, terminal child cleanup, planning exceptions, and `childAsk:auto`.
+- [x] 5.1 After the Item 1 audit confirms hard integration prerequisites 13.7 and 13.8 are available, block delegated starts, including preapproval planning/probe exceptions, before capacity checks in the Coordinator Mission run policy.
+- [x] 5.2 Add an early proposal-specific hold to Auto-mode classification that blocks `childAsk:auto` and other automatic user-surrogate decisions.
+- [x] 5.3 Hold follow-through after terminal reconciliation but before continuation delivery, resume, coordinator-only completion, or other advancement.
+- [x] 5.4 Enforce the pending transition table in MCP and reducer layers: reject new starts/bindings, pending/blocked-to-running, advancement status, contract changes, and Director-authored user decisions.
+- [x] 5.5 Persist existing and newly arriving questions from already-running children as unavailable/disabled with reason `held pending revision proposal`; fail all answer submits without recording or queuing an answer, while continuing terminal/evidence bookkeeping and removing obsolete questions when children terminalize.
+- [x] 5.6 Add policy/classifier/MCP/reducer/view-model tests for every blocked/allowed pause row, proposal-first checkpoint priority, existing/new child-question holds, fail-closed answer submits with no answer record, terminal child cleanup, planning exceptions, and `childAsk:auto`.
 
 ## 6. Trusted Durable Resolution Transactions
 

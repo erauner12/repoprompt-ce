@@ -513,16 +513,24 @@ struct CoordinatorModeSnapshotProjector {
     ) -> CoordinatorModeRow {
         let route = routeBuilder.route(tabID: seed.tabID, sessionID: seed.id)
         let mcpSnapshot = seed.isPersistedOnly ? nil : input.mcpSnapshotsBySessionID[seed.id]
-        let rawPendingInteraction = pendingInteractionSummary(
-            snapshot: mcpSnapshot,
-            route: route
-        )
+        let proposalHoldReason = parentMissionPlan?.pendingRevisionProposal == nil
+            ? nil
+            : CoordinatorMissionRevisionProposalPause.heldReason
+        let rawPendingInteraction = seed.runState == .completed
+            || seed.runState == .cancelled
+            || seed.runState == .failed
+            ? nil
+            : pendingInteractionSummary(
+                snapshot: mcpSnapshot,
+                route: route,
+                unavailableReason: proposalHoldReason
+            )
         let directorRoutedChildQuestion = isDirectorRoutedChildQuestion(
             seed: seed,
             pendingInteraction: rawPendingInteraction,
             parentMissionPlan: parentMissionPlan
         )
-        let pendingInteraction = directorRoutedChildQuestion ? nil : rawPendingInteraction
+        let pendingInteraction = directorRoutedChildQuestion && proposalHoldReason == nil ? nil : rawPendingInteraction
         let statusGroup = statusGroup(for: seed, directorRoutedChildQuestion: directorRoutedChildQuestion)
         let workstream = workstream(from: seed.worktreeBindingSummaries.first)
         let mergeAttention = mergeAttention(from: seed.activeWorktreeMergeSummaries)
@@ -1154,6 +1162,15 @@ struct CoordinatorModeSnapshotProjector {
             guard queueableCoordinatorIDs.contains(coordinatorID) else { continue }
             let coordinatorRoute = rowsByID[coordinatorID]?.openAgentChatRoute
             if let plan = option.missionPlan {
+                if let proposal = plan.pendingRevisionProposal {
+                    items.append(revisionProposalDecisionItem(
+                        coordinatorSessionID: coordinatorID,
+                        plan: plan,
+                        proposal: proposal,
+                        route: coordinatorRoute
+                    ))
+                    continue
+                }
                 if shouldQueuePlanApproval(plan) {
                     items.append(planApprovalDecisionItem(
                         coordinatorSessionID: coordinatorID,
@@ -1187,6 +1204,7 @@ struct CoordinatorModeSnapshotProjector {
 
         items.append(contentsOf: coordinatorRows.compactMap { row in
             guard let pendingInteraction = row.pendingInteraction,
+                  pendingInteraction.isAvailable,
                   let coordinatorID = coordinatorOwnerIDs[row.sessionID],
                   queueableCoordinatorIDs.contains(coordinatorID)
             else { return nil }
@@ -1205,6 +1223,9 @@ struct CoordinatorModeSnapshotProjector {
                 return true
             }
             .sorted { lhs, rhs in
+                if (lhs.source == .revisionProposal) != (rhs.source == .revisionProposal) {
+                    return lhs.source == .revisionProposal
+                }
                 if lhs.waitingSince != rhs.waitingSince { return lhs.waitingSince < rhs.waitingSince }
                 return lhs.id.uuidString < rhs.id.uuidString
             }
@@ -1214,6 +1235,35 @@ struct CoordinatorModeSnapshotProjector {
         guard option.isLiveInCurrentWindow else { return false }
         guard let plan = option.missionPlan else { return true }
         return isDecisionQueueable(plan)
+    }
+
+    private func revisionProposalDecisionItem(
+        coordinatorSessionID: UUID,
+        plan: CoordinatorMissionPlan,
+        proposal: CoordinatorMissionRevisionProposal,
+        route: AgentSessionDeepLinkRoute?
+    ) -> CoordinatorModeDecisionQueueItem {
+        CoordinatorModeDecisionQueueItem(
+            id: CoordinatorMissionStableIdentity.uuid(
+                namespace: "coordinator-mode-decision-revision-proposal",
+                parts: [
+                    coordinatorSessionID.uuidString,
+                    proposal.id.uuidString,
+                    proposal.baseContractFingerprint
+                ]
+            ),
+            source: .revisionProposal,
+            coordinatorSessionID: coordinatorSessionID,
+            sessionID: coordinatorSessionID,
+            interactionID: nil,
+            planID: plan.id,
+            planRevision: plan.revision,
+            nodeID: nil,
+            title: "Review Mission plan revision proposal",
+            detail: proposal.summary,
+            waitingSince: proposal.filedAt,
+            openAgentChatRoute: route
+        )
     }
 
     private func shouldQueuePlanApproval(_ plan: CoordinatorMissionPlan) -> Bool {
@@ -1400,7 +1450,8 @@ struct CoordinatorModeSnapshotProjector {
 
     private func pendingInteractionSummary(
         snapshot: AgentRunMCPSnapshot?,
-        route: AgentSessionDeepLinkRoute?
+        route: AgentSessionDeepLinkRoute?,
+        unavailableReason: String? = nil
     ) -> CoordinatorModePendingInteractionSummary? {
         guard let snapshot, let interaction = snapshot.interaction else { return nil }
         return CoordinatorModePendingInteractionSummary(
@@ -1414,7 +1465,9 @@ struct CoordinatorModeSnapshotProjector {
             options: interaction.options,
             fields: interaction.fields,
             details: interaction.details,
-            openAgentChatRoute: route
+            openAgentChatRoute: route,
+            isAvailable: unavailableReason == nil,
+            unavailableReason: unavailableReason
         )
     }
 

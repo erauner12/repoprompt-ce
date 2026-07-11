@@ -4,6 +4,7 @@ enum AgentRunCoordinatorMissionPlanPolicy {
     enum Decision: Equatable {
         case allow
         case requireApprovedMissionPlan(String)
+        case holdPendingRevisionProposal(String)
         case denyFlightCapReached(String)
     }
 
@@ -33,6 +34,9 @@ enum AgentRunCoordinatorMissionPlanPolicy {
         }
         guard !missionPlan.nodes.isEmpty else {
             return .requireApprovedMissionPlan(approvedMissionPlanRequiredMessage)
+        }
+        if missionPlan.pendingRevisionProposal != nil {
+            return .holdPendingRevisionProposal(CoordinatorMissionRevisionProposalPause.heldReason)
         }
         let runningNodeCount = missionPlan.nodes.count { $0.status == .running }
         let maxConcurrent = missionPlan.policySnapshot?.maxConcurrent ?? CoordinatorMissionPolicySnapshot.defaultMaxConcurrent

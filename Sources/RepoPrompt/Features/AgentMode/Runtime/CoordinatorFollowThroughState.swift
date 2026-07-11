@@ -250,6 +250,92 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         )
     }
 
+    mutating func applyMissionPlanUpdate(_ update: CoordinatorMissionPlanUpdate) throws {
+        try validateMissionPlanUpdateDuringPendingRevisionProposal(update)
+        updateMissionPlan(update)
+    }
+
+    func validateMissionPlanUpdateDuringPendingRevisionProposal(
+        _ update: CoordinatorMissionPlanUpdate
+    ) throws {
+        guard let existingPlan = missionPlan,
+              existingPlan.pendingRevisionProposal != nil
+        else { return }
+
+        guard update.decisions?.isEmpty != false else {
+            throw CoordinatorMissionRevisionProposalPauseError.directorDecision
+        }
+        guard update.routingDecisions?.allSatisfy({
+            $0.operation == .coordinatorHold || $0.operation == .agentRunCancel
+        }) != false else {
+            throw CoordinatorMissionRevisionProposalPauseError.advancement
+        }
+        if let approvalState = update.approvalState,
+           approvalState != existingPlan.approvalState
+        {
+            throw CoordinatorMissionRevisionProposalPauseError.contractChange
+        }
+        if let status = update.status,
+           !Self.isAllowedProposalPauseStatusTransition(from: existingPlan.status, to: status)
+        {
+            throw CoordinatorMissionRevisionProposalPauseError.advancement
+        }
+
+        let existingWorkstreams = Dictionary(uniqueKeysWithValues: existingPlan.workstreams.map { ($0.id, $0) })
+        for incoming in update.workstreams ?? [] {
+            guard let existing = existingWorkstreams[incoming.id],
+                  incoming.worktreeID == existing.worktreeID
+            else {
+                throw CoordinatorMissionRevisionProposalPauseError.binding
+            }
+        }
+
+        let existingNodes = Dictionary(uniqueKeysWithValues: existingPlan.nodes.map { ($0.id, $0) })
+        for incoming in update.nodes ?? [] {
+            guard let existing = existingNodes[incoming.id] else {
+                throw CoordinatorMissionRevisionProposalPauseError.advancement
+            }
+            guard incoming.boundSessionID == existing.boundSessionID,
+                  incoming.boundInteractionID == existing.boundInteractionID
+            else {
+                throw CoordinatorMissionRevisionProposalPauseError.binding
+            }
+            guard Self.isAllowedProposalPauseNodeTransition(from: existing.status, to: incoming.status) else {
+                throw CoordinatorMissionRevisionProposalPauseError.advancement
+            }
+        }
+
+        if let continuation = update.postApprovalContinuation,
+           continuation.status != .deferred
+        {
+            throw CoordinatorMissionRevisionProposalPauseError.continuation
+        }
+
+        var candidate = self
+        candidate.updateMissionPlan(update)
+        guard candidate.missionPlan?.materialContractSnapshot == existingPlan.materialContractSnapshot else {
+            throw CoordinatorMissionRevisionProposalPauseError.contractChange
+        }
+    }
+
+    private static func isAllowedProposalPauseStatusTransition(
+        from existing: CoordinatorMissionPlanStatus,
+        to incoming: CoordinatorMissionPlanStatus
+    ) -> Bool {
+        if incoming == existing { return true }
+        if existing == .running, incoming == .blocked { return true }
+        return (existing == .running || existing == .blocked) && incoming == .completed
+    }
+
+    private static func isAllowedProposalPauseNodeTransition(
+        from existing: CoordinatorMissionPlanNodeStatus,
+        to incoming: CoordinatorMissionPlanNodeStatus
+    ) -> Bool {
+        if incoming == existing { return true }
+        if existing == .running, incoming == .blocked { return true }
+        return (existing == .running || existing == .blocked) && incoming.isTerminal
+    }
+
     mutating func updateMissionPlan(_ update: CoordinatorMissionPlanUpdate) {
         let existingPlan = missionPlan
         if let existingPlan, existingPlan.status.isTerminal {
@@ -947,6 +1033,30 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         guard collapsed.count > maxLength else { return collapsed }
         return "\(collapsed.prefix(maxLength - 3))..."
+    }
+}
+
+enum CoordinatorMissionRevisionProposalPauseError: LocalizedError, Equatable {
+    case advancement
+    case binding
+    case contractChange
+    case directorDecision
+    case continuation
+
+    var errorDescription: String? {
+        let reason = CoordinatorMissionRevisionProposalPause.heldReason
+        return switch self {
+        case .advancement:
+            "Mission Plan advancement is \(reason)."
+        case .binding:
+            "New Mission Plan bindings are \(reason)."
+        case .contractChange:
+            "Approved Mission contract changes are \(reason)."
+        case .directorDecision:
+            "Director-authored user decisions are \(reason)."
+        case .continuation:
+            "Post-approval continuation delivery is \(reason)."
+        }
     }
 }
 

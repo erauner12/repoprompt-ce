@@ -16,6 +16,44 @@ final class CoordinatorAutoModeBoundaryClassifierTests: XCTestCase {
         XCTAssertEqual(decision, .hold(.coordinatorActive))
     }
 
+    func testPendingRevisionProposalHoldsBeforeBusyAndChildAskAutoClassification() throws {
+        let coordinatorID = uuid(1)
+        var policy = CoordinatorMissionPolicySnapshot.defaultPolicy
+        policy.autonomy[CoordinatorMissionAutonomyClasses.childAsk.key] = .auto
+        var state = CoordinatorFollowThroughState(
+            originalObjectiveSummary: "Finish the requested task.",
+            missionPlan: CoordinatorMissionPlan(
+                objective: "Approved objective",
+                status: .running,
+                approvalState: .approved,
+                policySnapshot: policy
+            )
+        )
+        let plan = try XCTUnwrap(state.missionPlan)
+        _ = try state.appendRevisionProposal(CoordinatorMissionRevisionProposalRequest(
+            expectedBasePlanID: plan.id,
+            expectedBaseContractFingerprint: plan.materialContractFingerprint(),
+            summary: "Revise approved scope",
+            affectedFields: ["objective"],
+            remedy: "revise_scope",
+            supportingEvidenceIDs: [],
+            requestedChange: "Revise approved scope.",
+            actor: CoordinatorMissionRevisionProposalActor(
+                coordinatorSessionID: coordinatorID,
+                runtimeSessionID: coordinatorID
+            )
+        ))
+
+        XCTAssertEqual(
+            classifier.classify(input(
+                coordinatorID: coordinatorID,
+                coordinatorRunState: .running,
+                state: state
+            )),
+            .hold(.pendingRevisionProposal)
+        )
+    }
+
     func testWaitingForQuestionCoordinatorCanResumeGateCleared() {
         let coordinatorID = uuid(1)
         let gate = CoordinatorContinuationGate.actionApproval(

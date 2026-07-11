@@ -280,6 +280,10 @@ enum CoordinatorMissionRevisionProposalIdentity {
     }
 }
 
+enum CoordinatorMissionRevisionProposalPause {
+    static let heldReason = "held pending revision proposal"
+}
+
 extension CoordinatorMissionPlan {
     var pendingRevisionProposal: CoordinatorMissionRevisionProposal? {
         revisionProposals.first { proposal in

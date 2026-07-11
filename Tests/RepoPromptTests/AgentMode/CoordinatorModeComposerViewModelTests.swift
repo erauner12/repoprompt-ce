@@ -1180,6 +1180,161 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.snapshot.coordinatorRail.missionSummary?.decisions.userCount, 2)
     }
 
+    func testPendingRevisionProposalHoldsExistingAndNewChildQuestionsWithoutQueuingAnswers() async throws {
+        let coordinatorID = uuid(1)
+        let existingChildID = uuid(2)
+        let newChildID = uuid(3)
+        let existingInteractionID = uuid(901)
+        let newInteractionID = uuid(902)
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Answer child questions.",
+            status: .running,
+            approvalState: .approved,
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    title: "Wait for child direction",
+                    workstreamID: uuid(80),
+                    executionPolicy: .coordinatorOnly
+                )
+            ],
+            routingDecisions: [
+                CoordinatorMissionRoutingDecision(
+                    timestamp: date(5),
+                    decision: .holdForUser,
+                    operation: .coordinatorHold,
+                    reason: "Existing step boundary."
+                )
+            ]
+        ))
+        var childStates: [(UUID, AgentSessionRunState)] = [(existingChildID, .waitingForQuestion)]
+        var interactions: [UUID: AgentRunMCPSnapshot.Interaction] = [
+            existingChildID: pendingQuestionInteraction(
+                id: existingInteractionID,
+                title: "Existing question",
+                prompt: "Question before proposal?"
+            )
+        ]
+        var submissions = 0
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                let children = childStates.map { childID, runState in
+                    self.live(
+                        id: childID,
+                        tab: self.uuid(childID == existingChildID ? 102 : 103),
+                        title: childID == existingChildID ? "Existing child" : "New child",
+                        updatedAt: self.date(childID == existingChildID ? 30 : 35),
+                        state: runState,
+                        parent: coordinatorID
+                    )
+                }
+                let snapshots = Dictionary(uniqueKeysWithValues: interactions.map { childID, interaction in
+                    (childID, self.mcpSnapshot(
+                        sessionID: childID,
+                        tabID: self.uuid(childID == existingChildID ? 102 : 103),
+                        sessionName: childID == existingChildID ? "Existing child" : "New child",
+                        status: .waitingForInput,
+                        statusText: "Waiting",
+                        assistantPreview: nil,
+                        parent: coordinatorID,
+                        interaction: interaction
+                    ))
+                })
+                return self.input(
+                    live: [
+                        self.live(
+                            id: coordinatorID,
+                            tab: self.uuid(101),
+                            title: "Coordinator",
+                            updatedAt: self.date(40),
+                            state: .idle,
+                            coordinatorRuntime: true,
+                            missionPlan: state.missionPlan
+                        )
+                    ] + children,
+                    mcpSnapshots: snapshots,
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [coordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            childInteractionResponseSubmitter: { _, _ in
+                submissions += 1
+                return .accepted
+            },
+            missionPlanUpdater: { _, update in
+                try state.applyMissionPlanUpdate(update)
+            }
+        )
+        viewModel.selectCoordinator(sessionID: coordinatorID)
+        XCTAssertEqual(viewModel.activePendingChildInteractionRow()?.sessionID, existingChildID)
+
+        let plan = try XCTUnwrap(state.missionPlan)
+        _ = try state.appendRevisionProposal(CoordinatorMissionRevisionProposalRequest(
+            expectedBasePlanID: plan.id,
+            expectedBaseContractFingerprint: plan.materialContractFingerprint(),
+            summary: "Revise child direction",
+            affectedFields: ["objective"],
+            remedy: "revise_scope",
+            supportingEvidenceIDs: [],
+            requestedChange: "Revise child direction.",
+            actor: CoordinatorMissionRevisionProposalActor(
+                coordinatorSessionID: coordinatorID,
+                runtimeSessionID: coordinatorID
+            )
+        ))
+        var legacyCoexistingPlan = try XCTUnwrap(state.missionPlan)
+        legacyCoexistingPlan.approvalState = .awaitingApproval
+        state.missionPlan = legacyCoexistingPlan
+        childStates.append((newChildID, .waitingForQuestion))
+        interactions[newChildID] = pendingQuestionInteraction(
+            id: newInteractionID,
+            title: "New question",
+            prompt: "Question during proposal?"
+        )
+        viewModel.refresh()
+
+        let heldRows = viewModel.snapshot.groups.flatMap(\.rows).filter { $0.pendingInteraction != nil }
+        XCTAssertEqual(Set(heldRows.map(\.sessionID)), [existingChildID, newChildID])
+        XCTAssertTrue(heldRows.allSatisfy { $0.pendingInteraction?.isAvailable == false })
+        XCTAssertTrue(heldRows.allSatisfy {
+            $0.pendingInteraction?.unavailableReason == CoordinatorMissionRevisionProposalPause.heldReason
+        })
+        XCTAssertNil(viewModel.activePendingChildInteractionRow())
+        XCTAssertEqual(viewModel.snapshot.decisionQueue.map(\.source), [.revisionProposal])
+        XCTAssertEqual(
+            viewModel.setCoordinatorMissionPace(coordinatorSessionID: coordinatorID, pace: .step),
+            .rejected(message: CoordinatorMissionRevisionProposalPause.heldReason)
+        )
+        XCTAssertEqual(
+            viewModel.setCoordinatorMissionAutonomy(
+                coordinatorSessionID: coordinatorID,
+                autonomyClassKey: CoordinatorMissionAutonomyClasses.childAsk.key,
+                mode: .auto
+            ),
+            .rejected(message: CoordinatorMissionRevisionProposalPause.heldReason)
+        )
+
+        let heldExisting = try XCTUnwrap(heldRows.first(where: { $0.sessionID == existingChildID }))
+        let result = await viewModel.submitPendingChildInteractionResponse(
+            .text("Do not queue this answer."),
+            to: heldExisting,
+            actor: .director
+        )
+        XCTAssertEqual(result, .rejected(message: CoordinatorMissionRevisionProposalPause.heldReason))
+        XCTAssertEqual(submissions, 0)
+        XCTAssertEqual(state.missionPlan?.decisions, [])
+        XCTAssertEqual(state.missionPlan?.evidence, [])
+
+        childStates = [
+            (existingChildID, .waitingForQuestion),
+            (newChildID, .completed)
+        ]
+        interactions.removeValue(forKey: newChildID)
+        viewModel.refresh()
+        XCTAssertEqual(Set(viewModel.snapshot.pendingInteractions.map(\.sessionID)), [existingChildID])
+    }
+
     func testEmptyChildInteractionResponseStillRecordsEvidence() async throws {
         let coordinatorID = uuid(1)
         let childID = uuid(2)
@@ -4177,6 +4332,49 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             XCTAssertThrowsError(
                 try harness.agentModeViewModel.test_validatePostApprovalContinuationEnqueueAuthority(expected),
                 mutation.rawValue
+            )
+        }
+    }
+
+    func testPendingRevisionProposalDefersContinuationAndFailsFinalEnqueueClosed() async throws {
+        let harness = await makePostApprovalContinuationHarness(status: .pending)
+        var state = try XCTUnwrap(harness.session.coordinatorFollowThroughState)
+        let plan = try XCTUnwrap(state.missionPlan)
+        _ = try state.appendRevisionProposal(CoordinatorMissionRevisionProposalRequest(
+            expectedBasePlanID: plan.id,
+            expectedBaseContractFingerprint: plan.materialContractFingerprint(),
+            summary: "Revise before continuation",
+            affectedFields: ["objective"],
+            remedy: "revise_scope",
+            supportingEvidenceIDs: [],
+            requestedChange: "Revise before continuation.",
+            actor: CoordinatorMissionRevisionProposalActor(
+                coordinatorSessionID: harness.coordinatorID,
+                runtimeSessionID: harness.coordinatorID
+            )
+        ))
+        harness.session.coordinatorFollowThroughState = state
+        var submissions = 0
+        harness.agentModeViewModel.test_setCoordinatorContinuationSubmitter { _ in
+            submissions += 1
+            return .submitted
+        }
+
+        await harness.agentModeViewModel.test_evaluateCoordinatorPostApprovalContinuation(
+            coordinatorSessionID: harness.coordinatorID
+        )
+
+        let deferred = try XCTUnwrap(harness.session.coordinatorFollowThroughState?.postApprovalContinuation)
+        XCTAssertEqual(deferred.status, .deferred)
+        XCTAssertEqual(deferred.lastError, CoordinatorMissionRevisionProposalPause.heldReason)
+        XCTAssertEqual(deferred.attempts, 0)
+        XCTAssertEqual(submissions, 0)
+        XCTAssertThrowsError(
+            try harness.agentModeViewModel.test_validatePostApprovalContinuationEnqueueAuthority(deferred)
+        ) { error in
+            XCTAssertTrue(
+                ((error as? LocalizedError)?.errorDescription ?? "")
+                    .contains(CoordinatorMissionRevisionProposalPause.heldReason)
             )
         }
     }

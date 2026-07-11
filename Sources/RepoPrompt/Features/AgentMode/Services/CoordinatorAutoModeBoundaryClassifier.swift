@@ -16,6 +16,7 @@ struct CoordinatorAutoModeBoundaryClassifier {
         case missingCoordinator
         case missingObjective
         case coordinatorActive
+        case pendingRevisionProposal
         case childNeedsUser(UUID)
         case childBlocked(UUID)
         case duplicateEvent(String)
@@ -35,6 +36,9 @@ struct CoordinatorAutoModeBoundaryClassifier {
         guard input.autoModeEnabled else { return .hold(.autoModeDisabled) }
         guard let coordinatorSessionID = input.coordinatorSessionID else { return .hold(.missingCoordinator) }
         guard input.state.originalObjectiveSummary?.isEmpty == false else { return .hold(.missingObjective) }
+        if input.state.missionPlan?.pendingRevisionProposal != nil {
+            return .hold(.pendingRevisionProposal)
+        }
         if isCoordinatorBusy(input.coordinatorRunState) {
             return .hold(.coordinatorActive)
         }

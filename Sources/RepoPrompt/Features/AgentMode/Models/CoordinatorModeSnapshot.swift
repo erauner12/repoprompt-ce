@@ -688,10 +688,13 @@ struct CoordinatorModePendingInteractionSummary: Identifiable, Equatable {
     let fields: [AgentRunMCPSnapshot.Interaction.Field]
     let details: [AgentRunMCPSnapshot.Interaction.Detail]
     let openAgentChatRoute: AgentSessionDeepLinkRoute?
+    var isAvailable = true
+    var unavailableReason: String?
 }
 
 struct CoordinatorModeDecisionQueueItem: Identifiable, Equatable {
     enum Source: String, Equatable {
+        case revisionProposal
         case planApproval
         case followThroughBoundary
         case interaction
