@@ -616,7 +616,8 @@ final class CoordinatorMissionRevisionProposalLedgerTests: XCTestCase {
             action: .revisePlan,
             proposalID: appended.proposalID,
             expectedContractFingerprint: proposal.baseContractFingerprint,
-            expectedCheckpointInstanceID: checkpoint
+            expectedCheckpointInstanceID: checkpoint,
+            guidance: "Keep the revised scope narrow."
         )
 
         let result = try state.resolveRevisionProposalTransaction(revise, resolvedAt: date(3))
@@ -636,8 +637,54 @@ final class CoordinatorMissionRevisionProposalLedgerTests: XCTestCase {
         ))
         XCTAssertEqual(presentation.phase, .drafting)
         XCTAssertEqual(presentation.proposalSummary, proposal.summary)
-        XCTAssertTrue(presentation.classifiedDeltaLines.isEmpty)
-        XCTAssertNil(presentation.reviseGuidanceDraft)
+        XCTAssertNil(presentation.materialDelta)
+        XCTAssertEqual(presentation.revisionGuidance, "Keep the revised scope narrow.")
+        XCTAssertEqual(
+            draftingPlan.latestAcceptedRevisionLineage?.resolution.guidance,
+            "Keep the revised scope narrow."
+        )
+
+        var revisedPlan = draftingPlan
+        revisedPlan.approvalState = .awaitingApproval
+        revisedPlan.objective = "Concrete revised objective"
+        var revisedPresentation = try XCTUnwrap(CoordinatorPlanRevisionPresentation.project(
+            coordinatorSessionID: coordinatorID,
+            plan: revisedPlan
+        ))
+        XCTAssertEqual(revisedPresentation.phase, .revisedPlanReady)
+        XCTAssertEqual(revisedPresentation.primaryHeading, "Approve revised Mission Plan")
+        XCTAssertEqual(
+            revisedPresentation.materialDelta?.materialChanges.first(where: { $0.path == "objective" })?
+                .promiseClassification,
+            .withinStatedAffectedAreas
+        )
+
+        let laterRejected = revisedPlan.makeRevisionProposalResolution(
+            CoordinatorMissionRevisionProposalResolutionRequest(
+                proposalID: proposal.id,
+                outcome: .rejected
+            ),
+            resultingContractFingerprint: proposal.baseContractFingerprint,
+            resolvedAt: date(5)
+        )
+        revisedPlan.revisionProposalResolutions.append(laterRejected)
+        revisedPresentation = try XCTUnwrap(CoordinatorPlanRevisionPresentation.project(
+            coordinatorSessionID: coordinatorID,
+            plan: revisedPlan
+        ))
+        XCTAssertEqual(revisedPresentation.phase, .revisedPlanReady)
+        XCTAssertEqual(revisedPresentation.proposalID, proposal.id)
+
+        revisedPlan.approvalState = .approved
+        let approvedPresentation = try XCTUnwrap(CoordinatorPlanRevisionPresentation.project(
+            coordinatorSessionID: coordinatorID,
+            plan: revisedPlan
+        ))
+        XCTAssertEqual(approvedPresentation.phase, .approvedCollapsed)
+        XCTAssertEqual(
+            approvedPresentation.primaryHeading,
+            "Plan revised to address: \(proposal.summary)"
+        )
 
         let keep = CoordinatorMissionRevisionProposalTrustedResolutionRequest(
             coordinatorSessionID: coordinatorID,

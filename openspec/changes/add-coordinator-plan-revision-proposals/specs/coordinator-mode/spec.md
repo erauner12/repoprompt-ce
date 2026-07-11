@@ -107,3 +107,18 @@ Coordinator mode SHALL display summary-only proposal lifecycle state from canoni
 - **WHEN** a proposal is accepted for concrete revision, rejected, invalidated, or stopped
 - **THEN** user-facing status and minimal receipt history SHALL describe the actual outcome
 - **AND** it SHALL NOT imply exact plan approval, execution completion, merge, commit, push, or deployment.
+
+### Requirement: Plan Revision container morphs through revised approval
+The Plan Revision container SHALL derive post-Revise state from the latest accepted-for-concrete-revision resolution/proposal lineage. It SHALL show drafting during `revisionRequested`, **Approve revised Mission Plan** during `awaitingApproval`, and **Plan revised to address: …** after approval.
+
+#### Scenario: Concrete revised plan awaits approval
+- **WHEN** the latest accepted proposal lineage has produced a concrete plan in `awaitingApproval`
+- **THEN** the same Plan Revision container SHALL identify the proposal and lead with a promise check
+- **AND** it SHALL prominently show changes outside stated affected areas before progressive added/removed/changed detail
+- **AND** the full revised plan SHALL remain accessible
+- **AND** approval SHALL use the existing exact plan-approval checkpoint transaction.
+
+#### Scenario: Revised plan is approved
+- **WHEN** that exact plan-approval transaction completes
+- **THEN** the container SHALL collapse to **Plan revised to address: …**
+- **AND** no exact proposal-ratification action SHALL be introduced.

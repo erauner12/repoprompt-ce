@@ -644,6 +644,8 @@ final class AgentModeViewModel: ObservableObject {
         private var test_allowsScheduledDerivedTranscriptRefreshWithoutPromptManager = false
         private var test_afterMCPStoreEpochBegan: (@MainActor () async -> Void)?
         var test_revisionProposalPersistenceBarrier: (@MainActor (_ tabID: UUID, _ minimumGeneration: UInt64) async -> Bool)?
+        var test_revisionDraftingDirectiveWillSubmit: (@MainActor (_ directive: String, _ resolutionID: UUID) -> Void)?
+        var test_revisionDraftingDirectiveSubmitter: (@MainActor (_ submission: CoordinatorDirectiveSubmission) async -> UserTurnSubmissionResult)?
         var test_postApprovalContinuationPersistenceBarrier: (@MainActor (_ tabID: UUID, _ minimumGeneration: UInt64) async -> Bool)?
         var test_coordinatorContinuationSubmitter: (@MainActor (_ continuation: CoordinatorPostApprovalContinuationRecord) async -> UserTurnSubmissionResult)?
         var test_beforeCoordinatorContinuationEnqueueAuthorityValidation: (@MainActor (_ continuation: CoordinatorPostApprovalContinuationRecord) -> Void)?
@@ -722,6 +724,18 @@ final class AgentModeViewModel: ObservableObject {
             _ hook: (@MainActor (_ tabID: UUID, _ minimumGeneration: UInt64) async -> Bool)?
         ) {
             test_revisionProposalPersistenceBarrier = hook
+        }
+
+        func test_setRevisionDraftingDirectiveWillSubmit(
+            _ hook: (@MainActor (_ directive: String, _ resolutionID: UUID) -> Void)?
+        ) {
+            test_revisionDraftingDirectiveWillSubmit = hook
+        }
+
+        func test_setRevisionDraftingDirectiveSubmitter(
+            _ hook: (@MainActor (_ submission: CoordinatorDirectiveSubmission) async -> UserTurnSubmissionResult)?
+        ) {
+            test_revisionDraftingDirectiveSubmitter = hook
         }
 
         func test_setPostApprovalContinuationPersistenceBarrier(

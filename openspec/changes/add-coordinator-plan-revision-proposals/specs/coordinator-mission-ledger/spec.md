@@ -105,3 +105,11 @@ The ledger SHALL accept only the first effective proposal resolution, SHALL make
 - **WHEN** a Mission terminalizes with a pending proposal
 - **THEN** the terminal transaction SHALL append `invalidatedMissionTerminal`, `stopped`, or the applicable terminal resolution before freezing state
 - **AND** Stop SHALL win concurrent races.
+
+### Requirement: Material contract delta is canonical and reusable
+The system SHALL expose one model-level `materialContractDelta(from:to:proposalAffectedFields:)` over canonical material-contract snapshots. Its deterministic structural output SHALL classify added, removed, changed, and unchanged fields; retain canonical before/after values; distinguish planned worktree strategy from excluded runtime worktree/session bindings; and classify each change as within or outside the proposal's stated affected areas.
+
+#### Scenario: Revised contract drifts beyond its promise
+- **WHEN** a concrete revised plan changes material fields outside the accepted proposal's `affected_fields`
+- **THEN** the canonical delta SHALL classify those fields as outside stated affected areas
+- **AND** runtime-only bindings SHALL never appear as material changes.

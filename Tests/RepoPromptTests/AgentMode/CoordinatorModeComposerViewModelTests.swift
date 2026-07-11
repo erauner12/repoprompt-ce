@@ -4144,6 +4144,127 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(resolutionBarrierAttempts, 4)
     }
 
+    func testRevisionGuidanceWaitsForDurableResolutionBeforeTrustedDraftingDirective() async throws {
+        let harness = await makeRevisionProposalPersistenceHarness()
+        harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }
+        _ = try await harness.coordinatorModeViewModel.appendRevisionProposal(
+            coordinatorSessionID: harness.coordinatorID,
+            request: harness.request
+        )
+        let proposal = try XCTUnwrap(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.pendingRevisionProposal
+        )
+        let checkpoint = CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+            coordinatorSessionID: harness.coordinatorID,
+            proposal: proposal
+        )
+        let previewPlan = try XCTUnwrap(harness.session.coordinatorFollowThroughState?.missionPlan)
+        let previewResolution = previewPlan.makeRevisionProposalResolution(
+            CoordinatorMissionRevisionProposalResolutionRequest(
+                proposalID: proposal.id,
+                outcome: .acceptedForConcreteRevision
+            ),
+            resultingContractFingerprint: proposal.baseContractFingerprint,
+            resolvedAt: date(1)
+        )
+        let unguidedDirective = CoordinatorModeViewModel.revisionDraftingDirective(
+            proposal: proposal,
+            resolution: previewResolution
+        )
+        XCTAssertTrue(unguidedDirective.contains("Draft a concrete revised Mission Plan"))
+        XCTAssertTrue(unguidedDirective.contains(proposal.id.uuidString))
+        XCTAssertTrue(unguidedDirective.contains(proposal.baseContractFingerprint))
+        XCTAssertFalse(unguidedDirective.contains("\"guidance\""))
+
+        var barrierAttempts = 0
+        harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in
+            barrierAttempts += 1
+            return true
+        }
+        var submittedDirective: String?
+        harness.agentModeViewModel.test_setRevisionDraftingDirectiveSubmitter { _ in .submitted }
+        harness.agentModeViewModel.test_setRevisionDraftingDirectiveWillSubmit { directive, resolutionID in
+            XCTAssertEqual(barrierAttempts, 2)
+            XCTAssertNil(
+                harness.session.coordinatorFollowThroughState?.missionPlan?
+                    .revisionProposalDurabilityHold
+            )
+            XCTAssertEqual(
+                resolutionID,
+                harness.session.coordinatorFollowThroughState?.missionPlan?
+                    .latestAcceptedRevisionLineage?.resolution.id
+            )
+            submittedDirective = directive
+        }
+
+        let result = await harness.coordinatorModeViewModel.submitRevisionProposalAction(
+            coordinatorSessionID: harness.coordinatorID,
+            action: .revisePlan,
+            proposalID: proposal.id,
+            expectedContractFingerprint: proposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: checkpoint,
+            guidance: "  Keep the scope narrow.  "
+        )
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertNil(harness.coordinatorModeViewModel.revisionDraftingRetryResolutionID)
+        XCTAssertTrue(submittedDirective?.contains("\"guidance\":\"Keep the scope narrow.\"") == true)
+        XCTAssertTrue(submittedDirective?.contains(proposal.canonicalRequestIdentity) == true)
+        XCTAssertEqual(
+            harness.session.coordinatorFollowThroughState?.missionPlan?
+                .latestAcceptedRevisionLineage?.resolution.guidance,
+            "Keep the scope narrow."
+        )
+
+        let failedHarness = await makeRevisionProposalPersistenceHarness()
+        failedHarness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }
+        _ = try await failedHarness.coordinatorModeViewModel.appendRevisionProposal(
+            coordinatorSessionID: failedHarness.coordinatorID,
+            request: failedHarness.request
+        )
+        let failedProposal = try XCTUnwrap(
+            failedHarness.session.coordinatorFollowThroughState?.missionPlan?.pendingRevisionProposal
+        )
+        var failedBarrierAttempts = 0
+        failedHarness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in
+            failedBarrierAttempts += 1
+            return failedBarrierAttempts != 2
+        }
+        var failedDirectiveSubmissions = 0
+        failedHarness.agentModeViewModel.test_setRevisionDraftingDirectiveWillSubmit { _, _ in
+            failedDirectiveSubmissions += 1
+        }
+
+        guard case .rejected = await failedHarness.coordinatorModeViewModel.submitRevisionProposalAction(
+            coordinatorSessionID: failedHarness.coordinatorID,
+            action: .revisePlan,
+            proposalID: failedProposal.id,
+            expectedContractFingerprint: failedProposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                coordinatorSessionID: failedHarness.coordinatorID,
+                proposal: failedProposal
+            ),
+            guidance: "Do not send early."
+        ) else {
+            return XCTFail("Expected durability failure.")
+        }
+        XCTAssertEqual(failedDirectiveSubmissions, 0)
+        XCTAssertNotNil(failedHarness.coordinatorModeViewModel.revisionDraftingRetryResolutionID)
+        let failedPresentation = try XCTUnwrap(CoordinatorPlanRevisionPresentation.project(
+            coordinatorSessionID: failedHarness.coordinatorID,
+            plan: XCTUnwrap(failedHarness.session.coordinatorFollowThroughState?.missionPlan)
+        ))
+        XCTAssertTrue(
+            failedHarness.coordinatorModeViewModel.shouldOfferRevisionDraftingRetry(
+                for: failedPresentation
+            )
+        )
+        XCTAssertNotNil(
+            failedHarness.session.coordinatorFollowThroughState?.missionPlan?
+                .revisionProposalDurabilityHold
+        )
+    }
+
     func testRevisionProposalActionResolvesLiveIdentityAndRejectsStaleCheckpoint() async throws {
         let harness = await makeRevisionProposalPersistenceHarness()
         harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }
@@ -4188,8 +4309,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             phase: .pendingDecision,
             expectedContractFingerprint: presentation.expectedContractFingerprint,
             expectedCheckpointInstanceID: checkpoint + "-stale",
-            classifiedDeltaLines: [],
-            reviseGuidanceDraft: nil
+            materialDelta: nil,
+            revisionGuidance: nil
         )
         XCTAssertNotNil(harness.coordinatorModeViewModel.revisionProposalActionNotice(for: stalePresentation))
         XCTAssertEqual(
@@ -4563,6 +4684,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
                             checkpointInstanceID: nil,
                             resultingPlanID: plan.id,
                             resultingContractFingerprint: proposal.baseContractFingerprint,
+                            guidance: nil,
                             resolvedAt: Date()
                         )
                     )
@@ -5370,6 +5492,34 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(captured?.2, proposalID)
         XCTAssertEqual(captured?.3, "contract-fingerprint")
         XCTAssertEqual(captured?.4, "checkpoint-instance")
+    }
+
+    func testRenderedRevisionProposalReviseActionCarriesOptionalGuidance() {
+        let coordinatorID = uuid(1)
+        let proposalID = uuid(2)
+        var captured: (
+            UUID,
+            CoordinatorMissionRevisionProposalResolutionAction,
+            UUID,
+            String,
+            String,
+            String?
+        )?
+        let action = CoordinatorModeView.renderedRevisionProposalReviseAction(
+            coordinatorSessionID: coordinatorID,
+            proposalID: proposalID,
+            expectedContractFingerprint: "contract-fingerprint",
+            expectedCheckpointInstanceID: "checkpoint-instance"
+        ) {
+            captured = ($0, $1, $2, $3, $4, $5)
+        }
+
+        action("Keep the scope narrow.")
+
+        XCTAssertEqual(captured?.0, coordinatorID)
+        XCTAssertEqual(captured?.1, .revisePlan)
+        XCTAssertEqual(captured?.2, proposalID)
+        XCTAssertEqual(captured?.5, "Keep the scope narrow.")
     }
 
     func testRenderedPlanAndStepStopActionsRetainMissionAcrossSelectionChangeAndRemainIdempotent() async throws {

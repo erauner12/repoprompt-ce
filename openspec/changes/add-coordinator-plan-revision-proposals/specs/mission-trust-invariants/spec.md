@@ -96,3 +96,11 @@ The system SHALL NOT offer one-click exact revised-plan approval until a later a
 - **WHEN** a summary proposal awaits user action
 - **THEN** its positive revision action SHALL be named **Revise plan**
 - **AND** it SHALL NOT be named **Approve revised plan** or imply that an exact replacement is available.
+
+### Requirement: Revised-plan UX preserves the trusted approval door
+The promise check and material delta are review evidence only. They SHALL NOT approve or ratify a proposal. The concrete revised Mission Plan SHALL continue through the existing exact plan-approval transaction and checkpoint identity.
+
+#### Scenario: User approves the concrete revised plan
+- **WHEN** the revised-plan promise check and delta are visible
+- **THEN** neither artifact SHALL grant execution authority
+- **AND** only the existing exact plan-approval transaction SHALL approve the concrete plan.

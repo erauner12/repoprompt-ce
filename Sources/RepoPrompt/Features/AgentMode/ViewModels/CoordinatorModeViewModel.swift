@@ -55,6 +55,19 @@ private enum CoordinatorMissionPolicyProviderText {
     }
 }
 
+private struct CoordinatorRevisionDraftingDirectivePayload: Encodable {
+    let version: Int
+    let proposalID: UUID
+    let resolutionID: UUID
+    let baseContractFingerprint: String
+    let canonicalRequestIdentity: String
+    let requestedChange: CoordinatorMissionCanonicalRequestedChange
+    let affectedFields: [String]
+    let guidance: String?
+    let advisorySummary: String
+    let advisoryRationale: String?
+}
+
 @MainActor
 final class CoordinatorModeViewModel: ObservableObject {
     enum DirectiveSubmissionResult: Equatable {
@@ -293,6 +306,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     @Published private(set) var currentRailActivityText: String?
     @Published private(set) var composerNotice: String?
     @Published private(set) var revisionProposalActionNotice: RevisionProposalActionNotice?
+    @Published private(set) var revisionDraftingRetryResolutionID: UUID?
     @Published private(set) var isFreshCoordinatorRunPending = false
     @Published private(set) var executionPace: CoordinatorExecutionPace
     @Published private(set) var missionPaceSelection: CoordinatorMissionPolicyPace
@@ -612,14 +626,16 @@ final class CoordinatorModeViewModel: ObservableObject {
         action: CoordinatorMissionRevisionProposalResolutionAction,
         proposalID: UUID,
         expectedContractFingerprint: String,
-        expectedCheckpointInstanceID: String
+        expectedCheckpointInstanceID: String,
+        guidance: String? = nil
     ) async -> DirectiveSubmissionResult {
         let request = CoordinatorMissionRevisionProposalTrustedResolutionRequest(
             coordinatorSessionID: coordinatorSessionID,
             action: action,
             proposalID: proposalID,
             expectedContractFingerprint: expectedContractFingerprint,
-            expectedCheckpointInstanceID: expectedCheckpointInstanceID
+            expectedCheckpointInstanceID: expectedCheckpointInstanceID,
+            guidance: guidance
         )
 
         do {
@@ -627,15 +643,30 @@ final class CoordinatorModeViewModel: ObservableObject {
             refresh()
             composerNotice = nil
             revisionProposalActionNotice = nil
+            revisionDraftingRetryResolutionID = nil
             if action == .keepCurrentPlan {
                 Task { @MainActor [followThroughEvaluationHandler] in
                     await followThroughEvaluationHandler(coordinatorSessionID)
                 }
+                return .accepted
             }
+
             return .accepted
         } catch {
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             refresh()
+            if action == .revisePlan,
+               let plan = snapshot.coordinatorRail.availableCoordinators
+               .first(where: { $0.sessionID == coordinatorSessionID })?
+               .missionPlan,
+               plan.approvalState == .revisionRequested,
+               let lineage = plan.latestAcceptedRevisionLineage,
+               lineage.proposal.id == proposalID
+            {
+                revisionDraftingRetryResolutionID = lineage.resolution.id
+            } else {
+                revisionDraftingRetryResolutionID = nil
+            }
             if Self.isRevisionProposalRenderRace(error) {
                 revisionProposalActionNotice = RevisionProposalActionNotice(
                     coordinatorSessionID: coordinatorSessionID,
@@ -650,6 +681,88 @@ final class CoordinatorModeViewModel: ObservableObject {
             }
             return .rejected(message: message)
         }
+    }
+
+    @discardableResult
+    func retryAcceptedRevisionDraftingDirective(
+        coordinatorSessionID: UUID,
+        proposalID: UUID
+    ) async -> DirectiveSubmissionResult {
+        refresh()
+        guard let plan = snapshot.coordinatorRail.availableCoordinators
+            .first(where: { $0.sessionID == coordinatorSessionID })?
+            .missionPlan,
+            let resolution = plan.acceptedRevisionDraftingResolution,
+            let lineage = plan.acceptedRevisionLineage(resolutionID: resolution.id),
+            lineage.proposal.id == proposalID
+        else {
+            let message = CoordinatorMissionRevisionProposalPause.heldReason
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        let result = await submitAcceptedRevisionDraftingDirective(
+            Self.revisionDraftingDirective(
+                proposal: lineage.proposal,
+                resolution: lineage.resolution
+            ),
+            coordinatorSessionID: coordinatorSessionID,
+            expectedResolutionID: resolution.id
+        )
+        if result == .accepted {
+            revisionDraftingRetryResolutionID = nil
+        }
+        return result
+    }
+
+    static func revisionDraftingDirective(
+        proposal: CoordinatorMissionRevisionProposal,
+        resolution: CoordinatorMissionRevisionProposalResolution
+    ) -> String {
+        let payload = CoordinatorRevisionDraftingDirectivePayload(
+            version: 1,
+            proposalID: proposal.id,
+            resolutionID: resolution.id,
+            baseContractFingerprint: proposal.baseContractFingerprint,
+            canonicalRequestIdentity: proposal.canonicalRequestIdentity,
+            requestedChange: proposal.requestedChange,
+            affectedFields: proposal.affectedFields.sorted(),
+            guidance: resolution.guidance,
+            advisorySummary: proposal.summary,
+            advisoryRationale: proposal.rationale
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(payload) else {
+            preconditionFailure("Revision drafting payload encoding must not fail.")
+        }
+        let json = String(decoding: data, as: UTF8.self)
+        return [
+            "<coordinator_revision_drafting>",
+            "Draft a concrete revised Mission Plan from this accepted canonical request:",
+            json,
+            "Return the concrete plan for approval. Do not resume Mission execution ",
+            "or treat this directive as approval.",
+            "</coordinator_revision_drafting>"
+        ].joined(separator: "\n")
+    }
+
+    func shouldOfferRevisionDraftingRetry(
+        for presentation: CoordinatorPlanRevisionPresentation
+    ) -> Bool {
+        guard presentation.phase == .drafting,
+              let plan = snapshot.coordinatorRail.availableCoordinators
+              .first(where: { $0.sessionID == presentation.coordinatorSessionID })?
+              .missionPlan,
+              let lineage = plan.latestAcceptedRevisionLineage,
+              lineage.proposal.id == presentation.proposalID
+        else { return false }
+        let submittedMarkerIsPresent = railTranscriptEntries.contains { entry in
+            entry.role == .user
+                && entry.text.contains("<coordinator_revision_drafting>")
+                && entry.text.contains(lineage.resolution.id.uuidString)
+        }
+        return revisionDraftingRetryResolutionID == lineage.resolution.id
+            || !submittedMarkerIsPresent
     }
 
     func refreshRevisionProposalCard() {
@@ -3988,6 +4101,46 @@ extension AgentModeViewModel {
             coordinatorSessionID: request.coordinatorSessionID,
             state: state
         )
+
+        if request.action == .revisePlan {
+            guard let lineage = state.missionPlan?.acceptedRevisionLineage(
+                resolutionID: result.resolutionID
+            )
+            else {
+                throw MCPError.invalidParams(
+                    "Durable revision proposal lineage is unavailable for drafting."
+                )
+            }
+            let directive = CoordinatorModeViewModel.revisionDraftingDirective(
+                proposal: lineage.proposal,
+                resolution: lineage.resolution
+            )
+            let submission = CoordinatorDirectiveSubmission(
+                visibleText: directive,
+                providerText: directive,
+                missionTemplate: nil,
+                missionPolicySnapshot: nil,
+                coordinatorSessionID: request.coordinatorSessionID,
+                coordinatorModelID: nil,
+                forceNewRuntime: false,
+                acceptedRevisionDraftingResolutionID: lineage.resolution.id
+            )
+            #if DEBUG
+                test_revisionDraftingDirectiveWillSubmit?(directive, lineage.resolution.id)
+                let submissionResult = if let test_revisionDraftingDirectiveSubmitter {
+                    await test_revisionDraftingDirectiveSubmitter(submission)
+                } else {
+                    await submitCoordinatorDirectiveToAgentMode(submission)
+                }
+            #else
+                let submissionResult = await submitCoordinatorDirectiveToAgentMode(submission)
+            #endif
+            guard case .submitted = submissionResult else {
+                throw MCPError.invalidParams(
+                    "The revision decision is durable, but the trusted drafting directive could not be submitted."
+                )
+            }
+        }
         return result
     }
 
@@ -4310,6 +4463,7 @@ extension AgentModeViewModel {
     private func isCoordinatorFollowThroughResumeDirective(_ text: String) -> Bool {
         text.contains("<coordinator_follow_through_resume")
             || text.contains("<coordinator_post_approval_continuation")
+            || text.contains("<coordinator_revision_drafting>")
     }
 
     @MainActor

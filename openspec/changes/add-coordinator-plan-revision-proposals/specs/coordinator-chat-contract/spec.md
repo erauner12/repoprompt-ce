@@ -151,3 +151,12 @@ Mission status, compact status, wait fingerprints, doctor feature discovery, pub
 #### Scenario: Caller waits for an update
 - **WHEN** a proposal is appended or resolved while `wait_for_update` is observing the Mission
 - **THEN** the proposal lifecycle change SHALL wake the waiter even if no generic Mission Plan merge revision changes.
+
+### Requirement: Revise plan accepts optional durable guidance
+External `submit` with `checkpoint_action: "revise_plan"` MAY include optional `guidance`. Non-empty guidance SHALL be normalized, persisted with the accepted resolution for audit, and included in the trusted revision-drafting directive only after the resolution is durable. Empty guidance SHALL preserve existing directive behavior.
+
+#### Scenario: External user revises with guidance
+- **WHEN** an external caller submits valid proposal/checkpoint/contract identity plus `guidance`
+- **THEN** identity and CAS authority SHALL remain unchanged
+- **AND** the guidance SHALL be delivered only after durable resolution
+- **AND** runtime callers and non-Revise actions SHALL reject guidance.

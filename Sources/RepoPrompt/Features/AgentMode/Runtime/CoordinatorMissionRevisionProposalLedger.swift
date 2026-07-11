@@ -135,13 +135,15 @@ struct CoordinatorMissionRevisionProposalTrustedResolutionRequest: Equatable {
     let proposalID: UUID
     let expectedContractFingerprint: String
     let expectedCheckpointInstanceID: String
+    let guidance: String?
 
     init(
         coordinatorSessionID: UUID,
         action: CoordinatorMissionRevisionProposalResolutionAction,
         proposalID: UUID,
         expectedContractFingerprint: String,
-        expectedCheckpointInstanceID: String
+        expectedCheckpointInstanceID: String,
+        guidance: String? = nil
     ) {
         self.coordinatorSessionID = coordinatorSessionID
         self.action = action
@@ -150,6 +152,7 @@ struct CoordinatorMissionRevisionProposalTrustedResolutionRequest: Equatable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         self.expectedCheckpointInstanceID = expectedCheckpointInstanceID
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.guidance = guidance?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }
 }
 
@@ -196,6 +199,7 @@ struct CoordinatorMissionRevisionProposalResolution: Codable, Equatable, Identif
     let checkpointInstanceID: String?
     let resultingPlanID: UUID
     let resultingContractFingerprint: String
+    let guidance: String?
     let resolvedAt: Date
 }
 
@@ -205,13 +209,15 @@ struct CoordinatorMissionRevisionProposalResolutionRequest: Equatable {
     let userDecisionID: UUID?
     let checkpointID: String?
     let checkpointInstanceID: String?
+    let guidance: String?
 
     init(
         proposalID: UUID,
         outcome: CoordinatorMissionRevisionProposalResolutionOutcome,
         userDecisionID: UUID? = nil,
         checkpointID: String? = nil,
-        checkpointInstanceID: String? = nil
+        checkpointInstanceID: String? = nil,
+        guidance: String? = nil
     ) {
         self.proposalID = proposalID
         self.outcome = outcome
@@ -219,6 +225,7 @@ struct CoordinatorMissionRevisionProposalResolutionRequest: Equatable {
         self.checkpointID = checkpointID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.checkpointInstanceID = checkpointInstanceID?
             .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.guidance = guidance?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }
 }
 
@@ -309,7 +316,8 @@ enum CoordinatorMissionRevisionProposalIdentity {
         outcome: CoordinatorMissionRevisionProposalResolutionOutcome,
         userDecisionID: UUID?,
         checkpointID: String?,
-        checkpointInstanceID: String?
+        checkpointInstanceID: String?,
+        guidance: String?
     ) -> UUID {
         CoordinatorMissionStableIdentity.uuid(
             namespace: "coordinator-mission-revision-proposal-resolution",
@@ -318,7 +326,8 @@ enum CoordinatorMissionRevisionProposalIdentity {
                 outcome.rawValue,
                 userDecisionID?.uuidString ?? "",
                 checkpointID ?? "",
-                checkpointInstanceID ?? ""
+                checkpointInstanceID ?? "",
+                guidance ?? ""
             ]
         )
     }
@@ -360,7 +369,37 @@ enum CoordinatorMissionRevisionProposalPause {
     static let heldReason = "Waiting until the plan decision is resolved."
 }
 
+struct CoordinatorMissionAcceptedRevisionLineage: Equatable {
+    let resolution: CoordinatorMissionRevisionProposalResolution
+    let proposal: CoordinatorMissionRevisionProposal
+}
+
 extension CoordinatorMissionPlan {
+    func acceptedRevisionLineage(
+        resolutionID: UUID
+    ) -> CoordinatorMissionAcceptedRevisionLineage? {
+        guard let resolution = revisionProposalResolutions.first(where: {
+            $0.id == resolutionID && $0.outcome == .acceptedForConcreteRevision
+        }),
+            let proposal = revisionProposals.first(where: { $0.id == resolution.proposalID })
+        else { return nil }
+        return CoordinatorMissionAcceptedRevisionLineage(
+            resolution: resolution,
+            proposal: proposal
+        )
+    }
+
+    var latestAcceptedRevisionLineage: CoordinatorMissionAcceptedRevisionLineage? {
+        for resolution in revisionProposalResolutions.reversed()
+            where resolution.outcome == .acceptedForConcreteRevision
+        {
+            if let lineage = acceptedRevisionLineage(resolutionID: resolution.id) {
+                return lineage
+            }
+        }
+        return nil
+    }
+
     var hasRevisionProposalDurabilityHold: Bool {
         revisionProposalDurabilityHold != nil
     }
@@ -415,7 +454,8 @@ extension CoordinatorMissionPlan {
                 outcome: request.outcome,
                 userDecisionID: request.userDecisionID,
                 checkpointID: request.checkpointID,
-                checkpointInstanceID: request.checkpointInstanceID
+                checkpointInstanceID: request.checkpointInstanceID,
+                guidance: request.guidance
             ),
             proposalID: request.proposalID,
             outcome: request.outcome,
@@ -424,6 +464,7 @@ extension CoordinatorMissionPlan {
             checkpointInstanceID: request.checkpointInstanceID,
             resultingPlanID: id,
             resultingContractFingerprint: resultingContractFingerprint,
+            guidance: request.guidance,
             resolvedAt: resolvedAt
         )
     }

@@ -634,10 +634,21 @@ struct CoordinatorPlanRevisionPresentation: Equatable {
     let phase: Phase
     let expectedContractFingerprint: String?
     let expectedCheckpointInstanceID: String?
+    let materialDelta: CoordinatorMissionMaterialContractDelta?
+    let revisionGuidance: String?
 
-    // Reserved for the next UX chunks; the container can add these without replacement.
-    let classifiedDeltaLines: [String]
-    let reviseGuidanceDraft: String?
+    var primaryHeading: String {
+        switch phase {
+        case .pendingDecision:
+            "Review the proposed Mission plan change"
+        case .drafting:
+            "Revision in progress"
+        case .revisedPlanReady:
+            "Approve revised Mission Plan"
+        case .approvedCollapsed:
+            "Plan revised to address: \(proposalSummary)"
+        }
+    }
 
     static func project(
         coordinatorSessionID: UUID,
@@ -654,34 +665,41 @@ struct CoordinatorPlanRevisionPresentation: Equatable {
                     coordinatorSessionID: coordinatorSessionID,
                     proposal: proposal
                 ),
-                classifiedDeltaLines: [],
-                reviseGuidanceDraft: nil
+                materialDelta: nil,
+                revisionGuidance: nil
             )
         }
-        guard let resolution = plan.revisionProposalResolutions.last,
-              resolution.outcome == .acceptedForConcreteRevision,
-              let proposal = plan.revisionProposals.first(where: { $0.id == resolution.proposalID })
+        guard !plan.status.isTerminal,
+              let lineage = plan.latestAcceptedRevisionLineage
         else { return nil }
 
         let phase: Phase
-        if plan.acceptedRevisionDraftingResolution != nil {
+        switch plan.approvalState {
+        case .revisionRequested:
             phase = .drafting
-        } else if plan.approvalState == .awaitingApproval {
+        case .awaitingApproval:
             phase = .revisedPlanReady
-        } else if plan.approvalState == .approved {
+        case .approved:
             phase = .approvedCollapsed
-        } else {
+        case .notRequired:
             return nil
         }
+        let delta = phase == .drafting
+            ? nil
+            : materialContractDelta(
+                from: lineage.proposal.baseContractSnapshot,
+                to: plan.materialContractSnapshot,
+                proposalAffectedFields: lineage.proposal.affectedFields
+            )
         return Self(
             coordinatorSessionID: coordinatorSessionID,
-            proposalID: proposal.id,
-            proposalSummary: proposal.summary,
+            proposalID: lineage.proposal.id,
+            proposalSummary: lineage.proposal.summary,
             phase: phase,
             expectedContractFingerprint: nil,
             expectedCheckpointInstanceID: nil,
-            classifiedDeltaLines: [],
-            reviseGuidanceDraft: nil
+            materialDelta: delta,
+            revisionGuidance: lineage.resolution.guidance
         )
     }
 }

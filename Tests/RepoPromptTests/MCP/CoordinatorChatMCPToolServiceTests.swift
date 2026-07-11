@@ -279,7 +279,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 appendRevisionProposal: { _, _ in
                     throw MCPError.invalidParams("Revision proposals are unavailable in this test.")
                 },
-                resolveRevisionProposal: { _, _, _, _, _ in .accepted },
+                resolveRevisionProposal: { _, _, _, _, _, _ in .accepted },
                 missionEvents: { _, sinceSeq, _ in
                     CoordinatorMissionEventJournal.Batch(
                         events: [],
@@ -4736,16 +4736,18 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         var resolvedProposalID: UUID?
         var resolvedContract: String?
         var resolvedCheckpoint: String?
+        var resolvedGuidance: String?
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
             missionPlans: { [coordinatorID: plan] },
-            resolveRevisionProposal: { sessionID, action, proposalID, contract, checkpoint in
+            resolveRevisionProposal: { sessionID, action, proposalID, contract, checkpoint, guidance in
                 XCTAssertEqual(sessionID, coordinatorID)
                 resolvedAction = action
                 resolvedProposalID = proposalID
                 resolvedContract = contract
                 resolvedCheckpoint = checkpoint
+                resolvedGuidance = guidance
                 return .accepted
             }
         )
@@ -4797,7 +4799,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             "checkpoint_action": .string("revise_plan"),
             "proposal_id": .string(proposal.id.uuidString),
             "expected_contract_fingerprint": .string(proposal.baseContractFingerprint),
-            "expected_checkpoint_instance_id": .string(checkpointID)
+            "expected_checkpoint_instance_id": .string(checkpointID),
+            "guidance": .string("Keep the scope narrow.")
         ])
 
         XCTAssertEqual(response.objectValue?["accepted"]?.boolValue, true)
@@ -4805,6 +4808,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(resolvedProposalID, proposal.id)
         XCTAssertEqual(resolvedContract, proposal.baseContractFingerprint)
         XCTAssertEqual(resolvedCheckpoint, checkpointID)
+        XCTAssertEqual(resolvedGuidance, "Keep the scope narrow.")
 
         do {
             _ = try await service.execute(args: [
@@ -4818,7 +4822,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             ])
             XCTFail("Expected proposal action payload rejection.")
         } catch {
-            XCTAssertTrue(String(describing: error).contains("identity fields only"))
+            XCTAssertTrue(String(describing: error).contains("does not deliver message"))
         }
     }
 
@@ -4959,7 +4963,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let service = makeService(
             coordinatorIDs: [coordinatorID],
             selectedID: coordinatorID,
-            resolveRevisionProposal: { _, _, _, _, _ in
+            resolveRevisionProposal: { _, _, _, _, _, _ in
                 didResolve = true
                 return .accepted
             }
@@ -6978,7 +6982,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         appendRevisionProposal: @escaping (UUID, CoordinatorMissionRevisionProposalRequest) async throws -> CoordinatorMissionRevisionProposalAppendResult = { _, _ in
             throw MCPError.invalidParams("Revision proposals are unavailable in this test.")
         },
-        resolveRevisionProposal: @escaping (UUID, CoordinatorMissionRevisionProposalResolutionAction, UUID, String, String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _, _, _ in .accepted },
+        resolveRevisionProposal: @escaping (UUID, CoordinatorMissionRevisionProposalResolutionAction, UUID, String, String, String?) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _, _, _, _ in .accepted },
         durableApprovalAuthorityToken: @escaping (UUID) -> String? = { _ in nil },
         missionEvents: @escaping (UUID, Int, Int) -> CoordinatorMissionEventJournal.Batch = { _, sinceSeq, _ in
             CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)
@@ -7049,7 +7053,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         appendRevisionProposal: @escaping (UUID, CoordinatorMissionRevisionProposalRequest) async throws -> CoordinatorMissionRevisionProposalAppendResult = { _, _ in
             throw MCPError.invalidParams("Revision proposals are unavailable in this test.")
         },
-        resolveRevisionProposal: @escaping (UUID, CoordinatorMissionRevisionProposalResolutionAction, UUID, String, String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _, _, _ in .accepted },
+        resolveRevisionProposal: @escaping (UUID, CoordinatorMissionRevisionProposalResolutionAction, UUID, String, String, String?) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _, _, _, _ in .accepted },
         durableApprovalAuthorityToken: @escaping (UUID) -> String? = { _ in nil },
         missionEvents: @escaping (UUID, Int, Int) -> CoordinatorMissionEventJournal.Batch = { _, sinceSeq, _ in
             CoordinatorMissionEventJournal.Batch(events: [], nextSeq: sinceSeq, oldestSeq: nil, latestSeq: nil, truncated: false)

@@ -1761,6 +1761,38 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             )?.phase,
             .drafting
         )
+        var readyPlan = draftingPlan
+        readyPlan.approvalState = .awaitingApproval
+        readyPlan.objective = "Concrete revised objective"
+        readyPlan.nodes = [
+            CoordinatorMissionPlanNode(
+                title: "Concrete revised step",
+                workstreamID: uuid(112),
+                executionPolicy: .coordinatorOnly
+            )
+        ]
+        let readySnapshot = projector.project(input(
+            live: [
+                live(
+                    id: coordinatorID,
+                    tab: uuid(110),
+                    title: "Coordinator Runtime Demo",
+                    updatedAt: date(44),
+                    state: .idle,
+                    coordinatorRuntime: true,
+                    missionPlan: readyPlan
+                )
+            ],
+            selectedCoordinatorID: coordinatorID,
+            demoCoordinatorIDs: [coordinatorID]
+        ))
+        XCTAssertEqual(readySnapshot.decisionQueue.map(\.source), [.planApproval])
+        let readyPresentation = try XCTUnwrap(CoordinatorPlanRevisionPresentation.project(
+            coordinatorSessionID: coordinatorID,
+            plan: readyPlan
+        ))
+        XCTAssertEqual(readyPresentation.phase, .revisedPlanReady)
+        XCTAssertFalse(readyPresentation.materialDelta?.materialChanges.isEmpty == true)
     }
 
     private func input(

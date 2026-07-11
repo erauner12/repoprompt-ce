@@ -19,7 +19,7 @@ struct CoordinatorChatMCPToolService {
         var durableApprovalAuthorityToken: (_ coordinatorSessionID: UUID) -> String?
         var updateMissionPlan: (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
         var appendRevisionProposal: (_ coordinatorSessionID: UUID, _ request: CoordinatorMissionRevisionProposalRequest) async throws -> CoordinatorMissionRevisionProposalAppendResult
-        var resolveRevisionProposal: (_ coordinatorSessionID: UUID, _ action: CoordinatorMissionRevisionProposalResolutionAction, _ proposalID: UUID, _ expectedContractFingerprint: String, _ expectedCheckpointInstanceID: String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
+        var resolveRevisionProposal: (_ coordinatorSessionID: UUID, _ action: CoordinatorMissionRevisionProposalResolutionAction, _ proposalID: UUID, _ expectedContractFingerprint: String, _ expectedCheckpointInstanceID: String, _ guidance: String?) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var missionEvents: (_ coordinatorSessionID: UUID, _ sinceSeq: Int, _ limit: Int) -> CoordinatorMissionEventJournal.Batch
         var setMissionPace: (_ coordinatorSessionID: UUID, _ pace: CoordinatorMissionPolicyPace) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var setMissionAutonomy: (_ coordinatorSessionID: UUID, _ autonomyClassKey: String, _ mode: CoordinatorMissionAutonomyMode) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
@@ -111,7 +111,8 @@ struct CoordinatorChatMCPToolService {
                         action: $1,
                         proposalID: $2,
                         expectedContractFingerprint: $3,
-                        expectedCheckpointInstanceID: $4
+                        expectedCheckpointInstanceID: $4,
+                        guidance: $5
                     )
                 },
                 missionEvents: { coordinatorViewModel.missionEvents(coordinatorSessionID: $0, sinceSeq: $1, limit: $2) },
@@ -365,6 +366,7 @@ struct CoordinatorChatMCPToolService {
 
         case "submit":
             let message = normalizedString(args["message"] ?? args["response"])
+            let revisionGuidance = normalizedString(args["guidance"])
             let proposalAction = try parseRevisionProposalAction(args)
             let continuationAction = proposalAction == nil
                 ? try parseCheckpointContinuationAction(args)
@@ -384,8 +386,12 @@ struct CoordinatorChatMCPToolService {
                || args["skip"] != nil
             {
                 throw MCPError.invalidParams(
-                    "\(proposalAction.rawValue) accepts identity fields only; message, answers, and skip are not delivered."
+                    "\(proposalAction.rawValue) does not deliver message, answers, or skip. "
+                        + "Use optional guidance only with revise_plan."
                 )
+            }
+            if proposalAction != .revisePlan, revisionGuidance != nil {
+                throw MCPError.invalidParams("guidance is only valid with checkpoint_action revise_plan.")
             }
             if newParent, hasCheckpointAction {
                 throw MCPError.invalidParams("checkpoint_action is only valid for existing Coordinator Missions.")
@@ -490,7 +496,8 @@ struct CoordinatorChatMCPToolService {
                         proposalAction,
                         proposalID,
                         expectedContractFingerprint,
-                        expectedCheckpointInstanceID
+                        expectedCheckpointInstanceID,
+                        revisionGuidance
                     )
                     routedToChildInteraction = false
                 } else if let continuationAction {

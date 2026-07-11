@@ -302,6 +302,169 @@ struct CoordinatorMissionMaterialContractSnapshot: Codable, Equatable {
     }
 }
 
+/// Authoritative structural comparison of two canonical material contracts.
+/// Canonical before/after payloads are retained for future exact-ratification.
+struct CoordinatorMissionMaterialContractDelta: Equatable {
+    enum Change: String, Equatable, CaseIterable {
+        case added
+        case removed
+        case changed
+        case unchanged
+    }
+
+    enum PromiseClassification: String, Equatable {
+        case withinStatedAffectedAreas
+        case outsideStatedAffectedAreas
+        case unchanged
+    }
+
+    struct Field: Equatable {
+        let path: String
+        let affectedArea: String
+        let change: Change
+        let promiseClassification: PromiseClassification
+        let beforeCanonicalValue: Data?
+        let afterCanonicalValue: Data?
+    }
+
+    let fields: [Field]
+
+    var materialChanges: [Field] {
+        fields.filter { $0.change != .unchanged }
+    }
+
+    var unexpectedChanges: [Field] {
+        materialChanges.filter { $0.promiseClassification == .outsideStatedAffectedAreas }
+    }
+}
+
+/// Produces a deterministic structural delta over canonical snapshots.
+func materialContractDelta(
+    from before: CoordinatorMissionMaterialContractSnapshot,
+    to after: CoordinatorMissionMaterialContractSnapshot,
+    proposalAffectedFields: [String]
+) -> CoordinatorMissionMaterialContractDelta {
+    typealias Delta = CoordinatorMissionMaterialContractDelta
+    struct Candidate {
+        let path: String
+        let area: String
+        let before: Data?
+        let after: Data?
+    }
+
+    let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return encoder
+    }()
+    func encoded(_ value: (some Encodable)?) -> Data? {
+        guard let value else { return nil }
+        return try? encoder.encode(value)
+    }
+    func scalar<T: Encodable>(_ path: String, _ area: String, _ lhs: T?, _ rhs: T?) -> Candidate {
+        Candidate(path: path, area: area, before: encoded(lhs), after: encoded(rhs))
+    }
+    func normalizedArea(_ value: String) -> String {
+        value.precomposedStringWithCanonicalMapping
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: " ", with: "_")
+    }
+
+    var candidates: [Candidate] = [
+        scalar("mission_key", "mission_key", before.missionKey, after.missionKey),
+        scalar("objective", "objective", before.objective, after.objective),
+        scalar("predecessor.id", "predecessor", before.predecessorMissionID, after.predecessorMissionID),
+        scalar("predecessor.title", "predecessor", before.predecessorTitle, after.predecessorTitle),
+        scalar("predecessor.summary", "predecessor", before.predecessorSummary, after.predecessorSummary),
+        scalar("shape", "shape", before.shape, after.shape),
+        scalar("policy", "policy", before.policy, after.policy),
+        scalar("autonomy", "autonomy", before.autonomy, after.autonomy)
+    ]
+
+    let beforeWorkstreams = Dictionary(uniqueKeysWithValues: before.workstreams.map { ($0.id, $0) })
+    let afterWorkstreams = Dictionary(uniqueKeysWithValues: after.workstreams.map { ($0.id, $0) })
+    for id in Set(beforeWorkstreams.keys).union(afterWorkstreams.keys).sorted(by: { $0.uuidString < $1.uuidString }) {
+        let lhs = beforeWorkstreams[id]
+        let rhs = afterWorkstreams[id]
+        let prefix = "workstreams.\(id.uuidString.lowercased())"
+        guard let lhs, let rhs else {
+            candidates.append(scalar(prefix, "workstreams", lhs, rhs))
+            continue
+        }
+        candidates.append(contentsOf: [
+            scalar("\(prefix).title", "workstreams", lhs.title, rhs.title),
+            scalar("\(prefix).purpose", "workstreams", lhs.purpose, rhs.purpose),
+            scalar("\(prefix).role", "workstreams", lhs.role, rhs.role),
+            scalar("\(prefix).default_policy", "workstreams", lhs.defaultPolicy, rhs.defaultPolicy),
+            scalar(
+                "\(prefix).planned_worktree_strategy",
+                "workstreams",
+                lhs.worktreeStrategy,
+                rhs.worktreeStrategy
+            )
+        ])
+    }
+
+    let beforeNodes = Dictionary(uniqueKeysWithValues: before.nodes.map { ($0.id, $0) })
+    let afterNodes = Dictionary(uniqueKeysWithValues: after.nodes.map { ($0.id, $0) })
+    for id in Set(beforeNodes.keys).union(afterNodes.keys).sorted(by: { $0.uuidString < $1.uuidString }) {
+        let lhs = beforeNodes[id]
+        let rhs = afterNodes[id]
+        let prefix = "nodes.\(id.uuidString.lowercased())"
+        guard let lhs, let rhs else {
+            candidates.append(scalar(prefix, "nodes", lhs, rhs))
+            continue
+        }
+        candidates.append(contentsOf: [
+            scalar("\(prefix).title", "nodes", lhs.title, rhs.title),
+            scalar("\(prefix).detail", "nodes", lhs.detail, rhs.detail),
+            scalar("\(prefix).workflow", "nodes", lhs.workflowHint, rhs.workflowHint),
+            scalar("\(prefix).done_criteria", "nodes", lhs.doneCriteria, rhs.doneCriteria),
+            scalar("\(prefix).workstream_id", "nodes", lhs.workstreamID, rhs.workstreamID),
+            scalar("\(prefix).depends_on", "nodes", lhs.dependsOn, rhs.dependsOn),
+            scalar("\(prefix).role", "nodes", lhs.role, rhs.role),
+            scalar("\(prefix).execution_policy", "nodes", lhs.executionPolicy, rhs.executionPolicy)
+        ])
+    }
+
+    let statedAreas = Set(proposalAffectedFields.map(normalizedArea).filter { !$0.isEmpty })
+    let fields = candidates
+        .filter { $0.before != nil || $0.after != nil }
+        .sorted { $0.path < $1.path }
+        .map { candidate -> Delta.Field in
+            let change: Delta.Change = if candidate.before == candidate.after {
+                .unchanged
+            } else if candidate.before == nil {
+                .added
+            } else if candidate.after == nil {
+                .removed
+            } else {
+                .changed
+            }
+            let topLevelArea = candidate.path.split(separator: ".").first.map(String.init) ?? candidate.area
+            let classification: Delta.PromiseClassification = if change == .unchanged {
+                .unchanged
+            } else if statedAreas.contains(normalizedArea(candidate.area))
+                || statedAreas.contains(normalizedArea(topLevelArea))
+            {
+                .withinStatedAffectedAreas
+            } else {
+                .outsideStatedAffectedAreas
+            }
+            return Delta.Field(
+                path: candidate.path,
+                affectedArea: candidate.area,
+                change: change,
+                promiseClassification: classification,
+                beforeCanonicalValue: candidate.before,
+                afterCanonicalValue: candidate.after
+            )
+        }
+    return Delta(fields: fields)
+}
+
 enum CoordinatorMissionMaterialContractComparator {
     static func matches(
         _ lhs: CoordinatorMissionMaterialContractSnapshot,

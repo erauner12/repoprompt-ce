@@ -234,6 +234,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             && resolution.userDecisionID == request.userDecisionID
             && resolution.checkpointID == request.checkpointID
             && resolution.checkpointInstanceID == request.checkpointInstanceID
+            && resolution.guidance == request.guidance
     }
 
     @discardableResult
@@ -257,6 +258,11 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
         guard request.expectedContractFingerprint == proposal.baseContractFingerprint else {
             throw CoordinatorMissionRevisionProposalLedgerError.staleBaseContract
         }
+        guard request.action == .revisePlan || request.guidance == nil else {
+            throw CoordinatorMissionRevisionProposalLedgerError.invalidRequest(
+                "guidance is only valid with revise_plan"
+            )
+        }
 
         let decisionID = CoordinatorMissionRevisionProposalCheckpoint.userDecisionID(
             proposalID: proposal.id,
@@ -267,7 +273,8 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             outcome: request.action.outcome,
             userDecisionID: decisionID,
             checkpointID: CoordinatorMissionRevisionProposalCheckpoint.checkpointID,
-            checkpointInstanceID: checkpointInstanceID
+            checkpointInstanceID: checkpointInstanceID,
+            guidance: request.guidance
         )
         if let existing = plan.revisionProposalResolution(for: proposal.id) {
             guard Self.resolution(existing, matches: resolutionRequest) else {

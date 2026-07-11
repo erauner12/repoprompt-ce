@@ -235,6 +235,85 @@ final class CoordinatorMissionMaterialContractTests: XCTestCase {
         XCTAssertNotNil(baseFingerprint.range(of: "^[0-9a-f]{64}$", options: .regularExpression))
     }
 
+    func testMaterialContractDeltaClassifiesStructuralChangesAndPromiseDriftDeterministically() {
+        let base = makePlan()
+        var revised = base
+        revised.objective = "Revised objective"
+        revised.workstreams[0].worktreeStrategy.mode = .askUser
+        revised.nodes[0].title = "Unexpected node title"
+        revised.nodes.removeLast()
+        revised.nodes.append(CoordinatorMissionPlanNode(
+            id: uuid(99),
+            title: "Added step",
+            workstreamID: revised.workstreams[0].id,
+            executionPolicy: .coordinatorOnly
+        ))
+
+        let delta = materialContractDelta(
+            from: base.materialContractSnapshot,
+            to: revised.materialContractSnapshot,
+            proposalAffectedFields: ["objective", "workstreams"]
+        )
+        XCTAssertEqual(delta.fields.map(\.path), delta.fields.map(\.path).sorted())
+        XCTAssertEqual(
+            delta.materialChanges.first(where: { $0.path == "objective" })?.promiseClassification,
+            .withinStatedAffectedAreas
+        )
+        XCTAssertEqual(
+            delta.materialChanges.first(where: { $0.path.hasSuffix(".planned_worktree_strategy") })?.change,
+            .changed
+        )
+        XCTAssertEqual(
+            delta.materialChanges.first(where: { $0.path.hasSuffix(".planned_worktree_strategy") })?.promiseClassification,
+            .withinStatedAffectedAreas
+        )
+        XCTAssertTrue(delta.materialChanges.contains {
+            $0.change == .removed && $0.path == "nodes.\(self.uuid(41).uuidString.lowercased())"
+        })
+        XCTAssertTrue(delta.materialChanges.contains {
+            $0.change == .added && $0.path == "nodes.\(self.uuid(99).uuidString.lowercased())"
+        })
+        XCTAssertTrue(delta.unexpectedChanges.contains { $0.path.hasSuffix(".title") })
+        XCTAssertTrue(delta.fields.contains {
+            $0.change == .unchanged && $0.promiseClassification == .unchanged
+        })
+        for field in delta.materialChanges {
+            XCTAssertNotEqual(field.beforeCanonicalValue, field.afterCanonicalValue)
+        }
+
+        let repeated = materialContractDelta(
+            from: base.materialContractSnapshot,
+            to: revised.materialContractSnapshot,
+            proposalAffectedFields: ["workstreams", "objective"]
+        )
+        XCTAssertEqual(delta, repeated)
+    }
+
+    func testMaterialContractDeltaExcludesRuntimeBindingsButNamesPlannedWorktreeStrategy() {
+        let base = makePlan()
+        var runtimeOnly = base
+        runtimeOnly.workstreams[0].worktreeStrategy.worktreeID = "runtime-binding"
+        runtimeOnly.workstreams[0].primarySessionID = uuid(200)
+        runtimeOnly.workstreams[0].relatedSessionIDs = [uuid(201)]
+        runtimeOnly.nodes[0].boundSessionID = uuid(202)
+
+        XCTAssertTrue(materialContractDelta(
+            from: base.materialContractSnapshot,
+            to: runtimeOnly.materialContractSnapshot,
+            proposalAffectedFields: ["workstreams"]
+        ).materialChanges.isEmpty)
+
+        var planned = base
+        planned.workstreams[0].worktreeStrategy.baseRef = "release"
+        let delta = materialContractDelta(
+            from: base.materialContractSnapshot,
+            to: planned.materialContractSnapshot,
+            proposalAffectedFields: ["workstreams"]
+        )
+        XCTAssertEqual(delta.materialChanges.count, 1)
+        XCTAssertTrue(delta.materialChanges[0].path.hasSuffix(".planned_worktree_strategy"))
+    }
+
     private func makePlan() -> CoordinatorMissionPlan {
         let workstreamA = uuid(1)
         let workstreamB = uuid(2)
