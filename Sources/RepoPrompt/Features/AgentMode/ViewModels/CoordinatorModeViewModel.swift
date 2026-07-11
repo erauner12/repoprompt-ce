@@ -510,6 +510,14 @@ final class CoordinatorModeViewModel: ObservableObject {
         return token
     }
 
+    #if DEBUG
+        func test_setPostApprovalContinuationDurableAuthority(
+            _ continuation: CoordinatorPostApprovalContinuationRecord
+        ) {
+            durableApprovalAuthorityTokensByCoordinatorID[continuation.coordinatorSessionID] = continuation.durableApprovalAuthorityToken
+        }
+    #endif
+
     func updateMissionPlan(
         coordinatorSessionID: UUID,
         update: CoordinatorMissionPlanUpdate
@@ -2896,7 +2904,8 @@ extension AgentModeViewModel {
         _ text: String,
         coordinatorSessionID: UUID?,
         forceNewRuntime: Bool = false,
-        beforeSubmit: (@MainActor () throws -> Void)? = nil
+        beforeSubmit: (@MainActor () throws -> Void)? = nil,
+        targetedBeforeSubmit: (@MainActor (_ tabID: UUID, _ session: TabSession) throws -> Void)? = nil
     ) async -> UserTurnSubmissionResult {
         await submitCoordinatorDirectiveToAgentMode(
             CoordinatorDirectiveSubmission(
@@ -2908,14 +2917,16 @@ extension AgentModeViewModel {
                 coordinatorModelID: nil,
                 forceNewRuntime: forceNewRuntime
             ),
-            beforeSubmit: beforeSubmit
+            beforeSubmit: beforeSubmit,
+            targetedBeforeSubmit: targetedBeforeSubmit
         )
     }
 
     @MainActor
     func submitCoordinatorDirectiveToAgentMode(
         _ submission: CoordinatorDirectiveSubmission,
-        beforeSubmit: (@MainActor () throws -> Void)? = nil
+        beforeSubmit: (@MainActor () throws -> Void)? = nil,
+        targetedBeforeSubmit: (@MainActor (_ tabID: UUID, _ session: TabSession) throws -> Void)? = nil
     ) async -> UserTurnSubmissionResult {
         let runtime: (tabID: UUID, sessionID: UUID)
         do {
@@ -2942,7 +2953,10 @@ extension AgentModeViewModel {
         let result = await submitUserTurnCreatingSessionIfNeeded(
             text: submission.providerText,
             target: target,
-            beforeSubmit: beforeSubmit
+            beforeSubmit: {
+                try targetedBeforeSubmit?(runtime.tabID, session)
+                try beforeSubmit?()
+            }
         ) {
             nil
         }
@@ -3010,6 +3024,14 @@ extension AgentModeViewModel {
         let tabID = match.key
         let session = match.value
         var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        if reconcileAcceptedCoordinatorPostApprovalContinuation(
+            coordinatorSessionID: coordinatorSessionID,
+            tabID: tabID,
+            session: session,
+            state: &state
+        ) {
+            return
+        }
         guard state.originalObjectiveSummary?.isEmpty == false else { return }
         guard state.missionPlan?.status.isTerminal != true else { return }
         guard let plan = state.missionPlan,
@@ -3032,9 +3054,17 @@ extension AgentModeViewModel {
             coordinatorModeViewModel.refreshIfVisible()
         }
 
-        if state.postApprovalContinuation?.status == .dispatching {
+        if let continuation = state.postApprovalContinuation,
+           continuation.status == .dispatching
+        {
             shouldPersistObservedPhases = false
-            return
+            if inFlightCoordinatorPostApprovalContinuationIDs.contains(continuation.id) {
+                return
+            }
+            guard state.markPostApprovalContinuationDeferred(
+                error: "Recovered an interrupted same-process continuation dispatch."
+            ) else { return }
+            persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
         }
 
         if let continuation = state.postApprovalContinuation,
@@ -3136,6 +3166,52 @@ extension AgentModeViewModel {
     }
 
     @MainActor
+    private func reconcileAcceptedCoordinatorPostApprovalContinuation(
+        coordinatorSessionID: UUID,
+        tabID: UUID,
+        session: TabSession,
+        state: inout CoordinatorFollowThroughState
+    ) -> Bool {
+        clearAcceptedCoordinatorPostApprovalContinuationReceiptsIfSafelyInvalidated(
+            coordinatorSessionID: coordinatorSessionID,
+            state: state
+        )
+        guard let continuation = state.postApprovalContinuation else { return false }
+        let identity = CoordinatorPostApprovalContinuationIdentity(continuation)
+        guard acceptedCoordinatorPostApprovalContinuationReceipts.contains(identity) else { return false }
+
+        if continuation.status.isDeliverable || continuation.status == .dispatching,
+           state.missionPlan?.id == continuation.planID,
+           state.reconcileAcceptedPostApprovalContinuationDelivery()
+        {
+            persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+            acceptedCoordinatorPostApprovalContinuationReceipts.remove(identity)
+            coordinatorModeViewModel.refreshIfVisible()
+        } else if continuation.status == .delivered {
+            acceptedCoordinatorPostApprovalContinuationReceipts.remove(identity)
+        }
+        return true
+    }
+
+    @MainActor
+    private func clearAcceptedCoordinatorPostApprovalContinuationReceiptsIfSafelyInvalidated(
+        coordinatorSessionID: UUID,
+        state: CoordinatorFollowThroughState
+    ) {
+        let planInvalidated = state.missionPlan?.status.isTerminal == true
+            || state.missionPlan?.approvalState == .revisionRequested
+            || state.missionPlan?.approvalState == .awaitingApproval
+        let continuationInvalidated = state.postApprovalContinuation?.status == .invalidated
+        guard planInvalidated || continuationInvalidated else { return }
+        let invalidatedReceipts = acceptedCoordinatorPostApprovalContinuationReceipts.filter {
+            $0.coordinatorSessionID == coordinatorSessionID
+        }
+        for receipt in invalidatedReceipts {
+            acceptedCoordinatorPostApprovalContinuationReceipts.remove(receipt)
+        }
+    }
+
+    @MainActor
     private func submitCoordinatorPostApprovalContinuation(
         _ continuation: CoordinatorPostApprovalContinuationRecord,
         tabID: UUID,
@@ -3145,24 +3221,58 @@ extension AgentModeViewModel {
         guard state.postApprovalContinuation?.id == continuation.id,
               state.markPostApprovalContinuationDispatching()
         else { return }
+        inFlightCoordinatorPostApprovalContinuationIDs.insert(continuation.id)
+        defer { inFlightCoordinatorPostApprovalContinuationIDs.remove(continuation.id) }
         persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
 
-        let result = await submitCoordinatorDirectiveToAgentMode(
-            continuation.directiveText,
-            coordinatorSessionID: continuation.coordinatorSessionID,
-            forceNewRuntime: false,
-            beforeSubmit: { [weak self] in
-                guard let self else {
-                    throw MCPError.invalidParams("Coordinator continuation authority is unavailable.")
+        let result: UserTurnSubmissionResult
+        #if DEBUG
+            if let test_coordinatorContinuationSubmitter {
+                do {
+                    try validatePostApprovalContinuationEnqueueAuthority(continuation)
+                    result = await test_coordinatorContinuationSubmitter(continuation)
+                } catch {
+                    result = .blocked(message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
                 }
-                try validatePostApprovalContinuationEnqueueAuthority(continuation)
+            } else {
+                result = await submitCoordinatorPostApprovalContinuationDirective(continuation)
             }
-        )
-        state = session.coordinatorFollowThroughState ?? state
+        #else
+            result = await submitCoordinatorPostApprovalContinuationDirective(continuation)
+        #endif
+        #if DEBUG
+            test_afterCoordinatorContinuationSubmitResult?(continuation, result)
+        #endif
+        let identity = CoordinatorPostApprovalContinuationIdentity(continuation)
+        if result == .submitted {
+            acceptedCoordinatorPostApprovalContinuationReceipts.insert(identity)
+        }
+        guard let currentSession = sessions[tabID],
+              currentSession.activeAgentSessionID == continuation.coordinatorSessionID,
+              currentSession.isCoordinatorRuntime
+        else {
+            coordinatorModeViewModel.refreshIfVisible()
+            return
+        }
+        state = currentSession.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        guard let currentPlan = state.missionPlan,
+              let currentContinuation = state.postApprovalContinuation,
+              CoordinatorPostApprovalContinuationIdentity(currentContinuation) == identity,
+              currentPlan.id == continuation.planID,
+              currentContinuation.status == .dispatching
+        else {
+            clearAcceptedCoordinatorPostApprovalContinuationReceiptsIfSafelyInvalidated(
+                coordinatorSessionID: continuation.coordinatorSessionID,
+                state: state
+            )
+            coordinatorModeViewModel.refreshIfVisible()
+            return
+        }
         switch result {
         case .submitted:
             if state.markPostApprovalContinuationDelivered() {
-                persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+                persistCoordinatorFollowThroughState(state, tabID: tabID, session: currentSession)
+                acceptedCoordinatorPostApprovalContinuationReceipts.remove(identity)
             }
         case let .blocked(message):
             let changed = if message.localizedCaseInsensitiveContains("mid-run") {
@@ -3171,10 +3281,49 @@ extension AgentModeViewModel {
                 state.markPostApprovalContinuationFailed(error: message)
             }
             if changed {
-                persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+                persistCoordinatorFollowThroughState(state, tabID: tabID, session: currentSession)
             }
         }
         coordinatorModeViewModel.refreshIfVisible()
+    }
+
+    @MainActor
+    private func submitCoordinatorPostApprovalContinuationDirective(
+        _ continuation: CoordinatorPostApprovalContinuationRecord
+    ) async -> UserTurnSubmissionResult {
+        await submitCoordinatorDirectiveToAgentMode(
+            continuation.directiveText,
+            coordinatorSessionID: continuation.coordinatorSessionID,
+            forceNewRuntime: false,
+            targetedBeforeSubmit: { [weak self] tabID, session in
+                guard let self else {
+                    throw MCPError.invalidParams("Coordinator continuation authority is unavailable.")
+                }
+                try validatePostApprovalContinuationAtFinalEnqueue(
+                    continuation,
+                    tabID: tabID,
+                    expectedSession: session
+                )
+            }
+        )
+    }
+
+    @MainActor
+    private func validatePostApprovalContinuationAtFinalEnqueue(
+        _ continuation: CoordinatorPostApprovalContinuationRecord,
+        tabID: UUID,
+        expectedSession: TabSession
+    ) throws {
+        #if DEBUG
+            test_beforeCoordinatorContinuationEnqueueAuthorityValidation?(continuation)
+        #endif
+        guard sessions[tabID] === expectedSession,
+              expectedSession.activeAgentSessionID == continuation.coordinatorSessionID,
+              expectedSession.isCoordinatorRuntime
+        else {
+            throw MCPError.invalidParams("Post-approval continuation enqueue rejected because the target Coordinator session changed.")
+        }
+        try validatePostApprovalContinuationEnqueueAuthority(continuation, in: expectedSession)
     }
 
     @MainActor
@@ -3255,6 +3404,10 @@ extension AgentModeViewModel {
         let session = match.value
         var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
         state.updateMissionPlan(update)
+        clearAcceptedCoordinatorPostApprovalContinuationReceiptsIfSafelyInvalidated(
+            coordinatorSessionID: coordinatorSessionID,
+            state: state
+        )
         persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
     }
 
@@ -3440,7 +3593,17 @@ extension AgentModeViewModel {
         let session = match.value
         let minimumGeneration = session.saveRequestGeneration
         try validatePostApprovalContinuationPersistenceToken(token, in: session)
-        guard await flushSave(for: tabID, requiringMinimumSaveGeneration: minimumGeneration) else {
+        let didFlush: Bool
+        #if DEBUG
+            if let test_postApprovalContinuationPersistenceBarrier {
+                didFlush = await test_postApprovalContinuationPersistenceBarrier(tabID, minimumGeneration)
+            } else {
+                didFlush = await flushSave(for: tabID, requiringMinimumSaveGeneration: minimumGeneration)
+            }
+        #else
+            didFlush = await flushSave(for: tabID, requiringMinimumSaveGeneration: minimumGeneration)
+        #endif
+        guard didFlush else {
             throw MCPError.invalidParams("Coordinator Mission persistence did not durably save the approved continuation before dispatch.")
         }
         guard sessions[tabID] === session else {
@@ -3481,9 +3644,19 @@ extension AgentModeViewModel {
     ) throws {
         guard let session = sessions.values.first(where: { session in
             session.activeAgentSessionID == expected.coordinatorSessionID && session.isCoordinatorRuntime
-        }),
-            let plan = session.coordinatorFollowThroughState?.missionPlan,
-            let continuation = plan.postApprovalContinuation
+        }) else {
+            throw MCPError.invalidParams("Post-approval continuation enqueue rejected because the Coordinator Mission is unavailable.")
+        }
+        try validatePostApprovalContinuationEnqueueAuthority(expected, in: session)
+    }
+
+    @MainActor
+    private func validatePostApprovalContinuationEnqueueAuthority(
+        _ expected: CoordinatorPostApprovalContinuationRecord,
+        in session: TabSession
+    ) throws {
+        guard let plan = session.coordinatorFollowThroughState?.missionPlan,
+              let continuation = plan.postApprovalContinuation
         else {
             throw MCPError.invalidParams("Post-approval continuation enqueue rejected because the Coordinator Mission is unavailable.")
         }
@@ -4032,6 +4205,56 @@ extension AgentModeViewModel {
         promptManager?.currentComposeTabs.first(where: { $0.id == tabID })?.name
             ?? workspaceManager?.composeTabName(with: tabID)
     }
+
+    #if DEBUG
+        func test_flushCoordinatorPostApprovalContinuationPersistence(
+            _ token: CoordinatorModeViewModel.PostApprovalContinuationPersistenceToken
+        ) async throws {
+            try await flushCoordinatorPostApprovalContinuationPersistence(token)
+        }
+
+        func test_validatePostApprovalContinuationEnqueueAuthority(
+            _ continuation: CoordinatorPostApprovalContinuationRecord
+        ) throws {
+            try validatePostApprovalContinuationEnqueueAuthority(continuation)
+        }
+
+        func test_submitCoordinatorPostApprovalContinuationAtFinalEnqueue(
+            _ continuation: CoordinatorPostApprovalContinuationRecord
+        ) async -> UserTurnSubmissionResult {
+            guard let match = sessions.first(where: { _, session in
+                session.activeAgentSessionID == continuation.coordinatorSessionID && session.isCoordinatorRuntime
+            }),
+                let target = makeComposerSubmitTarget(tabID: match.key, session: match.value)
+            else {
+                return .blocked(message: "Post-approval continuation final enqueue target is unavailable.")
+            }
+            return await submitUserTurnCreatingSessionIfNeeded(
+                text: continuation.directiveText,
+                target: target,
+                beforeSubmit: { [weak self] in
+                    guard let self else {
+                        throw MCPError.invalidParams("Coordinator continuation authority is unavailable.")
+                    }
+                    try validatePostApprovalContinuationAtFinalEnqueue(
+                        continuation,
+                        tabID: match.key,
+                        expectedSession: match.value
+                    )
+                },
+                createAndActivateSessionTab: { nil }
+            )
+        }
+
+        func test_evaluateCoordinatorPostApprovalContinuation(coordinatorSessionID: UUID) async {
+            coordinatorModeViewModel.refresh()
+            await evaluateCoordinatorFollowThrough(
+                coordinatorSessionID: coordinatorSessionID,
+                snapshot: coordinatorModeViewModel.snapshot,
+                trigger: CoordinatorAutoModeBoundaryClassifier.Trigger.lifecycle
+            )
+        }
+    #endif
 }
 
 private extension CoordinatorModeRow {

@@ -831,6 +831,20 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
     }
 
     @discardableResult
+    mutating func reconcileAcceptedPostApprovalContinuationDelivery(at date: Date = Date()) -> Bool {
+        guard let continuation = postApprovalContinuation,
+              continuation.status.isDeliverable || continuation.status == .dispatching
+        else { return false }
+        setPostApprovalContinuation(continuation.updating(
+            status: .delivered,
+            error: nil,
+            at: date,
+            countsAsAttempt: continuation.status.isDeliverable
+        ))
+        return true
+    }
+
+    @discardableResult
     mutating func markPostApprovalContinuationFailed(error: String, at date: Date = Date()) -> Bool {
         guard let continuation = postApprovalContinuation,
               continuation.status.isDeliverable || continuation.status == .dispatching
@@ -2150,6 +2164,22 @@ enum CoordinatorFollowThroughChildPhase: String, Codable, Equatable {
         } else {
             self.init(statusGroup: row.statusGroup)
         }
+    }
+}
+
+struct CoordinatorPostApprovalContinuationIdentity: Hashable {
+    let coordinatorSessionID: UUID
+    let continuationID: UUID
+    let checkpointInstanceID: String
+    let planID: UUID
+    let planRevision: Int
+
+    init(_ continuation: CoordinatorPostApprovalContinuationRecord) {
+        coordinatorSessionID = continuation.coordinatorSessionID
+        continuationID = continuation.id
+        checkpointInstanceID = continuation.checkpointInstanceID
+        planID = continuation.planID
+        planRevision = continuation.planRevision
     }
 }
 

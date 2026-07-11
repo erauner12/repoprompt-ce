@@ -618,6 +618,8 @@ final class AgentModeViewModel: ObservableObject {
     private var sessionIndexLocalUpserts: [UUID: AgentSessionIndexEntry] = [:]
     private var sessionIndexLocalRemovals: Set<UUID> = []
     private var saveInFlightSessionIDs: Set<UUID> = []
+    var inFlightCoordinatorPostApprovalContinuationIDs: Set<UUID> = []
+    var acceptedCoordinatorPostApprovalContinuationReceipts: Set<CoordinatorPostApprovalContinuationIdentity> = []
     private var saveRequestedWhileInFlightSessionIDs: Set<UUID> = []
     private var workspaceSwitchBackgroundCleanupTasks: [UUID: Task<Void, Never>] = [:]
     var sidebarAutoArchiveTask: Task<Void, Never>?
@@ -642,6 +644,10 @@ final class AgentModeViewModel: ObservableObject {
         private var test_allowsScheduledDerivedTranscriptRefreshWithoutPromptManager = false
         private var test_afterMCPStoreEpochBegan: (@MainActor () async -> Void)?
         var test_revisionProposalPersistenceBarrier: (@MainActor (_ tabID: UUID, _ minimumGeneration: UInt64) async -> Bool)?
+        var test_postApprovalContinuationPersistenceBarrier: (@MainActor (_ tabID: UUID, _ minimumGeneration: UInt64) async -> Bool)?
+        var test_coordinatorContinuationSubmitter: (@MainActor (_ continuation: CoordinatorPostApprovalContinuationRecord) async -> UserTurnSubmissionResult)?
+        var test_beforeCoordinatorContinuationEnqueueAuthorityValidation: (@MainActor (_ continuation: CoordinatorPostApprovalContinuationRecord) -> Void)?
+        var test_afterCoordinatorContinuationSubmitResult: (@MainActor (_ continuation: CoordinatorPostApprovalContinuationRecord, _ result: UserTurnSubmissionResult) -> Void)?
         private var test_terminalPublicationOverride: ((
             AgentRunTerminalCommitRevision,
             AgentRunEpochTransitionKind?,
@@ -716,6 +722,38 @@ final class AgentModeViewModel: ObservableObject {
             _ hook: (@MainActor (_ tabID: UUID, _ minimumGeneration: UInt64) async -> Bool)?
         ) {
             test_revisionProposalPersistenceBarrier = hook
+        }
+
+        func test_setPostApprovalContinuationPersistenceBarrier(
+            _ hook: (@MainActor (_ tabID: UUID, _ minimumGeneration: UInt64) async -> Bool)?
+        ) {
+            test_postApprovalContinuationPersistenceBarrier = hook
+        }
+
+        func test_setCoordinatorContinuationSubmitter(
+            _ hook: (@MainActor (_ continuation: CoordinatorPostApprovalContinuationRecord) async -> UserTurnSubmissionResult)?
+        ) {
+            test_coordinatorContinuationSubmitter = hook
+        }
+
+        func test_setBeforeCoordinatorContinuationEnqueueAuthorityValidation(
+            _ hook: (@MainActor (_ continuation: CoordinatorPostApprovalContinuationRecord) -> Void)?
+        ) {
+            test_beforeCoordinatorContinuationEnqueueAuthorityValidation = hook
+        }
+
+        func test_setAfterCoordinatorContinuationSubmitResult(
+            _ hook: (@MainActor (_ continuation: CoordinatorPostApprovalContinuationRecord, _ result: UserTurnSubmissionResult) -> Void)?
+        ) {
+            test_afterCoordinatorContinuationSubmitResult = hook
+        }
+
+        func test_hasAcceptedCoordinatorContinuationReceipt(
+            _ continuation: CoordinatorPostApprovalContinuationRecord
+        ) -> Bool {
+            acceptedCoordinatorPostApprovalContinuationReceipts.contains(
+                CoordinatorPostApprovalContinuationIdentity(continuation)
+            )
         }
 
         func test_replaceSessionForRevisionProposal(tabID: UUID) {

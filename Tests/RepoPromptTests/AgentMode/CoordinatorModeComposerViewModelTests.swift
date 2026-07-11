@@ -4030,6 +4030,438 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         }
     }
 
+    func testPostApprovalContinuationProductionFlushWaitsForGenerationAndRejectsPersistenceRaces() async throws {
+        let success = await makePostApprovalContinuationHarness()
+        var observedGeneration: UInt64?
+        success.agentModeViewModel.test_setPostApprovalContinuationPersistenceBarrier { tabID, minimumGeneration in
+            XCTAssertEqual(tabID, success.tabID)
+            observedGeneration = minimumGeneration
+            return true
+        }
+
+        try await success.agentModeViewModel.test_flushCoordinatorPostApprovalContinuationPersistence(success.token)
+
+        XCTAssertEqual(observedGeneration, success.session.saveRequestGeneration)
+        XCTAssertGreaterThan(observedGeneration ?? 0, 0)
+
+        let failure = await makePostApprovalContinuationHarness()
+        failure.agentModeViewModel.test_setPostApprovalContinuationPersistenceBarrier { _, _ in false }
+        do {
+            try await failure.agentModeViewModel.test_flushCoordinatorPostApprovalContinuationPersistence(failure.token)
+            XCTFail("Expected the failed persistence barrier to reject.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("did not durably save"))
+        }
+
+        for mutation in PostApprovalFlushMutation.allCases {
+            let harness = await makePostApprovalContinuationHarness()
+            harness.agentModeViewModel.test_setPostApprovalContinuationPersistenceBarrier { _, _ in
+                switch mutation {
+                case .sessionReplacement:
+                    harness.agentModeViewModel.test_replaceSessionForRevisionProposal(tabID: harness.tabID)
+                case .continuationIdentity:
+                    var state = harness.session.coordinatorFollowThroughState!
+                    var plan = state.missionPlan!
+                    let replacement = self.makePostApprovalContinuation(
+                        coordinatorID: harness.coordinatorID,
+                        plan: plan,
+                        id: UUID()
+                    )
+                    state.recordPostApprovalContinuation(replacement)
+                    plan.postApprovalContinuation = replacement
+                    state.missionPlan = plan
+                    harness.session.coordinatorFollowThroughState = state
+                case .planIdentity:
+                    var state = harness.session.coordinatorFollowThroughState!
+                    let current = state.missionPlan!
+                    state.missionPlan = CoordinatorMissionPlan(
+                        id: UUID(),
+                        revision: current.revision,
+                        objective: current.objective,
+                        status: current.status,
+                        approvalState: current.approvalState,
+                        postApprovalContinuation: current.postApprovalContinuation
+                    )
+                    harness.session.coordinatorFollowThroughState = state
+                case .continuationRevision:
+                    var state = harness.session.coordinatorFollowThroughState!
+                    let plan = state.missionPlan!
+                    let current = plan.postApprovalContinuation!
+                    let replacement = CoordinatorPostApprovalContinuationRecord(
+                        id: current.id,
+                        coordinatorSessionID: current.coordinatorSessionID,
+                        checkpointInstanceID: current.checkpointInstanceID,
+                        planID: current.planID,
+                        planRevision: current.planRevision + 1,
+                        directiveText: current.directiveText,
+                        durableApprovalAuthorityToken: current.durableApprovalAuthorityToken
+                    )
+                    state.recordPostApprovalContinuation(replacement)
+                    harness.session.coordinatorFollowThroughState = state
+                case .postFlushStatus:
+                    var state = harness.session.coordinatorFollowThroughState!
+                    _ = state.markPostApprovalContinuationDispatching()
+                    harness.session.coordinatorFollowThroughState = state
+                }
+                return true
+            }
+
+            do {
+                try await harness.agentModeViewModel.test_flushCoordinatorPostApprovalContinuationPersistence(harness.token)
+                XCTFail("Expected \(mutation.rawValue) to fail closed.")
+            } catch {
+                XCTAssertFalse(String(describing: error).isEmpty, mutation.rawValue)
+            }
+        }
+    }
+
+    func testPostApprovalContinuationProductionEnqueueAuthorityRejectsStaleMissionContracts() async throws {
+        for mutation in PostApprovalEnqueueMutation.allCases {
+            let harness = await makePostApprovalContinuationHarness(status: .dispatching)
+            let expected = harness.continuation
+            var state = try XCTUnwrap(harness.session.coordinatorFollowThroughState)
+            var plan = try XCTUnwrap(state.missionPlan)
+            switch mutation {
+            case .missingAuthority:
+                let current = try XCTUnwrap(plan.postApprovalContinuation)
+                let replacement = CoordinatorPostApprovalContinuationRecord(
+                    id: current.id,
+                    coordinatorSessionID: current.coordinatorSessionID,
+                    checkpointInstanceID: current.checkpointInstanceID,
+                    planID: current.planID,
+                    planRevision: current.planRevision,
+                    directiveText: current.directiveText,
+                    status: .dispatching
+                )
+                state.recordPostApprovalContinuation(replacement)
+            case .revokedAuthority:
+                plan.approvalState = .revisionRequested
+                state.missionPlan = plan
+            case .continuationIdentity:
+                let replacement = makePostApprovalContinuation(
+                    coordinatorID: harness.coordinatorID,
+                    plan: plan,
+                    id: UUID(),
+                    status: .dispatching
+                )
+                state.recordPostApprovalContinuation(replacement)
+            case .planIdentity:
+                state.missionPlan = CoordinatorMissionPlan(
+                    id: UUID(),
+                    revision: plan.revision,
+                    objective: plan.objective,
+                    status: plan.status,
+                    approvalState: plan.approvalState,
+                    postApprovalContinuation: plan.postApprovalContinuation
+                )
+            case .continuationRevision:
+                let current = try XCTUnwrap(plan.postApprovalContinuation)
+                let replacement = CoordinatorPostApprovalContinuationRecord(
+                    id: current.id,
+                    coordinatorSessionID: current.coordinatorSessionID,
+                    checkpointInstanceID: current.checkpointInstanceID,
+                    planID: current.planID,
+                    planRevision: current.planRevision + 1,
+                    directiveText: current.directiveText,
+                    status: .dispatching,
+                    durableApprovalAuthorityToken: current.durableApprovalAuthorityToken
+                )
+                state.recordPostApprovalContinuation(replacement)
+            case .terminalMission:
+                plan.status = .stopped
+                state.missionPlan = plan
+            }
+            harness.session.coordinatorFollowThroughState = state
+            harness.coordinatorModeViewModel.refresh()
+
+            XCTAssertThrowsError(
+                try harness.agentModeViewModel.test_validatePostApprovalContinuationEnqueueAuthority(expected),
+                mutation.rawValue
+            )
+        }
+    }
+
+    func testPostApprovalContinuationHiddenLifecycleDefersWithoutChurnThenDeliversExactlyOnce() async throws {
+        let harness = await makePostApprovalContinuationHarness(status: .pending, runState: .running)
+        await harness.agentModeViewModel.test_evaluateCoordinatorPostApprovalContinuation(
+            coordinatorSessionID: harness.coordinatorID
+        )
+        let firstDeferred = try XCTUnwrap(harness.session.coordinatorFollowThroughState?.postApprovalContinuation)
+        XCTAssertEqual(firstDeferred.status, .deferred)
+        XCTAssertEqual(firstDeferred.attempts, 0)
+
+        await harness.agentModeViewModel.test_evaluateCoordinatorPostApprovalContinuation(
+            coordinatorSessionID: harness.coordinatorID
+        )
+        XCTAssertEqual(harness.session.coordinatorFollowThroughState?.postApprovalContinuation, firstDeferred)
+
+        var acceptedSubmits = 0
+        harness.session.runState = .idle
+        harness.agentModeViewModel.test_setCoordinatorContinuationSubmitter { continuation in
+            acceptedSubmits += 1
+            XCTAssertEqual(
+                harness.session.coordinatorFollowThroughState?.postApprovalContinuation?.status,
+                .dispatching
+            )
+            do {
+                try harness.agentModeViewModel.test_validatePostApprovalContinuationEnqueueAuthority(continuation)
+            } catch {
+                XCTFail("Expected dispatching continuation authority to remain valid: \(error)")
+            }
+            return .submitted
+        }
+
+        await harness.agentModeViewModel.test_evaluateCoordinatorPostApprovalContinuation(
+            coordinatorSessionID: harness.coordinatorID
+        )
+        XCTAssertEqual(acceptedSubmits, 1)
+        XCTAssertEqual(harness.session.coordinatorFollowThroughState?.postApprovalContinuation?.status, .delivered)
+        XCTAssertEqual(harness.session.coordinatorFollowThroughState?.postApprovalContinuation?.attempts, 1)
+
+        await harness.agentModeViewModel.test_evaluateCoordinatorPostApprovalContinuation(
+            coordinatorSessionID: harness.coordinatorID
+        )
+        XCTAssertEqual(acceptedSubmits, 1)
+        XCTAssertEqual(harness.session.coordinatorFollowThroughState?.postApprovalContinuation?.status, .delivered)
+    }
+
+    func testAcceptedPostApprovalContinuationSessionReplacementSuppressesOrphanRedelivery() async throws {
+        let harness = await makePostApprovalContinuationHarness(status: .pending)
+        let durablePreDispatchState = try XCTUnwrap(harness.session.coordinatorFollowThroughState)
+        let recorder = CoordinatorContinuationRaceRecorder()
+        harness.agentModeViewModel.test_setCoordinatorContinuationSubmitter { _ in
+            recorder.providerSubmissions += 1
+            XCTAssertEqual(
+                harness.session.coordinatorFollowThroughState?.postApprovalContinuation?.status,
+                .dispatching
+            )
+            await Task.yield()
+            return .submitted
+        }
+        harness.agentModeViewModel.test_setAfterCoordinatorContinuationSubmitResult { _, result in
+            XCTAssertEqual(result, .submitted)
+            harness.agentModeViewModel.test_replaceSessionForRevisionProposal(tabID: harness.tabID)
+            let replacement = harness.agentModeViewModel.sessions[harness.tabID]!
+            replacement.testInstallPersistentSessionBinding(sessionID: UUID())
+            replacement.isCoordinatorRuntime = false
+            replacement.coordinatorFollowThroughState = nil
+            recorder.replacementSession = replacement
+            recorder.afterSubmitHookCalls += 1
+        }
+
+        await harness.agentModeViewModel.test_evaluateCoordinatorPostApprovalContinuation(
+            coordinatorSessionID: harness.coordinatorID
+        )
+
+        XCTAssertEqual(recorder.providerSubmissions, 1)
+        XCTAssertEqual(recorder.afterSubmitHookCalls, 1)
+        XCTAssertTrue(
+            harness.agentModeViewModel.test_hasAcceptedCoordinatorContinuationReceipt(harness.continuation)
+        )
+
+        let replacement = try XCTUnwrap(recorder.replacementSession)
+        replacement.testInstallPersistentSessionBinding(sessionID: harness.coordinatorID)
+        replacement.isCoordinatorRuntime = true
+        replacement.hasLoadedPersistedState = true
+        replacement.runState = .idle
+        replacement.coordinatorFollowThroughState = durablePreDispatchState
+
+        await harness.agentModeViewModel.test_evaluateCoordinatorPostApprovalContinuation(
+            coordinatorSessionID: harness.coordinatorID
+        )
+
+        XCTAssertEqual(recorder.providerSubmissions, 1)
+        XCTAssertEqual(recorder.afterSubmitHookCalls, 1)
+        XCTAssertEqual(
+            replacement.coordinatorFollowThroughState?.postApprovalContinuation?.status,
+            .delivered
+        )
+        XCTAssertEqual(replacement.coordinatorFollowThroughState?.postApprovalContinuation?.attempts, 1)
+    }
+
+    func testPostApprovalContinuationRealFinalEnqueueRejectsAuthorityRevokedBeforeSubmit() async {
+        for replaceTargetSession in [false, true] {
+            let harness = await makePostApprovalContinuationHarness(status: .dispatching)
+            var validationHookCalls = 0
+            let initialUserTurnCount = harness.session.items.count { $0.kind == .user }
+            harness.agentModeViewModel.test_setBeforeCoordinatorContinuationEnqueueAuthorityValidation { _ in
+                validationHookCalls += 1
+                if replaceTargetSession {
+                    harness.agentModeViewModel.test_replaceSessionForRevisionProposal(tabID: harness.tabID)
+                } else {
+                    var state = harness.session.coordinatorFollowThroughState!
+                    var plan = state.missionPlan!
+                    plan.approvalState = .revisionRequested
+                    state.missionPlan = plan
+                    harness.session.coordinatorFollowThroughState = state
+                    harness.coordinatorModeViewModel.refresh()
+                }
+            }
+
+            let result = await harness.agentModeViewModel
+                .test_submitCoordinatorPostApprovalContinuationAtFinalEnqueue(harness.continuation)
+
+            guard case let .blocked(message) = result else {
+                XCTFail("Expected final enqueue authority validation to block the user turn.")
+                continue
+            }
+            if replaceTargetSession {
+                XCTAssertTrue(message.contains("target Coordinator session changed"), message)
+            } else {
+                XCTAssertTrue(message.contains("authority changed before dispatch"), message)
+            }
+            XCTAssertEqual(validationHookCalls, 1)
+            XCTAssertEqual(harness.session.items.count { $0.kind == .user }, initialUserTurnCount)
+            XCTAssertEqual(harness.codexController.startUserTurnCount, 0)
+        }
+    }
+
+    func testPostApprovalContinuationSameProcessDecodedDeliverableStatesRecoverWithoutRestartPromise() async throws {
+        for status in [
+            CoordinatorPostApprovalContinuationRecord.Status.pending,
+            .deferred,
+            .dispatching
+        ] {
+            let harness = await makePostApprovalContinuationHarness(status: status)
+            let encoded = try JSONEncoder().encode(harness.session.coordinatorFollowThroughState)
+            harness.session.coordinatorFollowThroughState = try JSONDecoder().decode(
+                CoordinatorFollowThroughState.self,
+                from: encoded
+            )
+            var submits = 0
+            harness.agentModeViewModel.test_setCoordinatorContinuationSubmitter { _ in
+                submits += 1
+                return .submitted
+            }
+
+            await harness.agentModeViewModel.test_evaluateCoordinatorPostApprovalContinuation(
+                coordinatorSessionID: harness.coordinatorID
+            )
+            XCTAssertEqual(submits, 1, status.rawValue)
+            XCTAssertEqual(
+                harness.session.coordinatorFollowThroughState?.postApprovalContinuation?.status,
+                .delivered,
+                status.rawValue
+            )
+            await harness.agentModeViewModel.test_evaluateCoordinatorPostApprovalContinuation(
+                coordinatorSessionID: harness.coordinatorID
+            )
+            XCTAssertEqual(submits, 1, status.rawValue)
+        }
+    }
+
+    private enum PostApprovalFlushMutation: String, CaseIterable {
+        case sessionReplacement
+        case continuationIdentity
+        case planIdentity
+        case continuationRevision
+        case postFlushStatus
+    }
+
+    private enum PostApprovalEnqueueMutation: String, CaseIterable {
+        case missingAuthority
+        case revokedAuthority
+        case continuationIdentity
+        case planIdentity
+        case continuationRevision
+        case terminalMission
+    }
+
+    private struct PostApprovalContinuationHarness {
+        let agentModeViewModel: AgentModeViewModel
+        let coordinatorModeViewModel: CoordinatorModeViewModel
+        let session: AgentModeViewModel.TabSession
+        let tabID: UUID
+        let coordinatorID: UUID
+        let continuation: CoordinatorPostApprovalContinuationRecord
+        let token: CoordinatorModeViewModel.PostApprovalContinuationPersistenceToken
+        let codexController: CoordinatorResetFakeCodexController
+        let workspaceManager: WorkspaceManagerViewModel
+        let promptViewModel: PromptViewModel
+    }
+
+    private func makePostApprovalContinuationHarness(
+        status: CoordinatorPostApprovalContinuationRecord.Status = .pending,
+        runState: AgentSessionRunState = .idle
+    ) async -> PostApprovalContinuationHarness {
+        let tabID = UUID()
+        let coordinatorID = UUID()
+        var plan = CoordinatorMissionPlan(
+            revision: 7,
+            objective: "Approved continuation Mission",
+            status: .running,
+            approvalState: .approved
+        )
+        let continuation = makePostApprovalContinuation(
+            coordinatorID: coordinatorID,
+            plan: plan,
+            status: status
+        )
+        plan.postApprovalContinuation = continuation
+        let tab = ComposeTabState(
+            id: tabID,
+            name: "Coordinator Runtime",
+            activeAgentSessionID: coordinatorID
+        )
+        let codexController = CoordinatorResetFakeCodexController()
+        let fixture = makeAgentModeFixture(
+            tabs: [tab],
+            activeTabID: tabID,
+            codexController: codexController
+        )
+        let agentModeViewModel = fixture.viewModel
+        let session = await agentModeViewModel.ensureSessionReady(tabID: tabID)
+        _ = agentModeViewModel.test_installPersistentSessionBinding(sessionID: coordinatorID, on: session)
+        session.isCoordinatorRuntime = true
+        session.hasLoadedPersistedState = true
+        session.runState = runState
+        session.coordinatorFollowThroughState = CoordinatorFollowThroughState(
+            originalObjectiveSummary: "Approved continuation Mission",
+            missionPlan: plan,
+            postApprovalContinuation: continuation
+        )
+        session.isDirty = true
+        agentModeViewModel.scheduleSave(for: tabID)
+        let coordinatorModeViewModel = agentModeViewModel.coordinatorModeViewModel
+        coordinatorModeViewModel.refresh()
+        coordinatorModeViewModel.test_setPostApprovalContinuationDurableAuthority(continuation)
+        return PostApprovalContinuationHarness(
+            agentModeViewModel: agentModeViewModel,
+            coordinatorModeViewModel: coordinatorModeViewModel,
+            session: session,
+            tabID: tabID,
+            coordinatorID: coordinatorID,
+            continuation: continuation,
+            token: CoordinatorModeViewModel.PostApprovalContinuationPersistenceToken(
+                coordinatorSessionID: coordinatorID,
+                continuationID: continuation.id,
+                checkpointInstanceID: continuation.checkpointInstanceID,
+                planID: continuation.planID,
+                planRevision: continuation.planRevision
+            ),
+            codexController: codexController,
+            workspaceManager: fixture.manager,
+            promptViewModel: fixture.prompt
+        )
+    }
+
+    private func makePostApprovalContinuation(
+        coordinatorID: UUID,
+        plan: CoordinatorMissionPlan,
+        id: UUID = UUID(),
+        status: CoordinatorPostApprovalContinuationRecord.Status = .pending
+    ) -> CoordinatorPostApprovalContinuationRecord {
+        CoordinatorPostApprovalContinuationRecord(
+            id: id,
+            coordinatorSessionID: coordinatorID,
+            checkpointInstanceID: "coordinator:\(coordinatorID.uuidString):plan-approval:r\(plan.revision)",
+            planID: plan.id,
+            planRevision: plan.revision,
+            directiveText: "<coordinator_post_approval_continuation />",
+            status: status
+        ).confirmingDurableApprovalAuthority()
+    }
+
     private enum RevisionProposalBarrierMutation: String, CaseIterable {
         case sessionReplacement
         case planReplacement
@@ -4465,7 +4897,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
 
     private func makeAgentModeFixture(
         tabs: [ComposeTabState],
-        activeTabID: UUID?
+        activeTabID: UUID?,
+        codexController: CoordinatorResetFakeCodexController = CoordinatorResetFakeCodexController()
     ) -> (viewModel: AgentModeViewModel, manager: WorkspaceManagerViewModel, prompt: PromptViewModel) {
         let fileManager = WorkspaceFilesViewModel()
         let keyManager = KeyManager(
@@ -4498,7 +4931,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         manager.activeWorkspace = workspace
         prompt.loadComposeTabsFromWorkspace(workspace)
         let viewModel = AgentModeViewModel(
-            codexControllerFactory: { _, _, _, _, _, _ in CoordinatorResetFakeCodexController() }
+            codexControllerFactory: { _, _, _, _, _, _ in codexController }
         )
         viewModel.test_setSidebarAutoArchiveDependencies(promptManager: prompt, workspaceManager: manager)
         return (viewModel, manager, prompt)
@@ -4621,7 +5054,27 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
     }
 }
 
+@MainActor
+private final class CoordinatorContinuationRaceRecorder {
+    var providerSubmissions = 0
+    var afterSubmitHookCalls = 0
+    var replacementSession: AgentModeViewModel.TabSession?
+}
+
 private final class CoordinatorResetFakeCodexController: CodexSessionControllerTurnDispatchTestDefaults {
+    private(set) var startUserTurnCount = 0
+
+    func startUserTurn(
+        text _: String,
+        images _: [AgentImageAttachment],
+        model _: String?,
+        reasoningEffort _: String?,
+        serviceTier _: String?
+    ) async throws -> CodexTurnStartReceipt {
+        startUserTurnCount += 1
+        return CodexTurnStartReceipt(provisionalSubmissionID: "<coordinator-test-submission>")
+    }
+
     var hasActiveThread: Bool {
         false
     }
