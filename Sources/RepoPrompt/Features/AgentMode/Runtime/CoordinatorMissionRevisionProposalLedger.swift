@@ -373,6 +373,20 @@ extension CoordinatorMissionPlan {
             && revisionProposalResolutions.last?.outcome == .acceptedForConcreteRevision
     }
 
+    var acceptedRevisionDraftingResolution: CoordinatorMissionRevisionProposalResolution? {
+        guard !status.isTerminal,
+              approvalState == .revisionRequested,
+              pendingRevisionProposal == nil,
+              !hasRevisionProposalDurabilityHold,
+              let resolution = revisionProposalResolutions.last,
+              resolution.outcome == .acceptedForConcreteRevision,
+              revisionProposals.contains(where: { $0.id == resolution.proposalID })
+        else {
+            return nil
+        }
+        return resolution
+    }
+
     var pendingRevisionProposal: CoordinatorMissionRevisionProposal? {
         revisionProposals.first { proposal in
             !revisionProposalResolutions.contains { $0.proposalID == proposal.id }

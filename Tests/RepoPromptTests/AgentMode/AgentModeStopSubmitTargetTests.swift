@@ -850,6 +850,77 @@ final class AgentModeStopSubmitTargetTests: XCTestCase {
         XCTAssertEqual(childSession.activeAgentSessionID, childSessionID)
     }
 
+    func testAcceptedRevisionDraftingDirectiveRevalidatesAuthorityAtFinalEnqueue() async throws {
+        let vm = makeViewModel()
+        let coordinatorTabID = UUID()
+        let coordinatorSessionID = UUID()
+        vm.ensureSession(for: coordinatorTabID)
+        let coordinatorSession = try XCTUnwrap(vm.sessions[coordinatorTabID])
+        coordinatorSession.hasLoadedPersistedState = true
+        coordinatorSession.selectedAgent = .codexExec
+        coordinatorSession.isCoordinatorRuntime = true
+        coordinatorSession.testInstallPersistentSessionBinding(sessionID: coordinatorSessionID)
+
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Replace the approved contract.",
+            status: .running,
+            approvalState: .approved
+        ))
+        let basePlan = try XCTUnwrap(state.missionPlan)
+        let appended = try state.appendRevisionProposal(CoordinatorMissionRevisionProposalRequest(
+            expectedBasePlanID: basePlan.id,
+            expectedBaseContractFingerprint: basePlan.materialContractFingerprint(),
+            summary: "Draft a concrete replacement",
+            affectedFields: ["objective"],
+            remedy: "revise_scope",
+            requestedChange: "Draft a concrete replacement.",
+            actor: CoordinatorMissionRevisionProposalActor(
+                coordinatorSessionID: coordinatorSessionID,
+                runtimeSessionID: coordinatorSessionID
+            )
+        ))
+        let proposal = try XCTUnwrap(state.missionPlan?.pendingRevisionProposal)
+        let resolution = try state.resolveRevisionProposalTransaction(
+            CoordinatorMissionRevisionProposalTrustedResolutionRequest(
+                coordinatorSessionID: coordinatorSessionID,
+                action: .revisePlan,
+                proposalID: appended.proposalID,
+                expectedContractFingerprint: proposal.baseContractFingerprint,
+                expectedCheckpointInstanceID: CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                    coordinatorSessionID: coordinatorSessionID,
+                    proposal: proposal
+                )
+            )
+        )
+        XCTAssertTrue(state.clearRevisionProposalDurabilityHold(transactionID: resolution.resolutionID))
+        coordinatorSession.coordinatorFollowThroughState = state
+
+        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+            CoordinatorDirectiveSubmission(
+                visibleText: "Continue drafting the concrete revised plan.",
+                providerText: "Continue drafting the concrete revised plan.",
+                missionTemplate: nil,
+                missionPolicySnapshot: nil,
+                coordinatorSessionID: coordinatorSessionID,
+                coordinatorModelID: nil,
+                forceNewRuntime: false,
+                acceptedRevisionDraftingResolutionID: resolution.resolutionID
+            ),
+            targetedBeforeSubmit: { _, session in
+                session.coordinatorFollowThroughState?.missionPlan?.approvalState = .awaitingApproval
+            }
+        )
+
+        guard case let .blocked(message) = result else {
+            return XCTFail("Expected final enqueue to reject stale revision-drafting authority.")
+        }
+        XCTAssertTrue(message.contains(CoordinatorMissionRevisionProposalPause.heldReason))
+        XCTAssertTrue(coordinatorSession.items.filter { $0.kind == .user }.isEmpty)
+        XCTAssertTrue(coordinatorSession.pendingInstructions.isEmpty)
+        XCTAssertTrue(coordinatorSession.pendingClaudeSteeringInstructions.isEmpty)
+        XCTAssertTrue(coordinatorSession.pendingACPSteeringInstructions.isEmpty)
+    }
+
     func testCoordinatorDirectiveSubmissionStoresVisibleObjectiveInsteadOfWrappedPrompt() async throws {
         let vm = makeViewModel()
         let coordinatorTabID = UUID()

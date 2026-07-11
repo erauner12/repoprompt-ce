@@ -2753,6 +2753,24 @@ def run_s8(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
         raise E2EFailure(f"S8 external Revise plan rejected: {response.get('error') or response}")
     artifacts.add_checkpoint("revision-requested")
 
+    drafting_response = submit_with_midrun_retry(client, artifacts, session_id, {
+        "op": "submit",
+        "coordinator_session_id": session_id,
+        "message": (
+            "Continue the accepted revision flow now. Draft and publish a concrete revised "
+            f"Mission Plan for user approval that incorporates {token}. Do not execute it "
+            "before the revised-plan approval checkpoint is accepted."
+        ),
+        "compact": True,
+    }, args, "S8 concrete revised-plan drafting")
+    write_json(artifacts.root / "revision_drafting_response.json", drafting_response)
+    if drafting_response.get("accepted") is False:
+        raise E2EFailure(
+            "S8 accepted Revise could not resume concrete revised-plan drafting: "
+            f"{drafting_response.get('error') or drafting_response}"
+        )
+    artifacts.add_checkpoint("revision-drafting-submitted")
+
     revised = wait_until(
         client,
         artifacts,

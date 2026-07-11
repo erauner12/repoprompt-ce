@@ -10,6 +10,27 @@ struct CoordinatorDirectiveSubmission: Equatable {
     let coordinatorSessionID: UUID?
     let coordinatorModelID: String?
     let forceNewRuntime: Bool
+    let acceptedRevisionDraftingResolutionID: UUID?
+
+    init(
+        visibleText: String,
+        providerText: String,
+        missionTemplate: CoordinatorMissionTemplateSummary?,
+        missionPolicySnapshot: CoordinatorMissionPolicySnapshot?,
+        coordinatorSessionID: UUID?,
+        coordinatorModelID: String?,
+        forceNewRuntime: Bool,
+        acceptedRevisionDraftingResolutionID: UUID? = nil
+    ) {
+        self.visibleText = visibleText
+        self.providerText = providerText
+        self.missionTemplate = missionTemplate
+        self.missionPolicySnapshot = missionPolicySnapshot
+        self.coordinatorSessionID = coordinatorSessionID
+        self.coordinatorModelID = coordinatorModelID
+        self.forceNewRuntime = forceNewRuntime
+        self.acceptedRevisionDraftingResolutionID = acceptedRevisionDraftingResolutionID
+    }
 }
 
 struct CoordinatorMissionStopRequest: Equatable {
@@ -1217,9 +1238,34 @@ final class CoordinatorModeViewModel: ObservableObject {
     }
 
     @discardableResult
+    func submitAcceptedRevisionDraftingDirective(
+        _ text: String,
+        coordinatorSessionID: UUID,
+        expectedResolutionID: UUID
+    ) async -> DirectiveSubmissionResult {
+        refresh()
+        guard snapshot.coordinatorRail.availableCoordinators
+            .first(where: { $0.sessionID == coordinatorSessionID })?
+            .missionPlan?
+            .acceptedRevisionDraftingResolution?
+            .id == expectedResolutionID
+        else {
+            let message = CoordinatorMissionRevisionProposalPause.heldReason
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        return await submitCoordinatorDirective(
+            text,
+            targetCoordinatorSessionID: coordinatorSessionID,
+            acceptedRevisionDraftingResolutionID: expectedResolutionID
+        )
+    }
+
+    @discardableResult
     func submitCoordinatorDirective(
         _ text: String,
-        targetCoordinatorSessionID: UUID? = nil
+        targetCoordinatorSessionID: UUID? = nil,
+        acceptedRevisionDraftingResolutionID: UUID? = nil
     ) async -> DirectiveSubmissionResult {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -1263,7 +1309,8 @@ final class CoordinatorModeViewModel: ObservableObject {
             missionPolicySnapshot: missionPolicySnapshot,
             coordinatorSessionID: coordinatorSessionID,
             coordinatorModelID: forceNewRuntime ? pendingFreshCoordinatorModelID : nil,
-            forceNewRuntime: forceNewRuntime
+            forceNewRuntime: forceNewRuntime,
+            acceptedRevisionDraftingResolutionID: acceptedRevisionDraftingResolutionID
         )
         let result = await directiveSubmitter(submission)
         switch result {
@@ -3220,6 +3267,16 @@ extension AgentModeViewModel {
             target: target,
             beforeSubmit: {
                 try targetedBeforeSubmit?(runtime.tabID, session)
+                if let expectedResolutionID = submission.acceptedRevisionDraftingResolutionID {
+                    guard submission.coordinatorSessionID == runtime.sessionID,
+                          session.coordinatorFollowThroughState?
+                          .missionPlan?
+                          .acceptedRevisionDraftingResolution?
+                          .id == expectedResolutionID
+                    else {
+                        throw MCPError.invalidParams(CoordinatorMissionRevisionProposalPause.heldReason)
+                    }
+                }
                 try beforeSubmit?()
             }
         ) {

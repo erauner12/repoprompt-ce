@@ -265,6 +265,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 },
                 stopCoordinatorMission: { _ in .accepted },
                 submitDirective: { _ in .accepted },
+                submitAcceptedRevisionDraftingDirective: { _, _, _ in .accepted },
                 submitContinuation: { _, _ in .accepted },
                 activePendingChildInteractionRow: { _ in nil },
                 submitPendingChildInteractionResponse: { _, _, _ in .accepted },
@@ -5952,6 +5953,117 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         XCTAssertEqual(actors, [.director])
     }
 
+    func testSubmitExternalDirectiveResumesOnlyAcceptedRevisionDraftingWhileChildQuestionsStayHeld() async throws {
+        let coordinatorID = UUID()
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Replace the approved contract.",
+            status: .running,
+            approvalState: .approved
+        ))
+        let basePlan = try XCTUnwrap(state.missionPlan)
+        let appended = try state.appendRevisionProposal(CoordinatorMissionRevisionProposalRequest(
+            expectedBasePlanID: basePlan.id,
+            expectedBaseContractFingerprint: basePlan.materialContractFingerprint(),
+            summary: "Draft a concrete replacement",
+            affectedFields: ["objective"],
+            remedy: "revise_scope",
+            requestedChange: "Draft a concrete replacement.",
+            actor: CoordinatorMissionRevisionProposalActor(
+                coordinatorSessionID: coordinatorID,
+                runtimeSessionID: coordinatorID
+            )
+        ))
+        let proposal = try XCTUnwrap(state.missionPlan?.pendingRevisionProposal)
+        let resolution = try state.resolveRevisionProposalTransaction(
+            CoordinatorMissionRevisionProposalTrustedResolutionRequest(
+                coordinatorSessionID: coordinatorID,
+                action: .revisePlan,
+                proposalID: appended.proposalID,
+                expectedContractFingerprint: proposal.baseContractFingerprint,
+                expectedCheckpointInstanceID: CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                    coordinatorSessionID: coordinatorID,
+                    proposal: proposal
+                )
+            )
+        )
+        XCTAssertTrue(state.clearRevisionProposalDurabilityHold(transactionID: resolution.resolutionID))
+        XCTAssertEqual(state.missionPlan?.approvalState, .revisionRequested)
+        XCTAssertNil(state.missionPlan?.pendingRevisionProposal)
+        XCTAssertNil(state.missionPlan?.revisionProposalDurabilityHold)
+        XCTAssertTrue(state.missionPlan?.holdsChildInteractionsForRevisionProposal == true)
+        XCTAssertEqual(
+            state.missionPlan?.acceptedRevisionDraftingResolution?.id,
+            resolution.resolutionID
+        )
+
+        var genericDirectiveSubmitted = false
+        var draftingSubmissions: [(String, UUID, UUID)] = []
+        let service = makeService(
+            coordinatorIDs: [coordinatorID],
+            selectedID: coordinatorID,
+            submit: { _ in
+                genericDirectiveSubmitted = true
+                return .accepted
+            },
+            submitAcceptedRevisionDraftingDirective: { message, sessionID, resolutionID in
+                draftingSubmissions.append((message, sessionID, resolutionID))
+                return .accepted
+            },
+            pendingChild: { _ in nil },
+            missionPlans: { [coordinatorID: state.missionPlan!] }
+        )
+
+        let statusResponse = try await service.execute(args: [
+            "op": .string("mission_status"),
+            "coordinator_session_id": .string(coordinatorID.uuidString),
+            "compact": .bool(true)
+        ])
+        let proposalStatus = try XCTUnwrap(
+            statusResponse.objectValue?["mission_status"]?.objectValue?["revision_proposal"]?.objectValue
+        )
+        XCTAssertNil(proposalStatus["pending"]?.objectValue)
+        XCTAssertNil(proposalStatus["durability_hold"]?.objectValue)
+        XCTAssertEqual(
+            proposalStatus["recent_resolution"]?.objectValue?["outcome"]?.stringValue,
+            "accepted_for_concrete_revision"
+        )
+        XCTAssertEqual(
+            proposalStatus["held_child_questions"]?.objectValue?["held"]?.boolValue,
+            true
+        )
+        XCTAssertEqual(
+            proposalStatus["held_child_questions"]?.objectValue?["reason"]?.stringValue,
+            CoordinatorMissionRevisionProposalPause.heldReason
+        )
+
+        let response = try await service.execute(args: [
+            "op": .string("submit"),
+            "coordinator_session_id": .string(coordinatorID.uuidString),
+            "message": .string("Continue drafting the concrete revised plan.")
+        ])
+        XCTAssertEqual(response.objectValue?["accepted"]?.boolValue, true)
+        XCTAssertEqual(response.objectValue?["routed_to"]?.stringValue, "coordinator")
+        XCTAssertFalse(genericDirectiveSubmitted)
+        XCTAssertEqual(draftingSubmissions.map(\.0), ["Continue drafting the concrete revised plan."])
+        XCTAssertEqual(draftingSubmissions.map(\.1), [coordinatorID])
+        XCTAssertEqual(draftingSubmissions.map(\.2), [resolution.resolutionID])
+
+        state.missionPlan?.approvalState = .awaitingApproval
+        XCTAssertNil(state.missionPlan?.acceptedRevisionDraftingResolution)
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("submit"),
+                "coordinator_session_id": .string(coordinatorID.uuidString),
+                "message": .string("Bypass revised-plan approval.")
+            ])
+            XCTFail("Generic directives must not bypass revised-plan approval.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains(CoordinatorMissionRevisionProposalPause.heldReason))
+            XCTAssertFalse(genericDirectiveSubmitted)
+            XCTAssertEqual(draftingSubmissions.count, 1)
+        }
+    }
+
     func testSubmitExternalAnswerCannotFallThroughToCoordinatorDirectiveDuringProposalHold() async throws {
         let coordinatorID = UUID()
         var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
@@ -6852,6 +6964,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         startNew: @escaping (String?) -> Void = { _ in },
         stopMission: @escaping (UUID) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
+        submitAcceptedRevisionDraftingDirective: @escaping (String, UUID, UUID) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _ in .accepted },
         submitContinuation: @escaping (CoordinatorModeViewModel.ContinuationAction, String?) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
         pendingChild: @escaping (UUID?) -> CoordinatorModeRow? = { _ in nil },
         submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow, CoordinatorMissionDecisionActor) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _ in .accepted },
@@ -6886,6 +6999,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             startNew: startNew,
             stopMission: stopMission,
             submit: submit,
+            submitAcceptedRevisionDraftingDirective: submitAcceptedRevisionDraftingDirective,
             submitContinuation: submitContinuation,
             pendingChild: pendingChild,
             submitPendingChild: submitPendingChild,
@@ -6921,6 +7035,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         startNew: @escaping (String?) -> Void = { _ in },
         stopMission: @escaping (UUID) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
         submit: @escaping (String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _ in .accepted },
+        submitAcceptedRevisionDraftingDirective: @escaping (String, UUID, UUID) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _ in .accepted },
         submitContinuation: @escaping (CoordinatorModeViewModel.ContinuationAction, String?) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _ in .accepted },
         pendingChild: @escaping (UUID?) -> CoordinatorModeRow? = { _ in nil },
         submitPendingChild: @escaping (CoordinatorModeViewModel.ChildInteractionResponseSubmission, CoordinatorModeRow, CoordinatorMissionDecisionActor) async -> CoordinatorModeViewModel.DirectiveSubmissionResult = { _, _, _ in .accepted },
@@ -6973,6 +7088,7 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 startNewCoordinatorRun: startNew,
                 stopCoordinatorMission: stopMission,
                 submitDirective: submit,
+                submitAcceptedRevisionDraftingDirective: submitAcceptedRevisionDraftingDirective,
                 submitContinuation: submitContinuation,
                 activePendingChildInteractionRow: pendingChild,
                 submitPendingChildInteractionResponse: submitPendingChild,

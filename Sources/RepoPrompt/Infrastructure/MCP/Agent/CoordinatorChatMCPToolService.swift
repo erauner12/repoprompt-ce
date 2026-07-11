@@ -12,6 +12,7 @@ struct CoordinatorChatMCPToolService {
         var startNewCoordinatorRun: (_ coordinatorModelID: String?) -> Void
         var stopCoordinatorMission: (_ targetMissionID: UUID) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var submitDirective: (_ text: String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
+        var submitAcceptedRevisionDraftingDirective: (_ text: String, _ coordinatorSessionID: UUID, _ expectedResolutionID: UUID) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var submitContinuation: (_ action: CoordinatorModeViewModel.ContinuationAction, _ expectedCheckpointInstanceID: String?) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var activePendingChildInteractionRow: (_ coordinatorSessionID: UUID?) -> CoordinatorModeRow?
         var submitPendingChildInteractionResponse: (_ submission: CoordinatorModeViewModel.ChildInteractionResponseSubmission, _ row: CoordinatorModeRow, _ actor: CoordinatorMissionDecisionActor) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
@@ -91,6 +92,13 @@ struct CoordinatorChatMCPToolService {
                 startNewCoordinatorRun: { coordinatorViewModel.startNewCoordinatorRun(coordinatorModelID: $0) },
                 stopCoordinatorMission: { await coordinatorViewModel.stopCoordinatorMission(targetMissionID: $0) },
                 submitDirective: { await coordinatorViewModel.submitCoordinatorDirective($0) },
+                submitAcceptedRevisionDraftingDirective: {
+                    await coordinatorViewModel.submitAcceptedRevisionDraftingDirective(
+                        $0,
+                        coordinatorSessionID: $1,
+                        expectedResolutionID: $2
+                    )
+                },
                 submitContinuation: { await coordinatorViewModel.submitCoordinatorContinuation($0, expectedCheckpointInstanceID: $1) },
                 activePendingChildInteractionRow: { coordinatorViewModel.activePendingChildInteractionRow(coordinatorSessionID: $0) },
                 submitPendingChildInteractionResponse: { await coordinatorViewModel.submitPendingChildInteractionResponse($0, to: $1, actor: $2) },
@@ -419,13 +427,18 @@ struct CoordinatorChatMCPToolService {
             }
 
             let selectedSnapshot = environment.snapshot()
+            let selectedCoordinatorSessionID = scopedCoordinatorSessionID
+                ?? selectedSnapshot.coordinatorRail.coordinatorSessionID
+            let selectedPlan = selectedCoordinatorSessionID.flatMap { coordinatorSessionID in
+                selectedSnapshot.coordinatorRail.availableCoordinators
+                    .first(where: { $0.sessionID == coordinatorSessionID })?
+                    .missionPlan
+            }
+            let acceptedRevisionDraftingResolution = selectedPlan?.acceptedRevisionDraftingResolution
             if !newParent,
                !hasCheckpointAction,
-               let coordinatorSessionID = scopedCoordinatorSessionID ?? selectedSnapshot.coordinatorRail.coordinatorSessionID,
-               selectedSnapshot.coordinatorRail.availableCoordinators
-               .first(where: { $0.sessionID == coordinatorSessionID })?
-               .missionPlan?
-               .holdsChildInteractionsForRevisionProposal == true
+               selectedPlan?.holdsChildInteractionsForRevisionProposal == true,
+               acceptedRevisionDraftingResolution == nil
             {
                 throw MCPError.invalidParams(CoordinatorMissionRevisionProposalPause.heldReason)
             }
@@ -500,7 +513,17 @@ struct CoordinatorChatMCPToolService {
                     guard let message, !message.isEmpty else {
                         throw MCPError.invalidParams("message is required.")
                     }
-                    result = await environment.submitDirective(message)
+                    if let coordinatorSessionID = selectedCoordinatorSessionID,
+                       let resolution = acceptedRevisionDraftingResolution
+                    {
+                        result = await environment.submitAcceptedRevisionDraftingDirective(
+                            message,
+                            coordinatorSessionID,
+                            resolution.id
+                        )
+                    } else {
+                        result = await environment.submitDirective(message)
+                    }
                     routedToChildInteraction = false
                 }
             }
