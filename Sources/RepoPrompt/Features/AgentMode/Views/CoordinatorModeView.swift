@@ -130,8 +130,6 @@ struct CoordinatorModeView: View {
     @State private var hoveredPlanNodeID: UUID?
     @State private var filterText = ""
     @State private var coordinatorDirectiveDraft = ""
-    @State private var missionPlanRevisionDraft = ""
-    @State private var coordinatorRevisionGuidanceDrafts: [UUID: String] = [:]
     @State private var coordinatorCheckpointDrafts: [UUID: [String: AgentAskUserDraft]] = [:]
     @State private var coordinatorCheckpointQuestionIndex: [UUID: Int] = [:]
     @State private var coordinatorOwnedCheckpointDrafts: [String: [String: AgentAskUserDraft]] = [:]
@@ -142,10 +140,6 @@ struct CoordinatorModeView: View {
     @State private var coordinatorTextFieldHeight = ResizableTextField.height(forPresetIndex: 0, preset: .normal)
     @State private var coordinatorComposerChromeOcclusion: CGFloat = 0
     @State private var expandedTerminalComposerPlanID: UUID?
-    @State private var missionPlanComposerChromeOcclusion: CGFloat = 0
-    @State private var missionPlanComposerTextFieldResetTrigger = false
-    @State private var missionPlanComposerTextFieldHeight = ResizableTextField.height(forPresetIndex: 0, preset: .normal)
-    @State private var isSubmittingMissionPlanRevision = false
     @State private var isCoordinatorToolsPopoverPresented = false
     @State private var coordinatorToolsRevision = 0
     @State private var isCoordinatorRailVisible = true
@@ -157,7 +151,6 @@ struct CoordinatorModeView: View {
     @State private var expandedCompletedEvidenceNodeIDs: Set<UUID> = []
     @State private var coordinatorColumnVisibility: NavigationSplitViewVisibility = .all
     @FocusState private var isCoordinatorComposerFocused: Bool
-    @FocusState private var isMissionPlanComposerFocused: Bool
     @ObservedObject private var fontScale = FontScaleManager.shared
     @ObservedObject private var globalSettings = GlobalSettingsStore.shared
 
@@ -206,6 +199,8 @@ struct CoordinatorModeView: View {
         .onChange(of: viewModel.snapshot.coordinatorRail.coordinatorSessionID) { _, _ in
             collapseTerminalCoordinatorComposer()
             expandedCompletedEvidenceNodeIDs.removeAll()
+            coordinatorDirectiveDraft = ""
+            coordinatorTextFieldResetTrigger.toggle()
         }
         .onChange(of: viewModel.snapshot.coordinatorRail.missionPlan?.id) { _, _ in
             collapseTerminalCoordinatorComposer()
@@ -372,15 +367,6 @@ struct CoordinatorModeView: View {
                 metrics: metrics
             )
             .frame(maxHeight: .infinity)
-
-            if CoordinatorMissionPresentationPolicy.shouldShowPlanRevisionComposer(
-                for: snapshot.coordinatorRail.missionPlan
-            ) {
-                Divider()
-                    .opacity(0.28)
-                missionPlanFooterComposer(rail: snapshot.coordinatorRail, metrics: metrics)
-                    .padding(metrics.outerPadding)
-            }
         }
         .background(CoordinatorTheme.Palette.windowBackground)
         .coordinatorFlushRegion(edge: .leading)
@@ -1617,133 +1603,6 @@ struct CoordinatorModeView: View {
                 .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
             }
             .background(CoordinatorTheme.Palette.windowBackground)
-        }
-    }
-
-    private func missionPlanFooterComposer(
-        rail: CoordinatorModeCoordinatorRail,
-        metrics: CoordinatorVisualMetrics
-    ) -> some View {
-        let placeholder = missionPlanFooterComposerPlaceholder(rail)
-        let canEdit = canEditMissionPlanRevision(rail)
-        let canSubmit = canSubmitMissionPlanRevision(rail)
-
-        return VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-            HStack(spacing: metrics.tightSpacing) {
-                Image(systemName: "pencil.line")
-                    .font(.system(size: metrics.microIconSize, weight: .semibold))
-                Text("✎ PLAN")
-                    .font(metrics.microMedium)
-                    .tracking(0.4)
-            }
-            .foregroundStyle(canEdit ? Color.accentColor : .secondary)
-
-            ComposerChrome(
-                bottomOcclusion: $missionPlanComposerChromeOcclusion,
-                mainContentHeight: max(missionPlanComposerTextFieldHeight, metrics.composerTextMinHeight),
-                highlightColor: canSubmit ? Color.accentColor : nil,
-                bubbleVerticalPaddingOverride: metrics.coordinatorComposerChromeVerticalPadding,
-                bubbleInnerSpacingOverride: metrics.coordinatorComposerChromeInnerSpacing,
-                controlStripHeightOverride: metrics.composerControlStripHeight,
-                bubbleStroke: AgentModeSurfaceTheme.Palette.composerBubbleStroke,
-                bubbleShadow: AgentModeSurfaceTheme.Palette.composerShadow,
-                bubbleShadowRadius: 7,
-                main: {
-                    ResizableTextField(
-                        text: $missionPlanRevisionDraft,
-                        placeholder: placeholder,
-                        onReturn: submitMissionPlanRevision,
-                        resetTrigger: $missionPlanComposerTextFieldResetTrigger,
-                        features: coordinatorComposerFeatures(),
-                        onHeightChange: { newHeight in
-                            missionPlanComposerTextFieldHeight = newHeight
-                        }
-                    )
-                    .frame(height: max(missionPlanComposerTextFieldHeight, metrics.composerTextMinHeight))
-                    .disabled(!canEdit)
-                    .focused($isMissionPlanComposerFocused)
-                    .overlay(
-                        Text(placeholder)
-                            .font(metrics.body)
-                            .foregroundStyle(.secondary)
-                            .opacity(missionPlanRevisionDraft.isEmpty ? 1 : 0)
-                            .padding(.leading, 5)
-                            .padding(.top, 8)
-                            .allowsHitTesting(false),
-                        alignment: .topLeading
-                    )
-                },
-                strip: {
-                    HStack(spacing: metrics.smallSpacing) {
-                        Text("Plan revision")
-                            .font(metrics.microMedium)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-
-                        Spacer(minLength: metrics.smallSpacing)
-
-                        Button {
-                            submitMissionPlanRevision()
-                        } label: {
-                            Image(systemName: isSubmittingMissionPlanRevision ? "hourglass" : "paperplane.fill")
-                                .font(.system(size: metrics.composerSendIconSize, weight: .semibold))
-                                .frame(width: metrics.sendButtonSize, height: metrics.sendButtonSize)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(canSubmit ? Color.accentColor : Color.secondary.opacity(0.55))
-                        .disabled(!canSubmit)
-                        .hoverTooltip(isSubmittingMissionPlanRevision ? "Sending" : "Revise plan")
-                    }
-                    .frame(height: metrics.composerControlStripHeight)
-                    .padding(.horizontal, metrics.composerControlHorizontalPadding)
-                }
-            )
-        }
-    }
-
-    private func missionPlanFooterComposerPlaceholder(_ rail: CoordinatorModeCoordinatorRail) -> String {
-        guard let plan = rail.missionPlan else {
-            return "Approve the plan first to revise it…"
-        }
-        if plan.approvalState == .awaitingApproval {
-            return "Approve the plan first to revise it…"
-        }
-        return "Revise the plan — add, remove, or change a pending step…"
-    }
-
-    private func canEditMissionPlanRevision(_ rail: CoordinatorModeCoordinatorRail) -> Bool {
-        guard rail.state == .selected,
-              let plan = rail.missionPlan,
-              rail.isComposerEnabled,
-              rail.isComposerSendEnabled,
-              CoordinatorMissionPresentationPolicy.shouldShowPlanRevisionComposer(for: plan),
-              plan.approvalState != .awaitingApproval
-        else { return false }
-        return !isSubmittingMissionPlanRevision
-    }
-
-    private func canSubmitMissionPlanRevision(_ rail: CoordinatorModeCoordinatorRail) -> Bool {
-        canEditMissionPlanRevision(rail)
-            && !missionPlanRevisionDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func submitMissionPlanRevision() {
-        let rail = viewModel.snapshot.coordinatorRail
-        let draft = missionPlanRevisionDraft
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
-              canSubmitMissionPlanRevision(rail)
-        else { return }
-
-        isSubmittingMissionPlanRevision = true
-        isMissionPlanComposerFocused = true
-        Task { @MainActor in
-            let result = await viewModel.submitPlanRevisionDirective(draft)
-            if result == .accepted {
-                missionPlanRevisionDraft = ""
-            }
-            isSubmittingMissionPlanRevision = false
-            isMissionPlanComposerFocused = true
         }
     }
 
@@ -3891,15 +3750,9 @@ struct CoordinatorModeView: View {
                     coordinatorRevisionProposalDetail("Continuing would be", continuingImpact, metrics: metrics)
                 }
 
-                TextField(
-                    "Optional guidance for the revised plan",
-                    text: Binding(
-                        get: { coordinatorRevisionGuidanceDrafts[proposal.id] ?? "" },
-                        set: { coordinatorRevisionGuidanceDrafts[proposal.id] = $0 }
-                    )
-                )
-                .textFieldStyle(.roundedBorder)
-                .font(metrics.micro)
+                Text("Optional guidance is entered in the Mission composer below and is attached only if you choose Revise plan.")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
 
                 if let actionNotice {
                     HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
@@ -3920,7 +3773,7 @@ struct CoordinatorModeView: View {
                         description: "Request a concrete revised plan. Optional guidance is attached to this decision.",
                         accentColor: Color.orange,
                         metrics: metrics,
-                        action: { onRevise(coordinatorRevisionGuidanceDrafts[proposal.id]) }
+                        action: { onRevise(coordinatorDirectiveDraft) }
                     )
                     coordinatorDirectorCheckpointActionButton(
                         label: "Keep current plan",
@@ -4946,17 +4799,6 @@ struct CoordinatorModeView: View {
     private func reviseCoordinatorPlanApprovalCheckpoint() {
         coordinatorOwnedCheckpointDrafts[Self.planApprovalCheckpointDraftKey] = nil
         coordinatorOwnedCheckpointQuestionIndex[Self.planApprovalCheckpointDraftKey] = nil
-        let rail = viewModel.snapshot.coordinatorRail
-        if isMissionPlanPaneVisible,
-           rail.missionPlan != nil,
-           canEditMissionPlanRevision(rail)
-        {
-            if missionPlanRevisionDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                missionPlanRevisionDraft = "Revise the plan: "
-            }
-            isMissionPlanComposerFocused = true
-            return
-        }
         _ = viewModel.requestSelectedPlanRevision()
         if coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             coordinatorDirectiveDraft = "Revise the plan: "
@@ -6087,15 +5929,25 @@ struct CoordinatorModeView: View {
             for: rail.missionPlan,
             hasPendingChildQuestion: pendingChildRow != nil
         )
+        let missionComposerContext = viewModel.missionComposerContext()
         let placeholder: String = switch composerMode {
         case .standard:
-            coordinatorComposerPlaceholder(rail, pendingChildRow: pendingChildRow)
+            pendingChildRow == nil && rail.state == .selected
+                ? missionComposerContext.placeholder
+                : coordinatorComposerPlaceholder(rail, pendingChildRow: pendingChildRow)
         case let .terminalPrompt(action):
             action.placeholder
         }
 
         return VStack(alignment: .leading, spacing: metrics.smallSpacing) {
-            if let pendingChildRow, let pendingChildStructuredState {
+            if case .pendingRevisionProposal = missionComposerContext.route {
+                coordinatorComposerNotice(
+                    "Guidance stays local until you choose Revise plan on the Plan Revision card. Keep current plan and Stop Mission ignore it.",
+                    metrics: metrics
+                )
+            } else if case let .unavailableRevision(_, reason) = missionComposerContext.route {
+                coordinatorComposerNotice(reason, metrics: metrics)
+            } else if let pendingChildRow, let pendingChildStructuredState {
                 coordinatorStructuredPendingChildInteractionCard(
                     row: pendingChildRow,
                     pending: pendingChildStructuredState,
@@ -6121,6 +5973,7 @@ struct CoordinatorModeView: View {
                 case .standard, .terminalPrompt:
                     coordinatorComposerChrome(
                         rail,
+                        context: missionComposerContext,
                         placeholder: placeholder,
                         metrics: metrics
                     )
@@ -6131,6 +5984,7 @@ struct CoordinatorModeView: View {
 
     private func coordinatorComposerChrome(
         _ rail: CoordinatorModeCoordinatorRail,
+        context: CoordinatorModeViewModel.MissionComposerContext,
         placeholder: String,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
@@ -6156,8 +6010,9 @@ struct CoordinatorModeView: View {
                     }
                 )
                 .frame(height: max(coordinatorTextFieldHeight, metrics.composerTextMinHeight))
-                .disabled(!canEditCoordinatorDirective(rail))
+                .disabled(!canEditCoordinatorDirective(rail, context: context))
                 .focused($isCoordinatorComposerFocused)
+                .accessibilityLabel(context.accessibilityLabel)
                 .overlay(
                     Text(placeholder)
                         .font(metrics.body)
@@ -6170,7 +6025,7 @@ struct CoordinatorModeView: View {
                 )
             },
             strip: {
-                coordinatorComposerControlStrip(rail, metrics: metrics)
+                coordinatorComposerControlStrip(rail, context: context, metrics: metrics)
             }
         )
     }
@@ -6244,7 +6099,11 @@ struct CoordinatorModeView: View {
         }
     }
 
-    private func coordinatorComposerControlStrip(_ rail: CoordinatorModeCoordinatorRail, metrics: CoordinatorVisualMetrics) -> some View {
+    private func coordinatorComposerControlStrip(
+        _ rail: CoordinatorModeCoordinatorRail,
+        context: CoordinatorModeViewModel.MissionComposerContext,
+        metrics: CoordinatorVisualMetrics
+    ) -> some View {
         let pendingChildRow = viewModel.activePendingChildInteractionRow()
         let isChildReply = pendingChildRow != nil
         let isTerminalMission = rail.missionPlan?.status.isTerminal == true
@@ -6270,7 +6129,11 @@ struct CoordinatorModeView: View {
                 .hoverTooltip(isChildReply ? "Answer the child question." : policyEcho.tooltip)
 
             HStack(spacing: metrics.tightSpacing) {
-                if !isChildReply, !isTerminalMission, viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission {
+                if !isChildReply,
+                   !isTerminalMission,
+                   isOrdinaryMissionComposer(context),
+                   viewModel.canStopSelectedCoordinatorMission || isStoppingCoordinatorMission
+                {
                     coordinatorComposerStopButton(metrics: metrics)
                 }
 
@@ -6284,7 +6147,8 @@ struct CoordinatorModeView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(canSubmitCoordinatorDirective ? Color.accentColor : Color.secondary.opacity(0.55))
                 .disabled(!canSubmitCoordinatorDirective)
-                .hoverTooltip(isSubmittingCoordinatorDirective ? "Sending" : (isChildReply ? "Answer child" : "Send"))
+                .hoverTooltip(coordinatorComposerSendTooltip(context, isChildReply: isChildReply))
+                .accessibilityLabel(coordinatorComposerSendTooltip(context, isChildReply: isChildReply))
             }
             .fixedSize(horizontal: true, vertical: false)
         }
@@ -6766,17 +6630,48 @@ struct CoordinatorModeView: View {
 
     private var canSubmitCoordinatorDirective: Bool {
         let pendingChildRow = viewModel.activePendingChildInteractionRow()
+        let context = viewModel.missionComposerContext()
         return (
             viewModel.snapshot.coordinatorRail.isComposerSendEnabled
                 || viewModel.snapshot.coordinatorRail.state == .chooseCoordinator
                 || pendingChildRow != nil
         )
+            && (pendingChildRow != nil || context.sendsOnReturn)
             && !isSubmittingCoordinatorDirective
             && !coordinatorDirectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private func canEditCoordinatorDirective(_ rail: CoordinatorModeCoordinatorRail) -> Bool {
-        viewModel.activePendingChildInteractionRow() != nil || rail.state == .chooseCoordinator || rail.isComposerEnabled
+    private func canEditCoordinatorDirective(
+        _ rail: CoordinatorModeCoordinatorRail,
+        context: CoordinatorModeViewModel.MissionComposerContext
+    ) -> Bool {
+        if viewModel.activePendingChildInteractionRow() != nil || rail.state == .chooseCoordinator || rail.isComposerEnabled {
+            return true
+        }
+        if case .pendingRevisionProposal = context.route {
+            return true
+        }
+        return false
+    }
+
+    private func isOrdinaryMissionComposer(_ context: CoordinatorModeViewModel.MissionComposerContext) -> Bool {
+        if case .ordinary = context.route { return true }
+        return false
+    }
+
+    private func coordinatorComposerSendTooltip(
+        _ context: CoordinatorModeViewModel.MissionComposerContext,
+        isChildReply: Bool
+    ) -> String {
+        if isSubmittingCoordinatorDirective { return "Sending" }
+        if isChildReply { return "Answer child" }
+        if case .pendingRevisionProposal = context.route {
+            return "Choose Revise plan on the card to attach this guidance"
+        }
+        if case .unavailableRevision = context.route {
+            return "Refresh Mission revision state before sending"
+        }
+        return "Send"
     }
 
     private func submitCoordinatorDirective() {
@@ -6789,12 +6684,16 @@ struct CoordinatorModeView: View {
             submitPendingChildInteractionResponse(draft, to: pendingChildRow)
             return
         }
+        let context = viewModel.missionComposerContext()
         coordinatorDirectiveDraft = ""
         isSubmittingCoordinatorDirective = true
         isCoordinatorComposerFocused = true
         Task { @MainActor in
-            let result = await viewModel.submitCoordinatorDirective(draft)
-            if result != .accepted, coordinatorDirectiveDraft.isEmpty {
+            let result = await viewModel.submitMissionComposerDirective(draft, context: context)
+            if result != .accepted,
+               coordinatorDirectiveDraft.isEmpty,
+               viewModel.snapshot.coordinatorRail.coordinatorSessionID == context.coordinatorSessionID
+            {
                 coordinatorDirectiveDraft = draft
             }
             isSubmittingCoordinatorDirective = false
@@ -6858,17 +6757,26 @@ struct CoordinatorModeView: View {
         guidance: String? = nil
     ) {
         guard !isSubmittingCoordinatorDirective else { return }
+        let renderedGuidance = guidance
         isSubmittingCoordinatorDirective = true
         Task { @MainActor in
-            _ = await viewModel.submitRevisionProposalAction(
+            let result = await viewModel.submitRevisionProposalAction(
                 coordinatorSessionID: coordinatorSessionID,
                 action: action,
                 proposalID: proposalID,
                 expectedContractFingerprint: expectedContractFingerprint,
                 expectedCheckpointInstanceID: expectedCheckpointInstanceID,
-                guidance: guidance
+                guidance: renderedGuidance
             )
+            if result == .accepted,
+               action == .revisePlan,
+               viewModel.snapshot.coordinatorRail.coordinatorSessionID == coordinatorSessionID,
+               coordinatorDirectiveDraft == (renderedGuidance ?? "")
+            {
+                coordinatorDirectiveDraft = ""
+            }
             isSubmittingCoordinatorDirective = false
+            isCoordinatorComposerFocused = true
         }
     }
 

@@ -220,11 +220,6 @@ enum CoordinatorMissionPresentationPolicy {
         !(plan?.status.isTerminal ?? false)
     }
 
-    static func shouldShowPlanRevisionComposer(for plan: CoordinatorMissionPlan?) -> Bool {
-        guard let plan else { return false }
-        return !plan.status.isTerminal
-    }
-
     static func policyMetadataParts(for policy: CoordinatorMissionPolicySnapshot) -> [String] {
         var title = policy.name
         if isPolicyEdited(policy) {

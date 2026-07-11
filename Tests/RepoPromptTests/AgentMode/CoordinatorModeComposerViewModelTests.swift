@@ -2012,7 +2012,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertEqual(CoordinatorMissionPresentationPolicy.primaryStatus(for: plan), .approval(.awaitingApproval))
     }
 
-    func testPresentationPolicySuppressesLiveAndPlanRevisionForTerminalMissions() {
+    func testPresentationPolicySuppressesLiveForTerminalMissions() {
         let completedPlan = CoordinatorMissionPlan(id: uuid(693), status: .completed)
         let stoppedPlan = CoordinatorMissionPlan(id: uuid(694), status: .stopped)
         let runningPlan = CoordinatorMissionPlan(id: uuid(695), status: .running)
@@ -2020,9 +2020,6 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertFalse(CoordinatorMissionPresentationPolicy.shouldShowLiveBadge(for: completedPlan))
         XCTAssertFalse(CoordinatorMissionPresentationPolicy.shouldShowLiveBadge(for: stoppedPlan))
         XCTAssertTrue(CoordinatorMissionPresentationPolicy.shouldShowLiveBadge(for: runningPlan))
-        XCTAssertFalse(CoordinatorMissionPresentationPolicy.shouldShowPlanRevisionComposer(for: completedPlan))
-        XCTAssertFalse(CoordinatorMissionPresentationPolicy.shouldShowPlanRevisionComposer(for: stoppedPlan))
-        XCTAssertTrue(CoordinatorMissionPresentationPolicy.shouldShowPlanRevisionComposer(for: runningPlan))
     }
 
     func testPresentationPolicyUsesTerminalConversationSummary() {
@@ -4142,6 +4139,189 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         )
         XCTAssertEqual(harness.session.coordinatorFollowThroughState?.missionPlan?.approvalState, .approved)
         XCTAssertEqual(resolutionBarrierAttempts, 4)
+    }
+
+    func testUnifiedMissionComposerProjectsRevisionStatesWithoutAuthorityEscalation() async throws {
+        let harness = await makeRevisionProposalPersistenceHarness()
+        harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }
+        harness.coordinatorModeViewModel.selectCoordinator(sessionID: harness.coordinatorID)
+        let staleOrdinaryContext = harness.coordinatorModeViewModel.missionComposerContext()
+        _ = try await harness.coordinatorModeViewModel.appendRevisionProposal(
+            coordinatorSessionID: harness.coordinatorID,
+            request: harness.request
+        )
+        let proposal = try XCTUnwrap(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.pendingRevisionProposal
+        )
+        harness.coordinatorModeViewModel.selectCoordinator(sessionID: harness.coordinatorID)
+        guard case let .rejected(staleOrdinaryMessage) = await harness.coordinatorModeViewModel.submitMissionComposerDirective(
+            "This must not bypass the newly filed proposal.",
+            context: staleOrdinaryContext
+        ) else {
+            return XCTFail("Expected stale ordinary composer context to fail closed.")
+        }
+        XCTAssertEqual(staleOrdinaryMessage, CoordinatorMissionRevisionProposalPause.heldReason)
+        let pendingContext = harness.coordinatorModeViewModel.missionComposerContext()
+        guard case let .pendingRevisionProposal(
+            coordinatorSessionID,
+            proposalID,
+            expectedContractFingerprint,
+            expectedCheckpointInstanceID
+        ) = pendingContext.route else {
+            return XCTFail("Expected pending-proposal composer context.")
+        }
+        XCTAssertEqual(coordinatorSessionID, harness.coordinatorID)
+        XCTAssertEqual(proposalID, proposal.id)
+        XCTAssertEqual(expectedContractFingerprint, proposal.baseContractFingerprint)
+        XCTAssertEqual(
+            expectedCheckpointInstanceID,
+            CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                coordinatorSessionID: harness.coordinatorID,
+                proposal: proposal
+            )
+        )
+        XCTAssertEqual(pendingContext.placeholder, "Revise plan, and consider...")
+        XCTAssertFalse(pendingContext.sendsOnReturn)
+
+        let before = try XCTUnwrap(harness.session.coordinatorFollowThroughState?.missionPlan)
+        guard case let .rejected(message) = await harness.coordinatorModeViewModel.submitMissionComposerDirective(
+            "Keep the exact typed guidance local.",
+            context: pendingContext
+        ) else {
+            return XCTFail("Pending guidance must not send or decide the proposal.")
+        }
+        XCTAssertTrue(message.contains("Choose Revise plan"))
+        XCTAssertEqual(harness.session.coordinatorFollowThroughState?.missionPlan, before)
+
+        harness.agentModeViewModel.test_setRevisionDraftingDirectiveSubmitter { _ in .submitted }
+        let accepted = await harness.coordinatorModeViewModel.submitRevisionProposalAction(
+            coordinatorSessionID: harness.coordinatorID,
+            action: .revisePlan,
+            proposalID: proposal.id,
+            expectedContractFingerprint: proposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: expectedCheckpointInstanceID,
+            guidance: "Keep the exact typed guidance local."
+        )
+        XCTAssertEqual(accepted, .accepted)
+        let draftingContext = harness.coordinatorModeViewModel.missionComposerContext()
+        guard case .acceptedRevisionDrafting = draftingContext.route else {
+            return XCTFail("Expected accepted-resolution drafting context.")
+        }
+        XCTAssertEqual(draftingContext.placeholder, "Add guidance for the revised plan...")
+        XCTAssertTrue(draftingContext.sendsOnReturn)
+
+        var revisedPlan = try XCTUnwrap(harness.session.coordinatorFollowThroughState?.missionPlan)
+        revisedPlan.approvalState = .awaitingApproval
+        revisedPlan.revision += 1
+        harness.session.coordinatorFollowThroughState?.missionPlan = revisedPlan
+        harness.coordinatorModeViewModel.refresh()
+        let revisedReadyContext = harness.coordinatorModeViewModel.missionComposerContext()
+        guard case .revisedPlanAwaitingApproval = revisedReadyContext.route else {
+            return XCTFail("Expected revised-plan approval context.")
+        }
+        XCTAssertEqual(revisedReadyContext.placeholder, "Request another change...")
+
+        harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in false }
+        guard case let .rejected(durabilityMessage) = await harness.coordinatorModeViewModel.submitMissionComposerDirective(
+            "Keep the second revision narrow.",
+            context: revisedReadyContext
+        ) else {
+            return XCTFail("Expected revised-plan request persistence failure.")
+        }
+        XCTAssertTrue(durabilityMessage.contains("not durably recorded"), durabilityMessage)
+        XCTAssertEqual(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.approvalState,
+            .awaitingApproval
+        )
+        harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }
+
+        revisedPlan.approvalState = .approved
+        harness.session.coordinatorFollowThroughState?.missionPlan = revisedPlan
+        harness.coordinatorModeViewModel.refresh()
+        let ordinaryContext = harness.coordinatorModeViewModel.missionComposerContext()
+        guard case .ordinary = ordinaryContext.route else {
+            return XCTFail("Expected ordinary Director composer context.")
+        }
+        XCTAssertEqual(ordinaryContext.placeholder, "Message the Director...")
+    }
+
+    func testUnifiedMissionComposerCapturesRenderedMissionAndUsesAcceptedDraftingAuthority() async throws {
+        let harness = await makeRevisionProposalPersistenceHarness()
+        harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }
+        _ = try await harness.coordinatorModeViewModel.appendRevisionProposal(
+            coordinatorSessionID: harness.coordinatorID,
+            request: harness.request
+        )
+        let proposal = try XCTUnwrap(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.pendingRevisionProposal
+        )
+        harness.agentModeViewModel.test_setRevisionDraftingDirectiveSubmitter { _ in .submitted }
+        _ = await harness.coordinatorModeViewModel.submitRevisionProposalAction(
+            coordinatorSessionID: harness.coordinatorID,
+            action: .revisePlan,
+            proposalID: proposal.id,
+            expectedContractFingerprint: proposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                coordinatorSessionID: harness.coordinatorID,
+                proposal: proposal
+            )
+        )
+        let draftingPlan = try XCTUnwrap(harness.session.coordinatorFollowThroughState?.missionPlan)
+        let otherCoordinatorID = uuid(9802)
+        var submissions: [CoordinatorDirectiveSubmission] = []
+        let viewModel = CoordinatorModeViewModel(
+            inputProvider: { sortMode, selectedCoordinatorID in
+                self.input(
+                    live: [
+                        self.live(
+                            id: harness.coordinatorID,
+                            tab: self.uuid(9801),
+                            title: "Rendered Mission",
+                            updatedAt: self.date(2),
+                            state: .idle,
+                            isMCP: true,
+                            coordinatorRuntime: true,
+                            missionPlan: draftingPlan
+                        ),
+                        self.live(
+                            id: otherCoordinatorID,
+                            tab: self.uuid(9803),
+                            title: "Other Mission",
+                            updatedAt: self.date(1),
+                            state: .idle,
+                            isMCP: true,
+                            coordinatorRuntime: true,
+                            missionPlan: CoordinatorMissionPlan(status: .running, approvalState: .approved)
+                        )
+                    ],
+                    selectedCoordinatorID: selectedCoordinatorID,
+                    sort: sortMode,
+                    demoCoordinatorIDs: [harness.coordinatorID, otherCoordinatorID]
+                )
+            },
+            dashboardVisibilityHandler: { _ in },
+            directiveSubmitter: { submission in
+                submissions.append(submission)
+                return .accepted
+            }
+        )
+        viewModel.selectCoordinator(sessionID: harness.coordinatorID)
+        let renderedContext = viewModel.missionComposerContext()
+        viewModel.selectCoordinator(sessionID: otherCoordinatorID)
+
+        let result = await viewModel.submitMissionComposerDirective(
+            "Preserve the read-only first step.",
+            context: renderedContext
+        )
+
+        XCTAssertEqual(result, .accepted)
+        XCTAssertEqual(submissions.count, 1)
+        XCTAssertEqual(submissions.first?.coordinatorSessionID, harness.coordinatorID)
+        XCTAssertEqual(
+            submissions.first?.acceptedRevisionDraftingResolutionID,
+            draftingPlan.acceptedRevisionDraftingResolution?.id
+        )
+        XCTAssertEqual(submissions.first?.visibleText, "Preserve the read-only first step.")
     }
 
     func testRevisionGuidanceWaitsForDurableResolutionBeforeTrustedDraftingDirective() async throws {

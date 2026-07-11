@@ -108,6 +108,37 @@ Coordinator mode SHALL display summary-only proposal lifecycle state from canoni
 - **THEN** user-facing status and minimal receipt history SHALL describe the actual outcome
 - **AND** it SHALL NOT imply exact plan approval, execution completion, merge, commit, push, or deployment.
 
+### Requirement: Mission composer is state-aware during revision flows
+Coordinator mode SHALL expose one Mission composer and SHALL NOT render a second plan-revision composer. Cards remain the authority surface for proposal resolution, plan approval, and Stop.
+
+#### Scenario: Proposal awaits a decision
+- **WHEN** a revision proposal is pending
+- **THEN** the composer SHALL invite optional guidance with **Revise plan, and consider...**
+- **AND** Enter/send SHALL NOT deliver, queue, or resolve that guidance independently
+- **AND** Revise plan SHALL atomically consume the rendered Mission/proposal identities and the exact current guidance
+- **AND** Keep current plan and Stop Mission SHALL ignore the guidance.
+
+#### Scenario: Accepted revision is being drafted
+- **WHEN** an accepted proposal lineage is in `revisionRequested`
+- **THEN** the composer SHALL invite **Add guidance for the revised plan...**
+- **AND** send SHALL carry the rendered Mission and accepted-resolution identities through the narrow accepted-revision drafting path
+- **AND** it SHALL NOT fall back to generic old-contract execution.
+
+#### Scenario: Concrete revised plan awaits approval
+- **WHEN** an accepted proposal lineage has produced a concrete plan in `awaitingApproval`
+- **THEN** the composer SHALL invite **Request another change...**
+- **AND** send SHALL request revision through the trusted rendered plan-checkpoint path before using accepted-resolution drafting authority
+- **AND** send SHALL never approve the revised plan.
+
+#### Scenario: Mission is in an ordinary approved or executing state
+- **WHEN** no active revision flow owns composer routing
+- **THEN** the composer SHALL invite **Message the Director...** and use ordinary Director messaging.
+
+#### Scenario: Selection changes during send
+- **WHEN** a composer or card action starts and the selected Mission changes before asynchronous work completes
+- **THEN** the operation SHALL retain the rendered Mission and revision identities
+- **AND** it SHALL fail closed rather than retargeting the newly selected Mission.
+
 ### Requirement: Plan Revision container morphs through revised approval
 The Plan Revision container SHALL derive post-Revise state from the latest accepted-for-concrete-revision resolution/proposal lineage. It SHALL show drafting during `revisionRequested`, **Approve revised Mission Plan** during `awaitingApproval`, and **Plan revised to address: …** after approval.
 

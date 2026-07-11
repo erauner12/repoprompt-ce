@@ -69,6 +69,7 @@
 - [x] 8.4 Enforce checkpoint precedence: revision proposal first; selected-Mission child interaction only when no proposal is pending; then concrete plan approval and step boundary.
 - [x] 8.5 Extend external `submit` with `revise_plan` and `keep_current_plan` plus required proposal/contract/checkpoint identities; retain app-owned Stop parity and reject runtime self-resolution.
 - [x] 8.6 Add projection/UI/MCP tests for proposal-first uniqueness/precedence, disabled held-question rendering/reason, answer rejection without recording, stable identity, outcome transitions, stale rendering, labels, action parity, restart reprojection, trusted contract-dial invalidation/removal, required re-proposal, and absence of exact replacement payload.
+- [x] 8.7 Unify revision-flow guidance in the Mission composer; remove the second plan composer; preserve card authority, rendered Mission identity, accepted-resolution routing, and durable revised-plan request ordering with focused tests.
 
 ## 9. Status, Waits, Events, and Migration Safety
 

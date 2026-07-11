@@ -75,6 +75,69 @@ final class CoordinatorModeViewModel: ObservableObject {
         case rejected(message: String)
     }
 
+    struct MissionComposerContext: Equatable {
+        enum Route: Equatable {
+            case pendingRevisionProposal(
+                coordinatorSessionID: UUID,
+                proposalID: UUID,
+                expectedContractFingerprint: String,
+                expectedCheckpointInstanceID: String
+            )
+            case acceptedRevisionDrafting(
+                coordinatorSessionID: UUID,
+                resolutionID: UUID
+            )
+            case revisedPlanAwaitingApproval(
+                coordinatorSessionID: UUID,
+                planID: UUID,
+                planRevision: Int,
+                expectedCheckpointInstanceID: String,
+                resolutionID: UUID
+            )
+            case unavailableRevision(coordinatorSessionID: UUID, reason: String)
+            case ordinary(coordinatorSessionID: UUID?)
+        }
+
+        let route: Route
+        let placeholder: String
+
+        var sendsOnReturn: Bool {
+            switch route {
+            case .pendingRevisionProposal, .unavailableRevision:
+                false
+            case .acceptedRevisionDrafting, .revisedPlanAwaitingApproval, .ordinary:
+                true
+            }
+        }
+
+        var coordinatorSessionID: UUID? {
+            switch route {
+            case let .pendingRevisionProposal(coordinatorSessionID, _, _, _),
+                 let .acceptedRevisionDrafting(coordinatorSessionID, _),
+                 let .revisedPlanAwaitingApproval(coordinatorSessionID, _, _, _, _),
+                 let .unavailableRevision(coordinatorSessionID, _):
+                coordinatorSessionID
+            case let .ordinary(coordinatorSessionID):
+                coordinatorSessionID
+            }
+        }
+
+        var accessibilityLabel: String {
+            switch route {
+            case .pendingRevisionProposal:
+                "Optional guidance for the Revise plan decision"
+            case .acceptedRevisionDrafting:
+                "Guidance for the revised Mission plan"
+            case .revisedPlanAwaitingApproval:
+                "Request another Mission plan change"
+            case .unavailableRevision:
+                "Mission revision guidance unavailable"
+            case .ordinary:
+                "Message the Mission Director"
+            }
+        }
+    }
+
     enum PostApprovalContinuationStatus: Equatable {
         case none
         case deferred(checkpointInstanceID: String)
@@ -286,6 +349,13 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias RevisionProposalResolver = @MainActor (_ request: CoordinatorMissionRevisionProposalTrustedResolutionRequest) async throws -> CoordinatorMissionRevisionProposalResolutionResult
     typealias TrustedMissionStopRecorder = @MainActor (_ coordinatorSessionID: UUID, _ targetSessionIDs: [UUID]) async throws -> Void
     typealias TrustedContractChangeApplier = @MainActor (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) async throws -> Void
+    typealias TrustedRevisedPlanChangeRequester = @MainActor (
+        _ coordinatorSessionID: UUID,
+        _ planID: UUID,
+        _ planRevision: Int,
+        _ expectedCheckpointInstanceID: String,
+        _ resolutionID: UUID
+    ) async throws -> Void
     typealias MissionStopper = @MainActor (_ request: CoordinatorMissionStopRequest) async -> CoordinatorMissionStopResult
     typealias PendingFollowThroughEventProvider = @MainActor (_ coordinatorSessionID: UUID?) -> CoordinatorFollowThroughEvent?
     typealias FollowThroughEventSubmitter = @MainActor (_ event: CoordinatorFollowThroughEvent) async -> DirectiveSubmissionResult
@@ -370,6 +440,7 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let revisionProposalResolver: RevisionProposalResolver
     private let trustedMissionStopRecorder: TrustedMissionStopRecorder?
     private let trustedContractChangeApplier: TrustedContractChangeApplier?
+    private let trustedRevisedPlanChangeRequester: TrustedRevisedPlanChangeRequester?
     private let missionStopper: MissionStopper
     private let pendingFollowThroughEventProvider: PendingFollowThroughEventProvider
     private let followThroughEventSubmitter: FollowThroughEventSubmitter
@@ -433,6 +504,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         },
         trustedMissionStopRecorder: TrustedMissionStopRecorder? = nil,
         trustedContractChangeApplier: TrustedContractChangeApplier? = nil,
+        trustedRevisedPlanChangeRequester: TrustedRevisedPlanChangeRequester? = nil,
         missionStopper: @escaping MissionStopper = { request in
             CoordinatorMissionStopResult(
                 requestedSessionIDs: request.sessionIDs,
@@ -470,6 +542,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.revisionProposalResolver = revisionProposalResolver
         self.trustedMissionStopRecorder = trustedMissionStopRecorder
         self.trustedContractChangeApplier = trustedContractChangeApplier
+        self.trustedRevisedPlanChangeRequester = trustedRevisedPlanChangeRequester
         self.missionStopper = missionStopper
         self.pendingFollowThroughEventProvider = pendingFollowThroughEventProvider
         self.followThroughEventSubmitter = followThroughEventSubmitter
@@ -1394,6 +1467,181 @@ final class CoordinatorModeViewModel: ObservableObject {
         } catch {
             composerNotice = "Mission policy could not be updated: \(error.localizedDescription)"
             return false
+        }
+    }
+
+    func missionComposerContext() -> MissionComposerContext {
+        let rail = snapshot.coordinatorRail
+        guard rail.state == .selected,
+              let coordinatorSessionID = rail.coordinatorSessionID
+        else {
+            return MissionComposerContext(
+                route: .ordinary(coordinatorSessionID: rail.coordinatorSessionID),
+                placeholder: "Message the Director..."
+            )
+        }
+        return missionComposerContext(for: coordinatorSessionID)
+    }
+
+    private func missionComposerContext(for coordinatorSessionID: UUID) -> MissionComposerContext {
+        guard let plan = snapshot.coordinatorRail.availableCoordinators
+            .first(where: { $0.sessionID == coordinatorSessionID })?
+            .missionPlan,
+            !plan.status.isTerminal,
+            let presentation = CoordinatorPlanRevisionPresentation.project(
+                coordinatorSessionID: coordinatorSessionID,
+                plan: plan
+            )
+        else {
+            return MissionComposerContext(
+                route: .ordinary(coordinatorSessionID: coordinatorSessionID),
+                placeholder: "Message the Director..."
+            )
+        }
+
+        switch presentation.phase {
+        case .pendingDecision:
+            guard let fingerprint = presentation.expectedContractFingerprint,
+                  let checkpoint = presentation.expectedCheckpointInstanceID
+            else {
+                return MissionComposerContext(
+                    route: .unavailableRevision(
+                        coordinatorSessionID: coordinatorSessionID,
+                        reason: CoordinatorMissionRevisionProposalPause.heldReason
+                    ),
+                    placeholder: "Refresh Mission revision state..."
+                )
+            }
+            return MissionComposerContext(
+                route: .pendingRevisionProposal(
+                    coordinatorSessionID: coordinatorSessionID,
+                    proposalID: presentation.proposalID,
+                    expectedContractFingerprint: fingerprint,
+                    expectedCheckpointInstanceID: checkpoint
+                ),
+                placeholder: "Revise plan, and consider..."
+            )
+        case .drafting:
+            guard let resolution = plan.acceptedRevisionDraftingResolution else {
+                return MissionComposerContext(
+                    route: .unavailableRevision(
+                        coordinatorSessionID: coordinatorSessionID,
+                        reason: CoordinatorMissionRevisionProposalPause.heldReason
+                    ),
+                    placeholder: "Refresh Mission revision state..."
+                )
+            }
+            return MissionComposerContext(
+                route: .acceptedRevisionDrafting(
+                    coordinatorSessionID: coordinatorSessionID,
+                    resolutionID: resolution.id
+                ),
+                placeholder: "Add guidance for the revised plan..."
+            )
+        case .revisedPlanReady:
+            guard let resolution = plan.latestAcceptedRevisionLineage?.resolution else {
+                return MissionComposerContext(
+                    route: .unavailableRevision(
+                        coordinatorSessionID: coordinatorSessionID,
+                        reason: CoordinatorMissionRevisionProposalPause.heldReason
+                    ),
+                    placeholder: "Refresh Mission revision state..."
+                )
+            }
+            return MissionComposerContext(
+                route: .revisedPlanAwaitingApproval(
+                    coordinatorSessionID: coordinatorSessionID,
+                    planID: plan.id,
+                    planRevision: plan.revision,
+                    expectedCheckpointInstanceID: planApprovalCheckpointInstanceID(
+                        coordinatorSessionID: coordinatorSessionID,
+                        revision: plan.revision
+                    ),
+                    resolutionID: resolution.id
+                ),
+                placeholder: "Request another change..."
+            )
+        case .approvedCollapsed:
+            return MissionComposerContext(
+                route: .ordinary(coordinatorSessionID: coordinatorSessionID),
+                placeholder: "Message the Director..."
+            )
+        }
+    }
+
+    @discardableResult
+    func submitMissionComposerDirective(
+        _ text: String,
+        context: MissionComposerContext
+    ) async -> DirectiveSubmissionResult {
+        switch context.route {
+        case .pendingRevisionProposal:
+            let message = "Choose Revise plan on the Plan Revision card to attach this guidance. Sending guidance alone cannot decide the proposal."
+            composerNotice = message
+            return .rejected(message: message)
+        case let .acceptedRevisionDrafting(coordinatorSessionID, resolutionID):
+            return await submitAcceptedRevisionDraftingDirective(
+                text,
+                coordinatorSessionID: coordinatorSessionID,
+                expectedResolutionID: resolutionID
+            )
+        case let .revisedPlanAwaitingApproval(
+            coordinatorSessionID,
+            planID,
+            planRevision,
+            expectedCheckpointInstanceID,
+            resolutionID
+        ):
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                composerNotice = nil
+                return .rejected(message: "")
+            }
+            guard snapshot.coordinatorRail.coordinatorSessionID == coordinatorSessionID,
+                  snapshot.coordinatorRail.isComposerEnabled,
+                  snapshot.coordinatorRail.isComposerSendEnabled,
+                  let trustedRevisedPlanChangeRequester
+            else {
+                let message = "Mission revision request is unavailable. Refresh Mission status and retry."
+                composerNotice = message
+                return .rejected(message: message)
+            }
+            do {
+                try await trustedRevisedPlanChangeRequester(
+                    coordinatorSessionID,
+                    planID,
+                    planRevision,
+                    expectedCheckpointInstanceID,
+                    resolutionID
+                )
+                refresh()
+            } catch {
+                let message = "Mission revision request was not durably recorded; no guidance was sent. Refresh Mission status and retry. \(error.localizedDescription)"
+                composerNotice = message
+                refresh()
+                return .rejected(message: message)
+            }
+            return await submitAcceptedRevisionDraftingDirective(
+                trimmed,
+                coordinatorSessionID: coordinatorSessionID,
+                expectedResolutionID: resolutionID
+            )
+        case let .unavailableRevision(_, reason):
+            composerNotice = reason
+            return .rejected(message: reason)
+        case let .ordinary(coordinatorSessionID):
+            if let coordinatorSessionID {
+                refresh()
+                guard case .ordinary = missionComposerContext(for: coordinatorSessionID).route else {
+                    let message = CoordinatorMissionRevisionProposalPause.heldReason
+                    composerNotice = message
+                    return .rejected(message: message)
+                }
+            }
+            return await submitCoordinatorDirective(
+                text,
+                targetCoordinatorSessionID: coordinatorSessionID
+            )
         }
     }
 
@@ -3336,6 +3584,17 @@ extension AgentModeViewModel {
                 coordinatorSessionID: coordinatorSessionID,
                 update: update
             )
+        } trustedRevisedPlanChangeRequester: { [weak self] coordinatorSessionID, planID, planRevision, checkpoint, resolutionID in
+            guard let self else {
+                throw MCPError.invalidParams("Coordinator Mission revision persistence is unavailable.")
+            }
+            try await requestTrustedRevisedPlanChange(
+                coordinatorSessionID: coordinatorSessionID,
+                planID: planID,
+                planRevision: planRevision,
+                expectedCheckpointInstanceID: checkpoint,
+                resolutionID: resolutionID
+            )
         } missionStopper: { [weak self] request in
             guard let self else {
                 return CoordinatorMissionStopResult(
@@ -4224,6 +4483,80 @@ extension AgentModeViewModel {
             else {
                 throw MCPError.invalidParams("Coordinator Mission revision proposal summary changed before persistence.")
             }
+        }
+    }
+
+    @MainActor
+    private func requestTrustedRevisedPlanChange(
+        coordinatorSessionID: UUID,
+        planID: UUID,
+        planRevision: Int,
+        expectedCheckpointInstanceID: String,
+        resolutionID: UUID
+    ) async throws {
+        guard let match = sessions.first(where: { _, session in
+            session.activeAgentSessionID == coordinatorSessionID && session.isCoordinatorRuntime
+        }) else {
+            throw MCPError.invalidParams("Coordinator session \(coordinatorSessionID.uuidString) is not live in this window.")
+        }
+        let tabID = match.key
+        let session = match.value
+        var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        let originalState = state
+        guard let plan = state.missionPlan,
+              plan.id == planID,
+              plan.revision == planRevision,
+              plan.approvalState == .awaitingApproval,
+              !plan.status.isTerminal,
+              plan.latestAcceptedRevisionLineage?.resolution.id == resolutionID
+        else {
+            throw MCPError.invalidParams("The rendered revised Mission Plan changed before another revision was requested.")
+        }
+        let currentCheckpoint = "coordinator:\(coordinatorSessionID.uuidString):plan-approval:r\(planRevision)"
+        guard expectedCheckpointInstanceID == currentCheckpoint else {
+            throw MCPError.invalidParams("The rendered revised Mission Plan checkpoint is stale.")
+        }
+        let timestamp = Date()
+        let decision = CoordinatorMissionDecisionRecord(
+            userDecision: .requestedPlanRevision,
+            decisionClass: .plan,
+            checkpointInstanceID: currentCheckpoint,
+            timestamp: timestamp,
+            checkpointID: "plan-approval"
+        )
+        try state.applyMissionPlanUpdate(CoordinatorMissionPlanUpdate(
+            approvalState: .revisionRequested,
+            decisions: [decision],
+            events: [
+                CoordinatorMissionPlanEvent(
+                    kind: .revised,
+                    timestamp: timestamp,
+                    summary: "Another concrete Mission plan revision requested by user."
+                )
+            ],
+            updatedAt: timestamp
+        ))
+        guard let expectedPlan = state.missionPlan,
+              expectedPlan.approvalState == .revisionRequested,
+              expectedPlan.latestAcceptedRevisionLineage?.resolution.id == resolutionID,
+              expectedPlan.decisions.contains(where: {
+                  $0.checkpointInstanceID == currentCheckpoint
+                      && $0.label == CoordinatorMissionUserDecisionLabel.requestedPlanRevision.rawValue
+              })
+        else {
+            throw MCPError.invalidParams("Coordinator Mission revision request did not install canonical held state.")
+        }
+        persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+        let minimumGeneration = session.saveRequestGeneration
+        let persisted = await persistRevisionProposal(tabID: tabID, minimumGeneration: minimumGeneration)
+        guard persisted,
+              sessions[tabID] === session,
+              session.coordinatorFollowThroughState?.missionPlan == expectedPlan
+        else {
+            if sessions[tabID] === session {
+                persistCoordinatorFollowThroughState(originalState, tabID: tabID, session: session)
+            }
+            throw MCPError.invalidParams("Coordinator Mission revision request was not durably saved before drafting guidance.")
         }
     }
 
