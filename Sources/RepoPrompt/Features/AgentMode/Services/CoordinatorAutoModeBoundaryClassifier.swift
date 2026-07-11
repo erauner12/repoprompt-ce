@@ -36,7 +36,9 @@ struct CoordinatorAutoModeBoundaryClassifier {
         guard input.autoModeEnabled else { return .hold(.autoModeDisabled) }
         guard let coordinatorSessionID = input.coordinatorSessionID else { return .hold(.missingCoordinator) }
         guard input.state.originalObjectiveSummary?.isEmpty == false else { return .hold(.missingObjective) }
-        if input.state.missionPlan?.pendingRevisionProposal != nil {
+        if input.state.missionPlan?.pendingRevisionProposal != nil
+            || input.state.missionPlan?.hasRevisionProposalDurabilityHold == true
+        {
             return .hold(.pendingRevisionProposal)
         }
         if isCoordinatorBusy(input.coordinatorRunState) {

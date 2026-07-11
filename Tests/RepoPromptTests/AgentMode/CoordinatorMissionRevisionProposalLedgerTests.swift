@@ -482,6 +482,176 @@ final class CoordinatorMissionRevisionProposalLedgerTests: XCTestCase {
         XCTAssertEqual(state.missionPlan?.revisionProposalResolutions, [])
     }
 
+    func testTrustedKeepResolutionIsAtomicIdempotentAndRestoresContinuationOnlyAfterHoldClears() throws {
+        let coordinatorID = uuid(11)
+        var state = try makeState()
+        let continuation = try CoordinatorPostApprovalContinuationRecord(
+            id: uuid(12),
+            coordinatorSessionID: coordinatorID,
+            checkpointInstanceID: "approval-checkpoint",
+            planID: XCTUnwrap(state.missionPlan?.id),
+            planRevision: 1,
+            directiveText: "Continue",
+            status: .deferred,
+            createdAt: date(0),
+            updatedAt: date(1),
+            lastError: CoordinatorMissionRevisionProposalPause.heldReason
+        )
+        state.recordPostApprovalContinuation(continuation)
+        let appended = try state.appendRevisionProposal(request(for: state), filedAt: date(2))
+        let proposal = try XCTUnwrap(state.missionPlan?.pendingRevisionProposal)
+        let trusted = CoordinatorMissionRevisionProposalTrustedResolutionRequest(
+            coordinatorSessionID: coordinatorID,
+            action: .keepCurrentPlan,
+            proposalID: appended.proposalID,
+            expectedContractFingerprint: proposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                coordinatorSessionID: coordinatorID,
+                proposal: proposal
+            )
+        )
+
+        let first = try state.resolveRevisionProposalTransaction(trusted, resolvedAt: date(3))
+        let retry = try state.resolveRevisionProposalTransaction(trusted, resolvedAt: date(4))
+
+        XCTAssertEqual(first.disposition, .appended)
+        XCTAssertEqual(retry.disposition, .existingResolutionRetry)
+        XCTAssertEqual(first.resolutionID, retry.resolutionID)
+        XCTAssertEqual(state.missionPlan?.revisionProposalResolutions.count, 1)
+        XCTAssertEqual(state.missionPlan?.decisions.count, 1)
+        XCTAssertEqual(state.missionPlan?.approvalState, .approved)
+        XCTAssertEqual(state.missionPlan?.postApprovalContinuation?.status, .deferred)
+        XCTAssertTrue(state.missionPlan?.hasRevisionProposalDurabilityHold == true)
+        XCTAssertTrue(state.missionPlan?.holdsChildInteractionsForRevisionProposal == true)
+
+        XCTAssertTrue(state.clearRevisionProposalDurabilityHold(
+            transactionID: first.resolutionID,
+            at: date(5)
+        ))
+        XCTAssertFalse(state.missionPlan?.hasRevisionProposalDurabilityHold == true)
+        XCTAssertFalse(state.missionPlan?.holdsChildInteractionsForRevisionProposal == true)
+    }
+
+    func testTrustedReviseResolutionCASInvalidatesOldContinuationAndRejectsConflicts() throws {
+        let coordinatorID = uuid(11)
+        var state = try makeState()
+        let continuation = try CoordinatorPostApprovalContinuationRecord(
+            id: uuid(12),
+            coordinatorSessionID: coordinatorID,
+            checkpointInstanceID: "approval-checkpoint",
+            planID: XCTUnwrap(state.missionPlan?.id),
+            planRevision: 1,
+            directiveText: "Continue",
+            status: .deferred,
+            createdAt: date(0),
+            updatedAt: date(1)
+        )
+        state.recordPostApprovalContinuation(continuation)
+        let appended = try state.appendRevisionProposal(request(for: state), filedAt: date(2))
+        let proposal = try XCTUnwrap(state.missionPlan?.pendingRevisionProposal)
+        let checkpoint = CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+            coordinatorSessionID: coordinatorID,
+            proposal: proposal
+        )
+        let revise = CoordinatorMissionRevisionProposalTrustedResolutionRequest(
+            coordinatorSessionID: coordinatorID,
+            action: .revisePlan,
+            proposalID: appended.proposalID,
+            expectedContractFingerprint: proposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: checkpoint
+        )
+
+        let result = try state.resolveRevisionProposalTransaction(revise, resolvedAt: date(3))
+        XCTAssertEqual(state.missionPlan?.approvalState, .revisionRequested)
+        XCTAssertEqual(state.missionPlan?.postApprovalContinuation?.status, .invalidated)
+        XCTAssertTrue(state.missionPlan?.holdsChildInteractionsForRevisionProposal == true)
+        XCTAssertTrue(state.pendingEvents.isEmpty)
+
+        let keep = CoordinatorMissionRevisionProposalTrustedResolutionRequest(
+            coordinatorSessionID: coordinatorID,
+            action: .keepCurrentPlan,
+            proposalID: appended.proposalID,
+            expectedContractFingerprint: proposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: checkpoint
+        )
+        XCTAssertThrowsError(try state.resolveRevisionProposalTransaction(keep)) {
+            XCTAssertEqual(
+                $0 as? CoordinatorMissionRevisionProposalLedgerError,
+                .conflictingResolution(appended.proposalID)
+            )
+        }
+        XCTAssertThrowsError(try state.resolveRevisionProposalTransaction(.init(
+            coordinatorSessionID: coordinatorID,
+            action: .revisePlan,
+            proposalID: appended.proposalID,
+            expectedContractFingerprint: proposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: "stale"
+        ))) {
+            XCTAssertEqual($0 as? CoordinatorMissionRevisionProposalLedgerError, .staleCheckpoint)
+        }
+        XCTAssertTrue(state.clearRevisionProposalDurabilityHold(transactionID: result.resolutionID))
+        XCTAssertTrue(state.missionPlan?.holdsChildInteractionsForRevisionProposal == true)
+    }
+
+    func testTrustedStopAndContractChangeResolvePendingProposalAtomically() throws {
+        let coordinatorID = uuid(11)
+        var stopped = try makeState()
+        let stoppedProposal = try stopped.appendRevisionProposal(request(for: stopped), filedAt: date(1))
+        let stopResult = try XCTUnwrap(try stopped.stopMissionTransaction(
+            coordinatorSessionID: coordinatorID,
+            cancelledSessionIDs: [uuid(12)],
+            stoppedAt: date(2)
+        ))
+        XCTAssertEqual(stopped.missionPlan?.status, .stopped)
+        XCTAssertEqual(
+            stopped.missionPlan?.revisionProposalResolution(for: stoppedProposal.proposalID)?.outcome,
+            .stopped
+        )
+        XCTAssertEqual(stopped.missionPlan?.postApprovalContinuation?.status, nil)
+        XCTAssertEqual(stopped.missionPlan?.revisionProposalDurabilityHold?.transactionID, stopResult.resolutionID)
+        XCTAssertEqual(stopped.missionPlan?.decisions.last?.label, CoordinatorMissionUserDecisionLabel.stoppedMission.rawValue)
+        let stopRetry = try XCTUnwrap(try stopped.stopMissionTransaction(
+            coordinatorSessionID: coordinatorID,
+            cancelledSessionIDs: [uuid(12)],
+            stoppedAt: date(3)
+        ))
+        XCTAssertEqual(stopRetry.resolutionID, stopResult.resolutionID)
+        XCTAssertEqual(stopRetry.disposition, .existingResolutionRetry)
+
+        var changed = try makeState()
+        let changedProposal = try changed.appendRevisionProposal(request(for: changed), filedAt: date(1))
+        var policy = changed.missionPlan?.policySnapshot ?? .defaultPolicy
+        policy.defaultPace = .auto
+        let decision = CoordinatorMissionDecisionRecord(
+            id: uuid(13),
+            decisionClass: CoordinatorMissionDecisionClass.advance.rawValue,
+            actor: .user,
+            label: CoordinatorMissionUserDecisionLabel.setPaceToAuto.rawValue,
+            timestamp: date(2),
+            checkpointID: "mission-policy-override",
+            checkpointInstanceID: "pace-change"
+        )
+        let changeResult = try XCTUnwrap(try changed.applyTrustedContractChangeInvalidatingRevisionProposal(
+            .init(policySnapshot: policy, decisions: [decision], updatedAt: date(2)),
+            coordinatorSessionID: coordinatorID
+        ))
+        XCTAssertEqual(
+            changed.missionPlan?.revisionProposalResolution(for: changedProposal.proposalID)?.outcome,
+            .invalidatedContractChanged
+        )
+        XCTAssertNil(changed.missionPlan?.pendingRevisionProposal)
+        XCTAssertEqual(changed.missionPlan?.revisionProposalDurabilityHold?.transactionID, changeResult.resolutionID)
+        XCTAssertEqual(changed.missionPlan?.decisions.last?.id, decision.id)
+        let changeRetry = try XCTUnwrap(try changed.applyTrustedContractChangeInvalidatingRevisionProposal(
+            .init(policySnapshot: policy, decisions: [decision], updatedAt: date(3)),
+            coordinatorSessionID: coordinatorID
+        ))
+        XCTAssertEqual(changeRetry.resolutionID, changeResult.resolutionID)
+        XCTAssertEqual(changeRetry.disposition, .existingResolutionRetry)
+        XCTAssertTrue(changed.clearRevisionProposalDurabilityHold(transactionID: changeResult.resolutionID))
+        XCTAssertFalse(changed.missionPlan?.holdsChildInteractionsForRevisionProposal == true)
+    }
+
     private func makeState() throws -> CoordinatorFollowThroughState {
         let plan = CoordinatorMissionPlan(
             id: uuid(10),

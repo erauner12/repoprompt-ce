@@ -500,6 +500,21 @@ struct CoordinatorModeSnapshotProjector {
         }
     }
 
+    private func revalidatedRevisionProposalInteraction(
+        _ interaction: CoordinatorModePendingInteractionSummary?,
+        childSessionID: UUID,
+        plan: CoordinatorMissionPlan?
+    ) -> CoordinatorModePendingInteractionSummary? {
+        guard let interaction, let plan else { return interaction }
+        guard plan.approvalState == .approved,
+              plan.revisionProposalResolutions.last?.outcome == .acceptedForConcreteRevision
+        else { return interaction }
+        let remainsApplicable = plan.nodes.contains { node in
+            node.boundSessionID == childSessionID || node.boundInteractionID == interaction.id
+        }
+        return remainsApplicable ? interaction : nil
+    }
+
     private func row(
         from seed: RowSeed,
         childSessionIDs: [UUID],
@@ -513,9 +528,9 @@ struct CoordinatorModeSnapshotProjector {
     ) -> CoordinatorModeRow {
         let route = routeBuilder.route(tabID: seed.tabID, sessionID: seed.id)
         let mcpSnapshot = seed.isPersistedOnly ? nil : input.mcpSnapshotsBySessionID[seed.id]
-        let proposalHoldReason = parentMissionPlan?.pendingRevisionProposal == nil
-            ? nil
-            : CoordinatorMissionRevisionProposalPause.heldReason
+        let proposalHoldReason = parentMissionPlan?.holdsChildInteractionsForRevisionProposal == true
+            ? CoordinatorMissionRevisionProposalPause.heldReason
+            : nil
         let rawPendingInteraction = seed.runState == .completed
             || seed.runState == .cancelled
             || seed.runState == .failed
@@ -525,12 +540,19 @@ struct CoordinatorModeSnapshotProjector {
                 route: route,
                 unavailableReason: proposalHoldReason
             )
+        let revalidatedPendingInteraction = revalidatedRevisionProposalInteraction(
+            rawPendingInteraction,
+            childSessionID: seed.id,
+            plan: parentMissionPlan
+        )
         let directorRoutedChildQuestion = isDirectorRoutedChildQuestion(
             seed: seed,
-            pendingInteraction: rawPendingInteraction,
+            pendingInteraction: revalidatedPendingInteraction,
             parentMissionPlan: parentMissionPlan
         )
-        let pendingInteraction = directorRoutedChildQuestion && proposalHoldReason == nil ? nil : rawPendingInteraction
+        let pendingInteraction = directorRoutedChildQuestion && proposalHoldReason == nil
+            ? nil
+            : revalidatedPendingInteraction
         let statusGroup = statusGroup(for: seed, directorRoutedChildQuestion: directorRoutedChildQuestion)
         let workstream = workstream(from: seed.worktreeBindingSummaries.first)
         let mergeAttention = mergeAttention(from: seed.activeWorktreeMergeSummaries)
@@ -1247,9 +1269,10 @@ struct CoordinatorModeSnapshotProjector {
             id: CoordinatorMissionStableIdentity.uuid(
                 namespace: "coordinator-mode-decision-revision-proposal",
                 parts: [
-                    coordinatorSessionID.uuidString,
-                    proposal.id.uuidString,
-                    proposal.baseContractFingerprint
+                    CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                        coordinatorSessionID: coordinatorSessionID,
+                        proposal: proposal
+                    )
                 ]
             ),
             source: .revisionProposal,

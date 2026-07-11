@@ -19,8 +19,8 @@ struct CoordinatorChatMCPToolService {
         var updateMissionPlan: (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
         var appendRevisionProposal: (_ coordinatorSessionID: UUID, _ request: CoordinatorMissionRevisionProposalRequest) async throws -> CoordinatorMissionRevisionProposalAppendResult
         var missionEvents: (_ coordinatorSessionID: UUID, _ sinceSeq: Int, _ limit: Int) -> CoordinatorMissionEventJournal.Batch
-        var setMissionPace: (_ coordinatorSessionID: UUID, _ pace: CoordinatorMissionPolicyPace) -> CoordinatorModeViewModel.DirectiveSubmissionResult
-        var setMissionAutonomy: (_ coordinatorSessionID: UUID, _ autonomyClassKey: String, _ mode: CoordinatorMissionAutonomyMode) -> CoordinatorModeViewModel.DirectiveSubmissionResult
+        var setMissionPace: (_ coordinatorSessionID: UUID, _ pace: CoordinatorMissionPolicyPace) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
+        var setMissionAutonomy: (_ coordinatorSessionID: UUID, _ autonomyClassKey: String, _ mode: CoordinatorMissionAutonomyMode) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var archiveMission: (_ coordinatorSessionID: UUID) async -> CoordinatorModeViewModel.CoordinatorArchiveMissionResult
     }
 
@@ -97,8 +97,8 @@ struct CoordinatorChatMCPToolService {
                 updateMissionPlan: { try coordinatorViewModel.updateMissionPlan(coordinatorSessionID: $0, update: $1) },
                 appendRevisionProposal: { try await coordinatorViewModel.appendRevisionProposal(coordinatorSessionID: $0, request: $1) },
                 missionEvents: { coordinatorViewModel.missionEvents(coordinatorSessionID: $0, sinceSeq: $1, limit: $2) },
-                setMissionPace: { coordinatorViewModel.setCoordinatorMissionPace(coordinatorSessionID: $0, pace: $1) },
-                setMissionAutonomy: { coordinatorViewModel.setCoordinatorMissionAutonomy(coordinatorSessionID: $0, autonomyClassKey: $1, mode: $2) },
+                setMissionPace: { await coordinatorViewModel.setCoordinatorMissionPace(coordinatorSessionID: $0, pace: $1) },
+                setMissionAutonomy: { await coordinatorViewModel.setCoordinatorMissionAutonomy(coordinatorSessionID: $0, autonomyClassKey: $1, mode: $2) },
                 archiveMission: { await coordinatorViewModel.archiveCoordinatorMission(sessionID: $0) }
             )
         }
@@ -654,7 +654,7 @@ struct CoordinatorChatMCPToolService {
             )
             try validateCoordinatorExists(coordinatorSessionID, in: snapshot)
             let pace = try parseMissionPace(args["pace"] ?? args["default_pace"] ?? args["defaultPace"])
-            let result = environment.setMissionPace(coordinatorSessionID, pace)
+            let result = await environment.setMissionPace(coordinatorSessionID, pace)
             environment.refresh()
             let updatedSnapshot = environment.snapshot()
             let missionStatus = compactMissionStatusValue(
@@ -693,7 +693,7 @@ struct CoordinatorChatMCPToolService {
                 args["autonomy_class"] ?? args["autonomyClass"] ?? args["decision_class"] ?? args["decisionClass"] ?? args["class"]
             )
             let mode = try parseMissionAutonomyMode(args["mode"] ?? args["autonomy"] ?? args["value"])
-            let result = environment.setMissionAutonomy(coordinatorSessionID, autonomyClassKey, mode)
+            let result = await environment.setMissionAutonomy(coordinatorSessionID, autonomyClassKey, mode)
             environment.refresh()
             let updatedSnapshot = environment.snapshot()
             let missionStatus = compactMissionStatusValue(

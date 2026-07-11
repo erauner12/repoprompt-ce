@@ -236,6 +236,320 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             && resolution.checkpointInstanceID == request.checkpointInstanceID
     }
 
+    @discardableResult
+    mutating func resolveRevisionProposalTransaction(
+        _ request: CoordinatorMissionRevisionProposalTrustedResolutionRequest,
+        resolvedAt: Date = Date()
+    ) throws -> CoordinatorMissionRevisionProposalResolutionResult {
+        guard var plan = missionPlan else {
+            throw CoordinatorMissionRevisionProposalLedgerError.missionPlanMissing
+        }
+        guard let proposal = plan.revisionProposals.first(where: { $0.id == request.proposalID }) else {
+            throw CoordinatorMissionRevisionProposalLedgerError.proposalNotFound(request.proposalID)
+        }
+        let checkpointInstanceID = CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+            coordinatorSessionID: request.coordinatorSessionID,
+            proposal: proposal
+        )
+        guard request.expectedCheckpointInstanceID == checkpointInstanceID else {
+            throw CoordinatorMissionRevisionProposalLedgerError.staleCheckpoint
+        }
+        guard request.expectedContractFingerprint == proposal.baseContractFingerprint else {
+            throw CoordinatorMissionRevisionProposalLedgerError.staleBaseContract
+        }
+
+        let decisionID = CoordinatorMissionRevisionProposalCheckpoint.userDecisionID(
+            proposalID: proposal.id,
+            outcome: request.action.outcome
+        )
+        let resolutionRequest = CoordinatorMissionRevisionProposalResolutionRequest(
+            proposalID: proposal.id,
+            outcome: request.action.outcome,
+            userDecisionID: decisionID,
+            checkpointID: CoordinatorMissionRevisionProposalCheckpoint.checkpointID,
+            checkpointInstanceID: checkpointInstanceID
+        )
+        if let existing = plan.revisionProposalResolution(for: proposal.id) {
+            guard Self.resolution(existing, matches: resolutionRequest) else {
+                throw CoordinatorMissionRevisionProposalLedgerError.conflictingResolution(proposal.id)
+            }
+            return CoordinatorMissionRevisionProposalResolutionResult(
+                resolutionID: existing.id,
+                disposition: .existingResolutionRetry
+            )
+        }
+
+        guard !plan.status.isTerminal else {
+            throw CoordinatorMissionRevisionProposalLedgerError.missionTerminal
+        }
+        guard plan.pendingRevisionProposal?.id == proposal.id else {
+            throw CoordinatorMissionRevisionProposalLedgerError.conflictingResolution(proposal.id)
+        }
+        guard plan.materialContractSnapshot == proposal.baseContractSnapshot,
+              try plan.materialContractFingerprint() == proposal.baseContractFingerprint
+        else {
+            throw CoordinatorMissionRevisionProposalLedgerError.staleBaseContract
+        }
+        guard plan.revisionProposalDurabilityHold == nil else {
+            throw CoordinatorMissionRevisionProposalLedgerError.durabilityHoldActive
+        }
+
+        let label: CoordinatorMissionUserDecisionLabel = switch request.action {
+        case .revisePlan: .requestedPlanRevision
+        case .keepCurrentPlan: .keptCurrentMissionPlan
+        }
+        let decision = CoordinatorMissionDecisionRecord(
+            id: decisionID,
+            decisionClass: CoordinatorMissionDecisionClass.plan.rawValue,
+            actor: .user,
+            label: label.rawValue,
+            timestamp: resolvedAt,
+            sessionID: request.coordinatorSessionID,
+            checkpointID: CoordinatorMissionRevisionProposalCheckpoint.checkpointID,
+            checkpointInstanceID: checkpointInstanceID
+        )
+        plan.decisions.append(decision)
+        let resultingContractFingerprint = try plan.materialContractFingerprint()
+        let resolution = plan.makeRevisionProposalResolution(
+            resolutionRequest,
+            resultingContractFingerprint: resultingContractFingerprint,
+            resolvedAt: resolvedAt
+        )
+        plan.revisionProposalResolutions.append(resolution)
+        plan.revisionProposalDurabilityHold = CoordinatorMissionRevisionProposalDurabilityHold(
+            transactionID: resolution.id,
+            proposalID: proposal.id,
+            outcome: request.action.outcome,
+            installedAt: resolvedAt
+        )
+        switch request.action {
+        case .revisePlan:
+            plan.approvalState = .revisionRequested
+            if let continuation = plan.postApprovalContinuation, continuation.status.canInvalidate {
+                plan.postApprovalContinuation = continuation.updating(
+                    status: .invalidated,
+                    error: "Revision requested for the approved Mission contract.",
+                    at: resolvedAt,
+                    countsAsAttempt: false
+                )
+            }
+            pendingEvents.removeAll()
+        case .keepCurrentPlan:
+            if let continuation = plan.postApprovalContinuation,
+               continuation.status == .deferred,
+               continuation.lastError == CoordinatorMissionRevisionProposalPause.heldReason
+            {
+                plan.postApprovalContinuation = continuation.updating(
+                    status: .deferred,
+                    error: "Current Mission plan retained; continuation restored after durable resolution.",
+                    at: resolvedAt,
+                    countsAsAttempt: false
+                )
+            }
+        }
+        plan.revision += 1
+        plan.updatedAt = resolvedAt
+        missionPlan = plan
+        postApprovalContinuation = plan.postApprovalContinuation
+        return CoordinatorMissionRevisionProposalResolutionResult(
+            resolutionID: resolution.id,
+            disposition: .appended
+        )
+    }
+
+    @discardableResult
+    mutating func applyTrustedContractChangeInvalidatingRevisionProposal(
+        _ update: CoordinatorMissionPlanUpdate,
+        coordinatorSessionID: UUID
+    ) throws -> CoordinatorMissionRevisionProposalResolutionResult? {
+        guard let originalPlan = missionPlan else {
+            throw CoordinatorMissionRevisionProposalLedgerError.missionPlanMissing
+        }
+        if let hold = originalPlan.revisionProposalDurabilityHold,
+           hold.outcome == .invalidatedContractChanged
+        {
+            return CoordinatorMissionRevisionProposalResolutionResult(
+                resolutionID: hold.transactionID,
+                disposition: .existingResolutionRetry
+            )
+        }
+        guard let proposal = originalPlan.pendingRevisionProposal else {
+            updateMissionPlan(update)
+            return nil
+        }
+        guard !originalPlan.status.isTerminal else {
+            throw CoordinatorMissionRevisionProposalLedgerError.missionTerminal
+        }
+        guard originalPlan.revisionProposalDurabilityHold == nil else {
+            throw CoordinatorMissionRevisionProposalLedgerError.durabilityHoldActive
+        }
+
+        var candidate = self
+        candidate.updateMissionPlan(update)
+        guard var changedPlan = candidate.missionPlan,
+              changedPlan.materialContractSnapshot != proposal.baseContractSnapshot
+        else {
+            throw CoordinatorMissionRevisionProposalPauseError.contractChange
+        }
+        let decision = update.decisions?.last
+        let resolutionRequest = CoordinatorMissionRevisionProposalResolutionRequest(
+            proposalID: proposal.id,
+            outcome: .invalidatedContractChanged,
+            userDecisionID: decision?.id,
+            checkpointID: decision?.checkpointID,
+            checkpointInstanceID: decision?.checkpointInstanceID
+        )
+        let resolution = try changedPlan.makeRevisionProposalResolution(
+            resolutionRequest,
+            resultingContractFingerprint: changedPlan.materialContractFingerprint(),
+            resolvedAt: update.updatedAt
+        )
+        changedPlan.revisionProposalResolutions.append(resolution)
+        changedPlan.revisionProposalDurabilityHold = CoordinatorMissionRevisionProposalDurabilityHold(
+            transactionID: resolution.id,
+            proposalID: proposal.id,
+            outcome: .invalidatedContractChanged,
+            installedAt: update.updatedAt
+        )
+        if let continuation = changedPlan.postApprovalContinuation, continuation.status.canInvalidate {
+            changedPlan.postApprovalContinuation = continuation.updating(
+                status: .invalidated,
+                error: "Approved Mission contract changed.",
+                at: update.updatedAt,
+                countsAsAttempt: false
+            )
+        }
+        changedPlan.revision += 1
+        changedPlan.updatedAt = update.updatedAt
+        candidate.missionPlan = changedPlan
+        candidate.postApprovalContinuation = changedPlan.postApprovalContinuation
+        candidate.pendingEvents.removeAll()
+        self = candidate
+        return CoordinatorMissionRevisionProposalResolutionResult(
+            resolutionID: resolution.id,
+            disposition: .appended
+        )
+    }
+
+    @discardableResult
+    mutating func stopMissionTransaction(
+        coordinatorSessionID: UUID,
+        cancelledSessionIDs: Set<UUID>,
+        stoppedAt: Date = Date()
+    ) throws -> CoordinatorMissionRevisionProposalResolutionResult? {
+        guard var plan = missionPlan else {
+            throw CoordinatorMissionRevisionProposalLedgerError.missionPlanMissing
+        }
+        if let hold = plan.revisionProposalDurabilityHold,
+           hold.outcome == .stopped,
+           plan.status == .stopped
+        {
+            return CoordinatorMissionRevisionProposalResolutionResult(
+                resolutionID: hold.transactionID,
+                disposition: .existingResolutionRetry
+            )
+        }
+        guard !plan.status.isTerminal else { return nil }
+        guard plan.revisionProposalDurabilityHold == nil else {
+            throw CoordinatorMissionRevisionProposalLedgerError.durabilityHoldActive
+        }
+        let decisionID = CoordinatorMissionStableIdentity.uuid(
+            namespace: "coordinator-mission-stop-user-decision",
+            parts: [coordinatorSessionID.uuidString, plan.id.uuidString]
+        )
+        let checkpointInstanceID = "mission-stop:\(coordinatorSessionID.uuidString):\(plan.id.uuidString)"
+        plan.decisions.append(CoordinatorMissionDecisionRecord(
+            id: decisionID,
+            decisionClass: CoordinatorMissionDecisionClass.irreversible.rawValue,
+            actor: .user,
+            label: CoordinatorMissionUserDecisionLabel.stoppedMission.rawValue,
+            timestamp: stoppedAt,
+            sessionID: coordinatorSessionID,
+            checkpointID: "mission-stop",
+            checkpointInstanceID: checkpointInstanceID
+        ))
+        var result: CoordinatorMissionRevisionProposalResolutionResult?
+        if let proposal = plan.pendingRevisionProposal {
+            let resolutionRequest = CoordinatorMissionRevisionProposalResolutionRequest(
+                proposalID: proposal.id,
+                outcome: .stopped,
+                userDecisionID: decisionID,
+                checkpointID: "mission-stop",
+                checkpointInstanceID: checkpointInstanceID
+            )
+            let resolution = try plan.makeRevisionProposalResolution(
+                resolutionRequest,
+                resultingContractFingerprint: plan.materialContractFingerprint(),
+                resolvedAt: stoppedAt
+            )
+            plan.revisionProposalResolutions.append(resolution)
+            plan.revisionProposalDurabilityHold = CoordinatorMissionRevisionProposalDurabilityHold(
+                transactionID: resolution.id,
+                proposalID: proposal.id,
+                outcome: .stopped,
+                installedAt: stoppedAt
+            )
+            result = CoordinatorMissionRevisionProposalResolutionResult(
+                resolutionID: resolution.id,
+                disposition: .appended
+            )
+        }
+        plan.status = .stopped
+        plan.nodes = plan.nodes.map { node in
+            var next = node
+            if !next.status.isTerminal { next.status = .cancelled }
+            return next
+        }
+        plan.routingDecisions.append(
+            contentsOf: cancelledSessionIDs
+                .sorted { $0.uuidString < $1.uuidString }
+                .map { sessionID in
+                    CoordinatorMissionRoutingDecision(
+                        timestamp: stoppedAt,
+                        decision: .cancelOrReplace,
+                        operation: .agentRunCancel,
+                        sessionID: sessionID,
+                        reason: "User stopped the Coordinator Mission."
+                    )
+                }
+        )
+        if let continuation = plan.postApprovalContinuation, continuation.status.canInvalidate {
+            plan.postApprovalContinuation = continuation.updating(
+                status: .invalidated,
+                error: "Mission stopped.",
+                at: stoppedAt,
+                countsAsAttempt: false
+            )
+        }
+        plan.events.append(CoordinatorMissionPlanEvent(
+            kind: .revised,
+            timestamp: stoppedAt,
+            summary: "Mission stopped by user."
+        ))
+        plan.revision += 1
+        plan.updatedAt = stoppedAt
+        missionPlan = plan
+        postApprovalContinuation = plan.postApprovalContinuation
+        pendingEvents.removeAll()
+        return result
+    }
+
+    @discardableResult
+    mutating func clearRevisionProposalDurabilityHold(
+        transactionID: UUID,
+        at date: Date = Date()
+    ) -> Bool {
+        guard var plan = missionPlan,
+              plan.revisionProposalDurabilityHold?.transactionID == transactionID,
+              plan.revisionProposalResolutions.contains(where: { $0.id == transactionID })
+        else { return false }
+        plan.revisionProposalDurabilityHold = nil
+        plan.revision += 1
+        plan.updatedAt = date
+        missionPlan = plan
+        return true
+    }
+
     mutating func updateMissionPlan(
         objective: String?,
         workstreams incomingWorkstreams: [CoordinatorMissionWorkstreamSummary],
@@ -423,6 +737,7 @@ struct CoordinatorFollowThroughState: Codable, Equatable {
             evidence: evidence,
             revisionProposals: existingPlan?.revisionProposals ?? [],
             revisionProposalResolutions: existingPlan?.revisionProposalResolutions ?? [],
+            revisionProposalDurabilityHold: existingPlan?.revisionProposalDurabilityHold,
             events: (existingPlan?.events ?? []) + [
                 CoordinatorMissionPlanEvent(
                     kind: existingPlan == nil ? .created : .revised,
@@ -1148,6 +1463,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
     var evidence: [CoordinatorMissionEvidenceRecord]
     var revisionProposals: [CoordinatorMissionRevisionProposal]
     var revisionProposalResolutions: [CoordinatorMissionRevisionProposalResolution]
+    var revisionProposalDurabilityHold: CoordinatorMissionRevisionProposalDurabilityHold?
     var events: [CoordinatorMissionPlanEvent]
     var postApprovalContinuation: CoordinatorPostApprovalContinuationRecord?
     var updatedAt: Date
@@ -1173,6 +1489,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         evidence: [CoordinatorMissionEvidenceRecord] = [],
         revisionProposals: [CoordinatorMissionRevisionProposal] = [],
         revisionProposalResolutions: [CoordinatorMissionRevisionProposalResolution] = [],
+        revisionProposalDurabilityHold: CoordinatorMissionRevisionProposalDurabilityHold? = nil,
         events: [CoordinatorMissionPlanEvent] = [],
         postApprovalContinuation: CoordinatorPostApprovalContinuationRecord? = nil,
         updatedAt: Date = Date()
@@ -1200,6 +1517,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         self.evidence = evidence
         self.revisionProposals = revisionProposals
         self.revisionProposalResolutions = revisionProposalResolutions
+        self.revisionProposalDurabilityHold = revisionProposalDurabilityHold
         self.events = events
         self.postApprovalContinuation = postApprovalContinuation
         self.updatedAt = updatedAt
@@ -1260,6 +1578,7 @@ struct CoordinatorMissionPlan: Codable, Equatable {
         case evidence
         case revisionProposals
         case revisionProposalResolutions
+        case revisionProposalDurabilityHold
         case events
         case postApprovalContinuation
         case updatedAt
@@ -1295,6 +1614,10 @@ struct CoordinatorMissionPlan: Codable, Equatable {
                 [CoordinatorMissionRevisionProposalResolution].self,
                 forKey: .revisionProposalResolutions
             ) ?? [],
+            revisionProposalDurabilityHold: container.decodeIfPresent(
+                CoordinatorMissionRevisionProposalDurabilityHold.self,
+                forKey: .revisionProposalDurabilityHold
+            ),
             events: container.decode([CoordinatorMissionPlanEvent].self, forKey: .events),
             postApprovalContinuation: container.decodeIfPresent(CoordinatorPostApprovalContinuationRecord.self, forKey: .postApprovalContinuation),
             updatedAt: container.decode(Date.self, forKey: .updatedAt)
@@ -1518,6 +1841,7 @@ enum CoordinatorMissionAutonomyClasses {
 enum CoordinatorMissionUserDecisionLabel: String, Codable, Equatable, CaseIterable {
     case approvedMissionPlan = "approved the Mission plan"
     case requestedPlanRevision = "requested plan revision"
+    case keptCurrentMissionPlan = "kept the current Mission plan"
     case stoppedMission = "stopped the Mission"
     case continuedPastStepCheckIn = "continued past a step check-in"
     case answeredChildQuestion = "answered a child question"
@@ -2434,7 +2758,9 @@ extension CoordinatorMissionPlan {
     }
 
     func hasDurableApprovalAuthority(_ token: String?) -> Bool {
-        guard let token,
+        guard !hasRevisionProposalDurabilityHold,
+              pendingRevisionProposal == nil,
+              let token,
               let expected = expectedDurableApprovalAuthorityToken,
               token == expected,
               postApprovalContinuation?.durableApprovalAuthorityToken == expected

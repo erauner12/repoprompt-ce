@@ -35,7 +35,7 @@ enum AgentRunCoordinatorMissionPlanPolicy {
         guard !missionPlan.nodes.isEmpty else {
             return .requireApprovedMissionPlan(approvedMissionPlanRequiredMessage)
         }
-        if missionPlan.pendingRevisionProposal != nil {
+        if missionPlan.pendingRevisionProposal != nil || missionPlan.hasRevisionProposalDurabilityHold {
             return .holdPendingRevisionProposal(CoordinatorMissionRevisionProposalPause.heldReason)
         }
         let runningNodeCount = missionPlan.nodes.count { $0.status == .running }

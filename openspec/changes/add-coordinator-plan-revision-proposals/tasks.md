@@ -44,22 +44,22 @@
 
 ## 6. Trusted Durable Resolution Transactions
 
-- [ ] 6.1 After the Item 1 audit confirms hard integration prerequisites 13.7 and 13.8 are available, implement app-owned Revise/Keep transactions carrying action, proposal ID, expected contract identity, and expected checkpoint instance ID.
-- [ ] 6.2 CAS authoritative state for unresolved proposal, nonterminal Mission, rendered proposal/checkpoint identity, and structural equality with the proposal base snapshot.
-- [ ] 6.3 For Revise plan, create one authoritative generation containing the linked user decision, `acceptedForConcreteRevision`, `revisionRequested`, old-continuation invalidation, and durability hold; persist the full generation before clearing the hold and still require later concrete-plan approval.
-- [ ] 6.4 For Keep current plan, create one authoritative generation containing the linked user decision, `rejected`, unchanged approved state, restored continuation disposition, and durability hold; after persistence restore any still-pending child interaction as active/answerable and evaluate eligible follow-through once.
-- [ ] 6.5 Integrate Stop so one authoritative generation contains the linked Stop decision, stopped/terminal proposal resolution, terminal state, continuation invalidation, and durability hold, with Stop winning all races.
-- [ ] 6.6 For trusted manual revision or pace/`childAsk`/autonomy/policy contract changes, create one authoritative generation containing `invalidatedContractChanged`, old-continuation invalidation, checkpoint removal, and durability hold; after persistence return existing unanswered child interactions to ordinary policy and require re-proposal against the new base.
-- [ ] 6.7 Reuse or add a generation-aware persistence barrier and explicit durability hold so resolution, linked decision, approval/terminal state, continuation disposition, and child-question availability persist together; after barrier failure keep every authority/question gate fail-closed and reconcile from the last durable generation.
-- [ ] 6.8 Add view-model/integration tests for Revise, Keep, Stop, stale actions, conflicting decisions, persistence failure, Stop races, and atomic pace/`childAsk`/autonomy/policy invalidation covering checkpoint removal, old-continuation invalidation, unanswered-child return to ordinary policy, durability ordering, and required re-proposal.
+- [x] 6.1 After the Item 1 audit confirms hard integration prerequisites 13.7 and 13.8 are available, implement app-owned Revise/Keep transactions carrying action, proposal ID, expected contract identity, and expected checkpoint instance ID.
+- [x] 6.2 CAS authoritative state for unresolved proposal, nonterminal Mission, rendered proposal/checkpoint identity, and structural equality with the proposal base snapshot.
+- [x] 6.3 For Revise plan, create one authoritative generation containing the linked user decision, `acceptedForConcreteRevision`, `revisionRequested`, old-continuation invalidation, and durability hold; persist the full generation before clearing the hold and still require later concrete-plan approval.
+- [x] 6.4 For Keep current plan, create one authoritative generation containing the linked user decision, `rejected`, unchanged approved state, restored continuation disposition, and durability hold; after persistence restore any still-pending child interaction as active/answerable and evaluate eligible follow-through once.
+- [x] 6.5 Integrate Stop so one authoritative generation contains the linked Stop decision, stopped/terminal proposal resolution, terminal state, continuation invalidation, and durability hold, with Stop winning all races.
+- [x] 6.6 For trusted manual revision or pace/`childAsk`/autonomy/policy contract changes, create one authoritative generation containing `invalidatedContractChanged`, old-continuation invalidation, checkpoint removal, and durability hold; after persistence return existing unanswered child interactions to ordinary policy and require re-proposal against the new base.
+- [x] 6.7 Reuse or add a generation-aware persistence barrier and explicit durability hold so resolution, linked decision, approval/terminal state, continuation disposition, and child-question availability persist together; after barrier failure keep every authority/question gate fail-closed and reconcile from the last durable generation.
+- [x] 6.8 Add view-model/integration tests for Revise, Keep, Stop, stale actions, conflicting decisions, persistence failure, Stop races, and atomic pace/`childAsk`/autonomy/policy invalidation covering checkpoint removal, old-continuation invalidation, unanswered-child return to ordinary policy, durability ordering, and required re-proposal.
 
 ## 7. Continuation Authority Lifecycle
 
-- [ ] 7.1 After the Item 1 audit confirms hard integration prerequisites 13.7 and 13.8 are available, defer an otherwise deliverable post-approval continuation with a proposal-specific reason when a proposal is filed without invalidating it.
-- [ ] 7.2 Restore deferred continuation only after durable Keep; invalidate old-contract continuation after durable Revise and terminal continuation after Stop/terminalization.
-- [ ] 7.3 Revalidate no pending proposal and Stop precedence at every final delegated-start and continuation enqueue.
-- [ ] 7.4 Add focused continuation tests for filing deferral, Keep restoration/evaluate-once, Revise invalidation, Stop invalidation, persistence ordering, and final-enqueue races.
-- [ ] 7.5 Add focused child-question outcome tests: Keep restores active/answerable state; Revise holds through `revisionRequested` and drafting; revised-plan approval restores only still-applicable questions and cancels/supersedes others; Stop cancels; independent child terminal completion removes obsolete questions.
+- [x] 7.1 After the Item 1 audit confirms hard integration prerequisites 13.7 and 13.8 are available, defer an otherwise deliverable post-approval continuation with a proposal-specific reason when a proposal is filed without invalidating it.
+- [x] 7.2 Restore deferred continuation only after durable Keep; invalidate old-contract continuation after durable Revise and terminal continuation after Stop/terminalization.
+- [x] 7.3 Revalidate no pending proposal and Stop precedence at every final delegated-start and continuation enqueue.
+- [x] 7.4 Add focused continuation tests for filing deferral, Keep restoration/evaluate-once, Revise invalidation, Stop invalidation, persistence ordering, and final-enqueue races.
+- [x] 7.5 Add focused child-question outcome tests: Keep restores active/answerable state; Revise holds through `revisionRequested` and drafting; revised-plan approval restores only still-applicable questions and cancels/supersedes others; Stop cancels; independent child terminal completion removes obsolete questions.
 
 ## 8. Needs You Projection and User Actions
 

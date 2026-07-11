@@ -117,6 +117,76 @@ enum CoordinatorMissionRevisionProposalResolutionOutcome: String, Codable, Equat
     case stopped
 }
 
+enum CoordinatorMissionRevisionProposalResolutionAction: String, Codable, Equatable {
+    case revisePlan = "revise_plan"
+    case keepCurrentPlan = "keep_current_plan"
+
+    var outcome: CoordinatorMissionRevisionProposalResolutionOutcome {
+        switch self {
+        case .revisePlan: .acceptedForConcreteRevision
+        case .keepCurrentPlan: .rejected
+        }
+    }
+}
+
+struct CoordinatorMissionRevisionProposalTrustedResolutionRequest: Equatable {
+    let coordinatorSessionID: UUID
+    let action: CoordinatorMissionRevisionProposalResolutionAction
+    let proposalID: UUID
+    let expectedContractFingerprint: String
+    let expectedCheckpointInstanceID: String
+
+    init(
+        coordinatorSessionID: UUID,
+        action: CoordinatorMissionRevisionProposalResolutionAction,
+        proposalID: UUID,
+        expectedContractFingerprint: String,
+        expectedCheckpointInstanceID: String
+    ) {
+        self.coordinatorSessionID = coordinatorSessionID
+        self.action = action
+        self.proposalID = proposalID
+        self.expectedContractFingerprint = expectedContractFingerprint
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.expectedCheckpointInstanceID = expectedCheckpointInstanceID
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+struct CoordinatorMissionRevisionProposalDurabilityHold: Codable, Equatable {
+    let transactionID: UUID
+    let proposalID: UUID
+    let outcome: CoordinatorMissionRevisionProposalResolutionOutcome
+    let installedAt: Date
+}
+
+enum CoordinatorMissionRevisionProposalCheckpoint {
+    static let checkpointID = "revision-proposal"
+
+    static func instanceID(
+        coordinatorSessionID: UUID,
+        proposal: CoordinatorMissionRevisionProposal
+    ) -> String {
+        [
+            "coordinator",
+            coordinatorSessionID.uuidString,
+            "revision-proposal",
+            proposal.id.uuidString,
+            "contract-\(proposal.baseContractFingerprint)"
+        ].joined(separator: ":")
+    }
+
+    static func userDecisionID(
+        proposalID: UUID,
+        outcome: CoordinatorMissionRevisionProposalResolutionOutcome
+    ) -> UUID {
+        CoordinatorMissionStableIdentity.uuid(
+            namespace: "coordinator-mission-revision-proposal-user-decision",
+            parts: [proposalID.uuidString, outcome.rawValue]
+        )
+    }
+}
+
 struct CoordinatorMissionRevisionProposalResolution: Codable, Equatable, Identifiable {
     let id: UUID
     let proposalID: UUID
@@ -177,6 +247,8 @@ enum CoordinatorMissionRevisionProposalLedgerError: Error, Equatable, LocalizedE
     case missionTerminal
     case staleBasePlan
     case staleBaseContract
+    case staleCheckpoint
+    case durabilityHoldActive
     case invalidRequest(String)
     case differentProposalPending(UUID)
     case proposalNotFound(UUID)
@@ -192,6 +264,10 @@ enum CoordinatorMissionRevisionProposalLedgerError: Error, Equatable, LocalizedE
             "The revision proposal targets a stale Mission Plan."
         case .staleBaseContract:
             "The revision proposal targets a stale material contract."
+        case .staleCheckpoint:
+            "The revision proposal checkpoint is stale."
+        case .durabilityHoldActive:
+            "A revision proposal resolution is awaiting durable persistence."
         case let .invalidRequest(reason):
             "Invalid revision proposal: \(reason)"
         case let .differentProposalPending(proposalID):
@@ -285,6 +361,18 @@ enum CoordinatorMissionRevisionProposalPause {
 }
 
 extension CoordinatorMissionPlan {
+    var hasRevisionProposalDurabilityHold: Bool {
+        revisionProposalDurabilityHold != nil
+    }
+
+    var holdsChildInteractionsForRevisionProposal: Bool {
+        if pendingRevisionProposal != nil || hasRevisionProposalDurabilityHold {
+            return true
+        }
+        return approvalState != .approved
+            && revisionProposalResolutions.last?.outcome == .acceptedForConcreteRevision
+    }
+
     var pendingRevisionProposal: CoordinatorMissionRevisionProposal? {
         revisionProposals.first { proposal in
             !revisionProposalResolutions.contains { $0.proposalID == proposal.id }

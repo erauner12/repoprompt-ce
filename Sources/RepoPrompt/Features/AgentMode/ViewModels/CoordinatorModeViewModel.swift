@@ -249,6 +249,9 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias CoordinatorArchiveHandler = @MainActor (_ option: CoordinatorModeCoordinatorOption) async -> CoordinatorArchiveMissionResult
     typealias MissionPlanUpdater = @MainActor (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) throws -> Void
     typealias RevisionProposalAppender = @MainActor (_ coordinatorSessionID: UUID, _ request: CoordinatorMissionRevisionProposalRequest) async throws -> CoordinatorMissionRevisionProposalAppendResult
+    typealias RevisionProposalResolver = @MainActor (_ request: CoordinatorMissionRevisionProposalTrustedResolutionRequest) async throws -> CoordinatorMissionRevisionProposalResolutionResult
+    typealias TrustedMissionStopRecorder = @MainActor (_ coordinatorSessionID: UUID, _ targetSessionIDs: [UUID]) async throws -> Void
+    typealias TrustedContractChangeApplier = @MainActor (_ coordinatorSessionID: UUID, _ update: CoordinatorMissionPlanUpdate) async throws -> Void
     typealias MissionStopper = @MainActor (_ request: CoordinatorMissionStopRequest) async -> CoordinatorMissionStopResult
     typealias PendingFollowThroughEventProvider = @MainActor (_ coordinatorSessionID: UUID?) -> CoordinatorFollowThroughEvent?
     typealias FollowThroughEventSubmitter = @MainActor (_ event: CoordinatorFollowThroughEvent) async -> DirectiveSubmissionResult
@@ -328,6 +331,9 @@ final class CoordinatorModeViewModel: ObservableObject {
     private let coordinatorArchiveHandler: CoordinatorArchiveHandler
     private let missionPlanUpdater: MissionPlanUpdater
     private let revisionProposalAppender: RevisionProposalAppender
+    private let revisionProposalResolver: RevisionProposalResolver
+    private let trustedMissionStopRecorder: TrustedMissionStopRecorder?
+    private let trustedContractChangeApplier: TrustedContractChangeApplier?
     private let missionStopper: MissionStopper
     private let pendingFollowThroughEventProvider: PendingFollowThroughEventProvider
     private let followThroughEventSubmitter: FollowThroughEventSubmitter
@@ -379,6 +385,11 @@ final class CoordinatorModeViewModel: ObservableObject {
         revisionProposalAppender: @escaping RevisionProposalAppender = { _, _ in
             throw MCPError.invalidParams("Coordinator Mission revision proposals are unavailable.")
         },
+        revisionProposalResolver: @escaping RevisionProposalResolver = { _ in
+            throw MCPError.invalidParams("Coordinator Mission revision proposal resolution is unavailable.")
+        },
+        trustedMissionStopRecorder: TrustedMissionStopRecorder? = nil,
+        trustedContractChangeApplier: TrustedContractChangeApplier? = nil,
         missionStopper: @escaping MissionStopper = { request in
             CoordinatorMissionStopResult(
                 requestedSessionIDs: request.sessionIDs,
@@ -413,6 +424,9 @@ final class CoordinatorModeViewModel: ObservableObject {
         self.coordinatorArchiveHandler = coordinatorArchiveHandler
         self.missionPlanUpdater = missionPlanUpdater
         self.revisionProposalAppender = revisionProposalAppender
+        self.revisionProposalResolver = revisionProposalResolver
+        self.trustedMissionStopRecorder = trustedMissionStopRecorder
+        self.trustedContractChangeApplier = trustedContractChangeApplier
         self.missionStopper = missionStopper
         self.pendingFollowThroughEventProvider = pendingFollowThroughEventProvider
         self.followThroughEventSubmitter = followThroughEventSubmitter
@@ -542,10 +556,32 @@ final class CoordinatorModeViewModel: ObservableObject {
     }
 
     @discardableResult
+    func resolveRevisionProposal(
+        _ request: CoordinatorMissionRevisionProposalTrustedResolutionRequest
+    ) async -> DirectiveSubmissionResult {
+        do {
+            _ = try await revisionProposalResolver(request)
+            refresh()
+            composerNotice = nil
+            if request.action == .keepCurrentPlan {
+                Task { @MainActor [followThroughEvaluationHandler] in
+                    await followThroughEvaluationHandler(request.coordinatorSessionID)
+                }
+            }
+            return .accepted
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            composerNotice = message
+            refresh()
+            return .rejected(message: message)
+        }
+    }
+
+    @discardableResult
     func setCoordinatorMissionPace(
         coordinatorSessionID: UUID,
         pace: CoordinatorMissionPolicyPace
-    ) -> DirectiveSubmissionResult {
+    ) async -> DirectiveSubmissionResult {
         guard let option = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == coordinatorSessionID }) else {
             let message = "Coordinator session \(coordinatorSessionID.uuidString) is not available in this window."
             composerNotice = message
@@ -556,10 +592,15 @@ final class CoordinatorModeViewModel: ObservableObject {
             composerNotice = message
             return .rejected(message: message)
         }
-        guard plan.pendingRevisionProposal == nil else {
-            let message = CoordinatorMissionRevisionProposalPause.heldReason
-            composerNotice = message
-            return .rejected(message: message)
+        if plan.pendingRevisionProposal != nil
+            || plan.revisionProposalDurabilityHold?.outcome == .invalidatedContractChanged
+        {
+            return await applyPendingProposalMissionDialOverride(
+                coordinatorSessionID: coordinatorSessionID,
+                plan: plan,
+                pace: pace,
+                childAsk: nil
+            )
         }
         guard !plan.status.isTerminal else {
             let message = "Mission pace cannot be changed after the Mission is \(plan.status.rawValue)."
@@ -579,7 +620,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         coordinatorSessionID: UUID,
         autonomyClassKey: String,
         mode: CoordinatorMissionAutonomyMode
-    ) -> DirectiveSubmissionResult {
+    ) async -> DirectiveSubmissionResult {
         guard let option = snapshot.coordinatorRail.availableCoordinators.first(where: { $0.sessionID == coordinatorSessionID }) else {
             let message = "Coordinator session \(coordinatorSessionID.uuidString) is not available in this window."
             composerNotice = message
@@ -595,10 +636,20 @@ final class CoordinatorModeViewModel: ObservableObject {
             composerNotice = message
             return .rejected(message: message)
         }
-        guard plan.pendingRevisionProposal == nil else {
-            let message = CoordinatorMissionRevisionProposalPause.heldReason
-            composerNotice = message
-            return .rejected(message: message)
+        if plan.pendingRevisionProposal != nil
+            || plan.revisionProposalDurabilityHold?.outcome == .invalidatedContractChanged
+        {
+            guard autonomyClassKey == CoordinatorMissionAutonomyClasses.childAsk.key else {
+                let message = "Mission autonomy class \(autonomyClassKey) is not exposed as a live dial."
+                composerNotice = message
+                return .rejected(message: message)
+            }
+            return await applyPendingProposalMissionDialOverride(
+                coordinatorSessionID: coordinatorSessionID,
+                plan: plan,
+                pace: nil,
+                childAsk: mode
+            )
         }
         guard !plan.status.isTerminal else {
             let message = "Mission autonomy cannot be changed after the Mission is \(plan.status.rawValue)."
@@ -722,7 +773,13 @@ final class CoordinatorModeViewModel: ObservableObject {
             composerNotice = message
             return .rejected(message: message)
         }
-        if plan.status.isTerminal {
+        let targetSessionIDs = coordinatorMissionStopTargetSessionIDs(
+            coordinatorSessionID: coordinatorSessionID,
+            missionPlan: plan
+        )
+        if plan.status.isTerminal,
+           plan.revisionProposalDurabilityHold?.outcome != .stopped
+        {
             let message = "Mission is already \(plan.status.rawValue). Stop accepted as a no-op."
             composerNotice = message
             appendCoordinatorEventTranscriptEntry(message)
@@ -730,35 +787,38 @@ final class CoordinatorModeViewModel: ObservableObject {
             return .accepted
         }
 
-        let targetSessionIDs = coordinatorMissionStopTargetSessionIDs(
-            coordinatorSessionID: coordinatorSessionID,
-            missionPlan: plan
-        )
         let stoppedAt = Date()
-        let decision = stoppedMissionDecision(
-            coordinatorSessionID: coordinatorSessionID,
-            plan: plan,
-            timestamp: stoppedAt
-        )
-        plan.stopMission(cancelledSessionIDs: Set(targetSessionIDs), at: stoppedAt)
         do {
-            try missionPlanUpdater(
-                coordinatorSessionID,
-                CoordinatorMissionPlanUpdate(
-                    status: plan.status,
-                    nodes: plan.nodes,
-                    routingDecisions: plan.routingDecisions,
-                    decisions: [decision],
-                    events: [
-                        CoordinatorMissionPlanEvent(
-                            kind: .revised,
-                            timestamp: stoppedAt,
-                            summary: "Mission stopped by user."
-                        )
-                    ],
-                    updatedAt: stoppedAt
+            if plan.pendingRevisionProposal != nil
+                || plan.revisionProposalDurabilityHold?.outcome == .stopped,
+                let trustedMissionStopRecorder
+            {
+                try await trustedMissionStopRecorder(coordinatorSessionID, targetSessionIDs)
+            } else {
+                let decision = stoppedMissionDecision(
+                    coordinatorSessionID: coordinatorSessionID,
+                    plan: plan,
+                    timestamp: stoppedAt
                 )
-            )
+                plan.stopMission(cancelledSessionIDs: Set(targetSessionIDs), at: stoppedAt)
+                try missionPlanUpdater(
+                    coordinatorSessionID,
+                    CoordinatorMissionPlanUpdate(
+                        status: plan.status,
+                        nodes: plan.nodes,
+                        routingDecisions: plan.routingDecisions,
+                        decisions: [decision],
+                        events: [
+                            CoordinatorMissionPlanEvent(
+                                kind: .revised,
+                                timestamp: stoppedAt,
+                                summary: "Mission stopped by user."
+                            )
+                        ],
+                        updatedAt: stoppedAt
+                    )
+                )
+            }
         } catch {
             let message = "Mission stop could not be recorded; cancellation was not started: \(error.localizedDescription)"
             composerNotice = message
@@ -979,6 +1039,92 @@ final class CoordinatorModeViewModel: ObservableObject {
             Task { @MainActor [weak self] in
                 await self?.followThroughEvaluationHandler(coordinatorSessionID)
             }
+        }
+    }
+
+    private func applyPendingProposalMissionDialOverride(
+        coordinatorSessionID: UUID,
+        plan: CoordinatorMissionPlan,
+        pace: CoordinatorMissionPolicyPace?,
+        childAsk: CoordinatorMissionAutonomyMode?
+    ) async -> DirectiveSubmissionResult {
+        guard let proposalID = plan.pendingRevisionProposal?.id
+            ?? plan.revisionProposalDurabilityHold?.proposalID
+        else {
+            return .rejected(message: "No pending revision proposal transaction is available to invalidate.")
+        }
+        guard let trustedContractChangeApplier else {
+            let message = CoordinatorMissionRevisionProposalPause.heldReason
+            composerNotice = message
+            return .rejected(message: message)
+        }
+        var policySnapshot = plan.policySnapshot ?? CoordinatorMissionPolicySnapshot.defaultPolicy
+        var autonomy = plan.autonomy.isEmpty ? policySnapshot.autonomy : plan.autonomy
+        let subject: String
+        let label: CoordinatorMissionUserDecisionLabel
+        let decisionClass: CoordinatorMissionDecisionClass
+        if let pace {
+            policySnapshot.defaultPace = pace
+            subject = "pace"
+            label = pace == .auto ? .setPaceToAuto : .setPaceToStep
+            decisionClass = .advance
+        } else if let childAsk {
+            let key = CoordinatorMissionAutonomyClasses.childAsk.key
+            policySnapshot.autonomy[key] = childAsk
+            autonomy[key] = childAsk
+            subject = "childAsk"
+            label = childAsk == .ask ? .routedChildQuestionsToMe : .routedChildQuestionsToDirector
+            decisionClass = .childAsk
+        } else {
+            return .rejected(message: "No Mission contract change was requested.")
+        }
+        let timestamp = Date()
+        let checkpointInstanceID = [
+            "mission-policy",
+            coordinatorSessionID.uuidString,
+            proposalID.uuidString,
+            subject
+        ].joined(separator: ":")
+        let decisionID = CoordinatorMissionStableIdentity.uuid(
+            namespace: "coordinator-mission-policy-contract-change",
+            parts: [checkpointInstanceID, label.rawValue]
+        )
+        let decision = CoordinatorMissionDecisionRecord(
+            id: decisionID,
+            decisionClass: decisionClass.rawValue,
+            actor: .user,
+            label: label.rawValue,
+            timestamp: timestamp,
+            sessionID: coordinatorSessionID,
+            checkpointID: Self.missionPolicyOverrideCheckpointID,
+            checkpointInstanceID: checkpointInstanceID
+        )
+        do {
+            try await trustedContractChangeApplier(
+                coordinatorSessionID,
+                CoordinatorMissionPlanUpdate(
+                    policySnapshot: policySnapshot,
+                    autonomy: childAsk == nil ? nil : autonomy,
+                    decisions: [decision],
+                    updatedAt: timestamp
+                )
+            )
+            if let pace {
+                missionPaceSelection = pace
+                executionPace = CoordinatorExecutionPace(pace)
+                CoordinatorModeAutomationPreference.setExecutionPace(executionPace, defaults: userDefaults)
+            }
+            if let childAsk {
+                childAskSelection = childAsk
+            }
+            refresh()
+            composerNotice = nil
+            return .accepted
+        } catch {
+            let message = "Mission policy could not be durably updated: \(error.localizedDescription)"
+            composerNotice = message
+            refresh()
+            return .rejected(message: message)
         }
     }
 
@@ -2130,7 +2276,9 @@ final class CoordinatorModeViewModel: ObservableObject {
                 .first(where: { $0.sessionID == coordinatorID })?
                 .missionPlan
         }
-        if row.pendingInteraction?.isAvailable == false || pendingPlan?.pendingRevisionProposal != nil {
+        if row.pendingInteraction?.isAvailable == false
+            || pendingPlan?.holdsChildInteractionsForRevisionProposal == true
+        {
             let message = CoordinatorMissionRevisionProposalPause.heldReason
             composerNotice = message
             return .rejected(message: message)
@@ -2826,6 +2974,27 @@ extension AgentModeViewModel {
                 coordinatorSessionID: coordinatorSessionID,
                 request: request
             )
+        } revisionProposalResolver: { [weak self] request in
+            guard let self else {
+                throw MCPError.invalidParams("Coordinator Mission revision proposal resolution state is unavailable.")
+            }
+            return try await resolveCoordinatorMissionRevisionProposal(request)
+        } trustedMissionStopRecorder: { [weak self] coordinatorSessionID, targetSessionIDs in
+            guard let self else {
+                throw MCPError.invalidParams("Coordinator Mission stop persistence is unavailable.")
+            }
+            try await recordTrustedCoordinatorMissionStop(
+                coordinatorSessionID: coordinatorSessionID,
+                targetSessionIDs: targetSessionIDs
+            )
+        } trustedContractChangeApplier: { [weak self] coordinatorSessionID, update in
+            guard let self else {
+                throw MCPError.invalidParams("Coordinator Mission contract-change persistence is unavailable.")
+            }
+            try await applyTrustedCoordinatorMissionContractChange(
+                coordinatorSessionID: coordinatorSessionID,
+                update: update
+            )
         } missionStopper: { [weak self] request in
             guard let self else {
                 return CoordinatorMissionStopResult(
@@ -3074,7 +3243,9 @@ extension AgentModeViewModel {
             coordinatorModeViewModel.refreshIfVisible()
         }
 
-        if state.missionPlan?.pendingRevisionProposal != nil {
+        if state.missionPlan?.pendingRevisionProposal != nil
+            || state.missionPlan?.hasRevisionProposalDurabilityHold == true
+        {
             if state.postApprovalContinuation?.status == .dispatching
                 || state.postApprovalContinuation?.status.isDeliverable == true,
                 state.markPostApprovalContinuationDeferred(
@@ -3381,7 +3552,17 @@ extension AgentModeViewModel {
         let result = await submitCoordinatorDirectiveToAgentMode(
             event.resumeDirective,
             coordinatorSessionID: event.coordinatorSessionID,
-            forceNewRuntime: false
+            forceNewRuntime: false,
+            targetedBeforeSubmit: { tabID, expectedSession in
+                guard self.sessions[tabID] === expectedSession,
+                      let plan = expectedSession.coordinatorFollowThroughState?.missionPlan,
+                      !plan.status.isTerminal,
+                      plan.pendingRevisionProposal == nil,
+                      !plan.hasRevisionProposalDurabilityHold
+                else {
+                    throw MCPError.invalidParams(CoordinatorMissionRevisionProposalPause.heldReason)
+                }
+            }
         )
         var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
         switch result {
@@ -3525,6 +3706,83 @@ extension AgentModeViewModel {
     }
 
     @MainActor
+    private func resolveCoordinatorMissionRevisionProposal(
+        _ request: CoordinatorMissionRevisionProposalTrustedResolutionRequest
+    ) async throws -> CoordinatorMissionRevisionProposalResolutionResult {
+        guard let match = sessions.first(where: { _, session in
+            session.activeAgentSessionID == request.coordinatorSessionID && session.isCoordinatorRuntime
+        }) else {
+            throw MCPError.invalidParams("Coordinator session \(request.coordinatorSessionID.uuidString) is not live in this window.")
+        }
+        let tabID = match.key
+        let session = match.value
+        var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        let result = try state.resolveRevisionProposalTransaction(request)
+        if result.disposition == .existingResolutionRetry,
+           state.missionPlan?.revisionProposalDurabilityHold == nil
+        {
+            return result
+        }
+        guard let expectedPlan = state.missionPlan,
+              expectedPlan.revisionProposalDurabilityHold?.transactionID == result.resolutionID
+        else {
+            throw MCPError.invalidParams("Coordinator Mission revision proposal resolution did not install its durability hold.")
+        }
+        persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+        let minimumGeneration = session.saveRequestGeneration
+        guard await persistRevisionProposal(tabID: tabID, minimumGeneration: minimumGeneration) else {
+            throw MCPError.invalidParams("Coordinator Mission persistence did not durably save the revision proposal resolution; authority remains held and the action is retryable.")
+        }
+        guard sessions[tabID] === session,
+              session.coordinatorFollowThroughState?.missionPlan == expectedPlan,
+              expectedPlan.revisionProposalDurabilityHold?.transactionID == result.resolutionID,
+              !expectedPlan.status.isTerminal
+        else {
+            throw MCPError.invalidParams("Coordinator Mission revision proposal resolution changed before durable persistence completed; authority remains held.")
+        }
+        state = try await clearAndPersistRevisionProposalDurabilityHold(
+            in: session.coordinatorFollowThroughState ?? state,
+            transactionID: result.resolutionID,
+            tabID: tabID,
+            session: session
+        )
+        clearAcceptedCoordinatorPostApprovalContinuationReceiptsIfSafelyInvalidated(
+            coordinatorSessionID: request.coordinatorSessionID,
+            state: state
+        )
+        return result
+    }
+
+    @MainActor
+    private func clearAndPersistRevisionProposalDurabilityHold(
+        in state: CoordinatorFollowThroughState,
+        transactionID: UUID,
+        tabID: UUID,
+        session: TabSession
+    ) async throws -> CoordinatorFollowThroughState {
+        var cleared = state
+        guard let hold = cleared.missionPlan?.revisionProposalDurabilityHold,
+              hold.transactionID == transactionID,
+              cleared.clearRevisionProposalDurabilityHold(transactionID: transactionID)
+        else {
+            throw MCPError.invalidParams("Coordinator Mission revision proposal durability hold could not be cleared.")
+        }
+        persistCoordinatorFollowThroughState(cleared, tabID: tabID, session: session)
+        let minimumGeneration = session.saveRequestGeneration
+        guard await persistRevisionProposal(tabID: tabID, minimumGeneration: minimumGeneration),
+              sessions[tabID] === session,
+              session.coordinatorFollowThroughState == cleared,
+              cleared.missionPlan?.revisionProposalDurabilityHold == nil
+        else {
+            var failedClosed = session.coordinatorFollowThroughState ?? cleared
+            failedClosed.missionPlan?.revisionProposalDurabilityHold = hold
+            persistCoordinatorFollowThroughState(failedClosed, tabID: tabID, session: session)
+            throw MCPError.invalidParams("Coordinator Mission durability-hold clearance was not durably saved; authority remains held and the action is retryable.")
+        }
+        return cleared
+    }
+
+    @MainActor
     private func persistRevisionProposal(
         tabID: UUID,
         minimumGeneration: UInt64
@@ -3576,6 +3834,96 @@ extension AgentModeViewModel {
                 throw MCPError.invalidParams("Coordinator Mission revision proposal summary changed before persistence.")
             }
         }
+    }
+
+    @MainActor
+    private func applyTrustedCoordinatorMissionContractChange(
+        coordinatorSessionID: UUID,
+        update: CoordinatorMissionPlanUpdate
+    ) async throws {
+        guard let match = sessions.first(where: { _, session in
+            session.activeAgentSessionID == coordinatorSessionID && session.isCoordinatorRuntime
+        }) else {
+            throw MCPError.invalidParams("Coordinator session \(coordinatorSessionID.uuidString) is not live in this window.")
+        }
+        let tabID = match.key
+        let session = match.value
+        var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        let result = try state.applyTrustedContractChangeInvalidatingRevisionProposal(
+            update,
+            coordinatorSessionID: coordinatorSessionID
+        )
+        guard let result,
+              let expectedPlan = state.missionPlan,
+              expectedPlan.revisionProposalDurabilityHold?.transactionID == result.resolutionID
+        else {
+            throw MCPError.invalidParams("Coordinator Mission contract change did not invalidate the pending proposal atomically.")
+        }
+        persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+        let minimumGeneration = session.saveRequestGeneration
+        guard await persistRevisionProposal(tabID: tabID, minimumGeneration: minimumGeneration) else {
+            throw MCPError.invalidParams("Coordinator Mission contract change was not durably saved; authority remains held and the action is retryable.")
+        }
+        guard sessions[tabID] === session,
+              session.coordinatorFollowThroughState?.missionPlan == expectedPlan
+        else {
+            throw MCPError.invalidParams("Coordinator Mission contract changed again before durable persistence completed.")
+        }
+        state = try await clearAndPersistRevisionProposalDurabilityHold(
+            in: session.coordinatorFollowThroughState ?? state,
+            transactionID: result.resolutionID,
+            tabID: tabID,
+            session: session
+        )
+        clearAcceptedCoordinatorPostApprovalContinuationReceiptsIfSafelyInvalidated(
+            coordinatorSessionID: coordinatorSessionID,
+            state: state
+        )
+    }
+
+    @MainActor
+    private func recordTrustedCoordinatorMissionStop(
+        coordinatorSessionID: UUID,
+        targetSessionIDs: [UUID]
+    ) async throws {
+        guard let match = sessions.first(where: { _, session in
+            session.activeAgentSessionID == coordinatorSessionID && session.isCoordinatorRuntime
+        }) else {
+            throw MCPError.invalidParams("Coordinator session \(coordinatorSessionID.uuidString) is not live in this window.")
+        }
+        let tabID = match.key
+        let session = match.value
+        var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
+        let result = try state.stopMissionTransaction(
+            coordinatorSessionID: coordinatorSessionID,
+            cancelledSessionIDs: Set(targetSessionIDs)
+        )
+        guard let expectedPlan = state.missionPlan, expectedPlan.status == .stopped else {
+            throw MCPError.invalidParams("Coordinator Mission Stop did not install terminal state.")
+        }
+        persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+        let minimumGeneration = session.saveRequestGeneration
+        guard await persistRevisionProposal(tabID: tabID, minimumGeneration: minimumGeneration) else {
+            throw MCPError.invalidParams("Coordinator Mission Stop was not durably saved; cancellation was not started.")
+        }
+        guard sessions[tabID] === session,
+              session.coordinatorFollowThroughState?.missionPlan == expectedPlan,
+              session.coordinatorFollowThroughState?.missionPlan?.status == .stopped
+        else {
+            throw MCPError.invalidParams("Coordinator Mission Stop state changed before durable persistence completed.")
+        }
+        if let result {
+            state = try await clearAndPersistRevisionProposalDurabilityHold(
+                in: session.coordinatorFollowThroughState ?? state,
+                transactionID: result.resolutionID,
+                tabID: tabID,
+                session: session
+            )
+        }
+        clearAcceptedCoordinatorPostApprovalContinuationReceiptsIfSafelyInvalidated(
+            coordinatorSessionID: coordinatorSessionID,
+            state: state
+        )
     }
 
     @MainActor
@@ -3706,7 +4054,9 @@ extension AgentModeViewModel {
         else {
             throw MCPError.invalidParams("Post-approval continuation enqueue rejected because the continuation identity changed.")
         }
-        guard plan.pendingRevisionProposal == nil else {
+        guard plan.pendingRevisionProposal == nil,
+              !plan.hasRevisionProposalDurabilityHold
+        else {
             throw MCPError.invalidParams(CoordinatorMissionRevisionProposalPause.heldReason)
         }
         guard continuation.status == .dispatching,
@@ -3841,7 +4191,7 @@ extension AgentModeViewModel {
         else {
             throw MCPError.invalidParams("Coordinator child-answer authority is unavailable.")
         }
-        guard plan.pendingRevisionProposal == nil else {
+        guard !plan.holdsChildInteractionsForRevisionProposal else {
             throw MCPError.invalidParams(CoordinatorMissionRevisionProposalPause.heldReason)
         }
     }
