@@ -1520,12 +1520,26 @@ final class CoordinatorModeViewModel: ObservableObject {
         guard let plan = snapshot.coordinatorRail.availableCoordinators
             .first(where: { $0.sessionID == coordinatorSessionID })?
             .missionPlan,
-            !plan.status.isTerminal,
-            let presentation = CoordinatorPlanRevisionPresentation.project(
-                coordinatorSessionID: coordinatorSessionID,
-                plan: plan
-            )
+            !plan.status.isTerminal
         else {
+            return MissionComposerContext(
+                route: .ordinary(coordinatorSessionID: coordinatorSessionID),
+                placeholder: "Message the Director..."
+            )
+        }
+        if plan.hasRevisionProposalDurabilityHold {
+            return MissionComposerContext(
+                route: .unavailableRevision(
+                    coordinatorSessionID: coordinatorSessionID,
+                    reason: CoordinatorMissionRevisionProposalPause.heldReason
+                ),
+                placeholder: "Waiting for the plan decision to become durable..."
+            )
+        }
+        guard let presentation = CoordinatorPlanRevisionPresentation.project(
+            coordinatorSessionID: coordinatorSessionID,
+            plan: plan
+        ) else {
             return MissionComposerContext(
                 route: .ordinary(coordinatorSessionID: coordinatorSessionID),
                 placeholder: "Message the Director..."
@@ -1594,7 +1608,7 @@ final class CoordinatorModeViewModel: ObservableObject {
                 ),
                 placeholder: "Request another change..."
             )
-        case .approvedCollapsed:
+        case .approvedCollapsed, .keptCurrentPlanCollapsed:
             return MissionComposerContext(
                 route: .ordinary(coordinatorSessionID: coordinatorSessionID),
                 placeholder: "Message the Director..."

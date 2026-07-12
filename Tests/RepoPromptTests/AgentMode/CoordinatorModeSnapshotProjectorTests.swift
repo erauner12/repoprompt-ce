@@ -1787,6 +1787,8 @@ final class CoordinatorModeSnapshotProjectorTests: XCTestCase {
             demoCoordinatorIDs: [coordinatorID]
         ))
         XCTAssertEqual(readySnapshot.decisionQueue.map(\.source), [.planApproval])
+        XCTAssertEqual(readySnapshot.counts.needsYou, 1)
+        XCTAssertEqual(readySnapshot.coordinatorRail.childCounts.needsYou, 1)
         let readyPresentation = try XCTUnwrap(CoordinatorPlanRevisionPresentation.project(
             coordinatorSessionID: coordinatorID,
             plan: readyPlan

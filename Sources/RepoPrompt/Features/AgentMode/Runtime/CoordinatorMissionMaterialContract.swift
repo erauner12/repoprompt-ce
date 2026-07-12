@@ -336,6 +336,14 @@ struct CoordinatorMissionMaterialContractDelta: Equatable {
     var unexpectedChanges: [Field] {
         materialChanges.filter { $0.promiseClassification == .outsideStatedAffectedAreas }
     }
+
+    var requestedChanges: [Field] {
+        materialChanges.filter { $0.promiseClassification == .withinStatedAffectedAreas }
+    }
+
+    var unchangedFields: [Field] {
+        fields.filter { $0.change == .unchanged }
+    }
 }
 
 /// Produces a deterministic structural delta over canonical snapshots.

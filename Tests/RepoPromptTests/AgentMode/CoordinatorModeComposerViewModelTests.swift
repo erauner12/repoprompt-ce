@@ -4182,6 +4182,10 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         )
         XCTAssertEqual(pendingContext.placeholder, "Revise plan, and consider...")
         XCTAssertFalse(pendingContext.sendsOnReturn)
+        XCTAssertTrue(CoordinatorPlanRevisionPresentation.pendingComposerExplanation.contains("Decisions happen on the Plan Revision card"))
+        XCTAssertTrue(CoordinatorPlanRevisionPresentation.pendingComposerExplanation.contains("used only if you choose Revise plan"))
+        XCTAssertTrue(CoordinatorPlanRevisionPresentation.revisionReviewExpectation.contains("before any work resumes"))
+        XCTAssertEqual(CoordinatorPlanRevisionPresentation.accessibilityLabel, "Plan Revision")
 
         let before = try XCTUnwrap(harness.session.coordinatorFollowThroughState?.missionPlan)
         guard case let .rejected(message) = await harness.coordinatorModeViewModel.submitMissionComposerDirective(
@@ -4243,6 +4247,63 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             return XCTFail("Expected ordinary Director composer context.")
         }
         XCTAssertEqual(ordinaryContext.placeholder, "Message the Director...")
+    }
+
+    func testKeepOutcomeRestoresOrdinaryComposerOnlyAfterDurabilityHoldClears() async throws {
+        let harness = await makeRevisionProposalPersistenceHarness()
+        harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }
+        _ = try await harness.coordinatorModeViewModel.appendRevisionProposal(
+            coordinatorSessionID: harness.coordinatorID,
+            request: harness.request
+        )
+        var state = try XCTUnwrap(harness.session.coordinatorFollowThroughState)
+        let proposal = try XCTUnwrap(state.missionPlan?.pendingRevisionProposal)
+        let resolution = try state.resolveRevisionProposalTransaction(
+            CoordinatorMissionRevisionProposalTrustedResolutionRequest(
+                coordinatorSessionID: harness.coordinatorID,
+                action: .keepCurrentPlan,
+                proposalID: proposal.id,
+                expectedContractFingerprint: proposal.baseContractFingerprint,
+                expectedCheckpointInstanceID: CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                    coordinatorSessionID: harness.coordinatorID,
+                    proposal: proposal
+                )
+            ),
+            resolvedAt: date(2)
+        )
+        harness.session.coordinatorFollowThroughState = state
+        harness.coordinatorModeViewModel.refresh()
+        harness.coordinatorModeViewModel.selectCoordinator(sessionID: harness.coordinatorID)
+
+        let heldContext = harness.coordinatorModeViewModel.missionComposerContext()
+        guard case .unavailableRevision = heldContext.route else {
+            return XCTFail("Keep must not restore ordinary messaging before durability clears.")
+        }
+        XCTAssertFalse(heldContext.sendsOnReturn)
+        XCTAssertNil(try CoordinatorPlanRevisionPresentation.project(
+            coordinatorSessionID: harness.coordinatorID,
+            plan: XCTUnwrap(state.missionPlan)
+        ))
+
+        XCTAssertTrue(state.clearRevisionProposalDurabilityHold(
+            transactionID: resolution.resolutionID,
+            at: date(3)
+        ))
+        harness.session.coordinatorFollowThroughState = state
+        harness.coordinatorModeViewModel.refresh()
+        let ordinaryContext = harness.coordinatorModeViewModel.missionComposerContext()
+        guard case .ordinary = ordinaryContext.route else {
+            return XCTFail("Durable Keep should restore ordinary Director messaging.")
+        }
+        XCTAssertTrue(ordinaryContext.sendsOnReturn)
+        XCTAssertEqual(ordinaryContext.placeholder, "Message the Director...")
+        XCTAssertEqual(
+            try CoordinatorPlanRevisionPresentation.project(
+                coordinatorSessionID: harness.coordinatorID,
+                plan: XCTUnwrap(state.missionPlan)
+            )?.phase,
+            .keptCurrentPlanCollapsed
+        )
     }
 
     func testUnifiedMissionComposerCapturesRenderedMissionAndUsesAcceptedDraftingAuthority() async throws {
@@ -5734,13 +5795,13 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         )
     }
 
-    func testRenderedRevisionProposalActionCapturesOnlyStableIdentities() {
+    func testRenderedKeepRevisionProposalActionCapturesOnlyStableIdentitiesAndNoDraft() {
         let coordinatorID = uuid(1)
         let proposalID = uuid(2)
         var captured: (UUID, CoordinatorMissionRevisionProposalResolutionAction, UUID, String, String)?
         let action = CoordinatorModeView.renderedRevisionProposalAction(
             coordinatorSessionID: coordinatorID,
-            action: .revisePlan,
+            action: .keepCurrentPlan,
             proposalID: proposalID,
             expectedContractFingerprint: "contract-fingerprint",
             expectedCheckpointInstanceID: "checkpoint-instance"
@@ -5751,7 +5812,7 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         action()
 
         XCTAssertEqual(captured?.0, coordinatorID)
-        XCTAssertEqual(captured?.1, .revisePlan)
+        XCTAssertEqual(captured?.1, .keepCurrentPlan)
         XCTAssertEqual(captured?.2, proposalID)
         XCTAssertEqual(captured?.3, "contract-fingerprint")
         XCTAssertEqual(captured?.4, "checkpoint-instance")

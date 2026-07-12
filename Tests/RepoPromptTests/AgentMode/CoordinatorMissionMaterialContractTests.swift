@@ -274,9 +274,13 @@ final class CoordinatorMissionMaterialContractTests: XCTestCase {
             $0.change == .added && $0.path == "nodes.\(self.uuid(99).uuidString.lowercased())"
         })
         XCTAssertTrue(delta.unexpectedChanges.contains { $0.path.hasSuffix(".title") })
-        XCTAssertTrue(delta.fields.contains {
-            $0.change == .unchanged && $0.promiseClassification == .unchanged
-        })
+        XCTAssertEqual(
+            delta.requestedChanges,
+            delta.materialChanges.filter { $0.promiseClassification == .withinStatedAffectedAreas }
+        )
+        XCTAssertFalse(delta.requestedChanges.contains { $0.promiseClassification == .outsideStatedAffectedAreas })
+        XCTAssertEqual(delta.unchangedFields, delta.fields.filter { $0.change == .unchanged })
+        XCTAssertTrue(delta.unchangedFields.allSatisfy { $0.promiseClassification == .unchanged })
         for field in delta.materialChanges {
             XCTAssertNotEqual(field.beforeCanonicalValue, field.afterCanonicalValue)
         }

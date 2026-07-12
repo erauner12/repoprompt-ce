@@ -621,11 +621,17 @@ enum CoordinatorModeLedgerEntryPayload: Equatable {
 }
 
 struct CoordinatorPlanRevisionPresentation: Equatable {
+    static let revisionReviewExpectation = "You'll review the revised plan before any work resumes."
+    static let keepOutcome = "Resumed under the original plan; the Director's concern is recorded."
+    static let pendingComposerExplanation = "Decisions happen on the Plan Revision card. This text is optional guidance used only if you choose Revise plan; Keep current plan and Stop Mission ignore the draft."
+    static let accessibilityLabel = "Plan Revision"
+
     enum Phase: Equatable {
         case pendingDecision
         case drafting
         case revisedPlanReady
         case approvedCollapsed
+        case keptCurrentPlanCollapsed
     }
 
     let coordinatorSessionID: UUID
@@ -647,6 +653,8 @@ struct CoordinatorPlanRevisionPresentation: Equatable {
             "Approve revised Mission Plan"
         case .approvedCollapsed:
             "Plan revised to address: \(proposalSummary)"
+        case .keptCurrentPlanCollapsed:
+            Self.keepOutcome
         }
     }
 
@@ -669,9 +677,26 @@ struct CoordinatorPlanRevisionPresentation: Equatable {
                 revisionGuidance: nil
             )
         }
-        guard !plan.status.isTerminal,
-              let lineage = plan.latestAcceptedRevisionLineage
-        else { return nil }
+        guard !plan.status.isTerminal else { return nil }
+        if !plan.hasRevisionProposalDurabilityHold,
+           let resolution = plan.revisionProposalResolutions.last,
+           resolution.outcome == .rejected,
+           resolution.userDecisionID != nil,
+           resolution.checkpointID == CoordinatorMissionRevisionProposalCheckpoint.checkpointID,
+           let proposal = plan.revisionProposals.first(where: { $0.id == resolution.proposalID })
+        {
+            return Self(
+                coordinatorSessionID: coordinatorSessionID,
+                proposalID: proposal.id,
+                proposalSummary: proposal.summary,
+                phase: .keptCurrentPlanCollapsed,
+                expectedContractFingerprint: proposal.baseContractFingerprint,
+                expectedCheckpointInstanceID: resolution.checkpointInstanceID,
+                materialDelta: nil,
+                revisionGuidance: nil
+            )
+        }
+        guard let lineage = plan.latestAcceptedRevisionLineage else { return nil }
 
         let phase: Phase
         switch plan.approvalState {

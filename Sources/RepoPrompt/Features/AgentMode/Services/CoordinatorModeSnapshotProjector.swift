@@ -338,8 +338,11 @@ struct CoordinatorModeSnapshotProjector {
             rowsByID: rowsByID
         )
 
-        let pendingRevisionProposalCoordinatorIDs = Set(coordinatorOptions.compactMap { option in
-            option.missionPlan?.pendingRevisionProposal == nil ? nil : option.sessionID
+        let revisionAttentionCoordinatorIDs: Set<UUID> = Set(coordinatorOptions.compactMap { option in
+            guard let plan = option.missionPlan else { return nil }
+            let needsDecision = plan.pendingRevisionProposal != nil
+                || plan.approvalState == .awaitingApproval && plan.latestAcceptedRevisionLineage != nil
+            return needsDecision ? option.sessionID : nil
         })
 
         return CoordinatorModeSnapshot(
@@ -348,7 +351,7 @@ struct CoordinatorModeSnapshotProjector {
             boardScope: input.boardScope,
             counts: counts(
                 for: boardRows,
-                pendingRevisionProposalCoordinatorIDs: pendingRevisionProposalCoordinatorIDs
+                revisionAttentionCoordinatorIDs: revisionAttentionCoordinatorIDs
             ),
             groups: groups,
             coordinatorRail: coordinatorRail,
@@ -1177,10 +1180,14 @@ struct CoordinatorModeSnapshotProjector {
             guard ownerID == coordinatorID else { return nil }
             return rowsByID[sessionID]
         }
+        let revisionNeedsUser = plan.map {
+            $0.pendingRevisionProposal != nil
+                || $0.approvalState == .awaitingApproval && $0.latestAcceptedRevisionLineage != nil
+        } == true
         return CoordinatorModeCoordinatorChildCounts(
             total: rows.count,
             needsYou: rows.count(where: { $0.statusGroup == .needsYou })
-                + (plan?.pendingRevisionProposal == nil ? 0 : 1),
+                + (revisionNeedsUser ? 1 : 0),
             working: rows.count(where: { $0.statusGroup == .working }),
             blocked: rows.count(where: { $0.statusGroup == .blocked }),
             review: rows.count(where: { $0.statusGroup == .review }),
@@ -1597,15 +1604,15 @@ struct CoordinatorModeSnapshotProjector {
 
     private func counts(
         for rows: [CoordinatorModeRow],
-        pendingRevisionProposalCoordinatorIDs: Set<UUID>
+        revisionAttentionCoordinatorIDs: Set<UUID>
     ) -> CoordinatorModeCounts {
         let rowNeedsYou = rows.count { row in
             row.statusGroup == .needsYou
-                && !pendingRevisionProposalCoordinatorIDs.contains(row.sessionID)
+                && !revisionAttentionCoordinatorIDs.contains(row.sessionID)
         }
         return CoordinatorModeCounts(
             totalRows: rows.count,
-            needsYou: rowNeedsYou + pendingRevisionProposalCoordinatorIDs.count,
+            needsYou: rowNeedsYou + revisionAttentionCoordinatorIDs.count,
             blocked: rows.count(where: { $0.statusGroup == .blocked }),
             working: rows.count(where: { $0.statusGroup == .working }),
             review: rows.count(where: { $0.statusGroup == .review }),

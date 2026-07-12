@@ -115,8 +115,10 @@ Coordinator mode SHALL expose one Mission composer and SHALL NOT render a second
 - **WHEN** a revision proposal is pending
 - **THEN** the composer SHALL invite optional guidance with **Revise plan, and consider...**
 - **AND** Enter/send SHALL NOT deliver, queue, or resolve that guidance independently
+- **AND** inline copy SHALL state that decisions happen on the card and composer text is used only if Revise plan is chosen
 - **AND** Revise plan SHALL atomically consume the rendered Mission/proposal identities and the exact current guidance
-- **AND** Keep current plan and Stop Mission SHALL ignore the guidance.
+- **AND** Keep current plan and Stop Mission SHALL ignore the guidance
+- **AND** the card SHALL state that the user will review the revised plan before work resumes.
 
 #### Scenario: Accepted revision is being drafted
 - **WHEN** an accepted proposal lineage is in `revisionRequested`
@@ -145,7 +147,9 @@ The Plan Revision container SHALL derive post-Revise state from the latest accep
 #### Scenario: Concrete revised plan awaits approval
 - **WHEN** the latest accepted proposal lineage has produced a concrete plan in `awaitingApproval`
 - **THEN** the same Plan Revision container SHALL identify the proposal and lead with a promise check
-- **AND** it SHALL prominently show changes outside stated affected areas before progressive added/removed/changed detail
+- **AND** it SHALL prominently show changes outside stated affected areas second
+- **AND** requested in-scope changes SHALL follow, while unchanged fields remain collapsed by default
+- **AND** drafting completion SHALL create exactly one actionable Needs You item while drafting start creates none
 - **AND** the full revised plan SHALL remain accessible
 - **AND** approval SHALL use the existing exact plan-approval checkpoint transaction.
 
@@ -153,3 +157,9 @@ The Plan Revision container SHALL derive post-Revise state from the latest accep
 - **WHEN** that exact plan-approval transaction completes
 - **THEN** the container SHALL collapse to **Plan revised to address: …**
 - **AND** no exact proposal-ratification action SHALL be introduced.
+
+#### Scenario: User keeps the original plan
+- **WHEN** Keep current plan becomes durable
+- **THEN** the same container SHALL morph to **Resumed under the original plan; the Director's concern is recorded.**
+- **AND** the collapsed outcome SHALL remain derived from the latest proposal resolution until another revision lifecycle supersedes it or the Mission terminalizes
+- **AND** proposal, decision, receipt, contract identity, and ledger history SHALL remain intact.

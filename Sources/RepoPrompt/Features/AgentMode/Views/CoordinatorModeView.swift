@@ -3538,7 +3538,7 @@ struct CoordinatorModeView: View {
                coordinatorSessionID: coordinatorSessionID,
                plan: plan
            ),
-           presentation.phase == .approvedCollapsed,
+           presentation.phase == .approvedCollapsed || presentation.phase == .keptCurrentPlanCollapsed,
            let proposal = plan.revisionProposals.first(where: { $0.id == presentation.proposalID })
         {
             coordinatorPlanRevisionContainer(
@@ -3750,9 +3750,13 @@ struct CoordinatorModeView: View {
                     coordinatorRevisionProposalDetail("Continuing would be", continuingImpact, metrics: metrics)
                 }
 
-                Text("Optional guidance is entered in the Mission composer below and is attached only if you choose Revise plan.")
+                Text(CoordinatorPlanRevisionPresentation.pendingComposerExplanation)
                     .font(metrics.micro)
                     .foregroundStyle(.secondary)
+
+                Text(CoordinatorPlanRevisionPresentation.revisionReviewExpectation)
+                    .font(metrics.microMedium)
+                    .foregroundStyle(Color.orange)
 
                 if let actionNotice {
                     HStack(alignment: .firstTextBaseline, spacing: metrics.smallSpacing) {
@@ -3770,7 +3774,7 @@ struct CoordinatorModeView: View {
                     coordinatorDirectorCheckpointActionButton(
                         label: "Revise plan",
                         systemImage: "square.and.pencil",
-                        description: "Request a concrete revised plan. Optional guidance is attached to this decision.",
+                        description: "Request a concrete revised plan. \(CoordinatorPlanRevisionPresentation.revisionReviewExpectation)",
                         accentColor: Color.orange,
                         metrics: metrics,
                         action: { onRevise(coordinatorDirectiveDraft) }
@@ -3818,8 +3822,6 @@ struct CoordinatorModeView: View {
             case .revisedPlanReady:
                 Text(presentation.primaryHeading)
                     .font(metrics.bodySemibold)
-                coordinatorRevisionProposalDetail("Revision requested", proposal.summary, metrics: metrics)
-
                 if unexpected.isEmpty {
                     Label(
                         "Promise check passed: material changes stay within the stated affected areas.",
@@ -3842,8 +3844,10 @@ struct CoordinatorModeView: View {
                     .clipShape(RoundedRectangle(cornerRadius: metrics.smallSpacing))
                 }
 
+                coordinatorRevisionProposalDetail("Director's proposal", proposal.summary, metrics: metrics)
+
                 if let delta {
-                    coordinatorRevisionDeltaDisclosure(delta, metrics: metrics)
+                    coordinatorRevisionDeltaReview(delta, metrics: metrics)
                 }
                 if let plan {
                     DisclosureGroup("Full revised Mission Plan") {
@@ -3883,40 +3887,54 @@ struct CoordinatorModeView: View {
                 Text(presentation.primaryHeading)
                     .font(metrics.bodySemibold)
                     .fixedSize(horizontal: false, vertical: true)
+
+            case .keptCurrentPlanCollapsed:
+                Text(presentation.primaryHeading)
+                    .font(metrics.bodySemibold)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("The proposal and your Keep current plan decision remain in Mission history.")
+                    .font(metrics.micro)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(metrics.cardPadding)
         .background(CoordinatorTheme.Palette.elevatedPanelBackground)
         .clipShape(RoundedRectangle(cornerRadius: metrics.cardCornerRadius, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(CoordinatorPlanRevisionPresentation.accessibilityLabel)
     }
 
     @ViewBuilder
-    private func coordinatorRevisionDeltaDisclosure(
+    private func coordinatorRevisionDeltaReview(
         _ delta: CoordinatorMissionMaterialContractDelta,
         metrics: CoordinatorVisualMetrics
     ) -> some View {
-        let changes = delta.materialChanges
-        DisclosureGroup("Material changes (\(changes.count))") {
+        if !delta.requestedChanges.isEmpty {
             VStack(alignment: .leading, spacing: metrics.tightSpacing) {
-                ForEach(
-                    CoordinatorMissionMaterialContractDelta.Change.allCases.filter { $0 != .unchanged },
-                    id: \.rawValue
-                ) { change in
-                    let matching = changes.filter { $0.change == change }
-                    if !matching.isEmpty {
-                        DisclosureGroup("\(change.rawValue.capitalized) (\(matching.count))") {
-                            ForEach(matching, id: \.path) { field in
-                                Text(coordinatorRevisionDeltaDescription(field))
-                                    .font(metrics.micro)
-                                    .textSelection(.enabled)
-                            }
-                        }
-                    }
+                Label("Requested in-scope changes", systemImage: "checklist")
+                    .font(metrics.microMedium)
+                    .foregroundStyle(.primary)
+                ForEach(delta.requestedChanges, id: \.path) { field in
+                    Text(coordinatorRevisionDeltaDescription(field))
+                        .font(metrics.micro)
+                        .textSelection(.enabled)
                 }
             }
-            .padding(.top, metrics.tightSpacing)
         }
-        .font(metrics.microMedium)
+
+        if !delta.unchangedFields.isEmpty {
+            DisclosureGroup("Unchanged contract fields (\(delta.unchangedFields.count))") {
+                VStack(alignment: .leading, spacing: metrics.tightSpacing) {
+                    ForEach(delta.unchangedFields, id: \.path) { field in
+                        Text(coordinatorRevisionDeltaDescription(field))
+                            .font(metrics.micro)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(.top, metrics.tightSpacing)
+            }
+            .font(metrics.microMedium)
+        }
     }
 
     private func coordinatorRevisionDeltaDescription(
@@ -4029,7 +4047,8 @@ struct CoordinatorModeView: View {
                coordinatorSessionID: coordinatorSessionID,
                plan: plan
            ),
-           presentation.phase != .approvedCollapsed
+           presentation.phase != .approvedCollapsed,
+           presentation.phase != .keptCurrentPlanCollapsed
         {
             return .planRevision(presentation)
         }
@@ -5942,7 +5961,7 @@ struct CoordinatorModeView: View {
         return VStack(alignment: .leading, spacing: metrics.smallSpacing) {
             if case .pendingRevisionProposal = missionComposerContext.route {
                 coordinatorComposerNotice(
-                    "Guidance stays local until you choose Revise plan on the Plan Revision card. Keep current plan and Stop Mission ignore it.",
+                    CoordinatorPlanRevisionPresentation.pendingComposerExplanation,
                     metrics: metrics
                 )
             } else if case let .unavailableRevision(_, reason) = missionComposerContext.route {

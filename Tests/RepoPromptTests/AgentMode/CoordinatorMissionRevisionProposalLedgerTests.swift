@@ -581,6 +581,10 @@ final class CoordinatorMissionRevisionProposalLedgerTests: XCTestCase {
         XCTAssertEqual(state.missionPlan?.postApprovalContinuation?.status, .deferred)
         XCTAssertTrue(state.missionPlan?.hasRevisionProposalDurabilityHold == true)
         XCTAssertTrue(state.missionPlan?.holdsChildInteractionsForRevisionProposal == true)
+        XCTAssertNil(try CoordinatorPlanRevisionPresentation.project(
+            coordinatorSessionID: coordinatorID,
+            plan: XCTUnwrap(state.missionPlan)
+        ))
 
         XCTAssertTrue(state.clearRevisionProposalDurabilityHold(
             transactionID: first.resolutionID,
@@ -588,6 +592,18 @@ final class CoordinatorMissionRevisionProposalLedgerTests: XCTestCase {
         ))
         XCTAssertFalse(state.missionPlan?.hasRevisionProposalDurabilityHold == true)
         XCTAssertFalse(state.missionPlan?.holdsChildInteractionsForRevisionProposal == true)
+        let keptPlan = try XCTUnwrap(state.missionPlan)
+        let presentation = try XCTUnwrap(CoordinatorPlanRevisionPresentation.project(
+            coordinatorSessionID: coordinatorID,
+            plan: keptPlan
+        ))
+        XCTAssertEqual(presentation.phase, .keptCurrentPlanCollapsed)
+        XCTAssertEqual(presentation.proposalID, proposal.id)
+        XCTAssertEqual(presentation.expectedContractFingerprint, proposal.baseContractFingerprint)
+        XCTAssertEqual(presentation.primaryHeading, CoordinatorPlanRevisionPresentation.keepOutcome)
+        XCTAssertEqual(keptPlan.revisionProposals.count, 1)
+        XCTAssertEqual(keptPlan.revisionProposalResolutions.count, 1)
+        XCTAssertEqual(keptPlan.decisions.first?.label, CoordinatorMissionUserDecisionLabel.keptCurrentMissionPlan.rawValue)
     }
 
     func testTrustedReviseResolutionCASInvalidatesOldContinuationAndRejectsConflicts() throws {
