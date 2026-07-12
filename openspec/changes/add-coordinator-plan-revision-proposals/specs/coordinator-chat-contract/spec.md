@@ -131,6 +131,13 @@ The external Mission-aware `coordinator_chat submit` path SHALL support proposal
 - **THEN** the action SHALL fail closed as stale
 - **AND** it SHALL NOT append a conflicting decision.
 
+#### Scenario: External drafting guidance is bound to the accepted resolution
+- **WHEN** an external caller submits message-only revised-plan drafting guidance after Revise plan
+- **THEN** the public schema and Mission status SHALL expose `accepted_revision_resolution_id` as an identity copied from `revision_proposal.accepted_drafting.submit_hints`
+- **AND** the submit SHALL require an explicit target Mission and an exact authoritative accepted resolution identity
+- **AND** generic directives, runtime callers, child answers, stale identities, Stop, and revised-plan approval SHALL NOT acquire drafting authority from selection or projected UI state
+- **AND** retrying the same identity after its concrete revised plan is already awaiting approval SHALL return an idempotent success without sending another directive or bypassing exact revised-plan approval.
+
 #### Scenario: External user submits Stop
 - **WHEN** an external user submits target-bound Stop while a proposal is pending
 - **THEN** Stop SHALL remain stale-tolerant because it withdraws consent

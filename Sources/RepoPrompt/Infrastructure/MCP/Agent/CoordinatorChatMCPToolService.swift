@@ -12,8 +12,7 @@ struct CoordinatorChatMCPToolService {
         var startNewCoordinatorRun: (_ coordinatorModelID: String?) -> Void
         var stopCoordinatorMission: (_ targetMissionID: UUID) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var submitDirective: (_ text: String) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
-        var acceptedRevisionDraftingResolutionID: (_ coordinatorSessionID: UUID) -> UUID?
-        var holdsRevisionProposalAuthority: (_ coordinatorSessionID: UUID) -> Bool
+        var revisionProposalAuthorityState: (_ coordinatorSessionID: UUID) -> CoordinatorModeViewModel.RevisionProposalAuthority
         var submitAcceptedRevisionDraftingDirective: (_ text: String, _ coordinatorSessionID: UUID, _ expectedResolutionID: UUID) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var submitContinuation: (_ action: CoordinatorModeViewModel.ContinuationAction, _ expectedCheckpointInstanceID: String?) async -> CoordinatorModeViewModel.DirectiveSubmissionResult
         var activePendingChildInteractionRow: (_ coordinatorSessionID: UUID?) -> CoordinatorModeRow?
@@ -94,11 +93,8 @@ struct CoordinatorChatMCPToolService {
                 startNewCoordinatorRun: { coordinatorViewModel.startNewCoordinatorRun(coordinatorModelID: $0) },
                 stopCoordinatorMission: { await coordinatorViewModel.stopCoordinatorMission(targetMissionID: $0) },
                 submitDirective: { await coordinatorViewModel.submitCoordinatorDirective($0) },
-                acceptedRevisionDraftingResolutionID: {
-                    coordinatorViewModel.acceptedRevisionDraftingResolutionID(coordinatorSessionID: $0)
-                },
-                holdsRevisionProposalAuthority: {
-                    coordinatorViewModel.holdsRevisionProposalAuthority(coordinatorSessionID: $0)
+                revisionProposalAuthorityState: {
+                    coordinatorViewModel.revisionProposalAuthorityState(coordinatorSessionID: $0)
                 },
                 submitAcceptedRevisionDraftingDirective: {
                     await coordinatorViewModel.submitAcceptedRevisionDraftingDirective(
@@ -381,6 +377,10 @@ struct CoordinatorChatMCPToolService {
                 : nil
             let hasCheckpointAction = continuationAction != nil || proposalAction != nil
             let expectedCheckpointInstanceID = try parseExpectedCheckpointInstanceID(args)
+            let acceptedRevisionResolutionID = try optionalUUID(
+                args["accepted_revision_resolution_id"] ?? args["acceptedRevisionResolutionID"],
+                name: "accepted_revision_resolution_id"
+            )
             let newParent = AgentMCPToolHelpers.parseBool(args["new_parent"]) ?? false
             let coordinatorModelID = normalizedString(args["coordinator_model_id"] ?? args["coordinatorModelID"])
             let compact = AgentMCPToolHelpers.parseBool(args["compact"]) ?? true
@@ -406,6 +406,11 @@ struct CoordinatorChatMCPToolService {
             }
             if expectedCheckpointInstanceID != nil, !hasCheckpointAction {
                 throw MCPError.invalidParams("expected_checkpoint_instance_id is only valid with checkpoint_action.")
+            }
+            if acceptedRevisionResolutionID != nil, newParent || hasCheckpointAction {
+                throw MCPError.invalidParams(
+                    "accepted_revision_resolution_id is only valid for an existing Mission drafting-guidance submit."
+                )
             }
             let caller = try await classifyCaller(
                 metadata,
@@ -435,11 +440,7 @@ struct CoordinatorChatMCPToolService {
                 try validateCoordinatorExists(sessionID, in: environment.snapshot())
                 scopedCoordinatorSessionID = sessionID
                 let isAcceptedDraftingTarget = caller == .externalCaller
-                    && message != nil
-                    && args["answers"] == nil
-                    && args["answers_by_question_id"] == nil
-                    && args["skip"] == nil
-                    && environment.acceptedRevisionDraftingResolutionID(sessionID) != nil
+                    && acceptedRevisionResolutionID != nil
                 if !metadata.isCoordinatorRuntime, !isAcceptedDraftingTarget {
                     environment.selectCoordinator(sessionID)
                     environment.refresh()
@@ -454,21 +455,53 @@ struct CoordinatorChatMCPToolService {
                     .first(where: { $0.sessionID == coordinatorSessionID })?
                     .missionPlan
             }
-            let acceptedRevisionDraftingResolutionID = selectedCoordinatorSessionID.flatMap {
-                environment.acceptedRevisionDraftingResolutionID($0)
+            let revisionProposalAuthority = selectedCoordinatorSessionID.map {
+                environment.revisionProposalAuthorityState($0)
+            } ?? CoordinatorModeViewModel.RevisionProposalAuthority(plan: nil)
+            var isAcceptedRevisionDraftingDirective = false
+            if let acceptedRevisionResolutionID {
+                guard caller == .externalCaller else {
+                    throw MCPError.invalidParams(
+                        "accepted_revision_resolution_id is external-user drafting authority and cannot be submitted by a Coordinator runtime."
+                    )
+                }
+                guard scopedCoordinatorSessionID != nil else {
+                    throw MCPError.invalidParams(
+                        "coordinator_session_id is required with accepted_revision_resolution_id."
+                    )
+                }
+                guard message != nil,
+                      args["answers"] == nil,
+                      args["answers_by_question_id"] == nil,
+                      args["skip"] == nil
+                else {
+                    throw MCPError.invalidParams(
+                        "accepted_revision_resolution_id submits message-only drafting guidance and cannot answer child interactions."
+                    )
+                }
+                if revisionProposalAuthority.acceptedDraftingResolutionID == acceptedRevisionResolutionID {
+                    isAcceptedRevisionDraftingDirective = true
+                } else if revisionProposalAuthority.latestAcceptedResolutionID == acceptedRevisionResolutionID,
+                          revisionProposalAuthority.isRevisedPlanReady
+                {
+                    let extra: [String: Value] = [
+                        "accepted": .bool(true),
+                        "already_satisfied": .bool(true),
+                        "routed_to": .string("coordinator"),
+                        "accepted_revision_resolution_id": .string(acceptedRevisionResolutionID.uuidString)
+                    ]
+                    return compact
+                        ? compactStateResponse(selectedSnapshot, extra: extra)
+                        : stateResponse(selectedSnapshot, extra: extra)
+                } else {
+                    throw MCPError.invalidParams(
+                        "Stale accepted_revision_resolution_id. Refresh coordinator_chat op=mission_status and use revision_proposal.accepted_drafting.submit_hints."
+                    )
+                }
             }
-            let holdsRevisionProposalAuthority = selectedCoordinatorSessionID.map {
-                environment.holdsRevisionProposalAuthority($0)
-            } ?? false
-            let isAcceptedRevisionDraftingDirective = acceptedRevisionDraftingResolutionID != nil
-                && caller == .externalCaller
-                && message != nil
-                && args["answers"] == nil
-                && args["answers_by_question_id"] == nil
-                && args["skip"] == nil
             if !newParent,
                !hasCheckpointAction,
-               holdsRevisionProposalAuthority
+               revisionProposalAuthority.holdsInteractions
                || selectedPlan?.holdsChildInteractionsForRevisionProposal == true,
                !isAcceptedRevisionDraftingDirective
             {
@@ -548,7 +581,7 @@ struct CoordinatorChatMCPToolService {
                     }
                     if isAcceptedRevisionDraftingDirective,
                        let coordinatorSessionID = selectedCoordinatorSessionID,
-                       let resolutionID = acceptedRevisionDraftingResolutionID
+                       let resolutionID = acceptedRevisionResolutionID
                     {
                         result = await environment.submitAcceptedRevisionDraftingDirective(
                             message,
@@ -565,10 +598,13 @@ struct CoordinatorChatMCPToolService {
 
             switch result {
             case .accepted:
-                let extra: [String: Value] = [
+                var extra: [String: Value] = [
                     "accepted": .bool(true),
                     "routed_to": .string(routedToChildInteraction ? "child_interaction" : "coordinator")
                 ]
+                if isAcceptedRevisionDraftingDirective, let acceptedRevisionResolutionID {
+                    extra["accepted_revision_resolution_id"] = .string(acceptedRevisionResolutionID.uuidString)
+                }
                 return compact
                     ? compactStateResponse(environment.snapshot(), extra: extra)
                     : stateResponse(environment.snapshot(), extra: extra)
@@ -3971,6 +4007,27 @@ struct CoordinatorChatMCPToolService {
         let heldInteractionIDs = plan.holdsChildInteractionsForRevisionProposal
             ? plan.nodes.compactMap(\.boundInteractionID)
             : []
+        let acceptedDrafting: Value = if let lineage = plan.latestAcceptedRevisionLineage,
+                                         plan.approvalState == .revisionRequested
+                                         || plan.approvalState == .awaitingApproval
+        {
+            .object([
+                "resolution_id": .string(lineage.resolution.id.uuidString),
+                "proposal_id": .string(lineage.proposal.id.uuidString),
+                "state": .string(
+                    plan.approvalState == .revisionRequested
+                        ? "drafting"
+                        : "revised_plan_ready"
+                ),
+                "submit_hints": .object([
+                    "submit_op": .string("submit"),
+                    "coordinator_session_id": .string(coordinatorSessionID.uuidString),
+                    "accepted_revision_resolution_id": .string(lineage.resolution.id.uuidString)
+                ])
+            ])
+        } else {
+            .null
+        }
 
         return .object([
             "current_contract": .object([
@@ -3978,6 +4035,7 @@ struct CoordinatorChatMCPToolService {
                 "fingerprint": AgentMCPToolHelpers.stringOrNull(currentContractFingerprint)
             ]),
             "pending": pendingValue,
+            "accepted_drafting": acceptedDrafting,
             "history": .array(history),
             "durability_hold": plan.revisionProposalDurabilityHold.map { hold in
                 .object([

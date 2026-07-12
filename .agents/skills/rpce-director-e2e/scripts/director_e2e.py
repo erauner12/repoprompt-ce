@@ -2753,9 +2753,35 @@ def run_s8(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
         raise E2EFailure(f"S8 external Revise plan rejected: {response.get('error') or response}")
     artifacts.add_checkpoint("revision-requested")
 
+    accepted = wait_until(
+        client,
+        artifacts,
+        session_id,
+        lambda item: bool(
+            (revision_proposal_status(item.compact).get("accepted_drafting") or {}).get(
+                "resolution_id"
+            )
+        ),
+        args.timeout_seconds,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        events_mode=args.events_mode,
+    )
+    accepted_drafting = revision_proposal_status(accepted.compact).get("accepted_drafting") or {}
+    drafting_hints = accepted_drafting.get("submit_hints") or {}
+    resolution_id = str(accepted_drafting.get("resolution_id") or "")
+    hinted_resolution_id = str(drafting_hints.get("accepted_revision_resolution_id") or "")
+    hinted_session_id = str(drafting_hints.get("coordinator_session_id") or "")
+    if not resolution_id or hinted_resolution_id != resolution_id:
+        raise E2EFailure("S8 accepted drafting status omitted its resolution-bound submit hint")
+    if hinted_session_id != session_id:
+        raise E2EFailure("S8 accepted drafting submit hint was not bound to the target Mission")
+    if str((recent_revision_proposal_resolution(accepted.compact) or {}).get("resolution_id") or "") != resolution_id:
+        raise E2EFailure("S8 accepted drafting hint did not match the recent resolution identity")
+
     drafting_response = submit_with_midrun_retry(client, artifacts, session_id, {
         "op": "submit",
         "coordinator_session_id": session_id,
+        "accepted_revision_resolution_id": resolution_id,
         "message": (
             "Continue the accepted revision flow now. Draft and publish a concrete revised "
             f"Mission Plan for user approval that incorporates {token}. Do not execute it "
@@ -2769,6 +2795,8 @@ def run_s8(client: RpcClient, artifacts: RunArtifacts, args: argparse.Namespace)
             "S8 accepted Revise could not resume concrete revised-plan drafting: "
             f"{drafting_response.get('error') or drafting_response}"
         )
+    if str(drafting_response.get("accepted_revision_resolution_id") or "") != resolution_id:
+        raise E2EFailure("S8 drafting response did not preserve the accepted resolution identity")
     artifacts.add_checkpoint("revision-drafting-submitted")
 
     revised = wait_until(

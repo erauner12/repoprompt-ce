@@ -4367,6 +4367,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             revisionProposalAuthorityProvider: { sessionID in
                 CoordinatorModeViewModel.RevisionProposalAuthority(
                     acceptedDraftingResolutionID: sessionID == coordinatorID ? resolutionID : nil,
+                    latestAcceptedResolutionID: sessionID == coordinatorID ? resolutionID : nil,
+                    isRevisedPlanReady: false,
                     holdsInteractions: sessionID == coordinatorID
                 )
             }

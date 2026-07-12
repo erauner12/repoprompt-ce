@@ -265,11 +265,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 },
                 stopCoordinatorMission: { _ in .accepted },
                 submitDirective: { _ in .accepted },
-                acceptedRevisionDraftingResolutionID: {
-                    missionPlans[$0]?.acceptedRevisionDraftingResolution?.id
-                },
-                holdsRevisionProposalAuthority: {
-                    missionPlans[$0]?.holdsChildInteractionsForRevisionProposal == true
+                revisionProposalAuthorityState: {
+                    CoordinatorModeViewModel.RevisionProposalAuthority(plan: missionPlans[$0])
                 },
                 submitAcceptedRevisionDraftingDirective: { _, _, _ in .accepted },
                 submitContinuation: { _, _ in .accepted },
@@ -6007,7 +6004,16 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         )
 
         var genericDirectiveSubmitted = false
+        var draftingIsMidrun = false
         var draftingSubmissions: [(String, UUID, UUID)] = []
+        var requestMetadata = MCPServerViewModel.RequestMetadata(
+            connectionID: UUID(),
+            clientName: "rpce-cli-debug",
+            windowID: 1
+        )
+        let s8Message = "Continue the accepted revision flow now. Draft and publish a concrete revised "
+            + "Mission Plan for user approval that incorporates S8-revision-proposal-test. "
+            + "Do not execute it before the revised-plan approval checkpoint is accepted."
         let otherCoordinatorID = UUID()
         var selectedID = coordinatorID
         var projectedPlans = try [
@@ -6017,6 +6023,8 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         let service = makeService(
             coordinatorIDs: [coordinatorID, otherCoordinatorID],
             selectedID: { selectedID },
+            captureRequestMetadata: { requestMetadata },
+            resolveRuntimeCoordinatorSessionID: { _ in coordinatorID },
             select: { selectedID = $0 ?? selectedID },
             submit: { _ in
                 genericDirectiveSubmitted = true
@@ -6026,6 +6034,9 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 sessionID == coordinatorID ? state.missionPlan : nil
             },
             submitAcceptedRevisionDraftingDirective: { message, sessionID, resolutionID in
+                if draftingIsMidrun {
+                    return .rejected(message: "Coordinator is mid-run. Send directives when it reaches an ordinary turn boundary.")
+                }
                 draftingSubmissions.append((message, sessionID, resolutionID))
                 return .accepted
             },
@@ -6047,6 +6058,18 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             proposalStatus["recent_resolution"]?.objectValue?["outcome"]?.stringValue,
             "accepted_for_concrete_revision"
         )
+        let acceptedDrafting = try XCTUnwrap(proposalStatus["accepted_drafting"]?.objectValue)
+        let draftingHints = try XCTUnwrap(acceptedDrafting["submit_hints"]?.objectValue)
+        XCTAssertEqual(acceptedDrafting["state"]?.stringValue, "drafting")
+        XCTAssertEqual(acceptedDrafting["resolution_id"]?.stringValue, resolution.resolutionID.uuidString)
+        XCTAssertEqual(
+            draftingHints["accepted_revision_resolution_id"]?.stringValue,
+            resolution.resolutionID.uuidString
+        )
+        XCTAssertEqual(draftingHints["coordinator_session_id"]?.stringValue, coordinatorID.uuidString)
+        let hintedResolutionID = try XCTUnwrap(
+            try UUID(uuidString: XCTUnwrap(draftingHints["accepted_revision_resolution_id"]?.stringValue))
+        )
         XCTAssertEqual(
             proposalStatus["held_child_questions"]?.objectValue?["held"]?.boolValue,
             true
@@ -6059,15 +6082,46 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
         selectedID = otherCoordinatorID
         projectedPlans[coordinatorID] = nil
 
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("submit"),
+                "coordinator_session_id": .string(coordinatorID.uuidString),
+                "message": .string(s8Message)
+            ])
+            XCTFail("Accepted drafting guidance without its resolution identity must stay held.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains(CoordinatorMissionRevisionProposalPause.heldReason))
+            XCTAssertTrue(draftingSubmissions.isEmpty)
+        }
+        selectedID = otherCoordinatorID
+        draftingIsMidrun = true
+        let overlapping = try await service.execute(args: [
+            "op": .string("submit"),
+            "coordinator_session_id": .string(coordinatorID.uuidString),
+            "accepted_revision_resolution_id": .string(hintedResolutionID.uuidString),
+            "message": .string(s8Message),
+            "compact": .bool(true)
+        ])
+        XCTAssertEqual(overlapping.objectValue?["accepted"]?.boolValue, false)
+        XCTAssertTrue(overlapping.objectValue?["error"]?.stringValue?.contains("mid-run") == true)
+        XCTAssertTrue(draftingSubmissions.isEmpty)
+        XCTAssertEqual(selectedID, otherCoordinatorID)
+        draftingIsMidrun = false
+
         let response = try await service.execute(args: [
             "op": .string("submit"),
             "coordinator_session_id": .string(coordinatorID.uuidString),
-            "message": .string("Continue drafting the concrete revised plan.")
+            "accepted_revision_resolution_id": .string(hintedResolutionID.uuidString),
+            "message": .string(s8Message)
         ])
         XCTAssertEqual(response.objectValue?["accepted"]?.boolValue, true)
         XCTAssertEqual(response.objectValue?["routed_to"]?.stringValue, "coordinator")
+        XCTAssertEqual(
+            response.objectValue?["accepted_revision_resolution_id"]?.stringValue,
+            hintedResolutionID.uuidString
+        )
         XCTAssertFalse(genericDirectiveSubmitted)
-        XCTAssertEqual(draftingSubmissions.map(\.0), ["Continue drafting the concrete revised plan."])
+        XCTAssertEqual(draftingSubmissions.map(\.0), [s8Message])
         XCTAssertEqual(draftingSubmissions.map(\.1), [coordinatorID])
         XCTAssertEqual(draftingSubmissions.map(\.2), [resolution.resolutionID])
         XCTAssertEqual(selectedID, otherCoordinatorID)
@@ -6076,16 +6130,70 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
             _ = try await service.execute(args: [
                 "op": .string("submit"),
                 "coordinator_session_id": .string(coordinatorID.uuidString),
+                "accepted_revision_resolution_id": .string(hintedResolutionID.uuidString),
                 "answers": .array([.string("Do not deliver this held child answer.")])
             ])
             XCTFail("Accepted revision drafting must keep child answers held.")
         } catch {
-            XCTAssertTrue(String(describing: error).contains(CoordinatorMissionRevisionProposalPause.heldReason))
+            XCTAssertTrue(String(describing: error).contains("message-only drafting guidance"))
             XCTAssertEqual(draftingSubmissions.count, 1)
         }
 
         state.missionPlan?.approvalState = .awaitingApproval
         XCTAssertNil(state.missionPlan?.acceptedRevisionDraftingResolution)
+        projectedPlans[coordinatorID] = state.missionPlan
+        let revisedStatus = try await service.execute(args: [
+            "op": .string("mission_status"),
+            "coordinator_session_id": .string(coordinatorID.uuidString),
+            "compact": .bool(true)
+        ])
+        let revisedAcceptedDrafting = try XCTUnwrap(
+            revisedStatus.objectValue?["mission_status"]?.objectValue?["revision_proposal"]?
+                .objectValue?["accepted_drafting"]?.objectValue
+        )
+        XCTAssertEqual(revisedAcceptedDrafting["state"]?.stringValue, "revised_plan_ready")
+        XCTAssertEqual(
+            revisedAcceptedDrafting["submit_hints"]?.objectValue?["accepted_revision_resolution_id"]?.stringValue,
+            resolution.resolutionID.uuidString
+        )
+
+        let idempotent = try await service.execute(args: [
+            "op": .string("submit"),
+            "coordinator_session_id": .string(coordinatorID.uuidString),
+            "accepted_revision_resolution_id": .string(hintedResolutionID.uuidString),
+            "message": .string(s8Message),
+            "compact": .bool(true)
+        ])
+        XCTAssertEqual(idempotent.objectValue?["accepted"]?.boolValue, true)
+        XCTAssertEqual(idempotent.objectValue?["already_satisfied"]?.boolValue, true)
+        XCTAssertEqual(draftingSubmissions.count, 1)
+
+        requestMetadata = MCPServerViewModel.RequestMetadata(
+            connectionID: UUID(),
+            clientName: "rpce-cli-debug",
+            windowID: 1,
+            runPurpose: .agentModeRun,
+            taskLabelKind: .coordinator,
+            isCoordinatorRuntime: true
+        )
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("submit"),
+                "coordinator_session_id": .string(coordinatorID.uuidString),
+                "accepted_revision_resolution_id": .string(hintedResolutionID.uuidString),
+                "message": .string(s8Message)
+            ])
+            XCTFail("Coordinator runtime callers must not submit accepted drafting authority.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("external-user drafting authority"))
+            XCTAssertEqual(draftingSubmissions.count, 1)
+        }
+
+        requestMetadata = MCPServerViewModel.RequestMetadata(
+            connectionID: UUID(),
+            clientName: "rpce-cli-debug",
+            windowID: 1
+        )
         do {
             _ = try await service.execute(args: [
                 "op": .string("submit"),
@@ -7127,15 +7235,10 @@ final class CoordinatorChatMCPToolServiceTests: XCTestCase {
                 startNewCoordinatorRun: startNew,
                 stopCoordinatorMission: stopMission,
                 submitDirective: submit,
-                acceptedRevisionDraftingResolutionID: { coordinatorSessionID in
+                revisionProposalAuthorityState: { coordinatorSessionID in
                     let plan = revisionProposalAuthorityPlan?(coordinatorSessionID)
                         ?? missionPlans()[coordinatorSessionID]
-                    return plan?.acceptedRevisionDraftingResolution?.id
-                },
-                holdsRevisionProposalAuthority: { coordinatorSessionID in
-                    let plan = revisionProposalAuthorityPlan?(coordinatorSessionID)
-                        ?? missionPlans()[coordinatorSessionID]
-                    return plan?.holdsChildInteractionsForRevisionProposal == true
+                    return CoordinatorModeViewModel.RevisionProposalAuthority(plan: plan)
                 },
                 submitAcceptedRevisionDraftingDirective: submitAcceptedRevisionDraftingDirective,
                 submitContinuation: submitContinuation,

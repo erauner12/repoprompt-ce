@@ -69,6 +69,12 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         )
         XCTAssertTrue(guidanceDescription.contains("submit revise_plan"))
         XCTAssertTrue(guidanceDescription.contains("Rejected for other actions and runtime callers"))
+        let acceptedResolutionDescription = try XCTUnwrap(
+            properties["accepted_revision_resolution_id"]?.objectValue?["description"]?.stringValue
+        )
+        XCTAssertTrue(acceptedResolutionDescription.contains("revision_proposal.accepted_drafting.submit_hints"))
+        XCTAssertTrue(acceptedResolutionDescription.contains("External message-only authority"))
+        XCTAssertTrue(acceptedResolutionDescription.contains("stale IDs"))
 
         let approvalSchema = try XCTUnwrap(properties["approval_state"]?.objectValue)
         XCTAssertEqual(
@@ -566,7 +572,7 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         "17|agent_explore|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=0e8a797c836d23c3c085bc400d8e3dbab02144690baeab37689c4d1caa454f72|schema=2c8c2927050343e25b3868290db071e57a1754f2390d0c9f584c38a6f448fd33",
         "18|agent_run|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=b6ff4d5a7b55131656557000d6196c5bac46dcdeb56fffcfb4420ce8fd36dcea|schema=b046889882a5994e137378ada5ae3dd71438be9067e3a0019f181a9c721c6364",
         "19|agent_manage|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=03e16bee789cb9343f6b1b16cb4d472aedd3d811a43f6f95ad8ea5e8f69dc28d|schema=f5bc6b05cf0683ef3acb7a82ee4a14b75fadf26f32c56b0314be1424688a2ba5",
-        "20|coordinator_chat|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=1906868813cf090b1f9a70eb29aa81e5d63bed7129b86f543988c8334538adb5|schema=99e361c09474e03097cfbd334e6e5b48e83df92315dfd9b46e9bcfc9f2395530",
+        "20|coordinator_chat|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=1906868813cf090b1f9a70eb29aa81e5d63bed7129b86f543988c8334538adb5|schema=81ddebe72c2d20ad5882e1f56e38979c436b94769f19d399321c0e408ef373dc",
         "21|share_thoughts|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=b1ac755b39a4ac2d8a621e78801a258c5d95ec2ff4e063f600081fa27891a852|schema=a5dea0c92fd4da06a15f991e1e8a287235ca681ae381cef1b594bc7c07e538d7",
         "22|set_status|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=19bbfd6fc47639e02295de4e9289ea77f25c6a91ad150998726768b84c266783|schema=0854d727c81f1eb8fa0a14edb9d6ab8bb58974d919cc53150bd72473f1ae0196",
         "23|wait_for_next_user_instruction|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=3a59a13a0026414ae04dd21d730a7144b91c67146dce77340fe730c865bea3d7|schema=15335c3bbadf042948d0a1ba52f0fcb01125428dda4952dbda418051904d82ef"

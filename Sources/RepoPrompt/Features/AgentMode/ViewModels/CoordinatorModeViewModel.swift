@@ -349,19 +349,28 @@ final class CoordinatorModeViewModel: ObservableObject {
     typealias RevisionProposalResolver = @MainActor (_ request: CoordinatorMissionRevisionProposalTrustedResolutionRequest) async throws -> CoordinatorMissionRevisionProposalResolutionResult
     struct RevisionProposalAuthority: Equatable {
         let acceptedDraftingResolutionID: UUID?
+        let latestAcceptedResolutionID: UUID?
+        let isRevisedPlanReady: Bool
         let holdsInteractions: Bool
 
         init(
             acceptedDraftingResolutionID: UUID?,
+            latestAcceptedResolutionID: UUID?,
+            isRevisedPlanReady: Bool,
             holdsInteractions: Bool
         ) {
             self.acceptedDraftingResolutionID = acceptedDraftingResolutionID
+            self.latestAcceptedResolutionID = latestAcceptedResolutionID
+            self.isRevisedPlanReady = isRevisedPlanReady
             self.holdsInteractions = holdsInteractions
         }
 
         init(plan: CoordinatorMissionPlan?) {
             self.init(
                 acceptedDraftingResolutionID: plan?.acceptedRevisionDraftingResolution?.id,
+                latestAcceptedResolutionID: plan?.latestAcceptedRevisionLineage?.resolution.id,
+                isRevisedPlanReady: plan?.approvalState == .awaitingApproval
+                    && plan?.latestAcceptedRevisionLineage != nil,
                 holdsInteractions: plan?.holdsChildInteractionsForRevisionProposal == true
             )
         }
@@ -1683,6 +1692,12 @@ final class CoordinatorModeViewModel: ObservableObject {
     func acceptedRevisionDraftingResolutionID(coordinatorSessionID: UUID) -> UUID? {
         revisionProposalAuthority(coordinatorSessionID: coordinatorSessionID)
             .acceptedDraftingResolutionID
+    }
+
+    func revisionProposalAuthorityState(
+        coordinatorSessionID: UUID
+    ) -> RevisionProposalAuthority {
+        revisionProposalAuthority(coordinatorSessionID: coordinatorSessionID)
     }
 
     func holdsRevisionProposalAuthority(coordinatorSessionID: UUID) -> Bool {
