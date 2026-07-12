@@ -134,6 +134,12 @@ enum AgentToolTrackingSupport {
         AgentTranscriptIO.shouldHideToolFromTranscript(name)
     }
 
+    /// Explicit RepoPrompt MCP tools are usually tracker-owned plumbing; these are user-facing artifacts.
+    nonisolated static func shouldRenderExplicitRepoPromptProviderEvent(_ name: String?) -> Bool {
+        let normalized = MCPIntegrationHelper.normalizedRepoPromptToolName(name ?? "")
+        return normalized == "manage_worktree"
+    }
+
     /// Whether a provider tool event should be suppressed in favor of tracker-sourced events.
     static func shouldSuppressProviderToolEvent(
         toolName: String,

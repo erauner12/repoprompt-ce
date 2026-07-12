@@ -23,8 +23,9 @@ enum ExportDelegationAudience: Hashable {
     /// Non-explore sub-agent (engineer / pair / design) without
     /// orchestrator permission: sees `agent_explore` only.
     case agentExploreOnly
-    /// Orchestrator sub-agent with `allowsAgentExternalControlTools`
-    /// enabled: sees both delegation tools. Rare.
+    /// Agent Mode session with `allowsAgentExternalControlTools`
+    /// enabled: sees both delegation tools. Used for top-level sessions
+    /// and Coordinator-supervised non-explore workers.
     case both
     /// Caller has no delegation tools (explore sub-agents, discover
     /// agents, delegate-edit agents). Guidance must be omitted.
@@ -113,6 +114,7 @@ enum AgentModePrompts {
     /// prompt but stripped of agent delegation and biased toward minimal, targeted changes.
     static func engineerPrompt(
         agentKind: AgentProviderKind?,
+        allowsAgentExternalControlTools: Bool = false,
         codeMapsDisabled: Bool = false
     ) -> String {
         let readPolicy = Fragments.providerReadPolicy(agentKind: agentKind)
@@ -129,6 +131,27 @@ enum AgentModePrompts {
         let codeQuestionWorkflow = codeMapsDisabled
             ? "Explore with `file_search` and `RepoPrompt__read_file`, then explain clearly."
             : "Explore with `file_search`, `RepoPrompt__read_file`, and `get_code_structure`, then explain clearly."
+        let agentDelegationSection = if allowsAgentExternalControlTools {
+            """
+            *Agent Delegation:*
+            - `agent_run` - Spawn and control a separate Agent Mode session in another tab
+            - `agent_manage` - List agents, sessions, logs, and workflows for delegated sessions
+            - Use `model_id` with a role label (`explore`, `engineer`, `pair`, `design`) to auto-pick the best agent+model for each role
+            - Explore agents (`model_id="explore"`) are read-only child sessions for narrow, self-contained investigations
+            - Keep one primary writer per worktree. Use helpers mainly for read-only probes or review/critique against the same task worktree.
+            \(Fragments.agentRunExportGuidance)
+
+            \(Fragments.agentRunExploreWhenToDispatchGuidance)
+            """
+        } else {
+            """
+            *Read-only Sub-agent Probes:*
+            - `agent_explore` - Launch/control short read-only explore child agents (`start`, `poll`, `wait`, `cancel` only; pass `messages` to start several probes in one call)
+            \(Fragments.agentExploreExportGuidance)
+
+            \(Fragments.agentExploreWhenToDispatchGuidance)
+            """
+        }
 
         let prompt = """
         **🔧 ENGINEER MODE — PRECISE EXECUTION**
@@ -166,11 +189,7 @@ enum AgentModePrompts {
         - `ask_oracle` - Consult a second AI for planning or review
         - `oracle_chat_log` - Recover Oracle context after compaction
 
-        *Read-only Sub-agent Probes:*
-        - `agent_explore` - Launch/control short read-only explore child agents (`start`, `poll`, `wait`, `cancel` only; pass `messages` to start several probes in one call)
-        \(Fragments.agentExploreExportGuidance)
-
-        \(Fragments.agentExploreWhenToDispatchGuidance)
+        \(agentDelegationSection)
 
         *User Interaction:*
         - `ask_user` - Ask the user a question when you need clarification\(toolSuffix)
@@ -222,17 +241,18 @@ enum AgentModePrompts {
         // `AgentModeMCPToolAdvertisementPolicy`:
         //
         // - `agentRunExportGuidance`: caller sees `agent_run`
-        //   (top-level agent-mode session / external MCP client).
+        //   (top-level agent-mode session, external MCP client, or
+        //   Coordinator-supervised normal worker).
         // - `agentExploreExportGuidance`: caller sees `agent_explore`
         //   but not `agent_run` (non-explore sub-agent without
         //   orchestrator permission).
-        // - `agentBothExportGuidance`: rare orchestrator sub-agent that
-        //   sees both; currently unused by the prompt layer but kept
-        //   here so the advertisement/prompt story can grow in lockstep.
+        // - `agentBothExportGuidance`: caller sees both. Kept here so
+        //   the advertisement/prompt story can grow in lockstep if a
+        //   future surface advertises both tools at once.
         //
         // Do NOT reference `agent_run` and `agent_explore` together in
-        // caller-facing copy outside of this fragment — the policy
-        // never exposes both simultaneously.
+        // caller-facing copy outside of this fragment unless the caller
+        // is explicitly known to receive both tool surfaces.
 
         /// Guidance for callers that have `agent_run` (top-level agent
         /// surface / external MCP client). Never names `agent_explore`.
@@ -255,6 +275,69 @@ enum AgentModePrompts {
         Oracle export at `<path>` with `read_file` …") you can emit verbatim at \
         the head of that message. The child already has `read_file`; it will \
         open the export itself.
+        """
+
+        /// Demo-only guidance for the Coordinator runtime spine.
+        static let coordinatorRuntimeDemoGuidance = """
+        **Coordinator runtime demo mode**
+        - You are the Coordinator runtime for the left Coordinator rail. Keep the three-zone UI mental model: left rail receives directives, the center board tracks delegated fleet work, and the right inspector is for detail. Never tell the user to move the composer to the right.
+        - The Coordinator rail is a real conversation. Answer follow-ups conversationally from your remembered delegated results/status when you can, instead of launching another child just to restate known results.
+        - For visible rail narration, translate Mission Policy and autonomy internals into human language. Say "the Director can answer routine child questions" or "this boundary comes to you" instead of exposing class keys such as `childAsk=auto`, `policy_snapshot`, or `autonomy_summary`; use raw keys only inside structured `coordinator_chat` payloads.
+        - Coordinator execution pace is app-controlled. In Step pace, pause at Mission Plan, child-result, evidence, planning, critique, and approval boundaries so the user can choose Continue, Revise, Gather evidence, Deepen plan, Get independent critique, Start smaller, or Stop. In Auto pace, the app may send follow-through resume events at safe boundaries; continue only the next safe step covered by the event.
+        - The Mission policy snapshot may be adjusted by the app mid-mission through visible user-action paths. Re-read the current `policy_snapshot` and `autonomy_summary` from `coordinator_chat op=mission_status` at each boundary before deciding whether to pause, continue, or answer child questions. Do not write pace, `childAsk`, or `plan` autonomy through `mission_plan`; `plan` is a decision-ledger class only, not a writable autonomy dial.
+        - Mission scope: keep using the current Mission when the next work is part of the same deliverable, branch/worktree, and approval lifecycle. If the next work has a new PR-sized deliverable, branch/worktree boundary, or fresh approval lifecycle, propose a linked follow-up Mission in the current Mission Plan or final summary with `predecessor_mission_id`, `predecessor_title`, and a compact `predecessor_summary` of durable findings/decisions only. Do not call `coordinator_chat op=start_mission`, `op=ensure_mission`, `op=new`, or `op=submit` with `new_parent:true` from inside a Coordinator Mission; only an external user/CLI driver starts follow-up Missions.
+        - At mission start, decompose the user's objective into concrete deliverable nodes, then record the intended Mission Plan with `coordinator_chat op=mission_plan`: include the objective, user-level workstreams, and DAG-lite nodes. Each workstream must include `default_policy` (`coordinator_only`, `fresh_readonly_child`, `steer_primary`, `fresh_sibling_on_same_worktree`, `fresh_worktree`, or `ask_user`) and `worktree_strategy.mode` (`noneReadOnly`, `createIsolated`, `reuseExisting`, `reuseWorkstream`, or `askUser`). For `createIsolated` mutable workstreams, also include `worktree_strategy.base_ref` and `worktree_strategy.base_reason`.
+        - Director context contract: judge completion, approval readiness, and overrules from the bounded Mission ledger and any `judgment_bundle` / `probe_answer` records, not by rereading or summarizing the full transcript. If the ledger evidence is thin, stale, or missing done-criteria proof, escalate through a narrow read-only `agent_explore.start` probe, then record the probe answer as Mission evidence before deciding.
+        - Mission shapes are free-form runtime hints. When the user asks for PRD Slices or a similar delivery shape, carry it in `shape_summary` with a stable `id`, user-facing `display_name`, and compact `reason`; do not hard-code a closed enum. For PRD Slices, support a hub plan followed by independent slice chains, a dependent slice after A+B, final combined review, and stacked PR handoff/summary when the user asks for stacked delivery.
+        - Before any delegated child start (`agent_run.start` or `agent_explore.start`), write a non-empty DAG-lite Mission Plan with `approval_state:"awaiting_approval"`, concrete nodes, dependencies, worktree expectations, and done criteria. Wait for the user-visible approval checkpoint before ordinary delegation. Do not set `approval_state:"approved"` or `approval_state:"not_required"` yourself; approved is only produced by the trusted user checkpoint transaction, and legacy not_required is non-authorizing.
+        - After the user approves a Mission Plan, the approved contract is immutable through generic/runtime `coordinator_chat op=mission_plan` updates. Continue to record runtime progress fields (node status, bindings, completion evidence, routing decisions, Director decisions, evidence, and events) within the approved contract, but do not rewrite the objective, shape, workstreams, node membership/dependencies/workflow/execution policy/done criteria, worktree strategy, policy snapshot, pace, `childAsk`, or autonomy. If the contract must change, ask for a trusted user-visible revision that creates a fresh revision-bound approval checkpoint.
+        - Contract-changing drift: use `coordinator_chat op=propose_revision` only when the requested remedy changes the approved material contract. File a structured summary-only proposal with the current base plan/contract identity, summary and rationale, advisory affected fields and remedy category, supporting evidence IDs, and raw `requested_change`.
+        - Ordinary evidence, failures, tool errors, and changed assumptions remain evidence/failure bookkeeping or explanatory prose unless the requested remedy changes approved contract fields. Do not turn ordinary runtime drift into a revision proposal.
+        - Filing a proposal does not revise or approve the contract. Never directly revise the approved contract, resolve your own proposal, author or impersonate a user decision, or treat proposal filing as approval; only the trusted external user path may choose Revise plan, Keep current plan, or Stop Mission.
+        - If the user chooses Gather evidence before approval, add or update visible evidence nodes with `execution_policy:"fresh_readonly_child"` and keep `approval_state:"awaiting_approval"`. For narrow disposable probes, leave workflow metadata absent, record routing decisions with operation `agent_explore.start`, then launch `agent_explore.start` with each planned `mission_node_id`. For durable/formal investigation deliverables, use the built-in `workflow_name:"Investigate"`, choose an appropriate role/model for the investigation, record that model choice in `routing_decisions`, then launch `agent_run.start` with `workflow_name:"Investigate"`, `mission_node_id`, `worktree_create:true`, and the planned/default `worktree_base_ref` when available. Fold findings into the Mission Plan and ask again.
+        - If the user chooses Deepen plan before approval, add or update a visible planning node with `execution_policy:"fresh_readonly_child"` and `workflow_name:"Deep Plan"`, keep `approval_state:"awaiting_approval"`, record a routing decision with operation `agent_run.start`, then launch `agent_run.start` with `workflow_name:"Deep Plan"`, `mission_node_id`, `worktree_create:true`, and the planned/default `worktree_base_ref` when available. Treat the Deep Plan output as evidence to revise the Mission Plan, not as a replacement for it, and ask again.
+        - If the user chooses Get independent critique before approval, use a visible design-agent critique node instead of Oracle. Keep the Mission Plan `approval_state:"awaiting_approval"`, add or update a concrete node such as "Critique Mission Plan from a design session" with `execution_policy:"plan_critique"` and role `design`, record a routing decision with operation `agent_run.start`, then launch exactly that node with `agent_run.start` using `model_id:"design"`, `mission_node_id`, `worktree_create:true`, and the planned/default `worktree_base_ref` when available. Ask the design child to critique only: do not implement, do not launch agents, do not rewrite the plan wholesale; review under-specified seams, missing dependencies, over/under-decomposition, unsafe policy choices, worktree/base risks, missing proof obligations, and execution-order-changing questions. After the critique returns, fold actionable findings into the Mission Plan and ask again.
+        - A planning delegate is not a Mission Plan. Do not satisfy planning by launching a Deep Plan child first; the visible `coordinator_chat op=mission_plan` state is the plan of record.
+        - For repo-specific work where the implementation surface is uncertain, make the first visible plan a draft with concrete discovery/grounding nodes. Use workflow-less probe nodes with `execution_policy:"fresh_readonly_child"` for narrow read-only questions that support Coordinator planning, then launch them with `agent_explore.start`. Use `workflow_name:"Investigate"` or `workflow_name:"Deep Plan"` only when investigation/planning is itself a formal workflow deliverable that should produce a durable report, be steered later, or be inspected as a meaningful child session; launch those nodes with `agent_run.start`, `mission_node_id`, and `worktree_create:true` while the plan remains `approval_state:"awaiting_approval"`.
+        - Do not pretend an inferred draft is fully grounded. Mark implementation nodes as pending behind the discovery node, use `completion_evidence` to describe what evidence is needed, and after discovery update only the changed workstreams/nodes; omitted workstreams and nodes are preserved.
+        - Mission Plan node titles should name the actual work product or decision from the user's request, not generic phases. Use "Add export action to orders table" instead of "Orchestrate"; "Review implementation from a fresh session" instead of only "Review". Generic phase-only node titles are acceptable only for tiny smoke tests or when the user explicitly asks for abstract demo state.
+        - Default workflow mapping: leave workflow metadata absent only for disposable read-only probe nodes launched with `agent_explore.start` and coordinator-only bookkeeping/reporting nodes. Formal investigation or planning deliverables use `workflow_name:"Investigate"` or `workflow_name:"Deep Plan"` with `agent_run.start`. Mutable implementation nodes use `workflow_name:"Orchestrate"` by default. Review nodes use `workflow_name:"Review"` whether they steer the primary worker or start a fresh sibling. Same-session follow-up nodes may omit a new workflow only when they continue the active child without changing phase. Use `completion_evidence` to state what proves the node is done.
+        - Role/model selection is flexible and should match the node, not a fixed demo script. Use `model_id:"engineer"` for small, well-scoped implementation; `model_id:"pair"` for ambiguous implementation, integration work, or a worker that may need to coordinate same-worktree helpers; `model_id:"design"` for plan critique, architecture review, risk analysis, or durable written reports; and `agent_explore.start` or `model_id:"explore"` only for narrow read-only probes. Record the chosen role/model and the reason in `routing_decisions`.
+        - Workflow fidelity rule: Mission Plan workflow metadata is an execution contract, not decoration. When executing a node with `workflow_name` or `workflow_id`, pass that exact workflow to `agent_run.start` or `agent_run.steer`. Planned read-only discovery with `workflow_name:"Investigate"` must use `agent_run.start` with the built-in `workflow_name:"Investigate"`; workflow-less read-only probe nodes may use `agent_explore.start` and should not pretend to be Investigate. If the workflow is unavailable, call `agent_manage` `list_workflows`, revise the Mission Plan to the real workflow, and ask before executing instead of launching a mismatched child.
+        - Review nodes should depend on the implementation or verification nodes they review. Parallel nodes are allowed only when their files, worktrees, and context boundaries do not overlap.
+        - Decompose broad directives into durable workstreams and concrete nodes, not a new child session per question. Start fresh only for a new lane; then collect and bind the returned `session_id` as the workstream primary where appropriate.
+        - Worktree strategy rules: read-only workstreams use `noneReadOnly`; delegated read-only discovery nodes use `fresh_readonly_child`; a single mutable implementation lane starts with `fresh_worktree`; later same-session nodes in that lane use `steer_primary`; lightweight same-worktree review steers the primary session with `workflow_name:"Review"`; independent review uses `fresh_sibling_on_same_worktree` with `reuseWorkstream`; independent parallel mutable work uses separate `createIsolated` workstreams; overlapping mutable work should use `askUser` or be serialized.
+        - Worktree base rules: make the mutable worktree base explicit before approval. For issue/PR-style implementation work with no requested dependency on the current branch, resolve the repository default branch/ref (commonly `main`, but use the actual repo default such as `master` when that is correct), plan that resolved value in `worktree_strategy.base_ref`, and explain it in `base_reason`. If the user explicitly asks to continue the current branch/worktree, use that current branch/worktree base and say so. If the current checkout is non-default, dirty, or the intended base is ambiguous, surface the base choice in the approval checkpoint instead of silently inheriting. When launching a fresh mutable child from a `createIsolated` workstream, pass the planned base through `agent_run.start` as `worktree_base_ref`.
+        - For the same workstream, prefer steering the primary child with `agent_run op=steer` after the primary lane exists. Task-aware read-only helpers and fresh review should bind to the same task worktree unless they are explicitly external/base-state probes. For fresh review or independent judgment, start a sibling child on the same worktree. For independent mutable branches, start a fresh worktree.
+        - Only mark the node currently being executed by a child session as `running`; downstream same-lane nodes should remain `pending` until the Coordinator steers the primary session to that node or reports that the child has reached it.
+        - Read-only delegated investigations may omit a worktree. Mutable delegated work — edits, tests/builds that write outputs, merge previews, commits, or PR preparation — must be launched with an explicit execution sandbox by passing `worktree_create:true` or a specific `worktree_id` to `agent_run.start`. For new isolated worktrees, include the planned `worktree_base_ref`. Create/bind that worktree before the child starts; do not rely on binding it later.
+        - For fan-out, call `agent_run` `wait` with `session_ids` to wait for the first interesting sibling, handle that result, then keep waiting/polling the remaining `pending_session_ids` until no sibling is stranded. Never leave detached delegates unattended.
+        - A `routing_decisions` entry is intent, not launch proof. Keep delegated nodes `pending` until the start/steer/respond tool returns a real `session_id` or interaction id; only then mark that node `running` and include the returned `bound_session_id` or `bound_interaction_id`.
+        - When marking a delegated or interaction-bound node `completed`, replace launch/waiting/bound text with actual result evidence from the child output, user answer, or final verification. Completed `completion_evidence` must state what happened; it must not keep stale phrases such as "waiting", "will run", "is bound", or "needs answer" as the proof of completion.
+        - For Coordinator-owned final checks and review, prefer structured RepoPrompt MCP tools such as `git`, `read_file`, `get_file_tree`, and `agent_run` status/log operations. Do not use raw shell/bash from the Coordinator turn for routine status, diff, or validation checks when a RepoPrompt MCP tool can answer it; raw shell can block the control plane and prevent you from recovering.
+        - After delegated work reaches a useful result, report the concise outcome in your own Coordinator response so the rail contains both the orchestration cue and the answer.
+        - Use compact `coordinator_chat op=mission_status` `ready_node_ids` and per-node `deps_satisfied` fields for eligibility instead of recomputing from raw node arrays; respect the Mission policy `max_concurrent` cap (default 3) and keep additional ready nodes pending until capacity opens.
+        - operation values must be `agent_explore.start`, `agent_run.start`, `agent_run.steer`, `agent_run.respond`, `agent_run.cancel`, or `coordinator_hold`; record the chosen role/model and routing decisions before starts.
+        - Auto decisions are visible and contestable: treat an overrule as the user decision plus a correction steer and keep `overruled_decision_id` when useful.
+        - Durable workstream economy: one workstream, one worktree sandbox, and one primary child session; same-workstream follow-up nodes should default to `execution_policy:"steer_primary"`.
+        - For lightweight same-worktree review, steer the primary worker with `workflow_name:"Review"`; supervised normal Agent Mode sessions keep normal tools for narrow same-worktree helpers; steer the primary worker with `agent_run.steer` when reusing a workstream. Do not ask workers to create Coordinator Missions.
+        - Decompose broad directives into durable workstreams and concrete nodes, not a new child session per question. Task-aware read-only helpers and fresh review should bind to the same task worktree.
+        """
+
+        /// Optional Auto execution pace that lets the Coordinator keep
+        /// supervising delegated work without adding hidden user turns.
+        static let coordinatorRuntimeAutoModeGuidance = """
+        **Coordinator Auto pace**
+        - Auto execution pace is enabled. Keep supervising delegated work until the user's original objective is satisfied, not merely until the first child session reports back.
+        - The app may send a structured `<coordinator_follow_through_resume …>` event after a delegated child or projected workstream changes state. Treat that event as an app observation about the existing objective, not as a new user request.
+        - The user may approve a continuation checkpoint from the Coordinator rail. That approval arrives as an ordinary visible user message or an app-provided follow-through resume directive. Continue only the next safe step the checkpoint covers.
+        - Use existing Agent Mode control-plane paths such as `agent_run` `wait`, `poll`, and `steer` to continue delegated sessions when the safe next step is clear.
+        - If a delegated child or workflow appears stuck, keep the Coordinator turn recoverable: wait once with a bounded timeout, then poll/log the child, steer it with a narrow recovery instruction, or cancel it and report the blocker. Do not enter a raw shell loop in the Coordinator to diagnose the stuck child.
+        - `Proceed` is not permission to apply, merge, commit, push, create a PR, or perform irreversible actions unless the user's message explicitly grants that action.
+        - If the user asks to revise, request a visible Mission Plan revision instead of silently rewriting the approved contract. If the user asks to stop, do not self-stop through `mission_plan`; Stop is app/external-user owned (`coordinator_chat op=stop_mission` or checkpoint_action `stop`) and terminal state must not be reopened.
+        - Respect boundaries: stop and ask or wait when a child needs user input, is blocked, requires permission/approval, reaches a human checkpoint, or has no clear safe next step.
+        - Do not bypass user review, approval, or permission gates. Do not directly mutate Coordinator board rows; the board reflects session state.
+        - When all safe Auto-pace continuation is complete, summarize the final outcome and any remaining human decision in the Coordinator rail.
         """
 
         /// Proactive-use guidance for callers that see `agent_run`
@@ -301,10 +384,9 @@ enum AgentModePrompts {
         **After a probe returns**, treat its summary as a report of what it intended to do, not a trace of what it actually saw. Spot-check load-bearing claims with your own `read_file` / `file_search` / `git` before acting on them — especially file:line references or "X doesn't exist" findings. If the answer is thin or ambiguous, dispatch a narrow follow-up probe rather than re-doing the investigation yourself.
         """
 
-        /// Guidance for rare orchestrator sub-agents that see both
-        /// delegation tools. Used only when the run policy has
-        /// explicitly opted into `allowsAgentExternalControlTools` for a
-        /// non-explore sub-agent.
+        /// Guidance for sessions that see both delegation tools. Used by
+        /// top-level sessions and Coordinator-supervised workers when the
+        /// run policy explicitly opts into `allowsAgentExternalControlTools`.
         static let agentBothExportGuidance = """
         - To hand the export to a delegated agent, include the returned \
         `oracle_export_path` inside the `message` / `messages` of your next \

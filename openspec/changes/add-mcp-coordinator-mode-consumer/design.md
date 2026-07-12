@@ -1,57 +1,52 @@
 ## Context
 
-`MCPServerViewModel` owns a shared MCP update subscription used by existing MCP UI surfaces:
+Coordinator runtimes are Agent Mode-backed MCP clients. They are not external drivers and not ordinary delegated children: they consume MCP while owning a Mission. The core runtime spec in `add-coordinator-mode` defines the authoritative state machine and gates. This change defines the MCP-consumer contract around that state machine so prompts, tool schemas, and runtime behavior steer the model toward the right surfaces.
 
-- `DashboardConsumer` currently includes `.toolbarPopover` and `.statusView`.
-- `setDashboardUpdatesVisible(_:consumer:)` mutates a `dashboardConsumers` set and calls `updateDashboardSubscriptionIfNeeded()`.
-- `shouldObserveDashboardUpdates` stays true when window tools are enabled or any consumer is visible.
-- `dashboardTask` / `dashboardTaskID` / `dashboardSubscriptionID` manage one shared subscription to `MCPService.subscribeToDashboardUpdates()`.
-- `MCPServerToggleView` already uses `.toolbarPopover`; `startDashboardUpdates()` / `stopDashboardUpdates()` wrap `.statusView`.
+Important current seams:
 
-Coordinator mode should become another named consumer of this existing lifecycle. That shared contract should be validated before the Coordinator mode UI depends on it.
+- `MCPAgentControlToolProvider.coordinatorChatTool()` tool description/schema.
+- `AgentModePrompts` Coordinator/Director runtime guidance.
+- `CoordinatorChatMCPToolService` runtime/external operation gates.
+- `AgentRunMCPToolService` and `AgentExploreMCPToolService` Mission node delegation gates.
+- `CoordinatorModeViewModel` child interaction response submitters and Director/Me routing.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Add a Coordinator mode consumer identity to `MCPServerViewModel.DashboardConsumer`.
-- Preserve one shared MCP update subscription while one or more consumers are visible.
-- Stop and clear MCP update state only after the last visible consumer hides, unless window tools keep observation enabled.
-- Preserve existing toolbar popover and status view behavior.
+- Treat the Coordinator runtime as an MCP consumer with a Mission-owning context.
+- Ensure prompt and schema guidance points the runtime to `coordinator_chat` for Mission state and to `agent_run`/`agent_explore` for child delegation.
+- Require runtime consumers to inspect `mission_status`/`wait_for_update` rather than infer Mission state from prose.
+- Preserve childAsk response boundaries from the consumer side: Director-routed child answers go through `coordinator_chat submit`; generic `agent_run.respond` must not bypass decisions/evidence.
+- Keep external-driver operations separate from runtime operations.
 
 **Non-Goals:**
 
-- Building the Coordinator mode UI.
-- Creating `CoordinatorModeSnapshot`.
-- Changing MCP snapshot contents.
-- Adding external MCP error triage or active-scope visualization.
-- Changing `MCPService.dashboardSnapshot()` or tool-call attribution semantics.
+- Re-defining Mission Plan, policy/autonomy, childAsk, receipt, stop/archive, or follow-through semantics owned by `add-coordinator-mode`.
+- Defining broad `agent_manage.list_sessions` visibility or mission inventory retention; see `add-coordinator-list-sessions-visibility`.
+- Reintroducing the older dashboard update subscription prerequisite as this change's primary purpose.
 
 ## Decisions
 
-### 1. Add a named consumer, not a special API
+### 1. `coordinator_chat` is the runtime's Mission control plane
 
-Add a new `DashboardConsumer` case for Coordinator mode, e.g. `.coordinatorMode`. The future Coordinator mode should call the existing `setDashboardUpdatesVisible(_:consumer:)` lifecycle rather than introducing a parallel subscription path.
+The Coordinator runtime should read and mutate Mission-owned state through `coordinator_chat` operations. Runtime prompts/tool schemas must tell the model to use `mission_plan` before normal delegation, `mission_status`/`wait_for_update` for current state and polling, `mission_events` for observation, and `receipt` only for terminal receipt projection.
 
-### 2. Preserve shared subscription semantics
+### 2. `agent_run` and `agent_explore` are child delegation surfaces
 
-The consumer set remains the source of truth. Adding the Coordinator mode consumer must not create multiple MCP update tasks for multiple visible surfaces. The subscription starts when observation becomes necessary and stops only when no consumer remains and window tools do not force observation.
+The runtime may delegate work through `agent_run` and `agent_explore` only under the Mission gates specified in `add-coordinator-mode`. Prompts and schemas should teach use of `mission_node_id`, workflow metadata where relevant, and the wait/poll remaining-handles pattern so detached child work is not stranded.
 
-### 3. Existing surfaces remain unchanged
+### 3. Runtime callers are not external drivers
 
-`.toolbarPopover`, `.statusView`, `startDashboardUpdates()`, and `stopDashboardUpdates()` keep their current behavior. Tests should cover mixed visibility so regressions in existing surfaces are visible independent of the Coordinator mode UI.
+Runtime consumers must not call external Mission creation or user-action parity operations such as starting peer Missions, archiving Missions, setting pace/autonomy as a user action, or submitting follow-up parent creation. Those operations are reserved for user/UI/CLI paths in the core runtime spec.
+
+### 4. Child interaction response boundary is ledger-preserving
+
+When a Mission-bound child asks a question and `childAsk` resolves to Director, the Coordinator runtime may answer only through `coordinator_chat submit` so the childAsk decision and evidence requirements remain enforceable. When `childAsk` resolves to Me, or when the interaction is not the owning active Mission-bound child interaction, the runtime must not answer. Generic `agent_run.respond` is not the ledger-preserving route for active Mission-bound child interactions.
 
 ## Risks / Trade-offs
 
-- **Shared lifecycle regression** → Test consumer combinations, not just the new case.
-- **Over-coupling to future UI** → This change only adds the consumer identity and lifecycle guarantees; Coordinator view rendering belongs to `add-coordinator-mode`.
-- **Task ref-count confusion** → Keep one task/subscription per view model, controlled by the consumer set and existing `shouldObserveDashboardUpdates` logic.
-
-## Migration Plan
-
-1. Add the new Coordinator mode consumer case.
-2. Add focused tests around consumer set / shared subscription behavior.
-3. Confirm existing toolbar and status view consumers still keep the stream alive and stop it at the correct time.
-4. Let `add-coordinator-mode` consume this case later.
-
-Rollback is straightforward: remove the unused consumer case and tests before any Coordinator mode UI consumes it.
+- **Prompt/tool mismatch** → keep schemas and runtime prompt language aligned with the same Mission control-plane contract.
+- **Bypassing ledgers** → block or redirect generic child-response paths for Mission-bound child interactions.
+- **Runtime/external confusion** → use request metadata/policy context gates from `refactor-agent-mcp-policy-context`.
+- **Spec duplication** → reference `add-coordinator-mode` for the state machine and keep this change to MCP consumer behavior.

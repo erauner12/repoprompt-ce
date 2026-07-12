@@ -1771,6 +1771,11 @@ enum AgentModelCatalog {
         case engineer
         case pair
         case design
+        case coordinator
+
+        var requiresDedicatedLaunchPath: Bool {
+            self == .coordinator
+        }
     }
 
     /// Metadata for a task label.
@@ -1805,7 +1810,8 @@ enum AgentModelCatalog {
         TaskLabel(kind: .explore, label: "explore", description: "Fast exploration and codebase mapping"),
         TaskLabel(kind: .engineer, label: "engineer", description: "Balanced engineering work"),
         TaskLabel(kind: .pair, label: "pair", description: "Interactive pair programming with highest-tier models"),
-        TaskLabel(kind: .design, label: "design", description: "Architecture, design discussions, and creative problem solving")
+        TaskLabel(kind: .design, label: "design", description: "Architecture, design discussions, and creative problem solving"),
+        TaskLabel(kind: .coordinator, label: "coordinator", description: "Coordinate delegated Agent Mode work from a dedicated Coordinator runtime")
     ]
 
     /// Explicit candidate chains per role. Order matters: first available wins.
@@ -1849,6 +1855,14 @@ enum AgentModelCatalog {
                 SelectionCandidate(agent: .customClaudeCompatible, modelRaw: defaultCompatibleBackendModelRaw(for: .customClaudeCompatible)),
                 SelectionCandidate(agent: .cursor, modelRaw: AgentModel.cursorComposer2.rawValue),
                 SelectionCandidate(agent: .codexExec, modelRaw: AgentModel.gpt55CodexMedium.rawValue)
+            ]
+        case .coordinator:
+            [
+                SelectionCandidate(agent: .codexExec, modelRaw: AgentModel.gpt55CodexHigh.rawValue),
+                SelectionCandidate(agent: .claudeCode, modelRaw: AgentModel.claudeOpus.rawValue),
+                SelectionCandidate(agent: .claudeCodeGLM, modelRaw: AgentModel.claudeOpus.rawValue),
+                SelectionCandidate(agent: .customClaudeCompatible, modelRaw: defaultCompatibleBackendModelRaw(for: .customClaudeCompatible)),
+                SelectionCandidate(agent: .cursor, modelRaw: AgentModel.cursorComposer2.rawValue)
             ]
         }
     }

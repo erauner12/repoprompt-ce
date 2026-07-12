@@ -61,6 +61,7 @@ final class AgentModeRunService {
         let notifyAgentTurnComplete: (AgentModeViewModel.TabSession) -> Void
         let handleHeadlessStreamResult: (AIStreamResult, AgentModeViewModel.TabSession, UUID, UUID) async -> Void
         let buildHeadlessAgentMessage: (AgentModeViewModel.TabSession, String, UUID, [AgentImageAttachment]) -> AgentMessage
+        let askUserInteraction: (AgentModeViewModel.TabSession, AgentAskUserInteraction) async throws -> AgentAskUserResponse
         let finalizeStreamingItems: (AgentModeViewModel.TabSession) -> Void
         let finalizePendingToolCalls: (AgentModeViewModel.TabSession, AgentSessionRunState) -> Void
         let finalizePendingToolCallsWithUpperBound: (AgentModeViewModel.TabSession, AgentSessionRunState, Int?) -> Void
@@ -109,6 +110,9 @@ final class AgentModeRunService {
     private let codexRunner: CodexIntegratedAgentModeRunner
     private let claudeRunner: ClaudeIntegratedAgentModeRunner
     private let acpRunner: ACPIntegratedAgentModeRunner
+    #if DEBUG
+        private let scriptedRunner: ScriptedAgentModeRunner
+    #endif
     private let terminalCommitBarrier: AgentRunTerminalCommitBarrier
 
     private static let enableSteeringDebugLogging = false
@@ -152,6 +156,12 @@ final class AgentModeRunService {
             providerFactory: dependencies.acpProviderFactory,
             controllerFactory: dependencies.acpControllerFactory
         )
+        #if DEBUG
+            scriptedRunner = ScriptedAgentModeRunner(
+                hooks: hooks,
+                terminalCommitBarrier: terminalCommitBarrier
+            )
+        #endif
     }
 
     @discardableResult
@@ -179,6 +189,18 @@ final class AgentModeRunService {
         }
 
         if selectedAgent == .codexExec {
+            #if DEBUG
+                if AgentScriptedChildModelID.isScriptedModelRaw(session.selectedModelRaw) {
+                    await scriptedRunner.startRun(
+                        tabID: tabID,
+                        session: session,
+                        initialUserMessage: initialUserMessage,
+                        initialMessageForRun: initialMessageForRun,
+                        attachments: attachments
+                    )
+                    return nil
+                }
+            #endif
             return await codexRunner.startRun(
                 tabID: tabID,
                 session: session,
@@ -195,7 +217,7 @@ final class AgentModeRunService {
                 workspacePath: workspacePath,
                 resumeSessionID: session.providerSessionID,
                 attachments: attachments,
-                taskLabelKind: session.mcpControlContext?.taskLabelKind,
+                taskLabelKind: session.effectiveMCPTaskLabelKind,
                 sessionModeID: runtimePermission.acpSessionModeID,
                 autoApproveAllToolPermissions: runtimePermission.autoApproveAllACPToolPermissions
             )
@@ -207,8 +229,8 @@ final class AgentModeRunService {
         let mcpServerEnabler = dependencies.mcpServerEnabler
         let connectionPolicyInstaller = dependencies.connectionPolicyInstaller
         let expectedPIDPolicyArmer = dependencies.expectedPIDPolicyArmer
-        let taskLabelKind = session.mcpControlContext?.taskLabelKind
-        let allowsAgentExternalControlTools = session.mcpControlContext != nil && session.parentSessionID == nil
+        let taskLabelKind = session.effectiveMCPTaskLabelKind
+        let allowsAgentExternalControlTools = session.mcpControlContext?.allowsAgentExternalControlTools ?? false
         let makeLease: (_ runID: UUID) -> MCPBootstrapLease = { runID in
             let leaseSpec = MCPBootstrapLeaseSpec.agentMode(
                 tabID: tabID,
@@ -299,7 +321,7 @@ final class AgentModeRunService {
             workspacePath: workspacePath,
             resumeSessionID: session.providerSessionID,
             attachments: attachments,
-            taskLabelKind: session.mcpControlContext?.taskLabelKind,
+            taskLabelKind: session.effectiveMCPTaskLabelKind,
             sessionModeID: runtimePermission.acpSessionModeID,
             autoApproveAllToolPermissions: runtimePermission.autoApproveAllACPToolPermissions
         )

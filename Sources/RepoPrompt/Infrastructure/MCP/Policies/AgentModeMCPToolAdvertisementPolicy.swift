@@ -14,6 +14,11 @@ import Foundation
 enum AgentModeMCPToolAdvertisementPolicy {
     // MARK: - Precomputed hidden tool sets
 
+    /// Direct app-control tools that should only be advertised to the layer-above Coordinator.
+    private static let directAppControlTools: Set<String> = [
+        MCPWindowToolName.coordinatorChat
+    ]
+
     /// Tools hidden from `explore` role agents.
     /// Explore agents get a minimal read-only toolset: file_search, get_file_tree,
     /// get_code_structure, read_file, git, ask_user, set_status.
@@ -53,9 +58,11 @@ enum AgentModeMCPToolAdvertisementPolicy {
         guard let taskLabelKind else { return exploreControlTools }
         switch taskLabelKind {
         case .explore:
-            return exploreHiddenTools.union(exploreControlTools)
+            return exploreHiddenTools.union(exploreControlTools).union(directAppControlTools)
         case .engineer, .pair, .design:
-            return nonExploreRoleHiddenTools
+            return nonExploreRoleHiddenTools.union(directAppControlTools)
+        case .coordinator:
+            return []
         }
     }
 
@@ -66,12 +73,16 @@ enum AgentModeMCPToolAdvertisementPolicy {
     ///   - taskLabelKind: The resolved task label role, or `nil` for direct/non-role connections.
     /// - Returns: `true` if the tool should be included in `ListTools` results.
     static func shouldAdvertise(toolName: String, taskLabelKind: AgentModelCatalog.TaskLabelKind?) -> Bool {
+        if directAppControlTools.contains(toolName) {
+            return taskLabelKind == nil || taskLabelKind == .coordinator
+        }
+
         if MCPToolCapabilities.capabilities(for: toolName).contains(.agentExploreControl) {
             guard let taskLabelKind else { return false }
             switch taskLabelKind {
             case .explore:
                 return false
-            case .engineer, .pair, .design:
+            case .engineer, .pair, .design, .coordinator:
                 return true
             }
         }
@@ -82,6 +93,8 @@ enum AgentModeMCPToolAdvertisementPolicy {
             return !exploreHiddenTools.contains(toolName)
         case .engineer, .pair, .design:
             return !nonExploreRoleHiddenTools.contains(toolName)
+        case .coordinator:
+            return true
         }
     }
 

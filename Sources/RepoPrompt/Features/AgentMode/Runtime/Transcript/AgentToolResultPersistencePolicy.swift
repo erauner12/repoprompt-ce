@@ -143,6 +143,7 @@ enum AgentToolResultPersistencePolicy {
             || normalizedToolName == "agent_run"
             || normalizedToolName == "agent_explore"
             || normalizedToolName == "agent_manage"
+            || normalizedToolName == "manage_worktree"
             || normalizedToolName == "ask_oracle"
             || normalizedToolName == "oracle_send"
             || normalizedToolName == "context_builder"
@@ -310,6 +311,14 @@ enum AgentToolResultPersistencePolicy {
             }
             if allowedTools.contains(normalizedToolName) {
                 return resultJSON
+            }
+            if normalizedToolName == "manage_worktree",
+               let mergeSummary = manageWorktreeMergeStructuredSummaryJSON(
+                   resultJSON: resultJSON,
+                   context: context
+               )
+            {
+                return mergeSummary
             }
             if normalizedToolName == "agent_manage",
                let object = jsonObject(from: resultJSON, context: context),
@@ -1463,6 +1472,16 @@ enum AgentToolResultPersistencePolicy {
             return agentRunSummaryJSON(normalizedToolName: normalizedToolName, statusWord: statusWord, rawObject: rawObject)
         case "agent_manage":
             return agentManageSummaryJSON(statusWord: statusWord, rawObject: rawObject)
+        case "manage_worktree":
+            return manageWorktreeMergeStructuredSummaryJSON(
+                resultJSON: rawObject.flatMap(jsonString(from:)),
+                context: context
+            ) ?? genericSummaryJSON(
+                normalizedToolName: normalizedToolName,
+                statusWord: statusWord,
+                processID: processID,
+                exitCode: exitCode
+            )
         case "ask_oracle", "oracle_send":
             return oracleChatSummaryJSON(
                 normalizedToolName: normalizedToolName,
@@ -2088,6 +2107,242 @@ enum AgentToolResultPersistencePolicy {
             object["summary_text"] = "\(skippedCount) skipped"
         }
         return jsonString(from: object)
+    }
+
+    private static func manageWorktreeMergeStructuredSummaryJSON(
+        resultJSON: String?,
+        context: AgentToolResultProcessingContext?
+    ) -> String? {
+        guard let resultJSON = trimmedStorageString(resultJSON),
+              let object = jsonObject(from: resultJSON, context: context),
+              let merge = object["merge"] as? [String: Any],
+              let op = trimmedStorageString(stringValue(object, keys: ["op"]))?.lowercased(),
+              ["preview", "status", "apply", "continue", "abort"].contains(op)
+        else {
+            return nil
+        }
+        if !exceedsPersistedToolSummaryBudget(resultJSON) {
+            return resultJSON
+        }
+        return compactManageWorktreeMergeSummaryJSON(op: op, merge: merge)
+    }
+
+    private static func compactManageWorktreeMergeSummaryJSON(
+        op: String,
+        merge: [String: Any]
+    ) -> String? {
+        guard let status = smallStringValue(merge, keys: ["status"]) else { return nil }
+        var compactMerge: [String: Any] = [
+            "status": status,
+            "next_actions": compactStringArray(merge["next_actions"], limit: 2)
+        ]
+
+        let stringKeys = [
+            "operation_id",
+            "session_id",
+            "merge_base",
+            "source_head",
+            "target_head_before",
+            "target_head_after",
+            "merge_commit",
+            "stale_reason",
+            "error_code",
+            "error",
+            "post_merge",
+            "source_worktree_status"
+        ]
+        for key in stringKeys {
+            if let value = smallStringValue(merge, keys: [key]) {
+                compactMerge[key] = value
+            }
+        }
+        if let source = compactWorktreeMergeEndpoint(merge["source"]) {
+            compactMerge["source"] = source
+        }
+        if let target = compactWorktreeMergeEndpoint(merge["target"]) {
+            compactMerge["target"] = target
+        }
+        if let summary = compactWorktreeMergeSummary(merge["summary"]) {
+            compactMerge["summary"] = summary
+        }
+        if let preflight = compactWorktreeMergePreflight(merge["preflight"]) {
+            compactMerge["preflight"] = preflight
+        }
+        if let artifacts = compactWorktreeMergeArtifacts(merge["artifacts"]) {
+            compactMerge["artifacts"] = artifacts
+        }
+        if let visualization = compactWorktreeMergeVisualization(merge["visualization"]) {
+            compactMerge["visualization"] = visualization
+        }
+
+        var object: [String: Any] = ["op": op, "merge": compactMerge]
+        if let json = jsonString(from: object), !exceedsPersistedToolSummaryBudget(json) {
+            return json
+        }
+        compactMerge["visualization"] = nil
+        object["merge"] = compactMerge
+        if let json = jsonString(from: object), !exceedsPersistedToolSummaryBudget(json) {
+            return json
+        }
+        compactMerge["artifacts"] = nil
+        object["merge"] = compactMerge
+        if let json = jsonString(from: object), !exceedsPersistedToolSummaryBudget(json) {
+            return json
+        }
+        compactMerge["source"] = nil
+        compactMerge["target"] = nil
+        object["merge"] = compactMerge
+        if let json = jsonString(from: object), !exceedsPersistedToolSummaryBudget(json) {
+            return json
+        }
+        return nil
+    }
+
+    private static func compactWorktreeMergeEndpoint(_ value: Any?) -> [String: Any]? {
+        guard let object = value as? [String: Any],
+              let worktreeID = boundedStorageString(stringValue(object, keys: ["worktree_id", "worktreeID"]), maxCount: 160),
+              let repoKey = boundedStorageString(stringValue(object, keys: ["repo_key", "repoKey"]), maxCount: 160),
+              let path = boundedStorageString(stringValue(object, keys: ["path"]), maxCount: 240),
+              let head = boundedStorageString(stringValue(object, keys: ["head"]), maxCount: 80),
+              let shortHead = boundedStorageString(stringValue(object, keys: ["short_head", "shortHead"]), maxCount: 40),
+              let label = boundedStorageString(stringValue(object, keys: ["label"]), maxCount: 160)
+        else {
+            return nil
+        }
+        var endpoint: [String: Any] = [
+            "worktree_id": worktreeID,
+            "repo_key": repoKey,
+            "path": path,
+            "head": head,
+            "short_head": shortHead,
+            "is_main": boolValue(object, keys: ["is_main", "isMain"]) ?? false,
+            "label": label
+        ]
+        if let name = boundedStorageString(stringValue(object, keys: ["name"]), maxCount: 160) {
+            endpoint["name"] = name
+        }
+        if let branch = boundedStorageString(stringValue(object, keys: ["branch"]), maxCount: 160) {
+            endpoint["branch"] = branch
+        }
+        return endpoint
+    }
+
+    private static func compactWorktreeMergeSummary(_ value: Any?) -> [String: Any]? {
+        guard let object = value as? [String: Any] else { return nil }
+        let commits = intValue(object, keys: ["commits"])
+        let files = intValue(object, keys: ["files"])
+        let insertions = intValue(object, keys: ["insertions"])
+        let deletions = intValue(object, keys: ["deletions"])
+        guard commits != nil || files != nil || insertions != nil || deletions != nil else { return nil }
+        return [
+            "commits": commits ?? 0,
+            "files": files ?? 0,
+            "insertions": insertions ?? 0,
+            "deletions": deletions ?? 0
+        ]
+    }
+
+    private static func compactWorktreeMergePreflight(_ value: Any?) -> [String: Any]? {
+        guard let object = value as? [String: Any] else { return nil }
+        var preflight: [String: Any] = [
+            "blocked": boolValue(object, keys: ["blocked"]) ?? false,
+            "blockers": compactWorktreeMergeBlockers(object["blockers"])
+        ]
+        if let prediction = object["conflict_prediction"] as? [String: Any],
+           let status = smallStringValue(prediction, keys: ["status"])
+        {
+            var conflictPrediction: [String: Any] = [
+                "status": status,
+                "files": compactStringArray(prediction["files"], limit: 8)
+            ]
+            if let message = boundedStorageString(stringValue(prediction, keys: ["message"]), maxCount: 240) {
+                conflictPrediction["message"] = message
+            }
+            preflight["conflict_prediction"] = conflictPrediction
+        }
+        return preflight
+    }
+
+    private static func compactWorktreeMergeBlockers(_ value: Any?) -> [[String: Any]] {
+        guard let blockers = value as? [[String: Any]] else { return [] }
+        return blockers.prefix(5).map { blocker in
+            var compact: [String: Any] = [:]
+            compact["code"] = smallStringValue(blocker, keys: ["code"]) ?? "blocked"
+            compact["message"] = boundedStorageString(stringValue(blocker, keys: ["message"]), maxCount: 240) ?? "Blocked"
+            compact["paths"] = compactStringArray(blocker["paths"], limit: 5)
+            return compact
+        }
+    }
+
+    private static func compactWorktreeMergeArtifacts(_ value: Any?) -> [String: Any]? {
+        guard let object = value as? [String: Any],
+              let snapshotID = boundedStorageString(stringValue(object, keys: ["snapshot_id", "snapshotID"]), maxCount: 160),
+              let snapshotDirectory = boundedStorageString(stringValue(object, keys: ["snapshot_directory", "snapshotDirectory"]), maxCount: 240),
+              let manifestPath = boundedStorageString(
+                  stringValue(object, keys: ["manifest_path", "manifestPath", "metadata_path", "metadataPath", "sidecar_path", "sidecarPath"]),
+                  maxCount: 240
+              ),
+              let mapPath = boundedStorageString(stringValue(object, keys: ["map_path", "mapPath"]), maxCount: 240),
+              let sidecarPath = boundedStorageString(
+                  stringValue(object, keys: ["sidecar_path", "sidecarPath", "metadata_path", "metadataPath", "manifest_path", "manifestPath"]),
+                  maxCount: 240
+              )
+        else {
+            return nil
+        }
+        var artifacts: [String: Any] = [
+            "snapshot_id": snapshotID,
+            "snapshot_directory": snapshotDirectory,
+            "manifest_path": manifestPath,
+            "map_path": mapPath,
+            "sidecar_path": sidecarPath
+        ]
+        if let allPatchPath = boundedStorageString(stringValue(object, keys: ["all_patch_path", "allPatchPath", "patch_path", "patchPath"]), maxCount: 240) {
+            artifacts["all_patch_path"] = allPatchPath
+        }
+        return artifacts
+    }
+
+    private static func compactWorktreeMergeVisualization(_ value: Any?) -> [String: Any]? {
+        guard let object = value as? [String: Any],
+              let text = boundedStorageString(stringValue(object, keys: ["text"]), maxCount: 480)
+        else {
+            return nil
+        }
+        let rawLines = object["lines"] as? [String] ?? text.components(separatedBy: .newlines)
+        let lines = rawLines.prefix(8).compactMap { boundedStorageString($0, maxCount: 120) }
+        return [
+            "requested": boolValue(object, keys: ["requested"]) ?? true,
+            "limit": intValue(object, keys: ["limit"]) ?? 20,
+            "text": text,
+            "lines": lines,
+            "line_count": intValue(object, keys: ["line_count", "lineCount"]) ?? lines.count,
+            "truncated": boolValue(object, keys: ["truncated"]) ?? (rawLines.count > lines.count)
+        ]
+    }
+
+    private static func compactStringArray(_ value: Any?, limit: Int) -> [String] {
+        guard let values = value as? [Any] else { return [] }
+        return values.prefix(limit).compactMap { value in
+            if let string = value as? String {
+                return boundedStorageString(string, maxCount: 180)
+            }
+            if let number = value as? NSNumber {
+                return boundedStorageString(number.stringValue, maxCount: 180)
+            }
+            return nil
+        }
+    }
+
+    private static func boundedStorageString(_ value: String?, maxCount: Int) -> String? {
+        guard maxCount > 1,
+              let value = trimmedStorageString(value)
+        else {
+            return nil
+        }
+        guard value.count > maxCount else { return value }
+        let prefix = value.prefix(maxCount - 1).trimmingCharacters(in: .whitespacesAndNewlines)
+        return prefix.isEmpty ? nil : prefix + "…"
     }
 
     private static func contextBuilderSummaryJSON(

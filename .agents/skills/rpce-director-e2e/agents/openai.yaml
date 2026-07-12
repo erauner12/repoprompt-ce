@@ -1,0 +1,4 @@
+interface:
+  display_name: "RepoPrompt Director E2E"
+  short_description: "Run live Director mission E2E scenarios through rpce-cli-debug."
+  default_prompt: "Use $rpce-director-e2e to run the Director E2E smoke scenarios and report artifacts."
