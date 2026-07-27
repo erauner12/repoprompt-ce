@@ -15,7 +15,7 @@ import XCTest
                     MCPToolExecutionContractCatalog.orderedAdvertisedToolNames,
                     caseLabel
                 )
-                XCTAssertEqual(MCPToolDurationInventory.entries.count, 27, caseLabel)
+                XCTAssertEqual(MCPToolDurationInventory.entries.count, 28, caseLabel)
                 XCTAssertEqual(
                     Set(MCPToolDurationInventory.entries.map(\.toolName)).count,
                     MCPToolDurationInventory.entries.count,
@@ -80,7 +80,7 @@ import XCTest
                     ],
                     caseLabel
                 )
-                XCTAssertEqual(MCPToolDurationInventory.boundedToolNames.count, 12, caseLabel)
+                XCTAssertEqual(MCPToolDurationInventory.boundedToolNames.count, 13, caseLabel)
                 XCTAssertEqual(
                     MCPToolDurationInventory.detachAndSettleToolNames,
                     [
@@ -249,7 +249,7 @@ import XCTest
                     caseLabel
                 )
                 let tools = try XCTUnwrap(payload["tools"] as? [[String: Any]], caseLabel)
-                XCTAssertEqual(tools.count, 27, caseLabel)
+                XCTAssertEqual(tools.count, 28, caseLabel)
                 let getCodeStructure = try XCTUnwrap(tools.first {
                     $0["tool"] as? String == MCPWindowToolName.getCodeStructure
                 }, caseLabel)

@@ -4037,7 +4037,11 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
         XCTAssertTrue(blockedRecorder.observations.isEmpty)
         XCTAssertEqual(workspace.composeTabs.count, initialTabCount)
 
-        source.coordinatorFollowThroughState = CoordinatorFollowThroughState(missionPlan: coordinatorMissionPlan(approvalState: .approved))
+        let approvedMission = approvedCoordinatorMissionPlan(coordinatorSessionID: coordinatorID)
+        source.coordinatorFollowThroughState = CoordinatorFollowThroughState(missionPlan: approvedMission.plan)
+        window.agentModeViewModel.coordinatorModeViewModel.refresh()
+        window.agentModeViewModel.coordinatorModeViewModel
+            .test_setPostApprovalContinuationDurableAuthority(approvedMission.continuation)
         let allowedRecorder = ExploreStartRecorder(activatesControlContext: true)
         let allowedService = makeAgentExploreStartService(window: window, sourceTabID: sourceTabID, recorder: allowedRecorder)
 
@@ -4068,7 +4072,11 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
         source.testInstallPersistentSessionBinding(sessionID: coordinatorID)
         source.mcpControlContext = makeMCPControlContext(sessionID: coordinatorID, taskLabelKind: .coordinator)
         source.isCoordinatorRuntime = true
-        source.coordinatorFollowThroughState = CoordinatorFollowThroughState(missionPlan: coordinatorMissionPlan(approvalState: .approved))
+        let approvedMission = approvedCoordinatorMissionPlan(coordinatorSessionID: coordinatorID)
+        source.coordinatorFollowThroughState = CoordinatorFollowThroughState(missionPlan: approvedMission.plan)
+        window.agentModeViewModel.coordinatorModeViewModel.refresh()
+        window.agentModeViewModel.coordinatorModeViewModel
+            .test_setPostApprovalContinuationDurableAuthority(approvedMission.continuation)
 
         let recorder = AgentRunStartRecorder(activatesControlContext: true)
         let service = makeAgentRunStartService(window: window, sourceTabID: sourceTabID, recorder: recorder)
@@ -5098,6 +5106,23 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
             taskLabelKind: taskLabelKind,
             allowsAgentExternalControlTools: allowsAgentExternalControlTools
         )
+    }
+
+    private func approvedCoordinatorMissionPlan(
+        coordinatorSessionID: UUID
+    ) -> (plan: CoordinatorMissionPlan, continuation: CoordinatorPostApprovalContinuationRecord) {
+        var plan = coordinatorMissionPlan(approvalState: .approved)
+        let continuation = CoordinatorPostApprovalContinuationRecord(
+            coordinatorSessionID: coordinatorSessionID,
+            checkpointInstanceID: "test-approved-mission-plan",
+            planID: plan.id,
+            planRevision: plan.revision,
+            directiveText: "Proceed.",
+            status: .delivered,
+            attempts: 1
+        ).confirmingDurableApprovalAuthority()
+        plan.postApprovalContinuation = continuation
+        return (plan, continuation)
     }
 
     private func coordinatorMissionPlan(approvalState: CoordinatorMissionPlanApprovalState) -> CoordinatorMissionPlan {
