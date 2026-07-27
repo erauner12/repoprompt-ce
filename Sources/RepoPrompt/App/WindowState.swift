@@ -183,8 +183,6 @@ class WindowState: ObservableObject {
     private var agentNewSessionAction: (() -> Void)?
     /// Narrow titlebar state observed only by the principal toolbar title cluster.
     let agentChatTitleCluster = AgentChatTitleClusterModel(title: WindowTitleFormatter.defaultTitle)
-    private var activeAgentSessionHandoffInstructionsEditor: AgentSessionHandoffInstructionsEditorController?
-    private var activeAgentSessionHandoffInstructionsPresentationID: UUID?
 
     /// The sticky instance number assigned for this window's current workspace (monotonically increasing per workspace).
     /// Nil when no workspace is active yet.
@@ -303,7 +301,6 @@ class WindowState: ObservableObject {
         pendingFocusUpdateTask = nil
         pendingFocusSideEffectsTask?.cancel()
         pendingFocusSideEffectsTask = nil
-        cancelActiveAgentSessionHandoffInstructionsEditor()
         detachTitlebarAccessoryControllers(from: nsWindow)
         clearTitlebarAccessoryRequestsForClose()
         apiSettingsViewModel.prepareForWindowClose()
@@ -821,7 +818,6 @@ class WindowState: ObservableObject {
         handoffInstructionsProvider: @escaping AgentSessionHandoffInstructionsProvider = {
             GlobalSettingsStore.shared.agentSessionHandoffInstructions()
         },
-        handoffEditorPresenter: AgentSessionHandoffInstructionsEditorPresenter? = nil,
         handoffOversizedFeedback: ((Int, Int) -> Void)? = nil,
         copyToClipboard: @escaping (String) -> Void = { value in
             let pasteboard = NSPasteboard.general
@@ -844,14 +840,6 @@ class WindowState: ObservableObject {
                     target: target,
                     handoffInstructionsProvider: handoffInstructionsProvider,
                     handoffOversizedFeedback: handoffOversizedFeedback,
-                    copyToClipboard: copyToClipboard
-                )
-            },
-            presentHandoffWithInstructions: { [weak self] target in
-                self?.presentAgentChatHandoffWithInstructionsFromTitlebar(
-                    target: target,
-                    handoffInstructionsProvider: handoffInstructionsProvider,
-                    handoffEditorPresenter: handoffEditorPresenter,
                     copyToClipboard: copyToClipboard
                 )
             },
@@ -894,52 +882,6 @@ class WindowState: ObservableObject {
         }
     }
 
-    private func presentAgentChatHandoffWithInstructionsFromTitlebar(
-        target: AgentChatOptionsMenuTarget,
-        handoffInstructionsProvider: AgentSessionHandoffInstructionsProvider,
-        handoffEditorPresenter: AgentSessionHandoffInstructionsEditorPresenter?,
-        copyToClipboard: @escaping (String) -> Void
-    ) {
-        guard !isClosing,
-              agentChatTitleClusterMenuTargetIsValid(target),
-              activeAgentSessionHandoffInstructionsPresentationID == nil,
-              let window = nsWindow
-        else { return }
-
-        let initialInstructions = handoffInstructionsProvider()
-        guard agentChatTitleClusterMenuTargetIsValid(target) else { return }
-        let presentationID = UUID()
-        activeAgentSessionHandoffInstructionsPresentationID = presentationID
-
-        let completion: AgentSessionHandoffInstructionsEditorCompletion = { [weak self] result in
-            guard let self,
-                  activeAgentSessionHandoffInstructionsPresentationID == presentationID
-            else { return }
-
-            activeAgentSessionHandoffInstructionsPresentationID = nil
-            activeAgentSessionHandoffInstructionsEditor = nil
-
-            guard case let .copy(instructions) = result else { return }
-            _ = performAgentChatHandoffCopy(
-                target: target,
-                instructions: instructions,
-                copyToClipboard: copyToClipboard
-            )
-        }
-
-        if let handoffEditorPresenter {
-            handoffEditorPresenter(initialInstructions, window, completion)
-        } else {
-            let controller = AgentSessionHandoffInstructionsEditorController()
-            activeAgentSessionHandoffInstructionsEditor = controller
-            controller.present(
-                initialInstructions: initialInstructions,
-                attachedTo: window,
-                completion: completion
-            )
-        }
-    }
-
     @discardableResult
     private func performAgentChatHandoffCopy(
         target: AgentChatOptionsMenuTarget,
@@ -973,13 +915,6 @@ class WindowState: ObservableObject {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window)
-    }
-
-    private func cancelActiveAgentSessionHandoffInstructionsEditor() {
-        let controller = activeAgentSessionHandoffInstructionsEditor
-        activeAgentSessionHandoffInstructionsPresentationID = nil
-        activeAgentSessionHandoffInstructionsEditor = nil
-        controller?.cancel()
     }
 
     private func stashAgentChatFromTitlebar(target: AgentChatOptionsMenuTarget) {

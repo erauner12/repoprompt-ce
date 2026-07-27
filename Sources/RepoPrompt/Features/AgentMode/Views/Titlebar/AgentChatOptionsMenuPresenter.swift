@@ -47,7 +47,6 @@ struct AgentChatOptionsMenuActions {
     let rename: (AgentChatOptionsMenuTarget) -> Void
     let stash: (AgentChatOptionsMenuTarget) -> Void
     let copyHandoffPrompt: (AgentChatOptionsMenuTarget) -> Void
-    let presentHandoffWithInstructions: (AgentChatOptionsMenuTarget) -> Void
     let delete: (AgentChatOptionsMenuTarget) -> Void
 }
 
@@ -100,11 +99,6 @@ enum AgentChatOptionsMenuPresenter {
             title: "Handoff",
             symbolName: "arrow.right.doc.on.clipboard",
             handler: { actions.copyHandoffPrompt(target) }
-        ))
-        menu.addItem(AgentChatOptionsMenuItem(
-            title: "Handoff with Instructions…",
-            symbolName: "square.and.pencil",
-            handler: { actions.presentHandoffWithInstructions(target) }
         ))
         menu.addItem(.separator())
         menu.addItem(AgentChatOptionsMenuItem(

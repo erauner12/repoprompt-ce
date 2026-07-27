@@ -133,6 +133,11 @@ The reusable titlebar Handoff default is one optional app-wide scalar:
 scalarPreferences.agentMode.agentSessionHandoffInstructions
 ```
 
+This setting is global across workspaces. It does not use the Agent Models
+workspace-profile system, which is feature-specific rather than a generic
+layered-settings authority. Workspace-scoped Handoff instructions require a
+separate persistence and migration design.
+
 The field is a JSON string when present. An absent or decoded `null` field resolves to
 exactly `""` through `GlobalSettingsStore.agentSessionHandoffInstructions()` without
 materializing the field or rewriting the file. The typed setter preserves text verbatim:

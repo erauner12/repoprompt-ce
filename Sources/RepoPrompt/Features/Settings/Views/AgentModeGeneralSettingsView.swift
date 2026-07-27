@@ -189,7 +189,7 @@ struct AgentModeGeneralSettingsView: View {
                 Text("Handoff Instructions")
                     .font(fontPreset.swiftUIFont(sizeAtNormal: 13, weight: .semibold))
 
-                Text("This app-wide text is appended by the titlebar’s quick Handoff action. Handoff with Instructions… can override it for one clipboard prompt without saving.")
+                Text("This app-wide text is appended by the titlebar’s Handoff action.")
                     .font(fontPreset.swiftUIFont(sizeAtNormal: 12))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
