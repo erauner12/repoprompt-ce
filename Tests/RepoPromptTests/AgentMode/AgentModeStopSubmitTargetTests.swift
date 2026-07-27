@@ -1035,7 +1035,7 @@ final class AgentModeStopSubmitTargetTests: XCTestCase {
 
         XCTAssertEqual(result, .submitted)
         XCTAssertEqual(coordinatorSession.items.filter { $0.kind == .user }.map(\.text), ["Proceed with the approved plan."])
-        XCTAssertTrue(coordinatorSession.pendingInstructions.isEmpty)
+        XCTAssertEqual(coordinatorSession.pendingInstructions, ["Proceed with the approved plan."])
     }
 
     func testCoordinatorDirectiveRejectsMissingLiveCoordinatorWithoutCreatingSession() async {
