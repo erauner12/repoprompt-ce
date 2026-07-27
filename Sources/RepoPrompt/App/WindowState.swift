@@ -97,6 +97,14 @@ struct AppCommand {
     }
 }
 
+typealias AgentSessionHandoffInstructionsProvider = @MainActor () -> String
+
+enum AgentChatHandoffCopyOutcome: Equatable {
+    case copied
+    case staleTarget
+    case instructionsTooLong(count: Int, maximum: Int)
+}
+
 /// Holds all of the per-window managers/services.
 /// Each new window in the app gets a fresh instance of WindowState.
 @MainActor
@@ -175,6 +183,8 @@ class WindowState: ObservableObject {
     private var agentNewSessionAction: (() -> Void)?
     /// Narrow titlebar state observed only by the principal toolbar title cluster.
     let agentChatTitleCluster = AgentChatTitleClusterModel(title: WindowTitleFormatter.defaultTitle)
+    private var activeAgentSessionHandoffInstructionsEditor: AgentSessionHandoffInstructionsEditorController?
+    private var activeAgentSessionHandoffInstructionsPresentationID: UUID?
 
     /// The sticky instance number assigned for this window's current workspace (monotonically increasing per workspace).
     /// Nil when no workspace is active yet.
@@ -293,6 +303,7 @@ class WindowState: ObservableObject {
         pendingFocusUpdateTask = nil
         pendingFocusSideEffectsTask?.cancel()
         pendingFocusSideEffectsTask = nil
+        cancelActiveAgentSessionHandoffInstructionsEditor()
         detachTitlebarAccessoryControllers(from: nsWindow)
         clearTitlebarAccessoryRequestsForClose()
         apiSettingsViewModel.prepareForWindowClose()
@@ -807,6 +818,11 @@ class WindowState: ObservableObject {
     }
 
     func agentChatTitleClusterMenuActions(
+        handoffInstructionsProvider: @escaping AgentSessionHandoffInstructionsProvider = {
+            GlobalSettingsStore.shared.agentSessionHandoffInstructions()
+        },
+        handoffEditorPresenter: AgentSessionHandoffInstructionsEditorPresenter? = nil,
+        handoffOversizedFeedback: ((Int, Int) -> Void)? = nil,
         copyToClipboard: @escaping (String) -> Void = { value in
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
@@ -826,6 +842,16 @@ class WindowState: ObservableObject {
             copyHandoffPrompt: { [weak self] target in
                 self?.copyAgentChatHandoffPromptFromTitlebar(
                     target: target,
+                    handoffInstructionsProvider: handoffInstructionsProvider,
+                    handoffOversizedFeedback: handoffOversizedFeedback,
+                    copyToClipboard: copyToClipboard
+                )
+            },
+            presentHandoffWithInstructions: { [weak self] target in
+                self?.presentAgentChatHandoffWithInstructionsFromTitlebar(
+                    target: target,
+                    handoffInstructionsProvider: handoffInstructionsProvider,
+                    handoffEditorPresenter: handoffEditorPresenter,
                     copyToClipboard: copyToClipboard
                 )
             },
@@ -849,14 +875,111 @@ class WindowState: ObservableObject {
 
     private func copyAgentChatHandoffPromptFromTitlebar(
         target: AgentChatOptionsMenuTarget,
+        handoffInstructionsProvider: AgentSessionHandoffInstructionsProvider,
+        handoffOversizedFeedback: ((Int, Int) -> Void)?,
         copyToClipboard: (String) -> Void
     ) {
+        guard !isClosing, agentChatTitleClusterMenuTargetIsValid(target) else { return }
+        let instructions = handoffInstructionsProvider()
+        let outcome = performAgentChatHandoffCopy(
+            target: target,
+            instructions: instructions,
+            copyToClipboard: copyToClipboard
+        )
+        guard case let .instructionsTooLong(count, maximum) = outcome else { return }
+        if let handoffOversizedFeedback {
+            handoffOversizedFeedback(count, maximum)
+        } else {
+            presentAgentChatHandoffInstructionsTooLongFeedback(count: count, maximum: maximum)
+        }
+    }
+
+    private func presentAgentChatHandoffWithInstructionsFromTitlebar(
+        target: AgentChatOptionsMenuTarget,
+        handoffInstructionsProvider: AgentSessionHandoffInstructionsProvider,
+        handoffEditorPresenter: AgentSessionHandoffInstructionsEditorPresenter?,
+        copyToClipboard: @escaping (String) -> Void
+    ) {
+        guard !isClosing,
+              agentChatTitleClusterMenuTargetIsValid(target),
+              activeAgentSessionHandoffInstructionsPresentationID == nil,
+              let window = nsWindow
+        else { return }
+
+        let initialInstructions = handoffInstructionsProvider()
         guard agentChatTitleClusterMenuTargetIsValid(target) else { return }
+        let presentationID = UUID()
+        activeAgentSessionHandoffInstructionsPresentationID = presentationID
+
+        let completion: AgentSessionHandoffInstructionsEditorCompletion = { [weak self] result in
+            guard let self,
+                  activeAgentSessionHandoffInstructionsPresentationID == presentationID
+            else { return }
+
+            activeAgentSessionHandoffInstructionsPresentationID = nil
+            activeAgentSessionHandoffInstructionsEditor = nil
+
+            guard case let .copy(instructions) = result else { return }
+            _ = performAgentChatHandoffCopy(
+                target: target,
+                instructions: instructions,
+                copyToClipboard: copyToClipboard
+            )
+        }
+
+        if let handoffEditorPresenter {
+            handoffEditorPresenter(initialInstructions, window, completion)
+        } else {
+            let controller = AgentSessionHandoffInstructionsEditorController()
+            activeAgentSessionHandoffInstructionsEditor = controller
+            controller.present(
+                initialInstructions: initialInstructions,
+                attachedTo: window,
+                completion: completion
+            )
+        }
+    }
+
+    @discardableResult
+    private func performAgentChatHandoffCopy(
+        target: AgentChatOptionsMenuTarget,
+        instructions: String,
+        copyToClipboard: (String) -> Void
+    ) -> AgentChatHandoffCopyOutcome {
+        guard !isClosing, agentChatTitleClusterMenuTargetIsValid(target) else {
+            return .staleTarget
+        }
+        switch AgentSessionHandoffInstructionsPolicy.validation(of: instructions) {
+        case .valid:
+            break
+        case let .tooLong(count, maximum):
+            return .instructionsTooLong(count: count, maximum: maximum)
+        }
+
         let prompt = AgentSessionHandoffPrompt.render(
             target: target,
-            cliCommandName: MCPFilesystemConstants.identity.pathCLICommandName
+            cliCommandName: MCPFilesystemConstants.identity.pathCLICommandName,
+            instructions: instructions
         )
         copyToClipboard(prompt)
+        return .copied
+    }
+
+    private func presentAgentChatHandoffInstructionsTooLongFeedback(count: Int, maximum: Int) {
+        guard !isClosing, let window = nsWindow, window.attachedSheet == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Handoff Instructions Too Long"
+        alert.informativeText = "The saved default contains \(count) characters; the maximum is \(maximum). Shorten or clear it in Settings → Agent Mode → Handoff Instructions, then try again."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window)
+    }
+
+    private func cancelActiveAgentSessionHandoffInstructionsEditor() {
+        let controller = activeAgentSessionHandoffInstructionsEditor
+        activeAgentSessionHandoffInstructionsPresentationID = nil
+        activeAgentSessionHandoffInstructionsEditor = nil
+        controller?.cancel()
     }
 
     private func stashAgentChatFromTitlebar(target: AgentChatOptionsMenuTarget) {
