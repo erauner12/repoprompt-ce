@@ -1,4 +1,4 @@
-@testable import RepoPrompt
+@testable import RepoPromptApp
 import XCTest
 
 private extension CoordinatorModeWorkflowDisplaySummary {
@@ -3237,8 +3237,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertTrue(session.isCoordinatorRuntime)
         XCTAssertEqual(session.mcpControlContext?.taskLabelKind, .coordinator)
         XCTAssertEqual(session.selectedAgent, .codexExec)
-        XCTAssertEqual(session.selectedModelRaw, "gpt-5.5")
-        XCTAssertEqual(session.selectedReasoningEffortRaw, CodexReasoningEffort.low.rawValue)
+        XCTAssertEqual(session.selectedModelRaw, "gpt-5.6-sol")
+        XCTAssertEqual(session.selectedReasoningEffortRaw, CodexReasoningEffort.medium.rawValue)
     }
 
     func testCoordinatorRuntimeRejectsScriptedModelOverride() async throws {

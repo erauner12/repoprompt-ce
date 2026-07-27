@@ -16,6 +16,7 @@ extension AgentModeViewModel {
         @Published var items: [AgentChatItem] = [] {
             didSet {
                 guard !suppressSourceItemsChanged else { return }
+                repairStoredSourceItemsIfNeeded(diagnosticContext: "items.didSet")
                 rebuildSourceItemDerivedState()
                 onSourceItemsChanged?(self, .structural)
             }
@@ -29,6 +30,7 @@ extension AgentModeViewModel {
         var turnProjectionCaches: [UUID: AgentTranscriptTurnProjectionCache] = [:]
         var archivedTranscriptSnapshot: AgentArchivedTranscriptSnapshot = .empty
         var isCompressedHistoryRevealed: Bool = false
+        var isTranscriptWindowExpanded: Bool = false
         var transcriptProjectionProtection: AgentTranscriptProjectionProtection = .none
         var transcriptCanonicalVisibleRowCount: Int = 0
         var transcriptProjectionCounts: AgentTranscriptProjectionCounts = .zero
@@ -39,7 +41,7 @@ extension AgentModeViewModel {
         private(set) var liveItemIDs: Set<UUID> = []
         private var toolCorrelationIndexes = ToolCorrelationIndexes()
         private var nextEphemeralToolResultPayloadRevision: Int = 1
-        var rawToolResultPayloadRenderRevision: Int = 0
+        var rawToolResultPayloadRenderRevisionByItemID: [UUID: Int] = [:]
         var onSourceItemsChanged: ((TabSession, SourceItemsMutation) -> Void)?
         var onRunStateChanged: ((TabSession) -> Void)?
         #if DEBUG
@@ -56,6 +58,12 @@ extension AgentModeViewModel {
 
         @Published var runningStatusText: String? = nil
         var activeAgentRunStartedAt: Date?
+
+        struct DeferredActiveAgentRunTimerRollback {
+            let originalStartedAt: Date?
+        }
+
+        var deferredActiveAgentRunTimerRollback: DeferredActiveAgentRunTimerRollback?
 
         enum RunningStatusSource: Equatable {
             case transport
@@ -263,7 +271,7 @@ extension AgentModeViewModel {
             let turnKind: CodexTurnKind
             let controllerInstanceID: ObjectIdentifier
             let controllerGeneration: UUID
-            let runID: UUID
+            let runID: UUID?
             let runAttemptID: UUID
         }
 
@@ -272,13 +280,22 @@ extension AgentModeViewModel {
             let turnKind: CodexTurnKind
             let controllerInstanceID: ObjectIdentifier
             let controllerGeneration: UUID
-            let runID: UUID
+            let runID: UUID?
             let runAttemptID: UUID
         }
 
         enum CodexFallbackOrigin: Equatable {
             case manual
             case mcp(attemptID: UUID)
+
+            var isMCP: Bool {
+                switch self {
+                case .mcp:
+                    true
+                case .manual:
+                    false
+                }
+            }
         }
 
         @MainActor
@@ -362,7 +379,7 @@ extension AgentModeViewModel {
             let turnID: String
             let controllerInstanceID: ObjectIdentifier
             let controllerGeneration: UUID
-            let runID: UUID
+            let runID: UUID?
             let runAttemptID: UUID
         }
 
@@ -458,6 +475,7 @@ extension AgentModeViewModel {
 
         /// Selected workflow template for next message
         var selectedWorkflow: AgentWorkflowDefinition?
+        var userWorkflowSelectionMutationGeneration: UInt64 = 0
 
         // Pending image attachments for the next user turn
         @Published var pendingImageAttachments: [AgentImageAttachment] = []
@@ -467,6 +485,7 @@ extension AgentModeViewModel {
 
         // Provider session ID for resumption (e.g., Claude CLI session_id)
         var providerSessionID: String?
+        var providerCleanupHandle: ProviderConversationCleanupHandle?
         var providerTokenUsageByTurn: [AgentTokenUsagePersist] = []
         var pendingNonCodexUserInputTokenQueue: [Int] = []
         var activeNonCodexTurnTokenAccumulator: NonCodexTurnTokenAccumulator?
@@ -480,6 +499,7 @@ extension AgentModeViewModel {
         @Published var contextUsageSnapshot: ContextUsageSnapshot? = nil
         var contextCompactedAt: Date?
         var codexNeedsReconnect: Bool = false
+        var codexNativeStartupDisposition: CodexNativeStartupDisposition?
         var codexResumeTimeoutState: CodexResumeTimeoutState = .init()
         var codexToolPreferencesGeneration: Int = 0
         var codexController: (any CodexSessionControlling)? {
@@ -501,12 +521,18 @@ extension AgentModeViewModel {
         /// The task label kind the current Codex controller was created with.
         /// Used to detect when role-specific native tool overrides require controller recycling.
         var codexControllerTaskLabelKind: AgentModelCatalog.TaskLabelKind?
-        /// The effective workspace path the current Codex controller was created with.
-        /// Used to recycle the provider when a session worktree binding changes cwd.
-        var codexControllerWorkspacePath: String?
+        /// The launch/execution directory pair the current Codex controller was created with.
+        /// Controller replacement key: the provider is recycled when either directory changes,
+        /// e.g. when a session worktree binding moves the execution cwd.
+        var codexControllerWorkspacePaths: CodexRuntimeWorkspacePaths?
+        struct CodexControllerFeatureState: Equatable {
+            var computerUseEnabled: Bool
+            var goalSupportEnabled: Bool
+            var reasoningSummariesEnabled: Bool
+        }
+
         var pendingCodexComputerUseActivation: CodexComputerUseActivation?
-        var codexControllerComputerUseEnabled: Bool = false
-        var codexControllerGoalSupportEnabled: Bool = false
+        var codexControllerFeatureState: CodexControllerFeatureState?
         var wantsCodexComputerUseForNextTurn: Bool {
             pendingCodexComputerUseActivation != nil
         }
@@ -524,6 +550,8 @@ extension AgentModeViewModel {
         var activeReasoningItemID: UUID?
         var reasoningItemIDsByGroupID: [String: UUID] = [:]
         var pendingAssistantDelta: String = ""
+        var pendingCodexAssistantScope: CodexNativeSessionController.ItemScope?
+        var codexAssistantRowIDByScope: [CodexNativeSessionController.ItemScope: UUID] = [:]
         var assistantDeltaFlushTask: Task<Void, Never>?
         var assistantDeltaTaskGeneration: UInt64 = 0
         var assistantDeltaFlushGeneration: UInt64 = 0
@@ -597,6 +625,40 @@ extension AgentModeViewModel {
 
         deinit {
             applyEditsApprovalSubscriptionTask?.cancel()
+        }
+
+        /// Cancels all ephemeral runtime tasks and clears transient state on this
+        /// session. Called by both `prepareSessionForWindowClose` and
+        /// `prepareWorkspaceSwitchSessionDiscard` before the VM performs
+        /// async teardown (provider dispose, coordinator shutdown, MCP cleanup).
+        ///
+        /// This method is purely synchronous and touches only TabSession-owned
+        /// state. VM-owned interactions (cancelPendingQuestion, approval,
+        /// instruction, applyEditsReview, MCP control, run cancellation) remain
+        /// on the VM and are called separately by each teardown path.
+        func cancelEphemeralRuntimeState() {
+            derivedTranscriptRefreshTask?.cancel()
+            derivedTranscriptRefreshTask = nil
+            pendingDerivedTranscriptRefreshReason = nil
+            pendingCommandRunningFlushTask?.cancel()
+            pendingCommandRunningFlushTask = nil
+            pendingCommandRunningByKey.removeAll()
+            claudeSteeringFlushTask?.cancel()
+            claudeSteeringFlushTask = nil
+            acpSteeringFlushTask?.cancel()
+            acpSteeringFlushTask = nil
+            clearClaudeReasoningStatus(clearDisplayedStatus: true)
+            assistantDeltaFlushTask?.cancel()
+            assistantDeltaFlushTask = nil
+            pendingAssistantDelta = ""
+            agentTask?.cancel()
+            agentTask = nil
+            codexEventTask?.cancel()
+            codexEventTask = nil
+            codexEventTaskRunID = nil
+            applyEditsApprovalSubscriptionTask?.cancel()
+            applyEditsApprovalSubscriptionTask = nil
+            applyEditsApprovalSubscriptionID = nil
         }
 
         @discardableResult
@@ -1007,10 +1069,12 @@ extension AgentModeViewModel {
 
         private func commitSourceItems(
             _ newItems: [AgentChatItem],
-            dispatch: SourceItemsDispatch
+            dispatch: SourceItemsDispatch,
+            diagnosticContext: String
         ) {
+            let repairedItems = repairedSourceItems(newItems, diagnosticContext: diagnosticContext)
             suppressSourceItemsChanged = true
-            items = newItems
+            items = repairedItems
             suppressSourceItemsChanged = false
             rebuildSourceItemDerivedState()
             sourceItemsRevision &+= 1
@@ -1020,11 +1084,58 @@ extension AgentModeViewModel {
             }
         }
 
+        private func repairedSourceItems(
+            _ candidateItems: [AgentChatItem],
+            diagnosticContext: String
+        ) -> [AgentChatItem] {
+            let repair = AgentSourceItemIDRepair.repairDuplicateIDs(in: candidateItems)
+            if repair.didRepair {
+                AgentSourceItemIDRepair.logDiagnostics(
+                    repair.diagnostics,
+                    context: "tab_session tab_id=\(tabID.uuidString) \(diagnosticContext)"
+                )
+            }
+            return repair.items
+        }
+
+        @discardableResult
+        private func repairStoredSourceItemsIfNeeded(diagnosticContext: String) -> Bool {
+            let repairedItems = repairedSourceItems(items, diagnosticContext: diagnosticContext)
+            guard repairedItems != items else { return false }
+            suppressSourceItemsChanged = true
+            items = repairedItems
+            suppressSourceItemsChanged = false
+            return true
+        }
+
+        @discardableResult
+        private func commitRepairedSourceItemsIfNeeded(
+            _ candidateItems: [AgentChatItem],
+            diagnosticContext: String
+        ) -> Bool {
+            let repair = AgentSourceItemIDRepair.repairDuplicateIDs(in: candidateItems)
+            guard repair.didRepair else { return false }
+            AgentSourceItemIDRepair.logDiagnostics(
+                repair.diagnostics,
+                context: "tab_session tab_id=\(tabID.uuidString) \(diagnosticContext)"
+            )
+            commitSourceItems(
+                repair.items,
+                dispatch: .notify(.structural),
+                diagnosticContext: "\(diagnosticContext).commit"
+            )
+            return true
+        }
+
         private func rebuildSourceItemDerivedState() {
+            repairStoredSourceItemsIfNeeded(diagnosticContext: "rebuildSourceItemDerivedState")
             syncNextSequenceIndexFromItems()
             liveItemIDs = Set(items.map(\.id))
             replaceEphemeralToolResultPayloadMap(
-                AgentModeViewModel.rebuildEphemeralToolResultPayloadMap(from: items),
+                AgentModeViewModel.rebuildEphemeralToolResultPayloadMap(
+                    from: items,
+                    diagnosticContext: "tab_session tab_id=\(tabID.uuidString) rebuildSourceItemDerivedState"
+                ),
                 liveItemIDs: liveItemIDs
             )
             rebuildToolCorrelationIndexes()
@@ -1242,6 +1353,7 @@ extension AgentModeViewModel {
         ) {
             #if DEBUG
                 assert(liveItemIDs == Set(items.map(\.id)), "live item ID index desynchronized", file: file, line: line)
+                assert(items.count == liveItemIDs.count, "duplicate live item IDs detected", file: file, line: line)
                 assert(
                     ephemeralToolResultPayloadByItemID.keys.allSatisfy { liveItemIDs.contains($0) },
                     "ephemeral payload map contains non-live item IDs",
@@ -1270,7 +1382,11 @@ extension AgentModeViewModel {
             var updatedItems = previousItems
             body(&updatedItems)
             guard updatedItems != previousItems else { return false }
-            commitSourceItems(updatedItems, dispatch: .notify(mutation))
+            commitSourceItems(
+                updatedItems,
+                dispatch: .notify(mutation),
+                diagnosticContext: "mutateItemsBatch"
+            )
             if touchActivity {
                 lastActivityAt = Date()
             }
@@ -1302,7 +1418,11 @@ extension AgentModeViewModel {
                     ))
                 }
             #endif
-            commitSourceItems(items, dispatch: .silent)
+            commitSourceItems(
+                items,
+                dispatch: .silent,
+                diagnosticContext: "setItemsSilently reason=\(reason.rawValue)"
+            )
             pendingSourceItemsMutationSummary = nil
             pendingDerivedTranscriptRefreshReason = nil
             derivedTranscriptRefreshGeneration &+= 1
@@ -1354,6 +1474,9 @@ extension AgentModeViewModel {
         /// pruned. Mirrors the ephemeral-payload invariants that normal
         /// `TabSession` mutation helpers preserve via `reconcileEphemeralPayloadMap`.
         func compactSummaryOnlyToolResultsAndAlignEphemeralPayloadMap() {
+            if repairStoredSourceItemsIfNeeded(diagnosticContext: "compactSummaryOnlyToolResultsAndAlignEphemeralPayloadMap") {
+                rebuildSourceItemDerivedState()
+            }
             var alignedItems: [AgentChatItem] = []
             alignedItems.reserveCapacity(items.count)
             var alignedMap: [UUID: String] = [:]
@@ -1429,7 +1552,7 @@ extension AgentModeViewModel {
             transcriptProjectionCounts = .zero
             transcriptAnalyticsSnapshot = .init()
             transcriptPerformanceSnapshot = .empty
-            rawToolResultPayloadRenderRevision = 0
+            rawToolResultPayloadRenderRevisionByItemID = [:]
             derivedTranscriptSyncState = nil
         }
 
@@ -1437,6 +1560,7 @@ extension AgentModeViewModel {
             setItemsSilently(items, reason: .testOverride)
             pendingTurnRuntimeAnchors.removeAll()
             agentMessageRuntimeFootersByItemID.removeAll()
+            deferredActiveAgentRunTimerRollback = nil
             pendingSourceItemsMutationSummary = nil
             onSourceItemsChanged?(self, .replaceAll)
             lastActivityAt = Date()
@@ -1447,6 +1571,16 @@ extension AgentModeViewModel {
             var newItem = item
             newItem.sequenceIndex = nextSequenceIndex
             nextSequenceIndex += 1
+            let candidateItems = items + [newItem]
+            if commitRepairedSourceItemsIfNeeded(candidateItems, diagnosticContext: "appendItem") {
+                if newItem.kind == .user {
+                    hasSentFirstMessage = true
+                    lastUserMessageAt = newItem.timestamp
+                }
+                lastActivityAt = Date()
+                isDirty = true
+                return
+            }
             let appendedIndex = items.count
             suppressSourceItemsChanged = true
             items.append(newItem)
@@ -1466,6 +1600,13 @@ extension AgentModeViewModel {
             guard items.indices.contains(index) else { return }
             let previousItem = items[index]
             guard updatedItem != previousItem else { return }
+            var candidateItems = items
+            candidateItems[index] = updatedItem
+            if commitRepairedSourceItemsIfNeeded(candidateItems, diagnosticContext: "replaceItem") {
+                lastActivityAt = Date()
+                isDirty = true
+                return
+            }
             suppressSourceItemsChanged = true
             items[index] = updatedItem
             suppressSourceItemsChanged = false
@@ -1485,6 +1626,13 @@ extension AgentModeViewModel {
             var updatedItem = previousItem
             mutate(&updatedItem)
             guard updatedItem != previousItem else { return }
+            var candidateItems = items
+            candidateItems[index] = updatedItem
+            if commitRepairedSourceItemsIfNeeded(candidateItems, diagnosticContext: "mutateItem") {
+                lastActivityAt = Date()
+                isDirty = true
+                return
+            }
             suppressSourceItemsChanged = true
             items[index] = updatedItem
             suppressSourceItemsChanged = false
@@ -1518,6 +1666,13 @@ extension AgentModeViewModel {
             var updatedItem = previousItem
             mutate(&updatedItem)
             guard updatedItem != previousItem else { return }
+            var candidateItems = items
+            candidateItems[index] = updatedItem
+            if commitRepairedSourceItemsIfNeeded(candidateItems, diagnosticContext: "updateLastItem") {
+                lastActivityAt = Date()
+                isDirty = true
+                return
+            }
             suppressSourceItemsChanged = true
             items[index] = updatedItem
             suppressSourceItemsChanged = false

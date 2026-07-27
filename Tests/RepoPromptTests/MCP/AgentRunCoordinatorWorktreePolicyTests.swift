@@ -1,5 +1,5 @@
 import Foundation
-@testable import RepoPrompt
+@testable import RepoPromptApp
 import XCTest
 
 final class AgentRunCoordinatorWorktreePolicyTests: XCTestCase {
@@ -26,6 +26,17 @@ final class AgentRunCoordinatorWorktreePolicyTests: XCTestCase {
             ),
             .allow
         )
+    }
+
+    func testCoordinatorReadOnlyConstraintDoesNotHideLaterMutableIntent() {
+        let messages = [
+            "Investigate read-only, then implement the fix.",
+            "Do not edit the docs; implement the fix."
+        ]
+
+        for message in messages {
+            XCTAssertRequiresWorktree(decision(message: message))
+        }
     }
 
     func testCoordinatorInvestigationAllowsWithoutWorktree() {

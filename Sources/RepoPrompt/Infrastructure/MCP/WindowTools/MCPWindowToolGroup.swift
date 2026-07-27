@@ -12,6 +12,7 @@ enum MCPWindowToolGroup: CaseIterable, Hashable {
     case askUser
     case agentControl
     case agentSessionControl
+    case history
 
     var orderedToolNames: [String] {
         switch self {
@@ -61,6 +62,8 @@ enum MCPWindowToolGroup: CaseIterable, Hashable {
                 MCPWindowToolName.setStatus,
                 MCPWindowToolName.waitForNextInstruction
             ]
+        case .history:
+            [MCPWindowToolName.history]
         }
     }
 

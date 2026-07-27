@@ -1,4 +1,4 @@
-@testable import RepoPrompt
+@testable import RepoPromptApp
 import XCTest
 
 final class CoordinatorFollowThroughStateTests: XCTestCase {
@@ -1535,6 +1535,7 @@ final class CoordinatorFollowThroughStateTests: XCTestCase {
             [
                 "approved the Mission plan",
                 "requested plan revision",
+                "kept the current Mission plan",
                 "stopped the Mission",
                 "continued past a step check-in",
                 "answered a child question",

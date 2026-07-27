@@ -85,6 +85,7 @@ enum AgentRunCoordinatorMissionPlanPolicy {
             if node.executionPolicy == .planCritique {
                 return usesCreatedWorktree
                     && normalized(requestedModelID) == "design"
+                    && normalized(requestedWorkflowID) == nil
                     && normalized(requestedWorkflowName) == nil
                     && node.workflowHint == nil
             }
