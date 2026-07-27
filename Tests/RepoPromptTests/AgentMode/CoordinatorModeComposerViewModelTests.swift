@@ -4589,6 +4589,94 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         )
     }
 
+    func testRevisionProposalActionRetriesDeliveryWithoutDuplicatingDurableDecision() async throws {
+        let harness = await makeRevisionProposalPersistenceHarness()
+        harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }
+        _ = try await harness.coordinatorModeViewModel.appendRevisionProposal(
+            coordinatorSessionID: harness.coordinatorID,
+            request: harness.request
+        )
+        let proposal = try XCTUnwrap(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.pendingRevisionProposal
+        )
+        let checkpoint = CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+            coordinatorSessionID: harness.coordinatorID,
+            proposal: proposal
+        )
+        var deliveryAttempts = 0
+        var submittedResolutionIDs: [UUID?] = []
+        harness.agentModeViewModel.test_setRevisionDraftingDirectiveSubmitter { submission in
+            deliveryAttempts += 1
+            submittedResolutionIDs.append(submission.acceptedRevisionDraftingResolutionID)
+            if deliveryAttempts == 1 {
+                return .blocked(message: "Provider rejected the directive before accepting delivery.")
+            }
+            return .submitted
+        }
+
+        let first = await harness.coordinatorModeViewModel.submitRevisionProposalAction(
+            coordinatorSessionID: harness.coordinatorID,
+            action: .revisePlan,
+            proposalID: proposal.id,
+            expectedContractFingerprint: proposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: checkpoint
+        )
+
+        guard case let .rejected(message) = first else {
+            return XCTFail("Expected the operation to report the unconfirmed delivery.")
+        }
+        XCTAssertTrue(message.contains("revision decision is durable"))
+        let durablePlan = try XCTUnwrap(harness.session.coordinatorFollowThroughState?.missionPlan)
+        let durableResolution = try XCTUnwrap(durablePlan.latestAcceptedRevisionLineage?.resolution)
+        XCTAssertEqual(deliveryAttempts, 1)
+        XCTAssertEqual(durablePlan.revisionProposalResolutions.count, 1)
+        let durableDecisionCount = durablePlan.decisions.count
+        XCTAssertEqual(
+            harness.coordinatorModeViewModel.revisionDraftingRetryResolutionID,
+            durableResolution.id
+        )
+
+        let retry = await harness.coordinatorModeViewModel.submitRevisionProposalAction(
+            coordinatorSessionID: harness.coordinatorID,
+            action: .revisePlan,
+            proposalID: proposal.id,
+            expectedContractFingerprint: proposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: checkpoint
+        )
+
+        XCTAssertEqual(retry, .accepted)
+        XCTAssertEqual(deliveryAttempts, 2)
+        XCTAssertEqual(submittedResolutionIDs, [durableResolution.id, durableResolution.id])
+        XCTAssertNil(harness.coordinatorModeViewModel.revisionDraftingRetryResolutionID)
+
+        let deliveredDirective = CoordinatorModeViewModel.revisionDraftingDirective(
+            proposal: proposal,
+            resolution: durableResolution
+        )
+        harness.session.appendItem(.user(
+            deliveredDirective,
+            sequenceIndex: harness.session.nextSequenceIndex
+        ))
+        let idempotentRetry = await harness.coordinatorModeViewModel.submitRevisionProposalAction(
+            coordinatorSessionID: harness.coordinatorID,
+            action: .revisePlan,
+            proposalID: proposal.id,
+            expectedContractFingerprint: proposal.baseContractFingerprint,
+            expectedCheckpointInstanceID: checkpoint
+        )
+
+        XCTAssertEqual(idempotentRetry, .accepted)
+        XCTAssertEqual(deliveryAttempts, 2)
+        XCTAssertEqual(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.revisionProposalResolutions.count,
+            1
+        )
+        XCTAssertEqual(
+            harness.session.coordinatorFollowThroughState?.missionPlan?.decisions.count,
+            durableDecisionCount
+        )
+    }
+
     func testRevisionProposalActionResolvesLiveIdentityAndRejectsStaleCheckpoint() async throws {
         let harness = await makeRevisionProposalPersistenceHarness()
         harness.agentModeViewModel.test_setRevisionProposalPersistenceBarrier { _, _ in true }

@@ -3580,7 +3580,12 @@ extension AgentModeViewModel {
             guard let self else {
                 return .rejected(message: "Coordinator composer is unavailable.")
             }
-            switch await submitCoordinatorDirectiveToAgentMode(submission) {
+            let result = if submission.acceptedRevisionDraftingResolutionID != nil {
+                await submitTrustedRevisionDraftingDirectiveToAgentMode(submission)
+            } else {
+                await submitCoordinatorDirectiveToAgentMode(submission)
+            }
+            switch result {
             case .submitted:
                 return .accepted
             case let .blocked(message):
@@ -3788,6 +3793,41 @@ extension AgentModeViewModel {
         switch runState {
         case .running: false
         case .idle, .waitingForUser, .waitingForQuestion, .waitingForApproval, .completed, .cancelled, .failed: true
+        }
+    }
+
+    @MainActor
+    private func submitTrustedRevisionDraftingDirectiveToAgentMode(
+        _ submission: CoordinatorDirectiveSubmission
+    ) async -> UserTurnSubmissionResult {
+        guard let coordinatorSessionID = submission.coordinatorSessionID,
+              let expectedResolutionID = submission.acceptedRevisionDraftingResolutionID,
+              let session = sessions.values.first(where: {
+                  $0.activeAgentSessionID == coordinatorSessionID && $0.isCoordinatorRuntime
+              }),
+              session.coordinatorFollowThroughState?
+              .missionPlan?
+              .acceptedRevisionDraftingResolution?
+              .id == expectedResolutionID
+        else {
+            return .blocked(message: CoordinatorMissionRevisionProposalPause.heldReason)
+        }
+        #if DEBUG
+            if let test_revisionDraftingDirectiveSubmitter {
+                return await test_revisionDraftingDirectiveSubmitter(submission)
+            }
+        #endif
+        do {
+            _ = try await mcpDispatchInstruction(
+                sessionID: coordinatorSessionID,
+                text: submission.providerText,
+                allowStartingRun: true
+            )
+            return .submitted
+        } catch {
+            return .blocked(
+                message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            )
         }
     }
 
@@ -4430,79 +4470,99 @@ extension AgentModeViewModel {
         let session = match.value
         var state = session.coordinatorFollowThroughState ?? CoordinatorFollowThroughState()
         let result = try state.resolveRevisionProposalTransaction(request)
-        if result.disposition == .existingResolutionRetry,
-           state.missionPlan?.revisionProposalDurabilityHold == nil
+        let isDurableResolutionRetry = result.disposition == .existingResolutionRetry
+            && state.missionPlan?.revisionProposalDurabilityHold == nil
+        if !isDurableResolutionRetry {
+            guard let expectedPlan = state.missionPlan,
+                  expectedPlan.revisionProposalDurabilityHold?.transactionID == result.resolutionID
+            else {
+                throw MCPError.invalidParams("Coordinator Mission revision proposal resolution did not install its durability hold.")
+            }
+            persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
+            let minimumGeneration = session.saveRequestGeneration
+            guard await persistRevisionProposal(tabID: tabID, minimumGeneration: minimumGeneration) else {
+                throw MCPError.invalidParams("Coordinator Mission persistence did not durably save the revision proposal resolution; authority remains held and the action is retryable.")
+            }
+            guard sessions[tabID] === session,
+                  session.coordinatorFollowThroughState?.missionPlan == expectedPlan,
+                  expectedPlan.revisionProposalDurabilityHold?.transactionID == result.resolutionID,
+                  !expectedPlan.status.isTerminal
+            else {
+                throw MCPError.invalidParams("Coordinator Mission revision proposal resolution changed before durable persistence completed; authority remains held.")
+            }
+            state = try await clearAndPersistRevisionProposalDurabilityHold(
+                in: session.coordinatorFollowThroughState ?? state,
+                transactionID: result.resolutionID,
+                tabID: tabID,
+                session: session
+            )
+            clearAcceptedCoordinatorPostApprovalContinuationReceiptsIfSafelyInvalidated(
+                coordinatorSessionID: request.coordinatorSessionID,
+                state: state
+            )
+        }
+
+        guard request.action == .revisePlan else {
+            return result
+        }
+        guard let lineage = state.missionPlan?.acceptedRevisionLineage(
+            resolutionID: result.resolutionID
+        ) else {
+            throw MCPError.invalidParams(
+                "Durable revision proposal lineage is unavailable for drafting."
+            )
+        }
+        if isDurableResolutionRetry,
+           revisionDraftingDirectiveWasSubmitted(
+               in: session,
+               resolutionID: lineage.resolution.id,
+               plan: state.missionPlan
+           )
         {
             return result
         }
-        guard let expectedPlan = state.missionPlan,
-              expectedPlan.revisionProposalDurabilityHold?.transactionID == result.resolutionID
-        else {
-            throw MCPError.invalidParams("Coordinator Mission revision proposal resolution did not install its durability hold.")
-        }
-        persistCoordinatorFollowThroughState(state, tabID: tabID, session: session)
-        let minimumGeneration = session.saveRequestGeneration
-        guard await persistRevisionProposal(tabID: tabID, minimumGeneration: minimumGeneration) else {
-            throw MCPError.invalidParams("Coordinator Mission persistence did not durably save the revision proposal resolution; authority remains held and the action is retryable.")
-        }
-        guard sessions[tabID] === session,
-              session.coordinatorFollowThroughState?.missionPlan == expectedPlan,
-              expectedPlan.revisionProposalDurabilityHold?.transactionID == result.resolutionID,
-              !expectedPlan.status.isTerminal
-        else {
-            throw MCPError.invalidParams("Coordinator Mission revision proposal resolution changed before durable persistence completed; authority remains held.")
-        }
-        state = try await clearAndPersistRevisionProposalDurabilityHold(
-            in: session.coordinatorFollowThroughState ?? state,
-            transactionID: result.resolutionID,
-            tabID: tabID,
-            session: session
+        let directive = CoordinatorModeViewModel.revisionDraftingDirective(
+            proposal: lineage.proposal,
+            resolution: lineage.resolution
         )
-        clearAcceptedCoordinatorPostApprovalContinuationReceiptsIfSafelyInvalidated(
+        let submission = CoordinatorDirectiveSubmission(
+            visibleText: directive,
+            providerText: directive,
+            missionTemplate: nil,
+            missionPolicySnapshot: nil,
             coordinatorSessionID: request.coordinatorSessionID,
-            state: state
+            coordinatorModelID: nil,
+            forceNewRuntime: false,
+            acceptedRevisionDraftingResolutionID: lineage.resolution.id
         )
-
-        if request.action == .revisePlan {
-            guard let lineage = state.missionPlan?.acceptedRevisionLineage(
-                resolutionID: result.resolutionID
+        #if DEBUG
+            test_revisionDraftingDirectiveWillSubmit?(directive, lineage.resolution.id)
+        #endif
+        let submissionResult = await submitTrustedRevisionDraftingDirectiveToAgentMode(submission)
+        guard case .submitted = submissionResult else {
+            throw MCPError.invalidParams(
+                "The revision decision is durable, but the trusted drafting directive could not be submitted."
             )
-            else {
-                throw MCPError.invalidParams(
-                    "Durable revision proposal lineage is unavailable for drafting."
-                )
-            }
-            let directive = CoordinatorModeViewModel.revisionDraftingDirective(
-                proposal: lineage.proposal,
-                resolution: lineage.resolution
-            )
-            let submission = CoordinatorDirectiveSubmission(
-                visibleText: directive,
-                providerText: directive,
-                missionTemplate: nil,
-                missionPolicySnapshot: nil,
-                coordinatorSessionID: request.coordinatorSessionID,
-                coordinatorModelID: nil,
-                forceNewRuntime: false,
-                acceptedRevisionDraftingResolutionID: lineage.resolution.id
-            )
-            #if DEBUG
-                test_revisionDraftingDirectiveWillSubmit?(directive, lineage.resolution.id)
-                let submissionResult = if let test_revisionDraftingDirectiveSubmitter {
-                    await test_revisionDraftingDirectiveSubmitter(submission)
-                } else {
-                    await submitCoordinatorDirectiveToAgentMode(submission)
-                }
-            #else
-                let submissionResult = await submitCoordinatorDirectiveToAgentMode(submission)
-            #endif
-            guard case .submitted = submissionResult else {
-                throw MCPError.invalidParams(
-                    "The revision decision is durable, but the trusted drafting directive could not be submitted."
-                )
-            }
         }
         return result
+    }
+
+    @MainActor
+    private func revisionDraftingDirectiveWasSubmitted(
+        in session: TabSession,
+        resolutionID: UUID,
+        plan: CoordinatorMissionPlan?
+    ) -> Bool {
+        if plan?.approvalState == .awaitingApproval,
+           plan?.latestAcceptedRevisionLineage?.resolution.id == resolutionID
+        {
+            return true
+        }
+        return session.items.contains { item in
+            item.kind == .user
+                && item.text.contains("<coordinator_revision_drafting>")
+                && item.text.contains(resolutionID.uuidString)
+        }
     }
 
     @MainActor
