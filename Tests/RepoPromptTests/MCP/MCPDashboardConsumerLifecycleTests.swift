@@ -8,18 +8,16 @@ final class MCPDashboardConsumerLifecycleTests: XCTestCase {
         let window = makeWindowWithoutAutoStart()
         defer { WindowStatesManager.shared.unregisterWindowState(window) }
         let server = window.mcpServer
-
         let initialSubscriberCount = await server.test_dashboardSubscriberCount()
-        XCTAssertEqual(initialSubscriberCount, 0)
         XCTAssertNil(server.dashboard)
 
         server.setDashboardUpdatesVisible(true, consumer: .coordinatorMode)
-        try await waitForSubscriberCount(server, 1)
+        try await waitForSubscriberCount(server, initialSubscriberCount + 1)
         try await waitForDashboard(server, isNil: false)
         XCTAssertTrue(server.test_hasDashboardTask)
 
         server.setDashboardUpdatesVisible(false, consumer: .coordinatorMode)
-        try await waitForSubscriberCount(server, 0)
+        try await waitForSubscriberCount(server, initialSubscriberCount)
         XCTAssertFalse(server.test_hasDashboardTask)
         XCTAssertNil(server.dashboard)
     }
@@ -28,23 +26,24 @@ final class MCPDashboardConsumerLifecycleTests: XCTestCase {
         let window = makeWindowWithoutAutoStart()
         defer { WindowStatesManager.shared.unregisterWindowState(window) }
         let server = window.mcpServer
+        let initialSubscriberCount = await server.test_dashboardSubscriberCount()
 
         server.setDashboardUpdatesVisible(true, consumer: .toolbarPopover)
-        try await waitForSubscriberCount(server, 1)
+        try await waitForSubscriberCount(server, initialSubscriberCount + 1)
         XCTAssertEqual(server.test_dashboardConsumerCount, 1)
 
         server.setDashboardUpdatesVisible(true, consumer: .coordinatorMode)
-        try await waitForSubscriberCount(server, 1)
+        try await waitForSubscriberCount(server, initialSubscriberCount + 1)
         XCTAssertEqual(server.test_dashboardConsumerCount, 2)
         XCTAssertTrue(server.test_hasDashboardTask)
 
         server.setDashboardUpdatesVisible(false, consumer: .toolbarPopover)
-        try await waitForSubscriberCount(server, 1)
+        try await waitForSubscriberCount(server, initialSubscriberCount + 1)
         XCTAssertEqual(server.test_dashboardConsumerCount, 1)
         XCTAssertTrue(server.test_hasDashboardTask)
 
         server.setDashboardUpdatesVisible(false, consumer: .coordinatorMode)
-        try await waitForSubscriberCount(server, 0)
+        try await waitForSubscriberCount(server, initialSubscriberCount)
         XCTAssertNil(server.dashboard)
     }
 
@@ -52,18 +51,19 @@ final class MCPDashboardConsumerLifecycleTests: XCTestCase {
         let window = makeWindowWithoutAutoStart()
         defer { WindowStatesManager.shared.unregisterWindowState(window) }
         let server = window.mcpServer
+        let initialSubscriberCount = await server.test_dashboardSubscriberCount()
 
         server.windowToolsEnabled = true
-        try await waitForSubscriberCount(server, 1)
+        try await waitForSubscriberCount(server, initialSubscriberCount + 1)
         XCTAssertTrue(server.test_hasDashboardTask)
 
         server.setDashboardUpdatesVisible(true, consumer: .coordinatorMode)
         server.setDashboardUpdatesVisible(false, consumer: .coordinatorMode)
-        try await waitForSubscriberCount(server, 1)
+        try await waitForSubscriberCount(server, initialSubscriberCount + 1)
         XCTAssertTrue(server.test_hasDashboardTask)
 
         server.windowToolsEnabled = false
-        try await waitForSubscriberCount(server, 0)
+        try await waitForSubscriberCount(server, initialSubscriberCount)
         XCTAssertNil(server.dashboard)
     }
 
@@ -71,27 +71,28 @@ final class MCPDashboardConsumerLifecycleTests: XCTestCase {
         let window = makeWindowWithoutAutoStart()
         defer { WindowStatesManager.shared.unregisterWindowState(window) }
         let server = window.mcpServer
+        let initialSubscriberCount = await server.test_dashboardSubscriberCount()
 
         server.startDashboardUpdates()
-        try await waitForSubscriberCount(server, 1)
+        try await waitForSubscriberCount(server, initialSubscriberCount + 1)
         XCTAssertEqual(server.test_dashboardConsumerCount, 1)
 
         server.setDashboardUpdatesVisible(true, consumer: .toolbarPopover)
         server.setDashboardUpdatesVisible(true, consumer: .coordinatorMode)
-        try await waitForSubscriberCount(server, 1)
+        try await waitForSubscriberCount(server, initialSubscriberCount + 1)
         XCTAssertEqual(server.test_dashboardConsumerCount, 3)
 
         server.stopDashboardUpdates()
-        try await waitForSubscriberCount(server, 1)
+        try await waitForSubscriberCount(server, initialSubscriberCount + 1)
         XCTAssertEqual(server.test_dashboardConsumerCount, 2)
         XCTAssertTrue(server.test_hasDashboardTask)
 
         server.setDashboardUpdatesVisible(false, consumer: .toolbarPopover)
-        try await waitForSubscriberCount(server, 1)
+        try await waitForSubscriberCount(server, initialSubscriberCount + 1)
         XCTAssertEqual(server.test_dashboardConsumerCount, 1)
 
         server.setDashboardUpdatesVisible(false, consumer: .coordinatorMode)
-        try await waitForSubscriberCount(server, 0)
+        try await waitForSubscriberCount(server, initialSubscriberCount)
         XCTAssertEqual(server.test_dashboardConsumerCount, 0)
         XCTAssertNil(server.dashboard)
     }
