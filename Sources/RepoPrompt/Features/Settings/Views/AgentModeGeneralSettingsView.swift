@@ -196,7 +196,6 @@ struct AgentModeGeneralSettingsView: View {
 
                 TextKitView(
                     text: $handoffInstructionsDraft,
-                    isSpellCheckEnabled: true,
                     wrapLines: true,
                     externalUpdateTick: handoffInstructionsExternalUpdateTick
                 )
