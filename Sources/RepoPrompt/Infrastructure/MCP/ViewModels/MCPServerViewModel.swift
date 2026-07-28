@@ -2192,6 +2192,7 @@ final class MCPServerViewModel: ObservableObject {
     func wakeAgentRunWaitersOwnedByActiveRun(
         runID: UUID,
         source: String,
+        steeringMessage: String? = nil,
         publicationForSessionID: (UUID) -> (snapshot: AgentRunMCPSnapshot, cursor: AgentRunSessionStore.WaitCursor)?
     ) async {
         let sessionIDs = Set(childAgentRunWaitCountsByParentRunID[runID]?.keys.map(\.self) ?? [])
@@ -2208,7 +2209,8 @@ final class MCPServerViewModel: ObservableObject {
             await AgentRunSessionStore.wakeCurrentWaiters(
                 publication.snapshot,
                 cursor: publication.cursor,
-                reason: .steeringRequested
+                reason: .steeringRequested,
+                steeringMessage: steeringMessage
             )
         }
         await Task.yield()
@@ -2219,6 +2221,7 @@ final class MCPServerViewModel: ObservableObject {
     func wakeAndDrainAgentRunWaitersOwnedByActiveRun(
         runID: UUID,
         source: String,
+        steeringMessage: String? = nil,
         timeoutSeconds: TimeInterval,
         publicationForSessionID: (UUID) -> (snapshot: AgentRunMCPSnapshot, cursor: AgentRunSessionStore.WaitCursor)?
     ) async -> Bool {
@@ -2232,6 +2235,7 @@ final class MCPServerViewModel: ObservableObject {
             await wakeAgentRunWaitersOwnedByActiveRun(
                 runID: runID,
                 source: source,
+                steeringMessage: steeringMessage,
                 publicationForSessionID: publicationForSessionID
             )
 

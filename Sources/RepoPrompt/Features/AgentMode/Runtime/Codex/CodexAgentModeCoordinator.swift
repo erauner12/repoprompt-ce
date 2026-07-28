@@ -373,7 +373,7 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
         authRecovery: any CodexManagedAuthRecovering = CodexManagedAuthRecoveryService.shared,
         activeToolQuery: @escaping ActiveToolQuery = { _ in false },
         activeAgentRunWaitQuery: @escaping ActiveAgentRunWaitQuery = { _ in false },
-        activeAgentRunWaitDrain: @escaping ActiveAgentRunWaitDrain = { _, _ in true },
+        activeAgentRunWaitDrain: @escaping ActiveAgentRunWaitDrain = { _, _, _ in true },
         leaseRoutingTimeoutMs: Int = 10000,
         idleShutdownDelayNanos: UInt64 = 300_000_000_000,
         stallWatchdogPollIntervalNanos: UInt64 = 5_000_000_000,
@@ -5334,7 +5334,13 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
         let activeSendRunID = wasRunAlreadyActive ? session.runID : nil
         let shouldDrainActiveAgentRunWaits = fallbackContext?.origin.isMCP != true
         if let activeSendRunID, shouldDrainActiveAgentRunWaits {
-            let drained = await activeAgentRunWaitDrain(activeSendRunID, "codex-native-active-send")
+            let normalizedDraftText = fallbackContext?.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let steeringMessage = normalizedDraftText?.isEmpty == false ? normalizedDraftText : nil
+            let drained = await activeAgentRunWaitDrain(
+                activeSendRunID,
+                "codex-native-active-send",
+                steeringMessage
+            )
             if Task.isCancelled {
                 viewModel?.finalizeAttachmentsForTurn(
                     for: session,

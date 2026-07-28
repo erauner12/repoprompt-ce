@@ -1992,10 +1992,14 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
                 snapshot: .active(activeFlags: []),
                 onSendUserTurn: { ordering.recordSend() }
             )
-            let viewModel = makeViewModel(controller: controller) { runID, source in
+            let viewModel = makeViewModel(controller: controller) { runID, source, steeringMessage in
                 XCTAssertEqual(runID, harness.parentRunID)
                 XCTAssertEqual(source, "codex-native-active-send")
-                let drained = await harness.drain(source: source)
+                XCTAssertEqual(steeringMessage, "hello normalized")
+                let drained = await harness.drain(
+                    source: source,
+                    steeringMessage: steeringMessage
+                )
                 ordering.recordDrainCompletion(
                     succeeded: drained,
                     activeScopeCount: harness.activeScopeCount()
@@ -2009,10 +2013,21 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
             )
             session.codexRoutingObservedTurnID = "routing-hint-only"
 
+            let fallbackContext = AgentModeViewModel.TabSession.CodexFallbackSubmissionContext(
+                queueID: UUID(),
+                providerText: "workflow wrapped: hello normalized",
+                images: [],
+                taggedFileAttachments: [],
+                draftText: "  hello normalized\n",
+                optimisticUserItemID: nil,
+                origin: .manual,
+                dispatchTicket: nil
+            )
             let outcome = await viewModel.test_codexCoordinator.sendCodexNativeMessage(
                 session: session,
-                text: "hello",
-                attachments: []
+                text: fallbackContext.providerText,
+                attachments: [],
+                fallbackContext: fallbackContext
             )
             let interruptedValue = try await waitTask.value
             let interruptedObject = try XCTUnwrap(interruptedValue.objectValue)
@@ -2026,6 +2041,10 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
             XCTAssertEqual(
                 interruptedObject["wait"]?.objectValue?["result"]?.stringValue,
                 "interrupted_by_steering"
+            )
+            XCTAssertEqual(
+                interruptedObject["wait"]?.objectValue?["steering_message"]?.stringValue,
+                "hello normalized"
             )
             XCTAssertEqual(controller.startUserTurnCountSync(), 0)
             XCTAssertEqual(controller.steerUserTurnIDsSync(), ["turn"])
@@ -2042,7 +2061,7 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
 
     func testActiveCodexNativeSendRejectsBeforeDispatchWhenAgentRunDrainFails() async {
         let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
-        let viewModel = makeViewModel(controller: controller) { _, _ in false }
+        let viewModel = makeViewModel(controller: controller) { _, _, _ in false }
         let session = preparedCodexSession(in: viewModel, controller: controller)
 
         let outcome = await viewModel.test_codexCoordinator.sendCodexNativeMessage(
@@ -2065,7 +2084,7 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
     func testActiveCodexNativeSendRejectsBeforeDispatchWhenActiveRunChangesDuringDrain() async {
         let drainGate = LivenessSnapshotReadGate()
         let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
-        let viewModel = makeViewModel(controller: controller) { _, _ in
+        let viewModel = makeViewModel(controller: controller) { _, _, _ in
             await drainGate.wait()
             return true
         }
@@ -2097,7 +2116,7 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
     func testComposerActiveSendDrainRejectionRemovesOnlyOptimisticBubbleAndRestoresFullComposerState() async throws {
         let drainGate = LivenessSnapshotReadGate()
         let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
-        let viewModel = makeViewModel(controller: controller) { _, _ in
+        let viewModel = makeViewModel(controller: controller) { _, _, _ in
             await drainGate.wait()
             return false
         }
@@ -2228,7 +2247,7 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
     func testComposerActiveSendDrainRejectionDoesNotOverwriteNewerComposerChoices() async throws {
         let drainGate = LivenessSnapshotReadGate()
         let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
-        let viewModel = makeViewModel(controller: controller) { _, _ in
+        let viewModel = makeViewModel(controller: controller) { _, _, _ in
             await drainGate.wait()
             return false
         }
@@ -2446,7 +2465,7 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
     func testBackToBackComposerActiveSendDrainRejectionsRestoreEachDraftExactlyOnce() async throws {
         let drainGate = LivenessSnapshotReadGate()
         let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
-        let viewModel = makeViewModel(controller: controller) { _, _ in
+        let viewModel = makeViewModel(controller: controller) { _, _, _ in
             await drainGate.wait()
             return false
         }

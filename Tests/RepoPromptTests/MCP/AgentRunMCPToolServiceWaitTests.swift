@@ -29,10 +29,12 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
         }
         try await waitForAgentRunSessionStoreWaiter(registration: fixture.registration)
 
+        let steeringMessage = "Use the accepted steering text\nexactly once."
         await AgentRunSessionStore.wakeCurrentWaiters(
             fixture.runningSnapshot,
             cursor: fixture.cursor,
-            reason: .steeringRequested
+            reason: .steeringRequested,
+            steeringMessage: steeringMessage
         )
 
         let interruptedValue = try await firstWait.value
@@ -44,8 +46,16 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
             AgentRunSessionStore.WakeReason.steeringRequested.rawValue
         )
         XCTAssertEqual(interruptedWait["result"]?.stringValue, "interrupted_by_steering")
+        XCTAssertEqual(interruptedWait["steering_message"]?.stringValue, steeringMessage)
         XCTAssertTrue(interruptedWait["instruction"]?.stringValue?.contains("agent_run.wait") == true)
+        XCTAssertNil(interruptedMeta["steering_message"])
         XCTAssertNil(interruptedObject["assistant_text"])
+        let formatted = try Self.onlyText(ToolOutputFormatter.formatAgentRun(
+            args: ["op": .string("wait")],
+            value: interruptedValue
+        ))
+        XCTAssertTrue(formatted.contains("**Steering message**\n\n\(steeringMessage)"), formatted)
+        XCTAssertEqual(formatted.components(separatedBy: steeringMessage).count - 1, 1)
         let registrationRemainsActive = await AgentRunSessionStore.hasActiveRegistration(
             sessionID: fixture.sessionID
         )
@@ -80,6 +90,7 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
         XCTAssertEqual(resumedValue.objectValue?["status"]?.stringValue, AgentRunMCPSnapshot.Status.completed.rawValue)
         XCTAssertEqual(resumedValue.objectValue?["run_id"]?.stringValue, terminalRunID.uuidString)
         XCTAssertNil(resumedValue.objectValue?["_meta"]?.objectValue?["wake_reason"])
+        XCTAssertNil(resumedValue.objectValue?["wait"]?.objectValue?["steering_message"])
         let allCompletions = await recorder.completions()
         XCTAssertEqual(allCompletions.count, 2)
         XCTAssertEqual(allCompletions[1].reason, .snapshotReady)
@@ -158,10 +169,12 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
         try await waitForAgentRunSessionStoreWaiter(registration: first.registration)
         try await waitForAgentRunSessionStoreWaiter(registration: second.registration)
 
+        let steeringMessage = "multi-wait steering owner"
         await AgentRunSessionStore.wakeCurrentWaiters(
             second.runningSnapshot,
             cursor: second.cursor,
-            reason: .steeringRequested
+            reason: .steeringRequested,
+            steeringMessage: steeringMessage
         )
 
         let value = try await waitTask.value
@@ -174,6 +187,7 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
         )
         XCTAssertEqual(object["session_id"]?.stringValue, second.sessionID.uuidString)
         XCTAssertEqual(wait["result"]?.stringValue, "interrupted_by_steering")
+        XCTAssertEqual(wait["steering_message"]?.stringValue, steeringMessage)
         XCTAssertNil(wait["winner_session_id"]?.stringValue)
         XCTAssertEqual(wait["interrupted_session_id"]?.stringValue, second.sessionID.uuidString)
         XCTAssertEqual(
@@ -186,6 +200,10 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
         let secondRegistrationRemainsActive = await AgentRunSessionStore.hasActiveRegistration(
             sessionID: second.sessionID
         )
+        let snapshots = try XCTUnwrap(object["snapshots"]?.arrayValue)
+        XCTAssertTrue(snapshots.allSatisfy {
+            $0.objectValue?["wait"]?.objectValue?["steering_message"] == nil
+        })
         XCTAssertTrue(firstRegistrationRemainsActive)
         XCTAssertTrue(secondRegistrationRemainsActive)
 
@@ -433,6 +451,15 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
         XCTAssertEqual(completions[0].reason, .startupPending)
         XCTAssertEqual(completions[0].result, "startup_pending")
         XCTAssertEqual(completions[0].pendingSessionIDs, [fixture.sessionID])
+    }
+
+    private static func onlyText(_ blocks: [MCP.Tool.Content]) throws -> String {
+        let first = try XCTUnwrap(blocks.first)
+        guard case let .text(text, _, _) = first else {
+            XCTFail("Expected text content")
+            return ""
+        }
+        return text
     }
 
     private func makeWindow() -> WindowState {

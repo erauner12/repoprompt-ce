@@ -13,7 +13,11 @@ final class AgentRunWaitDrainIntegrationTests: XCTestCase {
             XCTAssertTrue(harness.server.hasActiveChildAgentRunWaits(runID: harness.parentRunID))
             XCTAssertEqual(harness.activeScopeCount(), 1)
 
-            let drained = await harness.drain(source: "test-real-wait-scope-drain")
+            let steeringMessage = "real drain accepted steering"
+            let drained = await harness.drain(
+                source: "test-real-wait-scope-drain",
+                steeringMessage: steeringMessage
+            )
             XCTAssertTrue(drained)
 
             let interruptedValue = try await firstWait.value
@@ -22,6 +26,15 @@ final class AgentRunWaitDrainIntegrationTests: XCTestCase {
                 interruptedObject["wait"]?.objectValue?["result"]?.stringValue,
                 "interrupted_by_steering"
             )
+            XCTAssertEqual(
+                interruptedObject["wait"]?.objectValue?["steering_message"]?.stringValue,
+                steeringMessage
+            )
+            let formatted = try Self.onlyText(ToolOutputFormatter.formatAgentRun(
+                args: ["op": .string("wait")],
+                value: interruptedValue
+            ))
+            XCTAssertEqual(formatted.components(separatedBy: steeringMessage).count - 1, 1)
             XCTAssertEqual(
                 interruptedObject["_meta"]?.objectValue?["wake_reason"]?.stringValue,
                 AgentRunSessionStore.WakeReason.steeringRequested.rawValue
@@ -54,12 +67,22 @@ final class AgentRunWaitDrainIntegrationTests: XCTestCase {
             try await harness.publishTerminal()
             let terminalValue = try await secondWait.value
             XCTAssertEqual(terminalValue.objectValue?["status"]?.stringValue, AgentRunMCPSnapshot.Status.completed.rawValue)
+            XCTAssertNil(terminalValue.objectValue?["wait"]?.objectValue?["steering_message"])
             XCTAssertFalse(harness.server.hasActiveChildAgentRunWaits(runID: harness.parentRunID))
             XCTAssertEqual(harness.activeScopeCount(), 0)
             let allCompletions = await harness.completionRecorder.completions()
             XCTAssertEqual(allCompletions.count, 2)
             XCTAssertEqual(allCompletions.last?.reason, .snapshotReady)
         }
+    }
+
+    private static func onlyText(_ blocks: [MCP.Tool.Content]) throws -> String {
+        let first = try XCTUnwrap(blocks.first)
+        guard case let .text(text, _, _) = first else {
+            XCTFail("Expected text content")
+            return ""
+        }
+        return text
     }
 }
 
@@ -220,10 +243,11 @@ final class AgentRunWaitDrainTestHarness {
         throw AgentRunWaitDrainHarnessError.timedOutWaitingForBlockedScope
     }
 
-    func drain(source: String) async -> Bool {
+    func drain(source: String, steeringMessage: String? = nil) async -> Bool {
         await server.wakeAndDrainAgentRunWaitersOwnedByActiveRun(
             runID: parentRunID,
             source: source,
+            steeringMessage: steeringMessage,
             timeoutSeconds: 1
         ) { [fixture] sessionID in
             guard sessionID == fixture.sessionID else { return nil }
