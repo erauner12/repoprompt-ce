@@ -4,6 +4,36 @@ import Foundation
 import XCTest
 
 final class MCPBootstrapLeaseTests: XCTestCase {
+    @MainActor
+    func testAgentModeLeaseBuildsNamedPolicyContext() {
+        let tabID = UUID()
+        let runID = UUID()
+        let spec = MCPBootstrapLeaseSpec.agentMode(
+            tabID: tabID,
+            runID: runID,
+            gateID: UUID(),
+            windowID: 42,
+            agent: .codexExec,
+            taskLabelKind: .pair,
+            allowsAgentExternalControlTools: true
+        )
+
+        let context = spec.agentModePolicyContext
+        XCTAssertEqual(context?.clientName, AgentProviderKind.codexMCPClientID)
+        XCTAssertEqual(context?.windowID, 42)
+        XCTAssertEqual(context?.restrictedTools, AgentModeMCPToolPolicy.restrictedTools)
+        XCTAssertEqual(context?.oneShot, true)
+        XCTAssertEqual(context?.reason, AgentModeMCPPolicyInstaller.policyReason)
+        XCTAssertEqual(context?.ttl, AgentModeMCPPolicyInstaller.policyTTL)
+        XCTAssertEqual(context?.tabID, tabID)
+        XCTAssertEqual(context?.runID, runID)
+        XCTAssertEqual(context?.additionalTools, AgentModeMCPPolicyInstaller.additionalTools(for: .codexExec))
+        XCTAssertEqual(context?.purpose, .agentModeRun)
+        XCTAssertEqual(context?.taskLabelKind, .pair)
+        XCTAssertEqual(context?.allowsAgentExternalControlTools, true)
+        XCTAssertEqual(context?.requiresExpectedAgentPID, true)
+    }
+
     func testPIDOwnedSameClientLeasesReleaseBootstrapGateBeforeEitherRoutes() async throws {
         #if DEBUG
             let firstRunID = UUID()

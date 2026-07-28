@@ -22,7 +22,7 @@ final class MCPAgentRoleDefaultsServiceTests: XCTestCase {
 
         XCTAssertEqual(
             resolutions.map(\.role),
-            AgentModelCatalog.TaskLabelKind.allCases
+            AgentModelCatalog.TaskLabelKind.allCases.filter { !$0.requiresDedicatedLaunchPath }
         )
 
         XCTAssertEqual(resolutions[0].recommended.agent, .codexExec)

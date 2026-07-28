@@ -606,7 +606,7 @@ final class MCPServerViewModel: ObservableObject {
             endAgentRunWait: { [self] token, completion in
                 endAgentRunWaitScope(token, completion: completion)
             },
-            startRun: { [self] target, message, metadata, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, workflow, expectedParentSessionID, oracleReviewSource in
+            startRun: { [self] target, message, metadata, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, allowsAgentExternalControlTools, workflow, expectedParentSessionID, oracleReviewSource in
                 try await AgentExternalMCPRunStarter.startPreservingCallerBinding(
                     target: target,
                     message: message,
@@ -616,6 +616,7 @@ final class MCPServerViewModel: ObservableObject {
                     modelRaw: modelRaw,
                     reasoningEffortRaw: reasoningEffortRaw,
                     taskLabelKind: taskLabelKind,
+                    allowsAgentExternalControlTools: allowsAgentExternalControlTools,
                     workflow: workflow,
                     expectedParentSessionID: expectedParentSessionID,
                     oracleReviewSource: oracleReviewSource,
@@ -861,7 +862,7 @@ final class MCPServerViewModel: ObservableObject {
             endAgentRunWait: { [self] token, completion in
                 endAgentRunWaitScope(token, completion: completion)
             },
-            startRun: { [self] target, message, metadata, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, workflow, _, _ in
+            startRun: { [self] target, message, metadata, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, allowsAgentExternalControlTools, workflow, _, _ in
                 try await AgentExternalMCPRunStarter.startApplyingRequestBindingPolicy(
                     target: target,
                     message: message,
@@ -874,6 +875,7 @@ final class MCPServerViewModel: ObservableObject {
                     modelRaw: modelRaw,
                     reasoningEffortRaw: reasoningEffortRaw,
                     taskLabelKind: taskLabelKind,
+                    allowsAgentExternalControlTools: allowsAgentExternalControlTools,
                     workflow: workflow
                 )
             }
@@ -893,6 +895,22 @@ final class MCPServerViewModel: ObservableObject {
             },
             bindCurrentRequestToTab: { [self] tabID, metadata in
                 try await bindCurrentRequestToTabIfPossible(tabID: tabID, metadata: metadata)
+            }
+        )
+    }
+
+    private var coordinatorChatToolService: CoordinatorChatMCPToolService {
+        CoordinatorChatMCPToolService(
+            toolName: MCPWindowToolName.coordinatorChat,
+            requireTargetWindow: { [self] in try requireTargetWindow() },
+            captureRequestMetadata: { [self] in await captureRequestMetadata() },
+            resolveRuntimeCoordinatorSessionID: { [self] metadata in
+                guard metadata.isCoordinatorRuntime else { return nil }
+                let targetWindow = try? requireTargetWindow()
+                guard let sourceTabID = await resolveSpawnSourceTabIDForAgentSessionCreation(metadata: metadata) else {
+                    return nil
+                }
+                return targetWindow?.agentModeViewModel.mcpSpawnParentSessionID(sourceTabID: sourceTabID)
             }
         )
     }
@@ -932,6 +950,7 @@ final class MCPServerViewModel: ObservableObject {
     enum DashboardConsumer: Hashable {
         case toolbarPopover
         case statusView
+        case coordinatorMode
     }
 
     @MainActor
@@ -1086,6 +1105,10 @@ final class MCPServerViewModel: ObservableObject {
         executeAgentManage: { [weak self] args in
             guard let self else { throw MCPError.internalError("Window deallocated while executing agent_manage") }
             return try await agentManageToolService.execute(args: args)
+        },
+        executeCoordinatorChat: { [weak self] args in
+            guard let self else { throw MCPError.internalError("Window deallocated while executing coordinator_chat") }
+            return try await coordinatorChatToolService.execute(args: args)
         },
         requireTargetWindow: { [weak self] in
             guard let self else { throw MCPError.internalError("Window deallocated while resolving target window") }
@@ -2410,6 +2433,20 @@ final class MCPServerViewModel: ObservableObject {
         @MainActor
         func test_clearActiveToolSlot() {
             clearActiveToolSlot()
+        }
+
+        @MainActor
+        var test_hasDashboardTask: Bool {
+            dashboardTask != nil
+        }
+
+        @MainActor
+        var test_dashboardConsumerCount: Int {
+            dashboardConsumers.count
+        }
+
+        func test_dashboardSubscriberCount() async -> Int {
+            await service.test_dashboardSubscriberCount()
         }
     #endif
 

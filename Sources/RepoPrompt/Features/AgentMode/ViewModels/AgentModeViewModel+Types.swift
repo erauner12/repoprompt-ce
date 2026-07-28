@@ -244,6 +244,10 @@ extension AgentModeViewModel {
         /// The task label kind for this MCP-controlled run (e.g. explore, engineer).
         /// Used to customize tool advertisement and system prompts for role-specific behavior.
         let taskLabelKind: AgentModelCatalog.TaskLabelKind?
+        /// Whether this MCP-controlled run can use RepoPrompt's external agent control plane.
+        /// This is distinct from parent linkage: Coordinator-supervised workers may be parented
+        /// for observability while still receiving normal Agent Mode delegation tools.
+        let allowsAgentExternalControlTools: Bool
 
         func replacingRegistration(_ registration: AgentRunSessionStore.Registration) -> Self {
             Self(
@@ -258,7 +262,8 @@ extension AgentModeViewModel {
                 suppressUserNotifications: suppressUserNotifications,
                 forceAutoEditEnabled: forceAutoEditEnabled,
                 autoEditEnabledBeforeOverride: autoEditEnabledBeforeOverride,
-                taskLabelKind: taskLabelKind
+                taskLabelKind: taskLabelKind,
+                allowsAgentExternalControlTools: allowsAgentExternalControlTools
             )
         }
     }

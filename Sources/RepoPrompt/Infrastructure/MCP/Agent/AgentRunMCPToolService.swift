@@ -187,6 +187,7 @@ struct AgentRunMCPToolService {
         _ modelRaw: String?,
         _ reasoningEffortRaw: String?,
         _ taskLabelKind: AgentModelCatalog.TaskLabelKind?,
+        _ allowsAgentExternalControlTools: Bool,
         _ workflow: AgentWorkflowDefinition?,
         _ expectedParentSessionID: UUID?,
         _ oracleReviewSource: AgentRunOracleReviewSource?
@@ -315,7 +316,9 @@ struct AgentRunMCPToolService {
         if normalizedString(args["session_id"]) != nil {
             throw MCPError.invalidParams("agent_run.start always creates a new session. Use agent_run op=steer with session_id to continue an existing session.")
         }
+        let missionNodeID = try optionalUUID(args["mission_node_id"], name: "mission_node_id")
         let detach = parseBool(args["detach"]) ?? false
+        let coordinatorInternal = parseBool(args["coordinator_internal"]) ?? false
         let timeoutSeconds = try Self.resolvedStartTimeoutSeconds(args["timeout"])
 
         let metadata = await captureRequestMetadata()
@@ -366,6 +369,37 @@ struct AgentRunMCPToolService {
         if parentSourceTabID != nil, spawnParentSessionID == nil {
             throw MCPError.invalidParams("agent_run.start was routed from an Agent Mode run, but RepoPrompt could not resolve its parent Agent session. Refusing to create an unparented run; reconnect the agent MCP client or retry after the source session is active.")
         }
+        let isCoordinatorParent = agentModeVM.mcpIsCoordinatorRuntime(sessionID: spawnParentSessionID)
+        let coordinatorMissionPlan = agentModeVM.mcpCoordinatorMissionPlan(sessionID: spawnParentSessionID)
+        let coordinatorMissionPlanDecision = AgentRunCoordinatorMissionPlanPolicy.decision(
+            isCoordinatorParent: isCoordinatorParent,
+            missionPlan: coordinatorMissionPlan,
+            operation: .agentRunStart,
+            missionNodeID: missionNodeID,
+            requestedModelID: normalizedString(args["model_id"]),
+            requestedWorkflowID: workflow?.id,
+            requestedWorkflowName: workflow?.displayName,
+            usesCreatedWorktree: worktreeStartRequest.mode == .create,
+            durableApprovalAuthorityToken: agentModeVM.mcpCoordinatorDurableApprovalAuthorityToken(sessionID: spawnParentSessionID)
+        )
+        if case let .requireApprovedMissionPlan(reason) = coordinatorMissionPlanDecision {
+            throw MCPError.invalidParams(reason)
+        }
+        if case let .holdPendingRevisionProposal(reason) = coordinatorMissionPlanDecision {
+            throw MCPError.invalidParams(reason)
+        }
+        if case let .denyFlightCapReached(reason) = coordinatorMissionPlanDecision {
+            throw MCPError.invalidParams(reason)
+        }
+        let coordinatorWorktreeDecision = AgentRunCoordinatorWorktreePolicy.decision(
+            isCoordinatorParent: isCoordinatorParent,
+            message: message,
+            workflow: workflow,
+            hasExplicitWorktree: worktreeStartRequest.hasExplicitWorktreeArgs
+        )
+        if case let .requireExplicitWorktree(reason) = coordinatorWorktreeDecision {
+            throw MCPError.invalidParams(reason)
+        }
 
         // Freeze the source before model validation or target creation. Later selection/worktree
         // mutations must not alter the child run's delegated review packaging.
@@ -391,6 +425,9 @@ struct AgentRunMCPToolService {
             availability: targetWindow.apiSettingsViewModel.agentModeAvailabilityContext,
             workspaceID: workspace.id
         )
+        try Self.rejectDedicatedLaunchRoleIfNeeded(selection.taskLabelKind, operation: "agent_run.start")
+        let allowsAgentExternalControlTools = spawnParentSessionID == nil
+            || (isCoordinatorParent && selection.taskLabelKind != .explore)
 
         #if DEBUG
             if let rawToken = normalizedString(args["_worktree_startup_benchmark_token"]) {
@@ -436,6 +473,9 @@ struct AgentRunMCPToolService {
                 ? false
                 : effectiveParentWorktreeInheritance
         )
+        if coordinatorInternal {
+            await agentModeVM.mcpMarkCoordinatorInternalSession(tabID: target.tabID, isCoordinatorInternal: true)
+        }
         guard let targetSessionID = target.sessionID else {
             await agentModeVM.mcpDiscardSessionTarget(target)
             throw MCPError.internalError("agent_run.start target did not resolve a session ID.")
@@ -645,6 +685,7 @@ struct AgentRunMCPToolService {
                 selection.modelRaw,
                 nil,
                 selection.taskLabelKind,
+                allowsAgentExternalControlTools,
                 workflow,
                 spawnParentSessionID,
                 oracleLaunchSource.source
@@ -717,6 +758,14 @@ struct AgentRunMCPToolService {
             workflow: workflow,
             initialDelivery: outcome.delivery
         )
+    }
+
+    private static func rejectDedicatedLaunchRoleIfNeeded(
+        _ taskLabelKind: AgentModelCatalog.TaskLabelKind?,
+        operation: String
+    ) throws {
+        guard taskLabelKind?.requiresDedicatedLaunchPath == true else { return }
+        throw MCPError.invalidParams("\(operation) cannot launch model_id 'coordinator' as an ordinary Agent Mode session. Use the dedicated Coordinator runtime launch path so the Coordinator marker and policy context are installed.")
     }
 
     private func executeWait(args: [String: Value], forcePoll: Bool = false) async throws -> Value {
@@ -1112,6 +1161,12 @@ struct AgentRunMCPToolService {
         let interactionID = try requireUUID(args["interaction_id"], name: "interaction_id")
         let workflow = try resolveWorkflow(args: args)
         let payload = try parseResponsePayload(args: args)
+        if let redirectMessage = await agentModeVM.mcpCoordinatorChildInteractionRespondRedirectMessage(
+            sessionID: sessionID,
+            interactionID: interactionID
+        ) {
+            throw MCPError.invalidParams(redirectMessage)
+        }
         let dispatch = try await agentModeVM.mcpResolvePendingInteraction(
             sessionID: sessionID,
             interactionID: interactionID,
@@ -2543,6 +2598,14 @@ struct AgentRunMCPToolService {
 
     private func requireUUID(_ value: Value?, name: String) throws -> UUID {
         guard let raw = normalizedString(value), let uuid = UUID(uuidString: raw) else {
+            throw MCPError.invalidParams("\(name) must be a UUID string.")
+        }
+        return uuid
+    }
+
+    private func optionalUUID(_ value: Value?, name: String) throws -> UUID? {
+        guard let raw = normalizedString(value) else { return nil }
+        guard let uuid = UUID(uuidString: raw) else {
             throw MCPError.invalidParams("\(name) must be a UUID string.")
         }
         return uuid

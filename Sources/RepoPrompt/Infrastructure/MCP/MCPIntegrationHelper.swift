@@ -52,6 +52,7 @@ enum MCPIntegrationHelper {
         "oracle_chat_log",
         "history",
         "git",
+        "manage_worktree",
         "bind_context",
         "manage_workspaces",
         "context_builder",

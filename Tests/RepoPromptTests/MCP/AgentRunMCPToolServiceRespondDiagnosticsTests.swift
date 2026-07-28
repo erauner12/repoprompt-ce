@@ -176,7 +176,7 @@ final class AgentRunMCPToolServiceRespondDiagnosticsTests: XCTestCase {
                 resolveSpawnParentSourceTabID: { _ in nil },
                 resolveSpawnParentSessionID: { _, _ in nil },
                 withHeartbeat: { _, _, _, _, operation in try await operation() },
-                startRun: { _, _, _, _, _, _, _, _, _, _, _ in
+                startRun: { _, _, _, _, _, _, _, _, _, _, _, _ in
                     throw MCPError.internalError("startRun should not be used by respond diagnostics tests")
                 }
             )

@@ -265,6 +265,86 @@ final class AgentToolResultPersistencePolicyTests: XCTestCase {
         XCTAssertLessThanOrEqual(summary.resultJSON.utf8.count, AgentToolResultPersistencePolicy.maxPersistedToolSummaryBytes)
     }
 
+    func testManageWorktreeMergePreviewPersistsStructuredReviewPacket() throws {
+        let raw = jsonString([
+            "op": "preview",
+            "merge": [
+                "status": "preview",
+                "operation_id": "merge_demo",
+                "source": [
+                    "worktree_id": "wt_source",
+                    "repo_key": "repo",
+                    "path": "/tmp/source",
+                    "name": "source-demo",
+                    "branch": "feature/demo",
+                    "head": "abcdef1234567890",
+                    "short_head": "abcdef1",
+                    "is_main": false,
+                    "label": "source-demo"
+                ],
+                "target": [
+                    "worktree_id": "wt_target",
+                    "repo_key": "repo",
+                    "path": "/tmp/target",
+                    "name": "target-demo",
+                    "branch": "main",
+                    "head": "1234567890abcdef",
+                    "short_head": "1234567",
+                    "is_main": true,
+                    "label": "target-demo"
+                ],
+                "summary": [
+                    "commits": 1,
+                    "files": 2,
+                    "insertions": 3,
+                    "deletions": 1
+                ],
+                "preflight": [
+                    "blocked": false,
+                    "blockers": [],
+                    "conflict_prediction": [
+                        "status": "clean",
+                        "files": []
+                    ]
+                ],
+                "artifacts": [
+                    "snapshot_id": "snap",
+                    "snapshot_directory": "/tmp/preview",
+                    "manifest_path": "/tmp/preview/manifest.json",
+                    "map_path": "/tmp/preview/MAP.txt",
+                    "all_patch_path": "/tmp/preview/diff/all.patch",
+                    "sidecar_path": "/tmp/preview/merge_preview.json"
+                ],
+                "visualization": [
+                    "requested": true,
+                    "limit": 20,
+                    "text": "target\n  +-- merge preview",
+                    "lines": ["target", "  +-- merge preview"],
+                    "line_count": 2,
+                    "truncated": false
+                ],
+                "next_actions": ["Apply after approval: manage_worktree {\"op\":\"apply\"}"]
+            ]
+        ])
+
+        let summary = try XCTUnwrap(persistedSummary(toolName: "manage_worktree", rawResultJSON: raw))
+        let object = try decodedObject(summary.resultJSON)
+        let merge = try XCTUnwrap(object["merge"] as? [String: Any])
+        let dto = try XCTUnwrap(ToolJSON.decode(ToolResultDTOs.ManageWorktreeReplyDTO.self, from: summary.resultJSON))
+
+        XCTAssertTrue(summary.summaryOnly)
+        XCTAssertEqual(object["op"] as? String, "preview")
+        XCTAssertEqual(merge["operation_id"] as? String, "merge_demo")
+        XCTAssertNotNil(merge["artifacts"])
+        XCTAssertNotNil(merge["visualization"])
+        XCTAssertEqual(dto.merge?.operationID, "merge_demo")
+        XCTAssertEqual(dto.merge?.source?.label, "source-demo")
+        XCTAssertEqual(dto.merge?.target?.label, "target-demo")
+        XCTAssertNotNil(dto.merge?.artifacts)
+        XCTAssertNotNil(dto.merge?.visualization)
+        XCTAssertLessThanOrEqual(summary.resultJSON.utf8.count, AgentToolResultPersistencePolicy.maxPersistedToolSummaryBytes)
+    }
+
     func testCursorACPStructuredSummaryKeepsChatIDForAllowedOracleTools() throws {
         for toolName in ["ask_oracle", "oracle_send"] {
             let events = CursorACPEventNormalizer.normalize([

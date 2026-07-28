@@ -30,7 +30,11 @@ struct AgentModeSidebarSessionBuilder {
             let startMS = AgentModePerfDiagnostics.timestampMSIfEnabled()
         #endif
         let context = makeBuildContext()
-        let rows = linkedTabs.map { tab in
+        let visibleLinkedTabs = linkedTabs.filter { tab in
+            sessions[tab.id]?.isCoordinatorRuntime != true
+                && context.bestEntryByTabID[tab.id]?.isCoordinatorRuntime != true
+        }
+        let rows = visibleLinkedTabs.map { tab in
             sidebarRow(for: tab, context: context)
         }
         let baseSortedSessions = sortedSidebarRows(rows, context: context)
@@ -64,7 +68,7 @@ struct AgentModeSidebarSessionBuilder {
         preferredSidebarEntry(
             for: tabID,
             tabName: tabName,
-            entries: sessionIndex.values.filter { $0.tabID == tabID }
+            entries: sessionIndex.values.filter { $0.tabID == tabID && !$0.isCoordinatorRuntime }
         )
     }
 
@@ -218,8 +222,12 @@ struct AgentModeSidebarSessionBuilder {
             parentSessionID: entry.parentSessionID,
             hasUnknownConversationContent: entry.hasUnknownConversationContent,
             isMCPOriginated: entry.isMCPOriginated,
+            isCoordinatorRuntime: entry.isCoordinatorRuntime,
+            coordinatorMissionTemplate: entry.coordinatorMissionTemplate,
+            coordinatorMissionPlan: entry.coordinatorMissionPlan,
             worktreeBindingSummaries: entry.worktreeBindingSummaries,
-            activeWorktreeMergeSummaries: entry.activeWorktreeMergeSummaries
+            activeWorktreeMergeSummaries: entry.activeWorktreeMergeSummaries,
+            workflowSummary: entry.workflowSummary
         )
     }
 

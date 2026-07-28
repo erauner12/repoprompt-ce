@@ -460,24 +460,25 @@ final class CodexMCPRoutingReadinessTests: XCTestCase {
     ) -> CodexAgentModeCoordinator {
         // Install the real per-run policy so the expected-PID policy arms. Routed tests must
         // confirm readiness through real policy admission rather than signalling the waiter directly.
-        let policyInstaller: AgentModeViewModel.ConnectionPolicyInstaller = { clientName, windowID, restrictedTools, oneShot, reason, ttl, tabID, runID, additionalTools, purpose, taskLabelKind, allowsAgentExternalControlTools, requiresExpectedAgentPID in
-            if let runID {
+        let policyInstaller: AgentModeViewModel.ConnectionPolicyInstaller = { context in
+            if let runID = context.runID {
                 capturedRunID?.set(runID)
             }
             await ServerNetworkManager.shared.installClientConnectionPolicy(
-                for: clientName,
-                windowID: windowID,
-                restrictedTools: restrictedTools,
-                oneShot: oneShot,
-                reason: reason,
-                ttl: ttl,
-                tabID: tabID,
-                runID: runID,
-                additionalTools: additionalTools,
-                purpose: purpose,
-                taskLabelKind: taskLabelKind,
-                allowsAgentExternalControlTools: allowsAgentExternalControlTools,
-                requiresExpectedAgentPID: requiresExpectedAgentPID
+                for: context.clientName,
+                windowID: context.windowID,
+                restrictedTools: context.restrictedTools,
+                oneShot: context.oneShot,
+                reason: context.reason,
+                ttl: context.ttl,
+                tabID: context.tabID,
+                runID: context.runID,
+                additionalTools: context.additionalTools,
+                purpose: context.purpose,
+                taskLabelKind: context.taskLabelKind,
+                allowsAgentExternalControlTools: context.allowsAgentExternalControlTools,
+                isCoordinatorRuntime: context.isCoordinatorRuntime,
+                requiresExpectedAgentPID: context.requiresExpectedAgentPID
             )
         }
 
@@ -556,6 +557,7 @@ final class CodexMCPRoutingReadinessTests: XCTestCase {
             notifyAgentTurnComplete: { _ in },
             handleHeadlessStreamResult: { _, _, _, _ in },
             buildHeadlessAgentMessage: { _, text, _, _ in AgentMessage(userMessage: text) },
+            askUserInteraction: { _, _ in throw CancellationError() },
             finalizeStreamingItems: { _ in },
             finalizePendingToolCalls: { _, _ in },
             finalizePendingToolCallsWithUpperBound: { _, _, _ in },

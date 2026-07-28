@@ -215,7 +215,8 @@ final class AgentModeWorkspaceSwitchCleanupTests: XCTestCase {
             suppressUserNotifications: false,
             forceAutoEditEnabled: false,
             autoEditEnabledBeforeOverride: true,
-            taskLabelKind: nil
+            taskLabelKind: nil,
+            allowsAgentExternalControlTools: false
         )
     }
 

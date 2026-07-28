@@ -3153,6 +3153,7 @@ class PromptViewModel: ObservableObject {
     @MainActor
     func stashTab(
         _ id: UUID,
+        allowReplacement: Bool = false,
         isMutationContextCurrent: (@MainActor () -> Bool)? = nil
     ) async {
         guard
@@ -3162,8 +3163,9 @@ class PromptViewModel: ObservableObject {
             isMutationContextCurrent?() ?? true
         else { return }
 
-        // Don't allow stashing if it's the last tab
-        guard manager.workspaces[index].composeTabs.count > 1 else { return }
+        // Don't allow ordinary UI stashing if it's the last tab. Cleanup flows may
+        // opt in to replacement; closeComposeTabs will append a blank tab.
+        guard manager.workspaces[index].composeTabs.count > 1 || allowReplacement else { return }
 
         // Flush and snapshot current state if this is the active tab
         if id == activeComposeTabID {
@@ -3479,12 +3481,18 @@ class PromptViewModel: ObservableObject {
         guard
             let manager = workspaceManager,
             let workspace = manager.activeWorkspace,
-            let index = manager.workspaces.firstIndex(where: { $0.id == workspace.id }),
-            let tabIndex = manager.workspaces[index].composeTabs.firstIndex(where: { $0.id == tabID })
+            let index = manager.workspaces.firstIndex(where: { $0.id == workspace.id })
         else { return }
-        guard manager.workspaces[index].composeTabs[tabIndex].isPinned != pinned else { return }
 
-        manager.workspaces[index].composeTabs[tabIndex].isPinned = pinned
+        if let tabIndex = manager.workspaces[index].composeTabs.firstIndex(where: { $0.id == tabID }) {
+            guard manager.workspaces[index].composeTabs[tabIndex].isPinned != pinned else { return }
+            manager.workspaces[index].composeTabs[tabIndex].isPinned = pinned
+        } else if let stashedIndex = manager.workspaces[index].stashedTabs.firstIndex(where: { $0.tab.id == tabID }) {
+            guard manager.workspaces[index].stashedTabs[stashedIndex].tab.isPinned != pinned else { return }
+            manager.workspaces[index].stashedTabs[stashedIndex].tab.isPinned = pinned
+        } else {
+            return
+        }
         loadComposeTabsFromWorkspace(manager.workspaces[index])
         manager.markWorkspaceDirty()
         manager.pollAndSaveState()
@@ -3492,7 +3500,9 @@ class PromptViewModel: ObservableObject {
 
     @MainActor
     func toggleComposeTabPinned(_ tabID: UUID) {
-        guard let tab = currentComposeTabs.first(where: { $0.id == tabID }) else { return }
+        guard let tab = currentComposeTabs.first(where: { $0.id == tabID })
+            ?? currentStashedTabs.first(where: { $0.tab.id == tabID })?.tab
+        else { return }
         setComposeTabPinned(!tab.isPinned, for: tabID)
     }
 

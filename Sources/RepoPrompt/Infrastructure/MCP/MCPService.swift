@@ -72,6 +72,12 @@ actor MCPService: Sendable {
         state
     }
 
+    #if DEBUG
+        func test_dashboardSubscriberCount() -> Int {
+            dashboardSubscribers.count
+        }
+    #endif
+
     // ──────────────────────────────────────────────
     // MARK: - Private implementation objects
 

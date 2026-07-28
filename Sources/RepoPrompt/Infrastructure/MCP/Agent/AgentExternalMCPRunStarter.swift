@@ -45,6 +45,7 @@ enum AgentExternalMCPRunStarter {
         modelRaw: String?,
         reasoningEffortRaw: String?,
         taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
+        allowsAgentExternalControlTools: Bool = false,
         workflow: AgentWorkflowDefinition? = nil,
         expectedParentSessionID: UUID? = nil,
         oracleReviewSource: AgentRunOracleReviewSource? = nil,
@@ -60,6 +61,7 @@ enum AgentExternalMCPRunStarter {
             modelRaw: modelRaw,
             reasoningEffortRaw: reasoningEffortRaw,
             taskLabelKind: taskLabelKind,
+            allowsAgentExternalControlTools: allowsAgentExternalControlTools,
             workflow: workflow,
             expectedParentSessionID: expectedParentSessionID,
             oracleReviewSource: oracleReviewSource,
@@ -77,6 +79,7 @@ enum AgentExternalMCPRunStarter {
         modelRaw: String?,
         reasoningEffortRaw: String?,
         taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
+        allowsAgentExternalControlTools: Bool = false,
         workflow: AgentWorkflowDefinition? = nil,
         expectedParentSessionID: UUID? = nil,
         oracleReviewSource: AgentRunOracleReviewSource? = nil,
@@ -92,6 +95,7 @@ enum AgentExternalMCPRunStarter {
             modelRaw: modelRaw,
             reasoningEffortRaw: reasoningEffortRaw,
             taskLabelKind: taskLabelKind,
+            allowsAgentExternalControlTools: allowsAgentExternalControlTools,
             workflow: workflow,
             expectedParentSessionID: expectedParentSessionID,
             oracleReviewSource: oracleReviewSource,
@@ -109,6 +113,7 @@ enum AgentExternalMCPRunStarter {
         modelRaw: String?,
         reasoningEffortRaw: String?,
         taskLabelKind: AgentModelCatalog.TaskLabelKind?,
+        allowsAgentExternalControlTools: Bool,
         workflow: AgentWorkflowDefinition?,
         expectedParentSessionID: UUID?,
         oracleReviewSource: AgentRunOracleReviewSource?,
@@ -145,6 +150,7 @@ enum AgentExternalMCPRunStarter {
             sessionID: sessionID,
             originatingConnectionID: metadata.connectionID,
             taskLabelKind: taskLabelKind,
+            allowsAgentExternalControlTools: allowsAgentExternalControlTools,
             startPending: true
         )
 
