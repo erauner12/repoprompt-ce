@@ -30,6 +30,7 @@ dist/
 *.profraw
 tmp/director-e2e-runs/
 tmp/director-e2e-sandbox/
+docs/test-suite-optimizer/raw-logs/
 
 # Agent-authored working documents
 docs/analysis/

@@ -35,14 +35,7 @@ enum AgentRunCoordinatorWorktreePolicy {
             return true
         }
 
-        let tokens = Set(normalized.split { !$0.isLetter && !$0.isNumber }.map(String.init))
-        let mutation = !tokens.isDisjoint(with: mutationTokens)
-        guard mutation else { return false }
-
-        if containsAnyPhrase(normalized, in: readOnlySafetyPhrases) {
-            return false
-        }
-        return true
+        return containsAnyUnnegatedToken(normalized, in: mutationTokens)
     }
 
     private static func workflowSuggestsMutation(_ workflow: AgentWorkflowDefinition?) -> Bool {
@@ -81,12 +74,44 @@ enum AgentRunCoordinatorWorktreePolicy {
         }
     }
 
-    private static func isNegated(_ normalized: String, before phraseStart: String.Index) -> Bool {
-        let sentenceStart = normalized[..<phraseStart].lastIndex { character in
-            character == "." || character == "?" || character == "!" || character == "\n"
-        }.map { normalized.index(after: $0) } ?? normalized.startIndex
+    private static func containsAnyUnnegatedToken(_ normalized: String, in tokens: Set<String>) -> Bool {
+        tokens.contains { token in
+            var searchStart = normalized.startIndex
+            while let range = normalized.range(of: token, range: searchStart ..< normalized.endIndex) {
+                defer { searchStart = range.upperBound }
+                guard isTokenBoundary(normalized, before: range.lowerBound),
+                      isTokenBoundary(normalized, after: range.upperBound),
+                      !isNegated(normalized, before: range.lowerBound)
+                else { continue }
+                return true
+            }
+            return false
+        }
+    }
 
-        let prefix = String(normalized[sentenceStart ..< phraseStart])
+    private static func isTokenBoundary(_ normalized: String, before index: String.Index) -> Bool {
+        guard index != normalized.startIndex else { return true }
+        let character = normalized[normalized.index(before: index)]
+        return !character.isLetter && !character.isNumber && character != "_"
+    }
+
+    private static func isTokenBoundary(_ normalized: String, after index: String.Index) -> Bool {
+        guard index != normalized.endIndex else { return true }
+        let character = normalized[index]
+        return !character.isLetter && !character.isNumber && character != "_"
+    }
+
+    private static func isNegated(_ normalized: String, before phraseStart: String.Index) -> Bool {
+        let prefixToPhrase = normalized[..<phraseStart]
+        let punctuationStart = prefixToPhrase.lastIndex { character in
+            character == "." || character == "?" || character == "!" || character == "\n"
+                || character == ";" || character == ":"
+        }.map { normalized.index(after: $0) } ?? normalized.startIndex
+        let contrastStart = contrastPhrases.compactMap { phrase in
+            prefixToPhrase.range(of: phrase, options: .backwards)?.upperBound
+        }.max() ?? normalized.startIndex
+        let scopeStart = max(punctuationStart, contrastStart)
+        let prefix = String(normalized[scopeStart ..< phraseStart])
         return negationPhrases.contains { prefix.contains($0) }
     }
 
@@ -122,20 +147,13 @@ enum AgentRunCoordinatorWorktreePolicy {
         "validate the change"
     ]
 
-    private static let readOnlySafetyPhrases: [String] = [
-        "do not change",
-        "do not edit",
-        "don't change",
-        "don't edit",
-        "must not change",
-        "must not edit",
-        "no edits",
-        "without changing",
-        "without editing",
-        "read only",
-        "read-only",
-        "inspect only",
-        "only inspect"
+    private static let contrastPhrases: [String] = [
+        " but ",
+        " then ",
+        " however ",
+        " instead ",
+        " yet ",
+        " afterwards "
     ]
 
     private static let negationPhrases: [String] = [

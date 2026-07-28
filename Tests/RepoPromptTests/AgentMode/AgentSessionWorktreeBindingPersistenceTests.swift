@@ -1,4 +1,4 @@
-@testable import RepoPrompt
+@testable import RepoPromptApp
 import XCTest
 
 final class AgentSessionWorktreeBindingPersistenceTests: XCTestCase {
@@ -22,7 +22,7 @@ final class AgentSessionWorktreeBindingPersistenceTests: XCTestCase {
         XCTAssertTrue(decoded.worktreeMergeOperations.isEmpty)
     }
 
-    func testAgentSessionRoundTripsWorktreeBindingsAsVersionSix() throws {
+    func testAgentSessionRoundTripsWorktreeBindingsAsCurrentVersion() throws {
         let binding = makeBinding()
         let session = try AgentSession(
             id: XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000102")),
@@ -41,7 +41,7 @@ final class AgentSessionWorktreeBindingPersistenceTests: XCTestCase {
         let decoded = try JSONDecoder().decode(AgentSession.self, from: encoded)
 
         XCTAssertEqual(decoded.serializationVersion, AgentSession.currentSerializationVersion)
-        XCTAssertEqual(decoded.serializationVersion, 6)
+        XCTAssertEqual(decoded.serializationVersion, 7)
         XCTAssertTrue(decoded.isCoordinatorRuntime)
         XCTAssertEqual(decoded.worktreeBindings, [binding])
     }
@@ -96,6 +96,52 @@ final class AgentSessionWorktreeBindingPersistenceTests: XCTestCase {
         XCTAssertEqual(sidebar.entriesBySessionID[sessionID]?.isCoordinatorRuntime, true)
         XCTAssertEqual(sidebar.entriesBySessionID[sessionID]?.worktreeBindingSummaries, [summary])
         XCTAssertEqual(sidebar.entriesBySessionID[sessionID]?.workflowSummary, AgentSessionWorkflowSummary(AgentWorkflow.orchestrate.definition))
+        XCTAssertEqual(sidebar.preferredSessionIDByTabID[tabID], sessionID)
+    }
+
+    func testDataServiceStubAndFullRestorePreserveCodexResumeReference() async throws {
+        let service = AgentSessionDataService.shared
+        let workspace = makeTemporaryWorkspace()
+        defer { try? FileManager.default.removeItem(at: try XCTUnwrap(workspace.customStoragePath)) }
+        let sessionID = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000106"))
+        let tabID = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000107"))
+        let conversationID = "019f775c-4070-7200-b41c-933196989588"
+        let rolloutPath = "/Users/example/.codex/sessions/legacy-rollout.jsonl"
+        let session = AgentSession(
+            id: sessionID,
+            workspaceID: workspace.id,
+            composeTabID: tabID,
+            name: "Legacy Codex Session",
+            savedAt: Date(timeIntervalSinceReferenceDate: 30),
+            itemCount: 2,
+            agentKind: AgentProviderKind.codexExec.rawValue,
+            codexConversationID: conversationID,
+            codexRolloutPath: rolloutPath
+        )
+
+        let fileURL = try await service.saveAgentSession(
+            session,
+            for: workspace,
+            preparation: .alreadyCanonicalTranscript,
+            trustedCanonicalItemCount: 2
+        )
+        let stub = try await service.loadAgentSessionStub(from: fileURL)
+        let restored = try await service.loadAgentSession(from: fileURL)
+        let sidebar = try await service.buildSidebarIndex(
+            AgentSessionSidebarBuildRequest(
+                workspace: workspace,
+                tabNameByID: [tabID: "Legacy Codex Tab"],
+                validTabIDs: [tabID],
+                boundSessionIDByTabID: [tabID: sessionID]
+            )
+        )
+
+        XCTAssertNil(stub.transcript)
+        XCTAssertTrue(stub.items.isEmpty)
+        XCTAssertEqual(stub.codexConversationID, conversationID)
+        XCTAssertEqual(stub.codexRolloutPath, rolloutPath)
+        XCTAssertEqual(restored.codexConversationID, conversationID)
+        XCTAssertEqual(restored.codexRolloutPath, rolloutPath)
         XCTAssertEqual(sidebar.preferredSessionIDByTabID[tabID], sessionID)
     }
 

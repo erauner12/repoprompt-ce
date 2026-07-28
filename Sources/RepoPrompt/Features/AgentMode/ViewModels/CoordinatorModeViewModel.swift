@@ -4980,7 +4980,8 @@ extension AgentModeViewModel {
                     payload: MCPInteractionResponsePayload(
                         text: text.trimmingCharacters(in: .whitespacesAndNewlines),
                         skip: false,
-                        decisionRaw: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                        responseArgument: .scalar(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+                        containsDecisionArgument: false,
                         amendment: nil,
                         answersByQuestionID: [:],
                         elicitationActionRaw: text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5048,12 +5049,13 @@ extension AgentModeViewModel {
                     text: submission.text,
                     skip: submission.skip,
                     explicitSkip: submission.skip,
-                    decisionRaw: submission.text,
+                    responseArgument: submission.text.map { MCPInteractionResponsePayload.ResponseArgument.scalar($0) } ?? .missing,
+                    containsDecisionArgument: false,
                     amendment: nil,
                     answersByQuestionID: [:],
                     askUserAnswersByQuestionID: submission.answersByQuestionID,
                     hasStructuredAnswerObjects: submission.hasStructuredAnswers,
-                    elicitationActionRaw: submission.text
+                    elicitationActionRaw: submission.skip ? nil : submission.text
                 ),
                 beforeResolve: { [weak self] in
                     guard let self else {
@@ -5087,12 +5089,13 @@ extension AgentModeViewModel {
                     text: submission.text,
                     skip: submission.skip,
                     explicitSkip: submission.skip,
-                    decisionRaw: submission.text,
+                    responseArgument: submission.text.map { MCPInteractionResponsePayload.ResponseArgument.scalar($0) } ?? .missing,
+                    containsDecisionArgument: false,
                     amendment: nil,
                     answersByQuestionID: [:],
                     askUserAnswersByQuestionID: submission.answersByQuestionID,
                     hasStructuredAnswerObjects: submission.hasStructuredAnswers,
-                    elicitationActionRaw: submission.text
+                    elicitationActionRaw: submission.skip ? nil : submission.text
                 )
             )
             return .submitted

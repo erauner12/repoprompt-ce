@@ -6344,7 +6344,7 @@ struct CoordinatorModeView: View {
                     Toggle("Bash", isOn: Binding(
                         get: { codexTools.bashToolEnabled },
                         set: { newValue in
-                            agentModeVM.setCodexBashToolEnabled(newValue)
+                            agentModeVM.applyCodexToolSettingMutation(.bashTool(enabled: newValue))
                             coordinatorToolsRevision += 1
                         }
                     ))
@@ -6352,7 +6352,7 @@ struct CoordinatorModeView: View {
                     Toggle("Search", isOn: Binding(
                         get: { codexTools.searchToolEnabled },
                         set: { newValue in
-                            agentModeVM.setCodexSearchToolEnabled(newValue)
+                            agentModeVM.applyCodexToolSettingMutation(.searchTool(enabled: newValue))
                             coordinatorToolsRevision += 1
                         }
                     ))
@@ -6360,7 +6360,7 @@ struct CoordinatorModeView: View {
                     Toggle("Goals", isOn: Binding(
                         get: { codexTools.goalSupportEnabled },
                         set: { newValue in
-                            agentModeVM.setCodexGoalSupportEnabled(newValue)
+                            agentModeVM.applyCodexToolSettingMutation(.goalSupport(enabled: newValue))
                             coordinatorToolsRevision += 1
                         }
                     ))
@@ -6381,7 +6381,9 @@ struct CoordinatorModeView: View {
                                         codexTools.mcpServerStatesByNormalizedName[normalizedServerToggleKey(entry.normalizedName)] ?? isRepoPromptServer
                                     },
                                     set: { newValue in
-                                        agentModeVM.setCodexMCPServerEnabled(normalizedName: entry.normalizedName, enabled: newValue)
+                                        agentModeVM.applyCodexToolSettingMutation(
+                                            .mcpServer(normalizedName: entry.normalizedName, enabled: newValue)
+                                        )
                                         coordinatorToolsRevision += 1
                                     }
                                 )
@@ -6428,7 +6430,7 @@ struct CoordinatorModeView: View {
                     Toggle("Bash", isOn: Binding(
                         get: { claudeTools.bashToolEnabled },
                         set: { newValue in
-                            agentModeVM.setClaudeBashToolEnabled(newValue)
+                            agentModeVM.applyClaudeToolSettingMutation(.bashTool(enabled: newValue))
                             coordinatorToolsRevision += 1
                         }
                     ))
@@ -6440,7 +6442,7 @@ struct CoordinatorModeView: View {
                     Toggle("RepoPrompt Only", isOn: Binding(
                         get: { claudeTools.mcpStrictModeEnabled },
                         set: { newValue in
-                            agentModeVM.setClaudeMCPStrictModeEnabled(newValue)
+                            agentModeVM.applyClaudeToolSettingMutation(.mcpStrictMode(enabled: newValue))
                             coordinatorToolsRevision += 1
                         }
                     ))
@@ -6460,7 +6462,7 @@ struct CoordinatorModeView: View {
                     Toggle("Lazy Tool Loading", isOn: Binding(
                         get: { claudeTools.toolSearchEnabled },
                         set: { newValue in
-                            agentModeVM.setClaudeToolSearchEnabled(newValue)
+                            agentModeVM.applyClaudeToolSettingMutation(.toolSearch(enabled: newValue))
                             coordinatorToolsRevision += 1
                         }
                     ))
@@ -6480,7 +6482,7 @@ struct CoordinatorModeView: View {
                     Picker(selection: Binding(
                         get: { claudeTools.agentModePromptDelivery },
                         set: { newValue in
-                            agentModeVM.setClaudeAgentModePromptDelivery(newValue)
+                            agentModeVM.applyClaudeToolSettingMutation(.agentModePromptDelivery(delivery: newValue))
                             coordinatorToolsRevision += 1
                         }
                     )) {

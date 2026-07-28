@@ -1,5 +1,5 @@
 import Foundation
-@testable import RepoPrompt
+@testable import RepoPromptApp
 import XCTest
 
 final class AgentRunCoordinatorMissionPlanPolicyTests: XCTestCase {
@@ -86,6 +86,21 @@ final class AgentRunCoordinatorMissionPlanPolicyTests: XCTestCase {
                 missionNodeID: critiqueNodeID,
                 requestedModelID: "design",
                 requestedWorkflowName: "Orchestrate",
+                usesCreatedWorktree: true
+            )
+        )
+    }
+
+    func testCoordinatorBlocksPreApprovalDesignCritiqueWithWorkflowIDOnly() {
+        let critiqueNodeID = uuid(2)
+        XCTAssertRequiresApprovedMissionPlan(
+            decision(
+                missionPlan: plan(approvalState: .awaitingApproval, nodes: [
+                    node(id: critiqueNodeID, executionPolicy: .planCritique, role: "design")
+                ]),
+                missionNodeID: critiqueNodeID,
+                requestedModelID: "design",
+                requestedWorkflowID: "builtin-orchestrate",
                 usesCreatedWorktree: true
             )
         )
