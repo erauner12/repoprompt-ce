@@ -149,11 +149,13 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
                 await AgentRunSessionStore.cleanup(registration: second.registration)
             }
         }
+        let waitConsumerParentRunID = UUID()
         let service = makeService(
             window: window,
             viewModel: viewModel,
             liveSnapshots: liveSnapshots,
-            recorder: recorder
+            recorder: recorder,
+            parentRunID: waitConsumerParentRunID
         )
 
         let waitTask = Task { @MainActor in
@@ -174,7 +176,8 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
             second.runningSnapshot,
             cursor: second.cursor,
             reason: .steeringRequested,
-            steeringMessage: steeringMessage
+            steeringMessage: steeringMessage,
+            steeringOriginRunID: waitConsumerParentRunID
         )
 
         let value = try await waitTask.value
@@ -187,7 +190,7 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
         )
         XCTAssertEqual(object["session_id"]?.stringValue, second.sessionID.uuidString)
         XCTAssertEqual(wait["result"]?.stringValue, "interrupted_by_steering")
-        XCTAssertEqual(wait["steering_message"]?.stringValue, steeringMessage)
+        XCTAssertNil(wait["steering_message"])
         XCTAssertNil(wait["winner_session_id"]?.stringValue)
         XCTAssertEqual(wait["interrupted_session_id"]?.stringValue, second.sessionID.uuidString)
         XCTAssertEqual(
@@ -519,7 +522,8 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
         window: WindowState,
         viewModel: AgentModeViewModel,
         liveSnapshots: LiveSnapshots,
-        recorder: WaitScopeRecorder
+        recorder: WaitScopeRecorder,
+        parentRunID: UUID = UUID()
     ) -> AgentRunMCPToolService {
         var service = AgentRunMCPToolService(
             toolName: MCPWindowToolName.agentRun,
@@ -540,8 +544,9 @@ final class AgentRunMCPToolServiceWaitTests: XCTestCase {
             }
         )
         service.beginAgentRunWait = {
-            (_: MCPServerViewModel.RequestMetadata, sessionIDs: Set<UUID>, _: TimeInterval?) async -> UUID? in
-            await recorder.begin(sessionIDs: sessionIDs)
+            (_: MCPServerViewModel.RequestMetadata, sessionIDs: Set<UUID>, _: TimeInterval?) async -> AgentRunWaitScopeRegistration? in
+            let token = await recorder.begin(sessionIDs: sessionIDs)
+            return AgentRunWaitScopeRegistration(token: token, parentRunID: parentRunID)
         }
         service.endAgentRunWait = {
             (token: UUID, completion: AgentRunWaitScopeCompletion) async in

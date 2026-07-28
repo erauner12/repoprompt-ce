@@ -34,6 +34,19 @@ actor AgentRunSessionStore {
         let snapshot: AgentRunMCPSnapshot
         let reason: WakeReason
         let steeringMessage: String?
+        let steeringOriginRunID: UUID?
+
+        init(
+            snapshot: AgentRunMCPSnapshot,
+            reason: WakeReason,
+            steeringMessage: String?,
+            steeringOriginRunID: UUID? = nil
+        ) {
+            self.snapshot = snapshot
+            self.reason = reason
+            self.steeringMessage = steeringMessage
+            self.steeringOriginRunID = steeringOriginRunID
+        }
     }
 
     enum WaitDisposition: Equatable {
@@ -161,13 +174,15 @@ actor AgentRunSessionStore {
         _ snapshot: AgentRunMCPSnapshot,
         cursor: WaitCursor,
         reason: WakeReason,
-        steeringMessage: String? = nil
+        steeringMessage: String? = nil,
+        steeringOriginRunID: UUID? = nil
     ) {
         ingestSnapshot(
             snapshot,
             cursor: cursor,
             wakeReason: reason,
-            steeringMessage: steeringMessage
+            steeringMessage: steeringMessage,
+            steeringOriginRunID: steeringOriginRunID
         )
     }
 
@@ -292,7 +307,8 @@ actor AgentRunSessionStore {
         _ snapshot: AgentRunMCPSnapshot,
         cursor: WaitCursor,
         reason: WakeReason,
-        steeringMessage: String? = nil
+        steeringMessage: String? = nil,
+        steeringOriginRunID: UUID? = nil
     ) {
         guard snapshot.sessionID == cursor.registration.sessionID else { return }
         guard var record = currentRecord(for: cursor.registration, operation: "wake") else { return }
@@ -312,7 +328,8 @@ actor AgentRunSessionStore {
             : .noteworthySnapshot(NoteworthyWake(
                 snapshot: acceptedSnapshot,
                 reason: reason,
-                steeringMessage: steeringMessage
+                steeringMessage: steeringMessage,
+                steeringOriginRunID: steeringOriginRunID
             ))
         resume(waiters, with: disposition)
     }
@@ -321,7 +338,8 @@ actor AgentRunSessionStore {
         _ snapshot: AgentRunMCPSnapshot,
         cursor: WaitCursor,
         wakeReason: WakeReason?,
-        steeringMessage: String? = nil
+        steeringMessage: String? = nil,
+        steeringOriginRunID: UUID? = nil
     ) {
         guard snapshot.sessionID == cursor.registration.sessionID else {
             recordRejectedOperation(
@@ -357,7 +375,8 @@ actor AgentRunSessionStore {
             .noteworthySnapshot(NoteworthyWake(
                 snapshot: acceptedSnapshot,
                 reason: wakeReason,
-                steeringMessage: steeringMessage
+                steeringMessage: steeringMessage,
+                steeringOriginRunID: steeringOriginRunID
             ))
         } else {
             nil
@@ -401,7 +420,8 @@ actor AgentRunSessionStore {
             return .noteworthySnapshot(NoteworthyWake(
                 snapshot: latestSnapshot(in: updated, cursor: cursor) ?? pending.snapshot,
                 reason: pending.reason,
-                steeringMessage: pending.steeringMessage
+                steeringMessage: pending.steeringMessage,
+                steeringOriginRunID: pending.steeringOriginRunID
             ))
         }
         if let timeoutSeconds, timeoutSeconds <= 0 {
@@ -440,7 +460,8 @@ actor AgentRunSessionStore {
                     continuation.resume(returning: .noteworthySnapshot(NoteworthyWake(
                         snapshot: latestSnapshot(in: current, cursor: cursor) ?? pending.snapshot,
                         reason: pending.reason,
-                        steeringMessage: pending.steeringMessage
+                        steeringMessage: pending.steeringMessage,
+                        steeringOriginRunID: pending.steeringOriginRunID
                     )))
                     return
                 }
@@ -790,13 +811,15 @@ extension AgentRunSessionStore {
         _ snapshot: AgentRunMCPSnapshot,
         cursor: WaitCursor,
         reason: WakeReason,
-        steeringMessage: String? = nil
+        steeringMessage: String? = nil,
+        steeringOriginRunID: UUID? = nil
     ) async {
         await shared.noteSnapshotAndWakeWaiters(
             snapshot,
             cursor: cursor,
             reason: reason,
-            steeringMessage: steeringMessage
+            steeringMessage: steeringMessage,
+            steeringOriginRunID: steeringOriginRunID
         )
     }
 
@@ -804,13 +827,15 @@ extension AgentRunSessionStore {
         _ snapshot: AgentRunMCPSnapshot,
         cursor: WaitCursor,
         reason: WakeReason,
-        steeringMessage: String? = nil
+        steeringMessage: String? = nil,
+        steeringOriginRunID: UUID? = nil
     ) async {
         await shared.wakeCurrentWaiters(
             snapshot,
             cursor: cursor,
             reason: reason,
-            steeringMessage: steeringMessage
+            steeringMessage: steeringMessage,
+            steeringOriginRunID: steeringOriginRunID
         )
     }
 }

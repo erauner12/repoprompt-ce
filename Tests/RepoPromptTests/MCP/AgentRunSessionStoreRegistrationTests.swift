@@ -321,12 +321,16 @@ final class AgentRunSessionStoreRegistrationTests: XCTestCase {
         let running = makeSnapshot(sessionID: sessionID, status: .running)
 
         let steeringMessage = "sticky signaled steering"
+        let steeringOriginRunID = UUID()
         await AgentRunSessionStore.signalSnapshotAndWakeWaiters(
             running,
             cursor: cursor,
             reason: .steeringRequested,
-            steeringMessage: steeringMessage
+            steeringMessage: steeringMessage,
+            steeringOriginRunID: steeringOriginRunID
         )
+        let refreshedRunning = makeSnapshot(sessionID: sessionID, status: .running)
+        await AgentRunSessionStore.signalSnapshot(refreshedRunning, cursor: cursor)
 
         let firstDisposition = await AgentRunSessionStore.waitUntilInteresting(
             cursor: cursor,
@@ -337,9 +341,10 @@ final class AgentRunSessionStoreRegistrationTests: XCTestCase {
             timeoutSeconds: 0
         )
         XCTAssertEqual(firstDisposition, .noteworthySnapshot(.init(
-            snapshot: running,
+            snapshot: refreshedRunning,
             reason: .steeringRequested,
-            steeringMessage: steeringMessage
+            steeringMessage: steeringMessage,
+            steeringOriginRunID: steeringOriginRunID
         )))
         XCTAssertEqual(secondDisposition, .timedOut)
         await AgentRunSessionStore.cleanup(registration: registration)

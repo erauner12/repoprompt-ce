@@ -1984,18 +1984,21 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
 
     func testActiveCodexNativeSendUsesRealAgentRunDrainBeforeSending() async throws {
         try await AgentRunWaitDrainTestHarness.withHarness { harness in
-            let waitTask = harness.startWait()
-            try await harness.waitUntilBlocked()
+            let steeringMarker = "<<rpce-steering-provenance-same-parent>>"
+            let parentWaitTask = harness.startWait()
+            let externalWaitTask = harness.startExternalWait()
+            try await harness.waitUntilBothBlocked()
 
             let ordering = CodexDrainSendOrderingRecorder()
             let controller = LivenessFakeCodexController(
                 snapshot: .active(activeFlags: []),
                 onSendUserTurn: { ordering.recordSend() }
             )
-            let viewModel = makeViewModel(controller: controller) { runID, source, steeringMessage in
+            let viewModel = makeViewModel(controller: controller) { runID, runAttemptID, source, steeringMessage in
                 XCTAssertEqual(runID, harness.parentRunID)
+                XCTAssertNotNil(runAttemptID)
                 XCTAssertEqual(source, "codex-native-active-send")
-                XCTAssertEqual(steeringMessage, "hello normalized")
+                XCTAssertEqual(steeringMessage, steeringMarker)
                 let drained = await harness.drain(
                     source: source,
                     steeringMessage: steeringMessage
@@ -2015,10 +2018,10 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
 
             let fallbackContext = AgentModeViewModel.TabSession.CodexFallbackSubmissionContext(
                 queueID: UUID(),
-                providerText: "workflow wrapped: hello normalized",
+                providerText: steeringMarker,
                 images: [],
                 taggedFileAttachments: [],
-                draftText: "  hello normalized\n",
+                draftText: steeringMarker,
                 optimisticUserItemID: nil,
                 origin: .manual,
                 dispatchTicket: nil
@@ -2029,8 +2032,24 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
                 attachments: [],
                 fallbackContext: fallbackContext
             )
-            let interruptedValue = try await waitTask.value
-            let interruptedObject = try XCTUnwrap(interruptedValue.objectValue)
+            let parentWaitValue = try await parentWaitTask.value
+            let externalWaitValue = try await externalWaitTask.value
+            let parentWaitObject = try XCTUnwrap(parentWaitValue.objectValue)
+            let externalWaitObject = try XCTUnwrap(externalWaitValue.objectValue)
+            let parentFormattedBlocks = ToolOutputFormatter.formatAgentRun(
+                args: ["op": .string("wait")],
+                value: parentWaitValue
+            )
+            let externalFormattedBlocks = ToolOutputFormatter.formatAgentRun(
+                args: ["op": .string("wait")],
+                value: externalWaitValue
+            )
+            guard case let .text(parentFormattedWait, _, _)? = parentFormattedBlocks.first,
+                  case let .text(externalFormattedWait, _, _)? = externalFormattedBlocks.first
+            else {
+                return XCTFail("Expected formatted agent_run.wait text")
+            }
+            let providerInput = try XCTUnwrap(controller.steeredUserTurnTextsSync().first)
             let completions = await harness.completionRecorder.completions()
             let registrationRemainsActive = await AgentRunSessionStore.hasActiveRegistration(
                 sessionID: harness.fixture.sessionID
@@ -2039,13 +2058,25 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
 
             XCTAssertEqual(outcome, .sent)
             XCTAssertEqual(
-                interruptedObject["wait"]?.objectValue?["result"]?.stringValue,
+                parentWaitObject["wait"]?.objectValue?["result"]?.stringValue,
+                "interrupted_by_steering"
+            )
+            XCTAssertNil(
+                parentWaitObject["wait"]?.objectValue?["steering_message"]
+            )
+            XCTAssertEqual(
+                externalWaitObject["wait"]?.objectValue?["result"]?.stringValue,
                 "interrupted_by_steering"
             )
             XCTAssertEqual(
-                interruptedObject["wait"]?.objectValue?["steering_message"]?.stringValue,
-                "hello normalized"
+                externalWaitObject["wait"]?.objectValue?["steering_message"]?.stringValue,
+                steeringMarker,
+                "A different supervisor must retain the exact steering payload"
             )
+            XCTAssertEqual(parentFormattedWait.components(separatedBy: steeringMarker).count - 1, 0)
+            XCTAssertEqual(externalFormattedWait.components(separatedBy: steeringMarker).count - 1, 1)
+            XCTAssertEqual(providerInput, steeringMarker)
+            XCTAssertEqual(controller.steeredUserTurnTextsSync(), [steeringMarker])
             XCTAssertEqual(controller.startUserTurnCountSync(), 0)
             XCTAssertEqual(controller.steerUserTurnIDsSync(), ["turn"])
             XCTAssertEqual(session.codexAuthoritativeActiveTurn?.turnID, "turn")
@@ -2053,15 +2084,26 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
             XCTAssertEqual(orderingSnapshot.activeScopeCountAtDrainCompletion, 0)
             XCTAssertTrue(orderingSnapshot.sendObservedAfterDrain)
             XCTAssertEqual(harness.activeScopeCount(), 0)
-            XCTAssertEqual(completions.count, 1)
-            XCTAssertEqual(completions.first?.result, "interrupted_by_steering")
+            XCTAssertEqual(harness.externalActiveScopeCount(), 0)
+            XCTAssertEqual(completions.count, 2)
+            XCTAssertTrue(completions.allSatisfy { $0.result == "interrupted_by_steering" })
             XCTAssertTrue(registrationRemainsActive)
+
+            let sameParentVisibleMarkerCount =
+                parentFormattedWait.components(separatedBy: steeringMarker).count - 1
+                    + providerInput.components(separatedBy: steeringMarker).count - 1
+            // The provider input remains authoritative; only the same-parent wait projection omits the duplicate.
+            XCTAssertEqual(
+                sameParentVisibleMarkerCount,
+                1,
+                "The same parent provider conversation must see one logical steering instruction exactly once"
+            )
         }
     }
 
     func testActiveCodexNativeSendRejectsBeforeDispatchWhenAgentRunDrainFails() async {
         let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
-        let viewModel = makeViewModel(controller: controller) { _, _, _ in false }
+        let viewModel = makeViewModel(controller: controller) { _, _, _, _ in false }
         let session = preparedCodexSession(in: viewModel, controller: controller)
 
         let outcome = await viewModel.test_codexCoordinator.sendCodexNativeMessage(
@@ -2084,7 +2126,7 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
     func testActiveCodexNativeSendRejectsBeforeDispatchWhenActiveRunChangesDuringDrain() async {
         let drainGate = LivenessSnapshotReadGate()
         let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
-        let viewModel = makeViewModel(controller: controller) { _, _, _ in
+        let viewModel = makeViewModel(controller: controller) { _, _, _, _ in
             await drainGate.wait()
             return true
         }
@@ -2116,7 +2158,7 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
     func testComposerActiveSendDrainRejectionRemovesOnlyOptimisticBubbleAndRestoresFullComposerState() async throws {
         let drainGate = LivenessSnapshotReadGate()
         let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
-        let viewModel = makeViewModel(controller: controller) { _, _, _ in
+        let viewModel = makeViewModel(controller: controller) { _, _, _, _ in
             await drainGate.wait()
             return false
         }
@@ -2247,7 +2289,7 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
     func testComposerActiveSendDrainRejectionDoesNotOverwriteNewerComposerChoices() async throws {
         let drainGate = LivenessSnapshotReadGate()
         let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
-        let viewModel = makeViewModel(controller: controller) { _, _, _ in
+        let viewModel = makeViewModel(controller: controller) { _, _, _, _ in
             await drainGate.wait()
             return false
         }
@@ -2465,7 +2507,7 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
     func testBackToBackComposerActiveSendDrainRejectionsRestoreEachDraftExactlyOnce() async throws {
         let drainGate = LivenessSnapshotReadGate()
         let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
-        let viewModel = makeViewModel(controller: controller) { _, _, _ in
+        let viewModel = makeViewModel(controller: controller) { _, _, _, _ in
             await drainGate.wait()
             return false
         }

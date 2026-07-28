@@ -298,6 +298,38 @@ final class AgentRunMCPToolServiceWaitAnyTests: XCTestCase {
             XCTAssertNil(snapshot.objectValue?["wait"]?.objectValue?["steering_message"])
         }
 
+        let sameParentRunID = UUID()
+        let sameParentValue = AgentRunMCPToolService.test_decoratedMultiWaitInterruptValue(
+            sessionIDs: [firstID, secondID],
+            snapshots: [
+                makeRunningSnapshot(sessionID: firstID),
+                makeRunningSnapshot(sessionID: secondID)
+            ],
+            pendingSessionIDs: [firstID, secondID],
+            interruptedSessionID: secondID,
+            steeringMessage: steeringMessage,
+            steeringOriginRunID: sameParentRunID,
+            waitConsumerParentRunID: sameParentRunID
+        )
+        XCTAssertNil(sameParentValue.objectValue?["wait"]?.objectValue?["steering_message"])
+
+        let differentParentValue = AgentRunMCPToolService.test_decoratedMultiWaitInterruptValue(
+            sessionIDs: [firstID, secondID],
+            snapshots: [
+                makeRunningSnapshot(sessionID: firstID),
+                makeRunningSnapshot(sessionID: secondID)
+            ],
+            pendingSessionIDs: [firstID, secondID],
+            interruptedSessionID: secondID,
+            steeringMessage: steeringMessage,
+            steeringOriginRunID: sameParentRunID,
+            waitConsumerParentRunID: UUID()
+        )
+        XCTAssertEqual(
+            differentParentValue.objectValue?["wait"]?.objectValue?["steering_message"]?.stringValue,
+            steeringMessage
+        )
+
         let attachmentOnlyValue = AgentRunMCPToolService.test_decoratedMultiWaitInterruptValue(
             sessionIDs: [firstID, secondID],
             snapshots: [
