@@ -921,9 +921,10 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.composerNotice?.contains("will be delivered once") == true)
     }
 
-    func testPlanCheckpointApprovalFailsClosedWhenDurableBarrierFails() async throws {
+    func testPlanCheckpointApprovalExactRetryRecoversFailedDurableContinuationWithoutDuplicates() async throws {
         let coordinatorID = uuid(1)
         let nodeID = uuid(30)
+        let checkpointInstanceID = "coordinator:\(coordinatorID.uuidString):plan-approval:r3"
         var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
             revision: 3,
             objective: "Ship the plan",
@@ -939,6 +940,8 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
         ))
         var submissions: [CoordinatorDirectiveSubmission] = []
         var evaluations: [UUID] = []
+        var barrierTokens: [CoordinatorModeViewModel.PostApprovalContinuationPersistenceToken] = []
+        let retryEvaluation = expectation(description: "retry evaluates the durable continuation")
         let viewModel = CoordinatorModeViewModel(
             inputProvider: { sortMode, selectedCoordinatorID in
                 self.input(
@@ -968,33 +971,69 @@ final class CoordinatorModeComposerViewModelTests: XCTestCase {
             },
             followThroughEvaluationHandler: { sessionID in
                 evaluations.append(sessionID)
+                retryEvaluation.fulfill()
             },
             postApprovalContinuationPersistenceBarrier: { token in
+                barrierTokens.append(token)
                 XCTAssertEqual(token.coordinatorSessionID, coordinatorID)
-                XCTAssertEqual(token.checkpointInstanceID, "coordinator:\(coordinatorID.uuidString):plan-approval:r3")
-                throw NSError(domain: "CoordinatorModeComposerViewModelTests", code: 99)
+                XCTAssertEqual(token.checkpointInstanceID, checkpointInstanceID)
+                if barrierTokens.count == 1 {
+                    throw NSError(domain: "CoordinatorModeComposerViewModelTests", code: 99)
+                }
             }
         )
         viewModel.selectCoordinator(sessionID: coordinatorID)
 
-        let result = await viewModel.submitCoordinatorContinuation(
+        let firstResult = await viewModel.submitCoordinatorContinuation(
             .proceed,
-            expectedCheckpointInstanceID: "coordinator:\(coordinatorID.uuidString):plan-approval:r3"
+            expectedCheckpointInstanceID: checkpointInstanceID
         )
 
-        guard case let .rejected(message) = result else {
-            XCTFail("Expected rejected result when the durable persistence barrier fails.")
-            return
+        guard case let .rejected(message) = firstResult else {
+            return XCTFail("Expected rejected result when the first durable persistence barrier fails.")
         }
         XCTAssertTrue(message.contains("durable continuation persistence failed"), message)
         XCTAssertTrue(submissions.isEmpty)
         XCTAssertTrue(evaluations.isEmpty)
-        let continuation = try XCTUnwrap(state.missionPlan?.postApprovalContinuation)
-        XCTAssertEqual(continuation.status, .failed)
-        XCTAssertEqual(continuation.attempts, 0)
-        XCTAssertNil(continuation.durableApprovalAuthorityToken)
+        let failedContinuation = try XCTUnwrap(state.missionPlan?.postApprovalContinuation)
+        XCTAssertEqual(failedContinuation.status, .failed)
+        XCTAssertEqual(failedContinuation.attempts, 0)
+        XCTAssertNil(failedContinuation.durableApprovalAuthorityToken)
         XCTAssertNil(viewModel.durableApprovalAuthorityToken(coordinatorSessionID: coordinatorID))
-        XCTAssertTrue(continuation.lastError?.contains("durable continuation persistence failed") == true)
+        XCTAssertTrue(failedContinuation.lastError?.contains("durable continuation persistence failed") == true)
+        XCTAssertEqual(state.missionPlan?.decisions.count, 1)
+        XCTAssertEqual(state.missionPlan?.events.count(where: { $0.kind == .approved }), 1)
+
+        let retryResult = await viewModel.submitCoordinatorContinuation(
+            .proceed,
+            expectedCheckpointInstanceID: checkpointInstanceID
+        )
+        await fulfillment(of: [retryEvaluation], timeout: 1)
+
+        XCTAssertEqual(retryResult, .accepted)
+        XCTAssertEqual(barrierTokens.count, 2)
+        XCTAssertEqual(barrierTokens.map(\.continuationID), [failedContinuation.id, failedContinuation.id])
+        XCTAssertTrue(submissions.isEmpty)
+        XCTAssertEqual(evaluations, [coordinatorID])
+        XCTAssertEqual(state.missionPlan?.approvalState, .approved)
+        XCTAssertEqual(state.missionPlan?.decisions.count, 1)
+        XCTAssertEqual(state.missionPlan?.decisions.first?.label, "approved the Mission plan")
+        XCTAssertEqual(state.missionPlan?.decisions.first?.checkpointInstanceID, checkpointInstanceID)
+        XCTAssertEqual(state.missionPlan?.events.count(where: { $0.kind == .approved }), 1)
+        let recoveredContinuation = try XCTUnwrap(state.missionPlan?.postApprovalContinuation)
+        XCTAssertEqual(recoveredContinuation.id, failedContinuation.id)
+        XCTAssertEqual(recoveredContinuation.createdAt, failedContinuation.createdAt)
+        XCTAssertEqual(recoveredContinuation.directiveText, failedContinuation.directiveText)
+        XCTAssertEqual(recoveredContinuation.status, .deferred)
+        XCTAssertEqual(recoveredContinuation.attempts, 0)
+        XCTAssertEqual(
+            recoveredContinuation.durableApprovalAuthorityToken,
+            recoveredContinuation.expectedDurableApprovalAuthorityToken
+        )
+        XCTAssertEqual(
+            viewModel.durableApprovalAuthorityToken(coordinatorSessionID: coordinatorID),
+            recoveredContinuation.expectedDurableApprovalAuthorityToken
+        )
     }
 
     func testStopMissionDoesNotCancelWhenPersistenceFails() async {
