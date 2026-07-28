@@ -11,7 +11,24 @@ extension MCPBootstrapLeaseSpec {
         taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
         allowsAgentExternalControlTools: Bool = false
     ) -> MCPBootstrapLeaseSpec {
-        MCPBootstrapLeaseSpec(
+        let policyContext = agent.mcpClientNameHint.map { clientName in
+            AgentModeMCPPolicyContext(
+                clientName: clientName,
+                windowID: windowID,
+                restrictedTools: AgentModeMCPToolPolicy.restrictedTools,
+                oneShot: true,
+                reason: AgentModeMCPPolicyInstaller.policyReason,
+                ttl: AgentModeMCPPolicyInstaller.policyTTL,
+                tabID: tabID,
+                runID: runID,
+                additionalTools: AgentModeMCPPolicyInstaller.additionalTools(for: agent),
+                purpose: .agentModeRun,
+                taskLabelKind: taskLabelKind,
+                allowsAgentExternalControlTools: allowsAgentExternalControlTools,
+                requiresExpectedAgentPID: agent.requiresExpectedPIDOwnedAgentModeMCPRouting
+            )
+        }
+        return MCPBootstrapLeaseSpec(
             runID: runID,
             gateID: gateID,
             windowID: windowID,
@@ -25,7 +42,8 @@ extension MCPBootstrapLeaseSpec {
             purpose: .agentModeRun,
             taskLabelKind: taskLabelKind,
             allowsAgentExternalControlTools: allowsAgentExternalControlTools,
-            requiresExpectedAgentPID: agent.requiresExpectedPIDOwnedAgentModeMCPRouting
+            requiresExpectedAgentPID: agent.requiresExpectedPIDOwnedAgentModeMCPRouting,
+            agentModePolicyContext: policyContext
         )
     }
 }
@@ -35,22 +53,8 @@ extension MCPBootstrapLease {
         _ connectionPolicyInstaller: @escaping AgentModeViewModel.ConnectionPolicyInstaller
     ) -> (MCPBootstrapLeaseSpec) async -> Void {
         { leaseSpec in
-            guard let clientName = leaseSpec.clientName else { return }
-            await connectionPolicyInstaller(
-                clientName,
-                leaseSpec.windowID,
-                leaseSpec.restrictedTools,
-                leaseSpec.oneShot,
-                leaseSpec.reason,
-                leaseSpec.ttl,
-                leaseSpec.tabID,
-                leaseSpec.runID,
-                leaseSpec.additionalTools,
-                leaseSpec.purpose,
-                leaseSpec.taskLabelKind,
-                leaseSpec.allowsAgentExternalControlTools,
-                leaseSpec.requiresExpectedAgentPID
-            )
+            guard let context = leaseSpec.agentModePolicyContext else { return }
+            await connectionPolicyInstaller(context)
         }
     }
 

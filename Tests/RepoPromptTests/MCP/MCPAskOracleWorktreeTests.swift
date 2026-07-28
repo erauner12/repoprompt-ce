@@ -2963,7 +2963,8 @@ import XCTest
                 suppressUserNotifications: false,
                 forceAutoEditEnabled: false,
                 autoEditEnabledBeforeOverride: true,
-                taskLabelKind: .pair
+                taskLabelKind: .pair,
+                allowsAgentExternalControlTools: false
             )
         }
 

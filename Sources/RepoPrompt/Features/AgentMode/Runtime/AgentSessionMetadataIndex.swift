@@ -59,8 +59,12 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
     var autoEditEnabled: Bool
     var parentSessionID: UUID?
     var isMCPOriginated: Bool
+    var isCoordinatorRuntime: Bool
+    var coordinatorMissionTemplate: CoordinatorMissionTemplateSummary?
+    var coordinatorMissionPlan: CoordinatorMissionPlan?
     var worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary]
     var activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary]
+    var workflowSummary: AgentSessionWorkflowSummary?
     var serializationVersion: Int?
     var observedFileSize: Int64?
     var observedFileModificationDate: Date?
@@ -126,8 +130,12 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
         autoEditEnabled: Bool,
         parentSessionID: UUID?,
         isMCPOriginated: Bool,
+        isCoordinatorRuntime: Bool = false,
+        coordinatorMissionTemplate: CoordinatorMissionTemplateSummary? = nil,
+        coordinatorMissionPlan: CoordinatorMissionPlan? = nil,
         worktreeBindingSummaries: [AgentSessionWorktreeBindingSummary] = [],
         activeWorktreeMergeSummaries: [AgentSessionWorktreeMergeSummary] = [],
+        workflowSummary: AgentSessionWorkflowSummary? = nil,
         serializationVersion: Int?,
         observedFileSize: Int64?,
         observedFileModificationDate: Date?,
@@ -156,8 +164,12 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
         self.autoEditEnabled = autoEditEnabled
         self.parentSessionID = parentSessionID
         self.isMCPOriginated = isMCPOriginated
+        self.isCoordinatorRuntime = isCoordinatorRuntime
+        self.coordinatorMissionTemplate = coordinatorMissionTemplate
+        self.coordinatorMissionPlan = coordinatorMissionPlan
         self.worktreeBindingSummaries = worktreeBindingSummaries
         self.activeWorktreeMergeSummaries = activeWorktreeMergeSummaries
+        self.workflowSummary = workflowSummary
         self.serializationVersion = serializationVersion
         self.observedFileSize = observedFileSize
         self.observedFileModificationDate = observedFileModificationDate
@@ -188,8 +200,12 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
         case autoEditEnabled
         case parentSessionID
         case isMCPOriginated
+        case isCoordinatorRuntime
+        case coordinatorMissionTemplate
+        case coordinatorMissionPlan
         case worktreeBindingSummaries
         case activeWorktreeMergeSummaries
+        case workflowSummary
         case serializationVersion
         case observedFileSize
         case observedFileModificationDate
@@ -221,8 +237,12 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
         autoEditEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoEditEnabled) ?? true
         parentSessionID = try container.decodeIfPresent(UUID.self, forKey: .parentSessionID)
         isMCPOriginated = try container.decodeIfPresent(Bool.self, forKey: .isMCPOriginated) ?? false
+        isCoordinatorRuntime = try container.decodeIfPresent(Bool.self, forKey: .isCoordinatorRuntime) ?? false
+        coordinatorMissionTemplate = try container.decodeIfPresent(CoordinatorMissionTemplateSummary.self, forKey: .coordinatorMissionTemplate)
+        coordinatorMissionPlan = try container.decodeIfPresent(CoordinatorMissionPlan.self, forKey: .coordinatorMissionPlan)
         worktreeBindingSummaries = try container.decodeIfPresent([AgentSessionWorktreeBindingSummary].self, forKey: .worktreeBindingSummaries) ?? []
         activeWorktreeMergeSummaries = try container.decodeIfPresent([AgentSessionWorktreeMergeSummary].self, forKey: .activeWorktreeMergeSummaries) ?? []
+        workflowSummary = try container.decodeIfPresent(AgentSessionWorkflowSummary.self, forKey: .workflowSummary)
         serializationVersion = try container.decodeIfPresent(Int.self, forKey: .serializationVersion)
         observedFileSize = try container.decodeIfPresent(Int64.self, forKey: .observedFileSize)
         observedFileModificationDate = try container.decodeIfPresent(Date.self, forKey: .observedFileModificationDate)
@@ -252,8 +272,12 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
             parentSessionID: parentSessionID,
             hasUnknownConversationContent: hasUnknownConversationContent,
             isMCPOriginated: isMCPOriginated,
+            isCoordinatorRuntime: isCoordinatorRuntime,
+            coordinatorMissionTemplate: coordinatorMissionTemplate,
+            coordinatorMissionPlan: coordinatorMissionPlan,
             worktreeBindingSummaries: worktreeBindingSummaries,
-            activeWorktreeMergeSummaries: activeWorktreeMergeSummaries
+            activeWorktreeMergeSummaries: activeWorktreeMergeSummaries,
+            workflowSummary: workflowSummary
         )
     }
 
@@ -269,6 +293,7 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
             lastRunState: lastRunStateRaw,
             parentSessionID: parentSessionID,
             isMCPOriginated: isMCPOriginated,
+            isCoordinatorRuntime: isCoordinatorRuntime,
             worktreeBindingSummaries: worktreeBindingSummaries,
             activeWorktreeMergeSummaries: activeWorktreeMergeSummaries
         )
@@ -292,8 +317,12 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
             && autoEditEnabled == other.autoEditEnabled
             && parentSessionID == other.parentSessionID
             && isMCPOriginated == other.isMCPOriginated
+            && isCoordinatorRuntime == other.isCoordinatorRuntime
+            && coordinatorMissionTemplate == other.coordinatorMissionTemplate
+            && coordinatorMissionPlan == other.coordinatorMissionPlan
             && worktreeBindingSummaries == other.worktreeBindingSummaries
             && activeWorktreeMergeSummaries == other.activeWorktreeMergeSummaries
+            && workflowSummary == other.workflowSummary
             && serializationVersion == other.serializationVersion
             && observedFileSize == other.observedFileSize
             && observedFileModificationDate == other.observedFileModificationDate
@@ -310,6 +339,7 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
         fileURL: URL,
         observedFileSize: Int64?,
         observedFileModificationDate: Date?,
+        workflowSummaryOverride: AgentSessionWorkflowSummary? = nil,
         lastIndexedAt: Date = Date()
     ) -> AgentSessionMetadataRecord {
         let turns = session.transcript?.turns ?? []
@@ -336,8 +366,12 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
             autoEditEnabled: session.autoEditEnabled,
             parentSessionID: session.parentSessionID,
             isMCPOriginated: session.isMCPOriginated,
+            isCoordinatorRuntime: session.isCoordinatorRuntime,
+            coordinatorMissionTemplate: session.coordinatorFollowThroughState?.missionTemplate,
+            coordinatorMissionPlan: session.coordinatorFollowThroughState?.missionPlan,
             worktreeBindingSummaries: session.worktreeBindings.worktreeBindingSummaries,
             activeWorktreeMergeSummaries: session.worktreeMergeOperations.activeWorktreeMergeSummaries,
+            workflowSummary: workflowSummaryOverride ?? latestWorkflowSummary(in: session),
             serializationVersion: session.serializationVersion,
             observedFileSize: observedFileSize,
             observedFileModificationDate: observedFileModificationDate,
@@ -349,6 +383,16 @@ struct AgentSessionMetadataRecord: Codable, Equatable, Identifiable {
             interActiveIntervalGapSeconds: durationPrimitives.gapSeconds,
             toolCallCount: computedToolCallCount
         )
+    }
+
+    static func latestWorkflowSummary(in session: AgentSession) -> AgentSessionWorkflowSummary? {
+        if let workflow = session.items.last(where: { $0.kind == .user })?.workflow {
+            return AgentSessionWorkflowSummary(workflow)
+        }
+        if let workflow = session.transcript?.turns.last(where: { $0.request?.workflow != nil })?.request?.workflow {
+            return AgentSessionWorkflowSummary(workflow)
+        }
+        return nil
     }
 
     /// Aggregate file key paths across turns: prefers compacted summary `keyPaths`, falling back to

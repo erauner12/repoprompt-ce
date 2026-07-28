@@ -16,21 +16,7 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
         _ computerUseEnabled: Bool
     ) -> any CodexSessionControlling
 
-    typealias ConnectionPolicyInstaller = (
-        _ clientName: String,
-        _ windowID: Int,
-        _ restrictedTools: Set<String>,
-        _ oneShot: Bool,
-        _ reason: String?,
-        _ ttl: TimeInterval,
-        _ tabID: UUID?,
-        _ runID: UUID?,
-        _ additionalTools: Set<String>?,
-        _ purpose: MCPRunPurpose,
-        _ taskLabelKind: AgentModelCatalog.TaskLabelKind?,
-        _ allowsAgentExternalControlTools: Bool,
-        _ requiresExpectedAgentPID: Bool
-    ) async -> Void
+    typealias ConnectionPolicyInstaller = (_ context: AgentModeMCPPolicyContext) async -> Void
     typealias ActiveToolQuery = AgentModeViewModel.CodexActiveToolQuery
     typealias ActiveAgentRunWaitQuery = AgentModeViewModel.CodexAgentRunWaitQuery
     typealias ActiveAgentRunWaitDrain = AgentModeViewModel.CodexAgentRunWaitDrain
@@ -4732,7 +4718,7 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
             }
         }
 
-        var currentTaskLabelKind = session.mcpControlContext?.taskLabelKind
+        var currentTaskLabelKind = session.effectiveMCPTaskLabelKind
         var controllerPermissionProfile = session.permissionProfile
         var runtimeWorkspacePaths: CodexRuntimeWorkspacePaths
         do {
@@ -4836,7 +4822,7 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
                 }
                 return nil
             }
-            let refreshedTaskLabelKind = session.mcpControlContext?.taskLabelKind
+            let refreshedTaskLabelKind = session.effectiveMCPTaskLabelKind
             let refreshedPermissionProfile = session.permissionProfile
             let refreshedComputerUseFeatureEnabled = CodexComputerUseWorkflow.isEnabled
             if !refreshedComputerUseFeatureEnabled {
@@ -5019,11 +5005,11 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
             && requiresTransportStart
         let shouldWaitForRouting = requiresTransportStart
         if shouldInstallPolicy {
-            let allowsAgentExternalControlTools = session.mcpControlContext != nil && session.parentSessionID == nil
+            let allowsAgentExternalControlTools = session.mcpControlContext?.allowsAgentExternalControlTools ?? false
             guard let lease = makeCodexRunLease(
                 tabID: session.tabID,
                 runID: runID,
-                taskLabelKind: session.mcpControlContext?.taskLabelKind,
+                taskLabelKind: session.effectiveMCPTaskLabelKind,
                 allowsAgentExternalControlTools: allowsAgentExternalControlTools
             ) else { return }
             let acquired = await lease.acquire()
@@ -5103,8 +5089,12 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
         let selection = effectiveCodexSelection(for: session)
         let basePrompt = SystemPromptService.agentModePrompt(
             agentKind: .codexExec,
-            taskLabelKind: session.mcpControlContext?.taskLabelKind,
-            codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled()
+            taskLabelKind: session.effectiveMCPTaskLabelKind,
+            allowsAgentExternalControlTools: session.mcpControlContext?.allowsAgentExternalControlTools ?? false,
+            codeMapsDisabled: GlobalSettingsStore.shared.globalCodeMapsDisabled(),
+            coordinatorRuntimeDemo: session.isCoordinatorRuntimeDemo,
+            coordinatorRuntimeAutoMode: session.isCoordinatorRuntimeDemo &&
+                CoordinatorModeAutomationPreference.isEnabled(defaults: preferenceDefaults)
         )
         let resumeCandidate = Self.codexResumeCandidate(
             for: session,
@@ -6859,7 +6849,9 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
                 session: session,
                 at: eventTimestamp
             )
-            if AgentToolTrackingSupport.isExplicitRepoPromptTool(toolName) {
+            if AgentToolTrackingSupport.isExplicitRepoPromptTool(toolName),
+               !AgentToolTrackingSupport.shouldRenderExplicitRepoPromptProviderEvent(toolName)
+            {
                 AgentModeViewModel.logCodexDebug("[AgentModeVM][CodexUI] skip native explicit RepoPrompt toolCall tool=\(toolName)")
                 return
             }
@@ -6892,7 +6884,9 @@ final class CodexAgentModeCoordinator: AgentModeRunInteractionStateObserving {
             guard session.runState.isActive else { return }
             clearCodexPendingAuthRetryTurn(session)
             sealAssistantBoundary(session)
-            if AgentToolTrackingSupport.isExplicitRepoPromptTool(toolName) {
+            if AgentToolTrackingSupport.isExplicitRepoPromptTool(toolName),
+               !AgentToolTrackingSupport.shouldRenderExplicitRepoPromptProviderEvent(toolName)
+            {
                 AgentModeViewModel.logCodexDebug("[AgentModeVM][CodexUI] skip native explicit RepoPrompt toolResult tool=\(toolName)")
                 return
             }

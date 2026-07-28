@@ -101,6 +101,7 @@ struct AgentManageMCPToolService {
         let tabID: UUID?
         let isLive: Bool
         let isMCPOriginated: Bool
+        let isCoordinatorRuntime: Bool
         let runStateRaw: String?
         let isEffectivelyActive: Bool
     }
@@ -190,7 +191,7 @@ struct AgentManageMCPToolService {
                 agentRaw: res.recommended.agent.rawValue,
                 modelRaw: res.recommended.modelRaw
             )
-            let object: [String: Value] = [
+            var object: [String: Value] = [
                 "label": .string(res.roleLabel),
                 "description": .string(res.roleDescription),
                 "model_id": .string(res.selectionID.rawValue),
@@ -200,6 +201,10 @@ struct AgentManageMCPToolService {
                 "has_custom_override": .bool(res.hasCustomOverride),
                 "override_unavailable": .bool(res.overrideUnavailable)
             ]
+            if res.role.requiresDedicatedLaunchPath {
+                object["requires_dedicated_launch_path"] = .bool(true)
+                object["launch_note"] = .string("Use the dedicated Coordinator runtime launch path; the role label is model binding only.")
+            }
             return .object(object)
         }
 
@@ -226,7 +231,7 @@ struct AgentManageMCPToolService {
 
         let persisted = try await AgentSessionDataService.shared.listAgentSessionsMeta(for: workspace)
         var entriesByID: [UUID: [String: Value]] = [:]
-        for meta in persisted {
+        for meta in persisted where !meta.isCoordinatorRuntime {
             entriesByID[meta.id] = sessionSummaryObject(
                 sessionID: meta.id,
                 name: meta.name,
@@ -241,7 +246,7 @@ struct AgentManageMCPToolService {
             )
         }
 
-        for entry in agentModeVM.sessionIndex.values {
+        for entry in agentModeVM.sessionIndex.values where !entry.isCoordinatorRuntime {
             entriesByID[entry.id] = sessionSummaryObject(
                 sessionID: entry.id,
                 name: entry.name,
@@ -257,7 +262,8 @@ struct AgentManageMCPToolService {
         }
 
         for session in agentModeVM.sessions.values {
-            guard let activeSessionID = session.activeAgentSessionID else { continue }
+            guard let activeSessionID = session.activeAgentSessionID,
+                  !session.isCoordinatorRuntime else { continue }
             let tabName = targetWindow.workspaceManager.composeTab(with: session.tabID)?.name
             entriesByID[activeSessionID] = sessionSummaryObject(
                 sessionID: activeSessionID,
@@ -476,6 +482,7 @@ struct AgentManageMCPToolService {
         let sourceTabID = await resolveSpawnSourceTabID(metadata)
         try agentModeVM.mcpValidateAgentRunSpawnAllowed(sourceTabID: sourceTabID)
         let spawnParentSessionID = await resolveSpawnParentSessionID(metadata, targetWindow)
+        let isCoordinatorParent = agentModeVM.mcpIsCoordinatorRuntime(sessionID: spawnParentSessionID)
         // create_session always creates a new session — default to the effective engineer role when model_id is omitted.
         // Validate selection before creating a target to avoid phantom sessions on bad model_id.
         let selection = try AgentMCPSelectionResolver.resolve(
@@ -484,6 +491,9 @@ struct AgentManageMCPToolService {
             availability: targetWindow.apiSettingsViewModel.agentModeAvailabilityContext,
             workspaceID: targetWindow.workspaceManager.activeWorkspace?.id
         )
+        try Self.rejectDedicatedLaunchRoleIfNeeded(selection.taskLabelKind, operation: "agent_manage.create_session")
+        let allowsAgentExternalControlTools = spawnParentSessionID == nil
+            || (isCoordinatorParent && selection.taskLabelKind != .explore)
         let resolved = resolvedModelAndEffort(agentRaw: selection.agentRaw, modelRaw: selection.modelRaw, args: args)
         let target = try await agentModeVM.mcpResolveOrCreateSessionTarget(
             tabID: nil,
@@ -509,6 +519,7 @@ struct AgentManageMCPToolService {
                 sessionID: sessionID,
                 originatingConnectionID: metadata.connectionID,
                 taskLabelKind: selection.taskLabelKind,
+                allowsAgentExternalControlTools: allowsAgentExternalControlTools,
                 startPending: false
             )
         } catch {
@@ -545,6 +556,7 @@ struct AgentManageMCPToolService {
         let sourceTabID = await resolveSpawnSourceTabID(metadata)
         try agentModeVM.mcpValidateAgentRunSpawnAllowed(sourceTabID: sourceTabID)
         let spawnParentSessionID = await resolveSpawnParentSessionID(metadata, targetWindow)
+        let isCoordinatorParent = agentModeVM.mcpIsCoordinatorRuntime(sessionID: spawnParentSessionID)
         guard let sessionID = try await agentModeVM.mcpResolveSessionID(reference: sessionReference, workspace: workspace) else {
             throw MCPError.invalidParams("Session '\(sessionReference)' was not found in the active workspace.")
         }
@@ -553,6 +565,9 @@ struct AgentManageMCPToolService {
             availability: targetWindow.apiSettingsViewModel.agentModeAvailabilityContext,
             workspaceID: workspace.id
         )
+        try Self.rejectDedicatedLaunchRoleIfNeeded(selection.taskLabelKind, operation: "agent_manage.resume_session")
+        let allowsAgentExternalControlTools = spawnParentSessionID == nil
+            || (isCoordinatorParent && selection.taskLabelKind != .explore)
         let resolved = resolvedModelAndEffort(agentRaw: selection.agentRaw, modelRaw: selection.modelRaw, args: args)
         let target = try await agentModeVM.mcpResolveOrCreateSessionTarget(
             tabID: nil,
@@ -572,6 +587,7 @@ struct AgentManageMCPToolService {
                     sessionID: sessionID,
                     originatingConnectionID: metadata.connectionID,
                     taskLabelKind: selection.taskLabelKind,
+                    allowsAgentExternalControlTools: allowsAgentExternalControlTools,
                     startPending: false
                 )
             }
@@ -635,6 +651,9 @@ struct AgentManageMCPToolService {
         }
 
         let session = await agentModeVM.ensureSessionReady(tabID: target.tabID)
+        guard !session.isCoordinatorRuntime else {
+            throw MCPError.invalidParams("Coordinator runtime sessions cannot be stopped through agent_manage.stop_session. Use the dedicated Coordinator reset path.")
+        }
         let wasActive = session.runState.isActive
         if wasActive {
             await agentModeVM.cancelAgentRun(tabID: target.tabID, completion: .terminalPublished)
@@ -739,6 +758,7 @@ struct AgentManageMCPToolService {
                         tabID: liveSession.tabID,
                         isLive: true,
                         isMCPOriginated: liveSession.isMCPOriginated,
+                        isCoordinatorRuntime: liveSession.isCoordinatorRuntime,
                         runStateRaw: liveSession.runState.rawValue,
                         isEffectivelyActive: isEffectivelyActive
                     )
@@ -766,6 +786,7 @@ struct AgentManageMCPToolService {
                             tabID: meta.composeTabID,
                             isLive: false,
                             isMCPOriginated: meta.isMCPOriginated,
+                            isCoordinatorRuntime: meta.isCoordinatorRuntime,
                             runStateRaw: meta.lastRunState,
                             isEffectivelyActive: runState?.isActive == true
                         )
@@ -815,6 +836,15 @@ struct AgentManageMCPToolService {
                     "session_id": .string(sessionID.uuidString),
                     "name": .string("Unknown"),
                     "reason": .string("already_absent")
+                ])
+                continue
+            }
+
+            if candidate.isCoordinatorRuntime {
+                skippedSessions.append([
+                    "session_id": .string(sessionID.uuidString),
+                    "name": .string(candidate.name),
+                    "reason": .string("coordinator_runtime_protected")
                 ])
                 continue
             }
@@ -1213,6 +1243,14 @@ struct AgentManageMCPToolService {
             obj["is_mcp_originated"] = .bool(true)
         }
         return obj
+    }
+
+    private static func rejectDedicatedLaunchRoleIfNeeded(
+        _ taskLabelKind: AgentModelCatalog.TaskLabelKind?,
+        operation: String
+    ) throws {
+        guard taskLabelKind?.requiresDedicatedLaunchPath == true else { return }
+        throw MCPError.invalidParams("\(operation) cannot use model_id 'coordinator' for an ordinary Agent Mode session. Use the dedicated Coordinator runtime launch path so the Coordinator marker and policy context are installed.")
     }
 
     private func sessionStateMatches(object: [String: Value], filter: String) -> Bool {

@@ -45,6 +45,10 @@ class ContentViewModel: ObservableObject {
         state.workspaceManager
     }
 
+    var canSelectMainSurface: Bool {
+        rootRoute == .main && !isInSystemFallback
+    }
+
     init(state: WindowState) {
         self.state = state
 
@@ -69,6 +73,7 @@ class ContentViewModel: ObservableObject {
     func evaluateInitialRouteIfNeeded() {
         if AppLaunchConfiguration.current.forcedRootRoute == .main {
             rootRoute = .main
+            state.agentModeViewModel.coordinatorModeViewModel.setVisible(false)
             return
         }
         if isInSystemFallback {
@@ -91,7 +96,11 @@ class ContentViewModel: ObservableObject {
     func syncRouteWithWorkspaceState() {
         if AppLaunchConfiguration.current.forcedRootRoute == .main {
             rootRoute = .main
+            state.agentModeViewModel.coordinatorModeViewModel.setVisible(false)
             return
+        }
+        if isInSystemFallback {
+            state.agentModeViewModel.coordinatorModeViewModel.setVisible(false)
         }
         if isInSystemFallback {
             if rootRoute != .workspaceEntry {

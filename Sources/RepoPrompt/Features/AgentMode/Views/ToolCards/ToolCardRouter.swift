@@ -5,6 +5,9 @@ import SwiftUI
 func normalizedToolCardName(_ name: String?) -> String? {
     guard let raw = name?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
     let canonical = MCPIntegrationHelper.canonicalRepoPromptToolName(raw) ?? raw
+    if canonical != raw {
+        return canonical
+    }
     // External tools can be namespaced (for example, "functions.bash").
     // Route by suffix so tool cards stay consistent.
     if let webCanonical = AgentWebToolCanonicalNames.canonicalToolCardName(canonical.lowercased()) {

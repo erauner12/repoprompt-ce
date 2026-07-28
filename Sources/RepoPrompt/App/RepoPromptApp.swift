@@ -157,6 +157,9 @@ struct RepoPromptSwiftUIApp: App {
             // ➜ New File-menu commands (Save Workspace / Exit Workspace)
             WorkspaceCommands(windowStatesManager: windowStatesManager)
 
+            // View-menu peer surface navigation for windows where toolbar chrome is hidden/customized.
+            MainSurfaceCommands()
+
             CommandGroup(before: .saveItem) {
                 Button("Close Window") {
                     NSApplication.shared.keyWindow?.performClose(nil)

@@ -876,6 +876,7 @@ final class AgentManageMCPToolServiceCleanupTests: XCTestCase {
             lastRunState: runState.rawValue,
             parentSessionID: nil,
             isMCPOriginated: isMCPOriginated,
+            isCoordinatorRuntime: false,
             worktreeBindingSummaries: [],
             activeWorktreeMergeSummaries: []
         )

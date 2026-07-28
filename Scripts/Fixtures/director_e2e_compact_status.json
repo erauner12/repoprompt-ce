@@ -1,0 +1,35 @@
+{
+  "fingerprint": "fixture",
+  "plan": {
+    "status": "running",
+    "revision": 1,
+    "approval_state": "approved",
+    "policy_snapshot": {
+      "max_concurrent": 3,
+      "default_pace": "step"
+    },
+    "autonomy_summary": {
+      "ask": [
+        "childAsk"
+      ],
+      "auto": []
+    }
+  },
+  "node_counts": {
+    "running": 0
+  },
+  "ready_node_ids": [],
+  "decision_counts_by_actor": {
+    "user": 1,
+    "director": 0
+  },
+  "evidence_counts": {
+    "total": 1
+  },
+  "receipt_ready_summary": null,
+  "counts": {
+    "needs_you": 0
+  },
+  "active_nodes": [],
+  "liveness_warnings": []
+}

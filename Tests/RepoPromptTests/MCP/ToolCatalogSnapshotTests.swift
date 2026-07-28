@@ -42,6 +42,70 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         XCTAssertEqual(signatures, Self.expectedSignatures)
     }
 
+    func testCoordinatorChatSchemaPinsCheckpointAuthorityAndApprovedContractCopy() async throws {
+        let window = Self.makeWindowWithoutAutoStart()
+        let tools = await window.mcpServer.windowMCPTools
+        let tool = try XCTUnwrap(tools.first { $0.name == MCPWindowToolName.coordinatorChat })
+        let description = try XCTUnwrap(tool.description)
+        let schema = try XCTUnwrap(Value(tool.inputSchema).objectValue)
+        let properties = try Self.schemaProperties(for: tool, label: #function)
+
+        XCTAssertTrue(description.contains("Checkpoint actions are external-user only"))
+        let sessionDescription = try XCTUnwrap(
+            properties["coordinator_session_id"]?.objectValue?["description"]?.stringValue
+        )
+        XCTAssertTrue(sessionDescription.contains("External callers default to the selected Coordinator"))
+        XCTAssertTrue(sessionDescription.contains("Coordinator runtime callers default to their own Mission or fail closed"))
+        XCTAssertTrue(description.contains("trusted visible revision"))
+        XCTAssertTrue(description.contains("approved objective, shape, workstreams, node contract, worktree strategy, policy/autonomy, or done criteria"))
+
+        let checkpointDescription = try XCTUnwrap(
+            properties["expected_checkpoint_instance_id"]?.objectValue?["description"]?.stringValue
+        )
+        XCTAssertTrue(checkpointDescription.contains("compact=true"))
+        XCTAssertTrue(checkpointDescription.contains("checkpoint.checkpoint_instance_id"))
+        let guidanceDescription = try XCTUnwrap(
+            properties["guidance"]?.objectValue?["description"]?.stringValue
+        )
+        XCTAssertTrue(guidanceDescription.contains("submit revise_plan"))
+        XCTAssertTrue(guidanceDescription.contains("Rejected for other actions and runtime callers"))
+        let acceptedResolutionDescription = try XCTUnwrap(
+            properties["accepted_revision_resolution_id"]?.objectValue?["description"]?.stringValue
+        )
+        XCTAssertTrue(acceptedResolutionDescription.contains("revision_proposal.accepted_drafting.submit_hints"))
+        XCTAssertTrue(acceptedResolutionDescription.contains("External message-only authority"))
+        XCTAssertTrue(acceptedResolutionDescription.contains("stale IDs"))
+
+        let approvalSchema = try XCTUnwrap(properties["approval_state"]?.objectValue)
+        XCTAssertEqual(
+            approvalSchema["enum"]?.arrayValue?.compactMap(\.stringValue),
+            ["awaiting_approval", "revision_requested"]
+        )
+        let approvalDescription = try XCTUnwrap(approvalSchema["description"]?.stringValue)
+        XCTAssertTrue(approvalDescription.contains("approved is set only by the trusted checkpoint path"))
+        XCTAssertTrue(approvalDescription.contains("not_required is legacy output-only/non-authorizing"))
+
+        let opSchema = try XCTUnwrap(properties["op"]?.objectValue)
+        let ops = try XCTUnwrap(opSchema["enum"]?.arrayValue?.compactMap(\.stringValue))
+        XCTAssertTrue(ops.contains("propose_revision"))
+        XCTAssertTrue(description.contains("`propose_revision`: Owning Coordinator runtime only"))
+        for field in [
+            "base_plan_id",
+            "base_contract_fingerprint",
+            "summary",
+            "rationale",
+            "affected_fields",
+            "remedy",
+            "supporting_evidence_ids",
+            "requested_change"
+        ] {
+            XCTAssertNotNil(properties[field], "Missing propose_revision schema field: \(field)")
+        }
+        XCTAssertNil(properties["revision_proposals"])
+        XCTAssertNil(properties["features"])
+        XCTAssertNil(schema["features"])
+    }
+
     func testAgentRunRespondSchemaAdvertisesCanonicalScalarResponseOnly() async throws {
         let window = Self.makeWindowWithoutAutoStart()
         let tools = await window.mcpServer.windowMCPTools
@@ -322,6 +386,12 @@ final class ToolCatalogSnapshotTests: XCTestCase {
             XCTAssertNotNil(agentRunProperties[field], "agent_run schema should advertise property \(field)")
             XCTAssertNotNil(agentExploreProperties[field], "agent_explore schema should advertise property \(field)")
         }
+        XCTAssertNotNil(agentRunProperties["mission_node_id"], "agent_run schema should advertise mission_node_id")
+        XCTAssertNotNil(agentExploreProperties["mission_node_id"], "agent_explore schema should advertise mission_node_id")
+        let agentRunMissionNodeDescription = try XCTUnwrap(agentRunProperties["mission_node_id"]?.objectValue?["description"]?.stringValue)
+        XCTAssertTrue(agentRunMissionNodeDescription.contains("pre-approval Investigate"))
+        XCTAssertTrue(agentRunMissionNodeDescription.contains("Deep Plan"))
+        XCTAssertTrue(agentRunMissionNodeDescription.contains("plan_critique"))
         #if DEBUG
             XCTAssertNotNil(agentRunProperties["_worktree_startup_benchmark_token"])
             XCTAssertNil(agentExploreProperties["_worktree_startup_benchmark_token"])
@@ -345,6 +415,24 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         ] {
             XCTAssertNil(agentExploreProperties[field], "agent_explore schema must not advertise run-only property \(field)")
         }
+    }
+
+    func testCoordinatorChatSchemaAdvertisesFollowUpMissionFields() async throws {
+        let window = Self.makeWindowWithoutAutoStart()
+        let tools = await window.mcpServer.windowMCPTools
+        let coordinatorChat = try XCTUnwrap(tools.first { $0.name == MCPWindowToolName.coordinatorChat })
+        let properties = try Self.schemaProperties(for: coordinatorChat)
+
+        XCTAssertNotNil(properties["predecessor_mission_id"])
+        XCTAssertNotNil(properties["predecessor_title"])
+        XCTAssertNotNil(properties["predecessor_summary"])
+        XCTAssertNotNil(properties["mission_key"])
+        XCTAssertNotNil(properties["format"])
+        let predecessorIDDescription = try XCTUnwrap(properties["predecessor_mission_id"]?.objectValue?["description"]?.stringValue)
+        XCTAssertTrue(predecessorIDDescription.contains("start_mission"))
+        XCTAssertTrue(predecessorIDDescription.contains("mission_plan"))
+        let formatDescription = try XCTUnwrap(properties["format"]?.objectValue?["description"]?.stringValue)
+        XCTAssertTrue(formatDescription.contains("[receipt]"))
     }
 
     private static func makeWindowWithoutAutoStart() -> WindowState {
@@ -506,13 +594,14 @@ final class ToolCatalogSnapshotTests: XCTestCase {
         "14|manage_worktree|enabled=true|ann=title=nil,readOnly=false,destructive=true,idempotent=nil,openWorld=false|desc=857ab8975667e3d2e5b35a09c7415e07ca0ab2f0ff16de6895170d4d1b47a820|schema=9263f9f047982b3709d92040f749804d69928d222ce46038a4171ded34d12bc6",
         "15|context_builder|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=d83348b6b803b303965401075041ddc5d7dcea3512020afa3f352c04413750fb|schema=2da87e6e171809a1e0eb0614fa8f7db2f91311f655f8427745060be80755da1f",
         "16|ask_user|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=6b3870ae4848eb01c73de9fbbdf2ed1782487db150260469853757f799257ee0|schema=080446bb7697cf5f4cd31f07b42ecff8ab29edc8501ee0e84e61426748569156",
-        "17|agent_explore|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=698ab006db47713a51f394bfe3f832ada8637440d8acb4715be5430ec380cef8|schema=d367738ad179d8f6b39b98f73082d594f53c42d771c4f2e512790593c5b3f9f4",
-        "18|agent_run|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=1c320626fae4f63a4fe884d3f03b0b1b6fd1b4bccd9f131c72bcd8624eb36a4c|schema=0b4f819f3aa6624df0f54fdaba6f8717ac64667d07a0528240d26905ba480520",
+        "17|agent_explore|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=0e8a797c836d23c3c085bc400d8e3dbab02144690baeab37689c4d1caa454f72|schema=107a43980ad3afe44c52602ed2c5b994869f0b377e09406c73b01d587bd531ee",
+        "18|agent_run|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=c32f0ed792ef645ab07e64f8aa27e00b41ed51222eeb778230de829f8575bd6a|schema=4e85b7cd22111ad15a5a5f0160ae62ea85bbd5a694939698bbff45749fbf4d33",
         "19|agent_manage|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=80d302d4391d6136f8acfbe8fc0bafe394c5110c5e63aefcf8f4c59fcbdbf95f|schema=83f34927eacac4dc6352db72eae312ac3a5477b2f70c9031f09a2101dc8f2e97",
-        "20|share_thoughts|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=b1ac755b39a4ac2d8a621e78801a258c5d95ec2ff4e063f600081fa27891a852|schema=a5dea0c92fd4da06a15f991e1e8a287235ca681ae381cef1b594bc7c07e538d7",
-        "21|set_status|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=19bbfd6fc47639e02295de4e9289ea77f25c6a91ad150998726768b84c266783|schema=0854d727c81f1eb8fa0a14edb9d6ab8bb58974d919cc53150bd72473f1ae0196",
-        "22|wait_for_next_user_instruction|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=3a59a13a0026414ae04dd21d730a7144b91c67146dce77340fe730c865bea3d7|schema=15335c3bbadf042948d0a1ba52f0fcb01125428dda4952dbda418051904d82ef",
-        "23|history|enabled=true|ann=title=nil,readOnly=true,destructive=false,idempotent=true,openWorld=false|desc=fdc6ec2292ef0962b5fcfadf8691d905849a28474a832042789f14c444f6b0b6|schema=584dfe4f4200b3c795505461c3889c23d455a3af97c761e3bb5dd40ae46a8d71"
+        "20|coordinator_chat|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=1906868813cf090b1f9a70eb29aa81e5d63bed7129b86f543988c8334538adb5|schema=81ddebe72c2d20ad5882e1f56e38979c436b94769f19d399321c0e408ef373dc",
+        "21|share_thoughts|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=b1ac755b39a4ac2d8a621e78801a258c5d95ec2ff4e063f600081fa27891a852|schema=a5dea0c92fd4da06a15f991e1e8a287235ca681ae381cef1b594bc7c07e538d7",
+        "22|set_status|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=19bbfd6fc47639e02295de4e9289ea77f25c6a91ad150998726768b84c266783|schema=0854d727c81f1eb8fa0a14edb9d6ab8bb58974d919cc53150bd72473f1ae0196",
+        "23|wait_for_next_user_instruction|enabled=true|ann=title=nil,readOnly=false,destructive=false,idempotent=nil,openWorld=false|desc=3a59a13a0026414ae04dd21d730a7144b91c67146dce77340fe730c865bea3d7|schema=15335c3bbadf042948d0a1ba52f0fcb01125428dda4952dbda418051904d82ef",
+        "24|history|enabled=true|ann=title=nil,readOnly=true,destructive=false,idempotent=true,openWorld=false|desc=fdc6ec2292ef0962b5fcfadf8691d905849a28474a832042789f14c444f6b0b6|schema=584dfe4f4200b3c795505461c3889c23d455a3af97c761e3bb5dd40ae46a8d71"
     ]
 
     private static func signatures(for tools: [RepoPromptApp.Tool]) throws -> [String] {
