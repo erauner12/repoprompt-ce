@@ -32,10 +32,68 @@ struct AgentWorkspaceRootsSectionView: View {
     @FocusState private var focusedRootAction: RootActionFocus?
     @State private var showModelsPopover = false
     @State private var showPermissionsPopover = false
+    @State private var showCodemapPopover = false
     @State private var isAddFolderHovered = false
     @ObservedObject private var fontScale = FontScaleManager.shared
     private var fontPreset: FontScalePreset {
         fontScale.preset
+    }
+
+    private struct CodemapSummary {
+        enum State: Equatable {
+            case indexing
+            case reconciling
+            case ready
+            case paused
+            case mixed
+            case unavailable
+        }
+
+        let state: State
+        let progressFraction: Double?
+        let classifiedCount: UInt64
+        let supportedCount: UInt64?
+        let readyRootCount: Int
+        let reconcilingRootCount: Int
+        let pausedRootCount: Int
+
+        var progressPercentage: Int? {
+            guard state == .indexing || state == .reconciling, let progressFraction else { return nil }
+            return min(99, max(0, Int((progressFraction * 100).rounded(.down))))
+        }
+
+        var label: String {
+            switch state {
+            case .indexing, .reconciling, .ready, .unavailable: "Code Map"
+            case .paused: "Paused"
+            case .mixed: "Partial"
+            }
+        }
+
+        var detailText: String {
+            switch state {
+            case .indexing:
+                var details = [progressPercentage.map { "Indexing \($0)%" } ?? "Preparing index…"]
+                if reconcilingRootCount > 0 { details.append("\(reconcilingRootCount) reconciling") }
+                if pausedRootCount > 0 { details.append("\(pausedRootCount) paused") }
+                return details.joined(separator: " • ")
+            case .reconciling:
+                let detail = "Reconciling watcher changes"
+                return pausedRootCount > 0 ? "\(detail) • \(pausedRootCount) paused" : detail
+            case .ready:
+                return "All available roots mapped"
+            case .paused:
+                return "Indexing paused"
+            case .mixed:
+                return "\(readyRootCount) mapped • \(pausedRootCount) paused"
+            case .unavailable:
+                return "Code Maps unavailable"
+            }
+        }
+
+        var tooltip: String {
+            "\(detailText). Click for graph coverage and per-root controls."
+        }
     }
 
     private struct RootActionFocus: Hashable {
@@ -172,17 +230,67 @@ struct AgentWorkspaceRootsSectionView: View {
     }
 
     private var worktreeCapsuleLabelMaxWidth: CGFloat {
-        fontPreset.scaledClamped(118, min: 62, max: 154)
+        fontPreset.scaledClamped(170, min: 72, max: 220)
     }
 
     private var mergeCapsuleLabelMaxWidth: CGFloat {
-        fontPreset.scaledClamped(92, min: 44, max: 126)
+        fontPreset.scaledClamped(130, min: 56, max: 180)
     }
 
     private var roots: [AgentWorkspaceRootRow] {
         rootsStore.rootRows.map { row in
             row.withWorktree(worktreeIndicator(for: row))
         }
+    }
+
+    private var codemapSummary: CodemapSummary {
+        let availableRoots = roots.filter(\.codemap.canToggle)
+        let activeRoots = availableRoots.filter {
+            switch $0.codemap.state {
+            case .notInitialized, .indexing, .updating: true
+            case .reconciling, .ready, .paused, .unavailable, .revoked: false
+            }
+        }
+        let reconcilingRoots = availableRoots.filter { $0.codemap.state == .reconciling }
+        let pausedRoots = availableRoots.filter(\.codemap.isPaused)
+        let readyRoots = availableRoots.filter { $0.codemap.state == .ready }
+        let progressRoots = availableRoots.filter { !$0.codemap.isPaused }
+        let totalsAreKnown = !progressRoots.isEmpty && progressRoots.allSatisfy {
+            $0.codemap.supportedCount != nil
+        }
+        let classified = progressRoots.reduce(UInt64(0)) { $0 + $1.codemap.classifiedCount }
+        let supported = totalsAreKnown
+            ? progressRoots.reduce(UInt64(0)) { $0 + ($1.codemap.supportedCount ?? 0) }
+            : nil
+        let rawProgress = supported.flatMap { supported -> Double? in
+            guard supported > 0 else { return activeRoots.isEmpty ? 1 : nil }
+            return min(1, Double(classified) / Double(supported))
+        }
+        let state: CodemapSummary.State = if !activeRoots.isEmpty {
+            .indexing
+        } else if !reconcilingRoots.isEmpty {
+            .reconciling
+        } else if availableRoots.isEmpty {
+            .unavailable
+        } else if pausedRoots.count == availableRoots.count {
+            .paused
+        } else if readyRoots.count == availableRoots.count {
+            .ready
+        } else {
+            .mixed
+        }
+        let progress = rawProgress.map {
+            state == .indexing || state == .reconciling ? min(0.99, $0) : $0
+        }
+        return CodemapSummary(
+            state: state,
+            progressFraction: progress,
+            classifiedCount: classified,
+            supportedCount: supported,
+            readyRootCount: readyRoots.count,
+            reconcilingRootCount: reconcilingRoots.count,
+            pausedRootCount: pausedRoots.count
+        )
     }
 
     /// Resolves the active session's worktree indicator bound to `row`, if any.
@@ -273,9 +381,15 @@ struct AgentWorkspaceRootsSectionView: View {
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: true, vertical: false)
 
-            workspaceDropdown
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(1)
+            HStack(spacing: headerButtonSpacing) {
+                workspaceDropdown
+                    .layoutPriority(1)
+
+                codemapStatusTag
+                    .layoutPriority(2)
+            }
+
+            Spacer(minLength: 0)
 
             Button(action: {
                 Task { await rootsStore.exitWorkspace() }
@@ -293,6 +407,206 @@ struct AgentWorkspaceRootsSectionView: View {
         }
     }
 
+    private var codemapStatusTag: some View {
+        let summary = codemapSummary
+        return Button {
+            showCodemapPopover.toggle()
+        } label: {
+            ViewThatFits(in: .horizontal) {
+                codemapStatusTagLabel(summary, showsText: true)
+                codemapStatusTagLabel(summary, showsText: false)
+            }
+        }
+        .buttonStyle(CustomButtonStyle(verticalPadding: 0, horizontalPadding: 8, height: 26))
+        .hoverTooltip(summary.tooltip, .top)
+        .accessibilityLabel(summary.tooltip)
+        .popover(isPresented: $showCodemapPopover, arrowEdge: .top) {
+            codemapPopoverContent
+        }
+    }
+
+    private func codemapStatusTagLabel(
+        _ summary: CodemapSummary,
+        showsText: Bool
+    ) -> some View {
+        let tint = codemapSummaryTint(summary)
+        return HStack(spacing: fontPreset.scaledClamped(5, max: 7)) {
+            if showsText {
+                Text(summary.label)
+                    .font(fontPreset.swiftUIFont(sizeAtNormal: 10, weight: .medium))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            codemapSummaryIndicator(summary)
+        }
+        .foregroundStyle(tint)
+    }
+
+    @ViewBuilder
+    private func codemapSummaryIndicator(_ summary: CodemapSummary) -> some View {
+        let size = fontPreset.scaledClamped(15, min: 15, max: 20)
+        let tint = codemapSummaryTint(summary)
+        ZStack {
+            switch summary.state {
+            case .indexing, .reconciling:
+                if let progress = summary.progressFraction {
+                    Circle()
+                        .stroke(tint.opacity(0.25), lineWidth: 2)
+                    Circle()
+                        .trim(from: 0, to: progress)
+                        .stroke(tint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .animation(.linear(duration: 0.15), value: progress)
+                    if let progressPercentage = summary.progressPercentage {
+                        Text("\(progressPercentage)")
+                            .font(fontPreset.swiftUIFont(sizeAtNormal: 6, weight: .medium))
+                            .foregroundStyle(tint)
+                    }
+                } else {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .scaleEffect(0.55)
+                }
+            case .ready:
+                Image(systemName: "checkmark.circle")
+                    .font(fontPreset.swiftUIFont(sizeAtNormal: 13, weight: .medium))
+            case .paused:
+                Image(systemName: "pause.circle.fill")
+                    .font(fontPreset.swiftUIFont(sizeAtNormal: 13, weight: .medium))
+            case .mixed:
+                Image(systemName: "circle.lefthalf.filled")
+                    .font(fontPreset.swiftUIFont(sizeAtNormal: 13, weight: .medium))
+            case .unavailable:
+                Image(systemName: "slash.circle")
+                    .font(fontPreset.swiftUIFont(sizeAtNormal: 13, weight: .medium))
+            }
+        }
+        .frame(width: size, height: size)
+    }
+
+    private func codemapSummaryTint(_ summary: CodemapSummary) -> Color {
+        switch summary.state {
+        case .indexing: .blue
+        case .reconciling: .orange
+        case .ready: .secondary
+        case .mixed: .orange
+        case .paused, .unavailable: .secondary
+        }
+    }
+
+    private var codemapPopoverContent: some View {
+        let summary = codemapSummary
+        return VStack(alignment: .leading, spacing: fontPreset.scaledClamped(10, max: 14)) {
+            HStack(spacing: fontPreset.scaledClamped(8, max: 10)) {
+                codemapSummaryIndicator(summary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Code Map Mapping")
+                        .font(fontPreset.swiftUIFont(sizeAtNormal: 13, weight: .semibold))
+                    Text(summary.detailText)
+                        .font(fontPreset.swiftUIFont(sizeAtNormal: 10))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+
+            if summary.state == .indexing || summary.state == .reconciling {
+                if let progress = summary.progressFraction {
+                    ProgressView(value: progress)
+                        .tint(.accentColor)
+                    if let total = summary.supportedCount {
+                        Text("\(summary.classifiedCount) of \(total) files indexed")
+                            .font(fontPreset.swiftUIFont(sizeAtNormal: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(
+                            summary.pausedRootCount > 0
+                                ? "Per-root progress continues below."
+                                : "Preparing repository catalogs…"
+                        )
+                        .font(fontPreset.swiftUIFont(sizeAtNormal: 10))
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Divider()
+
+            Text("Repositories")
+                .font(fontPreset.swiftUIFont(sizeAtNormal: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            ScrollView(.vertical) {
+                LazyVStack(spacing: fontPreset.scaledClamped(6, max: 8)) {
+                    ForEach(roots, id: \.id) { row in
+                        codemapRootPopoverRow(row)
+                    }
+                }
+            }
+            .frame(maxHeight: fontPreset.scaledClamped(260, min: 140, max: 360))
+            .scrollIndicators(.automatic)
+        }
+        .padding(fontPreset.scaledClamped(14, max: 18))
+        .frame(width: fontPreset.scaledClamped(320, min: 290, max: 390))
+    }
+
+    private func codemapRootPopoverRow(_ row: AgentWorkspaceRootRow) -> some View {
+        let pending = rootsStore.isCodemapActionPending(rowID: row.id)
+        let actionTitle = row.codemap.isPaused ? "Resume" : "Pause"
+        return VStack(alignment: .leading, spacing: fontPreset.scaledClamped(5, max: 7)) {
+            HStack(spacing: fontPreset.scaledClamped(7, max: 9)) {
+                Image(systemName: "folder.fill")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(row.name)
+                        .font(fontPreset.swiftUIFont(sizeAtNormal: 11, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(row.codemap.statusText)
+                        .font(fontPreset.swiftUIFont(sizeAtNormal: 9))
+                        .foregroundStyle(codemapTint(row.codemap.tone))
+                }
+                Spacer(minLength: 4)
+                if row.codemap.canToggle {
+                    Button {
+                        Task {
+                            await rootsStore.toggleCodemapGeneration(rowID: row.id)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            if pending {
+                                ProgressView()
+                                    .controlSize(.mini)
+                            } else {
+                                Image(systemName: row.codemap.isPaused ? "play.fill" : "pause.fill")
+                            }
+                            Text(actionTitle)
+                        }
+                        .font(fontPreset.swiftUIFont(sizeAtNormal: 9, weight: .medium))
+                    }
+                    .buttonStyle(CustomButtonStyle(verticalPadding: 0, horizontalPadding: 6, height: 22))
+                    .disabled(pending)
+                    .accessibilityLabel("\(actionTitle) Code Map generation for \(row.name)")
+                }
+            }
+
+            if row.codemap.showsProgress, let progress = row.codemap.progressFraction {
+                ProgressView(value: progress)
+                    .tint(codemapTint(row.codemap.tone))
+            }
+        }
+        .padding(.horizontal, fontPreset.scaledClamped(8, max: 11))
+        .padding(.vertical, fontPreset.scaledClamped(7, max: 9))
+        .background(
+            RoundedRectangle(cornerRadius: fontPreset.scaledClamped(8, max: 11), style: .continuous)
+                .fill(Color.secondary.opacity(0.08))
+        )
+        .hoverTooltip(row.codemap.tooltip, .top)
+    }
+
     // MARK: - Workspace Dropdown
 
     private var workspaceDropdown: some View {
@@ -304,6 +618,7 @@ struct AgentWorkspaceRootsSectionView: View {
                 Text(rootsStore.workspaceLabel)
                     .font(fontPreset.swiftUIFont(sizeAtNormal: 12))
                     .lineLimit(1)
+                    .truncationMode(.middle)
                 Image(systemName: "chevron.down")
                     .font(fontPreset.swiftUIFont(sizeAtNormal: 9))
             }
@@ -448,7 +763,7 @@ struct AgentWorkspaceRootsSectionView: View {
 
     private var primaryBadge: some View {
         Text("PRIMARY")
-            .font(fontPreset.swiftUIFont(sizeAtNormal: 8, weight: .medium))
+            .font(fontPreset.swiftUIFont(sizeAtNormal: 9, weight: .medium))
             .foregroundColor(.secondary)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
@@ -478,6 +793,16 @@ struct AgentWorkspaceRootsSectionView: View {
             }
 
             Spacer(minLength: 0)
+        }
+        .padding(.leading, rootFolderIconWidth + rootRowSpacing)
+    }
+
+    private func codemapTint(_ tone: AgentWorkspaceCodemapPresentation.Tone) -> Color {
+        switch tone {
+        case .accent: .accentColor
+        case .success: .green
+        case .warning: .orange
+        case .secondary: .secondary
         }
     }
 
@@ -548,6 +873,15 @@ struct AgentWorkspaceRootsSectionView: View {
                 copyToPasteboard(checkout.value)
             }
         }
+
+        Divider()
+
+        Button(row.codemap.isPaused ? "Resume Code Map Generation" : "Pause Code Map Generation") {
+            Task {
+                await rootsStore.toggleCodemapGeneration(rowID: row.id)
+            }
+        }
+        .disabled(rootsStore.isCodemapActionPending(rowID: row.id) || !row.codemap.canToggle)
 
         if let worktree = row.worktree {
             Divider()
@@ -646,14 +980,14 @@ struct AgentWorkspaceRootsSectionView: View {
         let glyph = worktree.isAvailable ? worktree.iconName : "exclamationmark.triangle.fill"
         return HStack(spacing: fontPreset.scaledClamped(3, max: 4)) {
             Image(systemName: glyph)
-                .font(fontPreset.swiftUIFont(sizeAtNormal: 7, weight: .semibold))
+                .font(fontPreset.swiftUIFont(sizeAtNormal: 8, weight: .semibold))
             if isCompact {
                 Text("WT")
-                    .font(fontPreset.swiftUIFont(sizeAtNormal: 8, weight: .medium))
+                    .font(fontPreset.swiftUIFont(sizeAtNormal: 9, weight: .medium))
                     .lineLimit(1)
             } else {
                 Text(worktree.capsuleText)
-                    .font(fontPreset.swiftUIFont(sizeAtNormal: 8, weight: .medium))
+                    .font(fontPreset.swiftUIFont(sizeAtNormal: 9, weight: .medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .fixedSize(horizontal: false, vertical: true)
@@ -664,11 +998,12 @@ struct AgentWorkspaceRootsSectionView: View {
         .padding(.horizontal, fontPreset.scaledClamped(4, max: 6))
         .padding(.vertical, fontPreset.scaledClamped(1, max: 2))
         .background(
-            Capsule().fill(tint.opacity(worktree.isAvailable ? 0.14 : 0.12))
+            Capsule().fill(tint.opacity(worktree.isAvailable ? 0.18 : 0.12))
         )
         .overlay(
-            Capsule().strokeBorder(tint.opacity(worktree.isAvailable ? 0.5 : 0.7), lineWidth: 0.75)
+            Capsule().strokeBorder(tint.opacity(worktree.isAvailable ? 0.55 : 0.7), lineWidth: 0.75)
         )
+        .fixedSize(horizontal: true, vertical: true)
     }
 
     // MARK: - Merge Attention Capsule
@@ -689,17 +1024,17 @@ struct AgentWorkspaceRootsSectionView: View {
         }
         return HStack(spacing: fontPreset.scaledClamped(3, max: 4)) {
             Image(systemName: glyph)
-                .font(fontPreset.swiftUIFont(sizeAtNormal: 7, weight: .semibold))
+                .font(fontPreset.swiftUIFont(sizeAtNormal: 8, weight: .semibold))
             Text("MERGE")
-                .font(fontPreset.swiftUIFont(sizeAtNormal: 8, weight: .medium))
+                .font(fontPreset.swiftUIFont(sizeAtNormal: 9, weight: .medium))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
             Text("→")
-                .font(fontPreset.swiftUIFont(sizeAtNormal: 8, weight: .medium))
+                .font(fontPreset.swiftUIFont(sizeAtNormal: 9, weight: .medium))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
             Text(attention.targetLabel)
-                .font(fontPreset.swiftUIFont(sizeAtNormal: 8, weight: .medium))
+                .font(fontPreset.swiftUIFont(sizeAtNormal: 9, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: mergeCapsuleLabelMaxWidth, alignment: .leading)
