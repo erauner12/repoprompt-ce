@@ -6,8 +6,10 @@ import SwiftUI
 struct AgentModeView: View {
     @ObservedObject var windowState: WindowState
     let agentModeVM: AgentModeViewModel
+    let onOpenCoordinatorDestination: (CoordinatorModeViewModel.RailDestination) -> Void
     @ObservedObject var promptManager: PromptViewModel
     @ObservedObject private var workspaceManager: WorkspaceManagerViewModel
+    @ObservedObject private var coordinatorModeVM: CoordinatorModeViewModel
 
     @StateObject private var navigationController: AgentModeNavigationController
     @StateObject private var rootsSidebarStore: AgentWorkspaceRootsSidebarStore
@@ -24,12 +26,15 @@ struct AgentModeView: View {
     init(
         windowState: WindowState,
         agentModeVM: AgentModeViewModel,
-        promptManager: PromptViewModel
+        promptManager: PromptViewModel,
+        onOpenCoordinatorDestination: @escaping (CoordinatorModeViewModel.RailDestination) -> Void
     ) {
         self.windowState = windowState
         self.agentModeVM = agentModeVM
+        self.onOpenCoordinatorDestination = onOpenCoordinatorDestination
         self.promptManager = promptManager
         _workspaceManager = ObservedObject(wrappedValue: windowState.workspaceManager)
+        _coordinatorModeVM = ObservedObject(wrappedValue: agentModeVM.coordinatorModeViewModel)
 
         let isSystem = windowState.workspaceManager.activeWorkspace?.isSystemWorkspace ?? true
         _navigationController = StateObject(wrappedValue: AgentModeNavigationController(isSystemWorkspaceMode: isSystem))
@@ -62,6 +67,11 @@ struct AgentModeView: View {
                     promptManager: promptManager,
                     apiSettingsVM: windowState.apiSettingsViewModel,
                     currentTabID: currentTabID,
+                    directorSummary: AgentSidebarDirectorSummary(
+                        liveAgentCount: coordinatorModeVM.snapshot.counts.liveRows,
+                        decisionCount: coordinatorModeVM.snapshot.decisionQueue.count
+                    ),
+                    onOpenCoordinatorDestination: onOpenCoordinatorDestination,
                     onManageWorkspaces: {
                         NotificationCenter.default.post(
                             name: .showManageWorkspacesTab,

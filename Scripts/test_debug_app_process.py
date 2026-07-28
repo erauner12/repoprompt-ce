@@ -129,11 +129,16 @@ class LifecycleSurfaceTests(unittest.TestCase):
         run_script = (SCRIPT_DIR / "run.sh").read_text(encoding="utf-8")
         conductor_script = (SCRIPT_DIR / "conductor.py").read_text(encoding="utf-8")
         finder_launcher = (SCRIPT_DIR.parent / "Launch RepoPrompt CE.command").read_text(encoding="utf-8")
+        preflight_script = (
+            SCRIPT_DIR.parent / ".agents" / "skills" / "rpce-contribution-check" / "scripts" / "preflight.sh"
+        ).read_text(encoding="utf-8")
 
-        for source in [run_script, conductor_script, finder_launcher]:
+        for source in [run_script, conductor_script, finder_launcher, preflight_script]:
             self.assertNotIn("pgrep -x RepoPrompt", source)
             self.assertNotIn("pkill -x RepoPrompt", source)
         self.assertIn('python3 "$PROCESS_HELPER" list --executable "$APP_EXECUTABLE"', run_script)
+        self.assertIn('python3 "$PROCESS_HELPER" list --executable "$APP_EXECUTABLE"', preflight_script)
+        self.assertIn("PUSH_PREFLIGHT_ROOT_TESTS_SKIPPED_VISIBLE_DEBUG_APP", preflight_script)
         self.assertIn("terminate_matching_processes(debug_app_executable_path())", conductor_script)
         self.assertIn("safe coordinated launcher requires Python 3", finder_launcher)
         self.assertIn("No uncoordinated fallback is provided", finder_launcher)

@@ -1391,6 +1391,8 @@ extension MCPServerViewModel {
         /// Run purpose known at request capture time. Agent Mode / run-scoped calls
         /// must fail closed instead of using active-tab compatibility.
         let runPurpose: MCPRunPurpose?
+        let taskLabelKind: AgentModelCatalog.TaskLabelKind?
+        let isCoordinatorRuntime: Bool
         /// One-shot dispatch-level tab-context hint from context_id / legacy _tabID.
         /// This is not a sticky connection binding; resolvers validate it against any
         /// existing binding and otherwise use it for this call only.
@@ -1401,12 +1403,16 @@ extension MCPServerViewModel {
             clientName: String?,
             windowID: Int?,
             runPurpose: MCPRunPurpose? = nil,
+            taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
+            isCoordinatorRuntime: Bool = false,
             tabContextHint: TabContextHint? = nil
         ) {
             self.connectionID = connectionID
             self.clientName = clientName
             self.windowID = windowID
             self.runPurpose = runPurpose
+            self.taskLabelKind = taskLabelKind
+            self.isCoordinatorRuntime = isCoordinatorRuntime
             self.tabContextHint = tabContextHint
         }
     }
@@ -1419,11 +1425,18 @@ extension MCPServerViewModel {
         } else {
             nil
         }
+        let policyContext = if let connectionID {
+            await ServerNetworkManager.shared.agentModePolicyContext(for: connectionID)
+        } else {
+            (taskLabelKind: AgentModelCatalog.TaskLabelKind?.none, isCoordinatorRuntime: false)
+        }
         return await RequestMetadata(
             connectionID: connectionID,
             clientName: service.currentRequestClientName(),
             windowID: service.currentRequestWindowID(),
             runPurpose: runPurpose,
+            taskLabelKind: policyContext.taskLabelKind,
+            isCoordinatorRuntime: policyContext.isCoordinatorRuntime,
             tabContextHint: ServerNetworkManager.currentTabContextHint
         )
     }

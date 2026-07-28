@@ -819,6 +819,210 @@ final class AgentModeStopSubmitTargetTests: XCTestCase {
         XCTAssertEqual(cancelTarget?.expectedPendingUserInputRequestID, requestID)
     }
 
+    func testCoordinatorDirectiveDispatchesOrdinaryExistingSessionMessageWithoutMutatingChildSession() async throws {
+        let vm = makeViewModel()
+        let coordinatorTabID = UUID()
+        let childTabID = UUID()
+        let coordinatorSessionID = UUID()
+        let childSessionID = UUID()
+        vm.ensureSession(for: coordinatorTabID)
+        vm.ensureSession(for: childTabID)
+        let coordinatorSession = try XCTUnwrap(vm.sessions[coordinatorTabID])
+        let childSession = try XCTUnwrap(vm.sessions[childTabID])
+        coordinatorSession.hasLoadedPersistedState = true
+        coordinatorSession.selectedAgent = .codexExec
+        coordinatorSession.testInstallPersistentSessionBinding(sessionID: coordinatorSessionID)
+        childSession.hasLoadedPersistedState = true
+        childSession.selectedAgent = .codexExec
+        childSession.parentSessionID = coordinatorSessionID
+        childSession.testInstallPersistentSessionBinding(sessionID: childSessionID)
+
+        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+            "  coordinate the next child step  ",
+            coordinatorSessionID: coordinatorSessionID
+        )
+
+        XCTAssertEqual(result, .submitted)
+        XCTAssertEqual(coordinatorSession.items.filter { $0.kind == .user }.map(\.text), ["coordinate the next child step"])
+        XCTAssertTrue(childSession.items.isEmpty)
+        XCTAssertTrue(childSession.pendingInstructions.isEmpty)
+        XCTAssertEqual(childSession.parentSessionID, coordinatorSessionID)
+        XCTAssertEqual(childSession.activeAgentSessionID, childSessionID)
+    }
+
+    func testAcceptedRevisionDraftingDirectiveRevalidatesAuthorityAtFinalEnqueue() async throws {
+        let vm = makeViewModel()
+        let coordinatorTabID = UUID()
+        let coordinatorSessionID = UUID()
+        vm.ensureSession(for: coordinatorTabID)
+        let coordinatorSession = try XCTUnwrap(vm.sessions[coordinatorTabID])
+        coordinatorSession.hasLoadedPersistedState = true
+        coordinatorSession.selectedAgent = .codexExec
+        coordinatorSession.isCoordinatorRuntime = true
+        coordinatorSession.testInstallPersistentSessionBinding(sessionID: coordinatorSessionID)
+
+        var state = CoordinatorFollowThroughState(missionPlan: CoordinatorMissionPlan(
+            objective: "Replace the approved contract.",
+            status: .running,
+            approvalState: .approved
+        ))
+        let basePlan = try XCTUnwrap(state.missionPlan)
+        let appended = try state.appendRevisionProposal(CoordinatorMissionRevisionProposalRequest(
+            expectedBasePlanID: basePlan.id,
+            expectedBaseContractFingerprint: basePlan.materialContractFingerprint(),
+            summary: "Draft a concrete replacement",
+            affectedFields: ["objective"],
+            remedy: "revise_scope",
+            requestedChange: "Draft a concrete replacement.",
+            actor: CoordinatorMissionRevisionProposalActor(
+                coordinatorSessionID: coordinatorSessionID,
+                runtimeSessionID: coordinatorSessionID
+            )
+        ))
+        let proposal = try XCTUnwrap(state.missionPlan?.pendingRevisionProposal)
+        let resolution = try state.resolveRevisionProposalTransaction(
+            CoordinatorMissionRevisionProposalTrustedResolutionRequest(
+                coordinatorSessionID: coordinatorSessionID,
+                action: .revisePlan,
+                proposalID: appended.proposalID,
+                expectedContractFingerprint: proposal.baseContractFingerprint,
+                expectedCheckpointInstanceID: CoordinatorMissionRevisionProposalCheckpoint.instanceID(
+                    coordinatorSessionID: coordinatorSessionID,
+                    proposal: proposal
+                )
+            )
+        )
+        XCTAssertTrue(state.clearRevisionProposalDurabilityHold(transactionID: resolution.resolutionID))
+        coordinatorSession.coordinatorFollowThroughState = state
+
+        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+            CoordinatorDirectiveSubmission(
+                visibleText: "Continue drafting the concrete revised plan.",
+                providerText: "Continue drafting the concrete revised plan.",
+                missionTemplate: nil,
+                missionPolicySnapshot: nil,
+                coordinatorSessionID: coordinatorSessionID,
+                coordinatorModelID: nil,
+                forceNewRuntime: false,
+                acceptedRevisionDraftingResolutionID: resolution.resolutionID
+            ),
+            targetedBeforeSubmit: { _, session in
+                session.coordinatorFollowThroughState?.missionPlan?.approvalState = .awaitingApproval
+            }
+        )
+
+        guard case let .blocked(message) = result else {
+            return XCTFail("Expected final enqueue to reject stale revision-drafting authority.")
+        }
+        XCTAssertTrue(message.contains(CoordinatorMissionRevisionProposalPause.heldReason))
+        XCTAssertTrue(coordinatorSession.items.filter { $0.kind == .user }.isEmpty)
+        XCTAssertTrue(coordinatorSession.pendingInstructions.isEmpty)
+        XCTAssertTrue(coordinatorSession.pendingClaudeSteeringInstructions.isEmpty)
+        XCTAssertTrue(coordinatorSession.pendingACPSteeringInstructions.isEmpty)
+    }
+
+    func testCoordinatorDirectiveSubmissionStoresVisibleObjectiveInsteadOfWrappedPrompt() async throws {
+        let vm = makeViewModel()
+        let coordinatorTabID = UUID()
+        let coordinatorSessionID = UUID()
+        vm.ensureSession(for: coordinatorTabID)
+        let coordinatorSession = try XCTUnwrap(vm.sessions[coordinatorTabID])
+        coordinatorSession.hasLoadedPersistedState = true
+        coordinatorSession.selectedAgent = .codexExec
+        coordinatorSession.isCoordinatorRuntime = true
+        coordinatorSession.testInstallPersistentSessionBinding(sessionID: coordinatorSessionID)
+
+        let template = CoordinatorMissionTemplate.scopedChange
+        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+            CoordinatorDirectiveSubmission(
+                visibleText: "fix docs",
+                providerText: template.wrap("fix docs"),
+                missionTemplate: CoordinatorMissionTemplateSummary(template),
+                missionPolicySnapshot: nil,
+                coordinatorSessionID: coordinatorSessionID,
+                coordinatorModelID: nil,
+                forceNewRuntime: false
+            )
+        )
+
+        XCTAssertEqual(result, .submitted)
+        XCTAssertTrue(coordinatorSession.items.filter { $0.kind == .user }.map(\.text).first?.contains("Run this as a scoped Coordinator change.") == true)
+        XCTAssertEqual(coordinatorSession.coordinatorFollowThroughState?.originalObjectiveSummary, "fix docs")
+        XCTAssertEqual(coordinatorSession.coordinatorFollowThroughState?.missionTemplate, CoordinatorMissionTemplateSummary(template))
+    }
+
+    func testCoordinatorDirectiveRejectsActiveCoordinatorBeforeSteeringPath() async throws {
+        let recorder = StopSubmitSendRecorder()
+        let controller = StopSubmitNoopCodexController(recorder: recorder, hasActiveThread: true)
+        let vm = makeViewModel(codexController: controller)
+        let coordinatorTabID = UUID()
+        let coordinatorSessionID = UUID()
+        vm.ensureSession(for: coordinatorTabID)
+        let coordinatorSession = try XCTUnwrap(vm.sessions[coordinatorTabID])
+        coordinatorSession.hasLoadedPersistedState = true
+        coordinatorSession.selectedAgent = .codexExec
+        coordinatorSession.testInstallPersistentSessionBinding(sessionID: coordinatorSessionID)
+        coordinatorSession.runState = .running
+        coordinatorSession.runID = UUID()
+        coordinatorSession.beginRunAttempt(source: "test.runningCoordinator")
+
+        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+            "do not steer",
+            coordinatorSessionID: coordinatorSessionID
+        )
+
+        guard case let .blocked(message) = result else {
+            return XCTFail("Expected active Coordinator directive to be blocked")
+        }
+        XCTAssertFalse(message.isEmpty)
+        XCTAssertTrue(coordinatorSession.items.isEmpty)
+        XCTAssertTrue(coordinatorSession.pendingInstructions.isEmpty)
+        XCTAssertTrue(coordinatorSession.pendingClaudeSteeringInstructions.isEmpty)
+        XCTAssertTrue(coordinatorSession.pendingACPSteeringInstructions.isEmpty)
+        XCTAssertTrue(recorder.sentTexts().isEmpty)
+    }
+
+    func testCoordinatorDirectiveAllowsWaitingQuestionBoundary() async throws {
+        let recorder = StopSubmitSendRecorder()
+        let controller = StopSubmitNoopCodexController(recorder: recorder, hasActiveThread: true)
+        let vm = makeViewModel(codexController: controller)
+        let coordinatorTabID = UUID()
+        let coordinatorSessionID = UUID()
+        vm.ensureSession(for: coordinatorTabID)
+        let coordinatorSession = try XCTUnwrap(vm.sessions[coordinatorTabID])
+        coordinatorSession.hasLoadedPersistedState = true
+        coordinatorSession.selectedAgent = .codexExec
+        coordinatorSession.testInstallPersistentSessionBinding(sessionID: coordinatorSessionID)
+        coordinatorSession.runState = .waitingForQuestion
+        coordinatorSession.runID = UUID()
+        coordinatorSession.beginRunAttempt(source: "test.waitingCoordinator")
+
+        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+            "Proceed with the approved plan.",
+            coordinatorSessionID: coordinatorSessionID
+        )
+
+        XCTAssertEqual(result, .submitted)
+        XCTAssertEqual(coordinatorSession.items.filter { $0.kind == .user }.map(\.text), ["Proceed with the approved plan."])
+        XCTAssertTrue(coordinatorSession.pendingInstructions.isEmpty)
+    }
+
+    func testCoordinatorDirectiveRejectsMissingLiveCoordinatorWithoutCreatingSession() async {
+        let vm = makeViewModel()
+        let existingTabIDs = Set(vm.sessions.keys)
+
+        let result = await vm.submitCoordinatorDirectiveToAgentMode(
+            "unreachable",
+            coordinatorSessionID: UUID()
+        )
+
+        guard case let .blocked(message) = result else {
+            return XCTFail("Expected unreachable Coordinator directive to be blocked")
+        }
+        XCTAssertFalse(message.isEmpty)
+        XCTAssertEqual(Set(vm.sessions.keys), existingTabIDs)
+    }
+
     private func makeViewModel(
         onCancelTools: @escaping AgentModeViewModel.MCPRunToolCanceller = { _, _ in 0 },
         codexController: StopSubmitNoopCodexController? = nil

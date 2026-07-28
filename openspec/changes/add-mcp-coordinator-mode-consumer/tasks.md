@@ -1,25 +1,23 @@
-## 1. Consumer identity
+## 1. Prompt and schema guidance
 
-- [x] 1.1 Add a Coordinator mode case to `MCPServerViewModel.DashboardConsumer`.
-- [x] 1.2 Keep existing `.toolbarPopover` and `.statusView` cases unchanged.
-- [x] 1.3 Keep Coordinator mode on the existing `setDashboardUpdatesVisible(_:consumer:)` API.
+- [x] 1.1 State that the Coordinator runtime is a Mission-owning MCP consumer.
+- [x] 1.2 Require prompt guidance to describe `coordinator_chat` as the Mission control plane.
+- [x] 1.3 Require prompt/schema guidance to describe `agent_run` and `agent_explore` as delegated-child surfaces subject to Mission Plan gates.
 
-## 2. Shared lifecycle behavior
+## 2. Runtime use of MCP surfaces
 
-- [x] 2.1 Verify a first visible consumer starts MCP update observation.
-- [x] 2.2 Verify a second visible consumer does not start a duplicate MCP update task.
-- [x] 2.3 Verify hiding one of multiple visible consumers keeps observation active.
-- [x] 2.4 Verify hiding the last visible consumer stops observation and clears MCP snapshot state when window tools do not force observation.
-- [x] 2.5 Verify window-tools-enabled behavior still keeps observation active independent of visible consumers.
+- [x] 2.1 Require runtime callers to use `coordinator_chat mission_status` / `wait_for_update` for current Mission state and polling.
+- [x] 2.2 Require runtime callers to use `coordinator_chat mission_plan` for Director decisions/evidence and plan updates.
+- [x] 2.3 Require child starts to use Mission node IDs/workflow metadata where the core runtime requires them.
+- [x] 2.4 Require multi-child waits to keep tracking remaining active child handles.
 
-## 3. Existing consumer regression coverage
+## 3. Operation boundaries
 
-- [x] 3.1 Cover toolbar popover visibility behavior.
-- [x] 3.2 Cover status view `startDashboardUpdates()` / `stopDashboardUpdates()` behavior.
-- [x] 3.3 Cover mixed visibility among toolbar popover, status view, and Coordinator mode consumers.
+- [x] 3.1 State that runtime callers must not create peer/follow-up parent Missions through external creation operations.
+- [x] 3.2 State that runtime callers must not invoke user-action parity operations as the user.
+- [x] 3.3 State that childAsk Director answers use `coordinator_chat submit` and generic `agent_run.respond` must not bypass the ledger.
+- [x] 3.4 Cross-reference `add-coordinator-mode` for core Mission gates, actor ledger rules, and childAsk enforcement.
 
 ## 4. Validation
 
-- [x] 4.1 Run focused MCP Coordinator mode consumer lifecycle tests.
-- [x] 4.2 Run the smallest relevant coordinated Swift validation lane for touched MCP view-model files.
-- [x] 4.3 Run `openspec validate add-mcp-coordinator-mode-consumer`.
+- [x] 4.1 Run `openspec validate add-mcp-coordinator-mode-consumer` after reconciliation.

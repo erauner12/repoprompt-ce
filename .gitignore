@@ -28,6 +28,8 @@ dist/
 *.trace
 *.xcresult/
 *.profraw
+tmp/director-e2e-runs/
+tmp/director-e2e-sandbox/
 
 # Agent-authored working documents
 docs/analysis/

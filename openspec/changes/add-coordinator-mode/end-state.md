@@ -1,466 +1,92 @@
-# Coordinator Mode End State: Control Plane Plan
+# Coordinator Mode End State: Mission Runtime Baseline
 
-Status: planning
+Status: planning baseline
 Scope owner: Erauner team
-Related changes: `add-mcp-coordinator-mode-consumer`, `add-coordinator-mode`
+Related changes: `add-coordinator-mode`, `add-coordinator-role`, `refactor-agent-mcp-policy-context`, `add-mcp-coordinator-mode-consumer`, `add-coordinator-list-sessions-visibility`
 
 ## Goal
 
-Define the full Coordinator mode system beyond the board-first Coordinator view v1 so the first slice is built with seams that can support later supervision, action, and expanded Coordinator-directive flows.
+Define the durable end state implied by the current Swift demo branch for the **core Coordinator/Director Mission runtime**. This document is intentionally narrower than the earlier Command Center/UI plan: the authoritative v1 baseline is shipped surface behavior, Mission state, MCP control, trust invariants, follow-through, lifecycle tooling, deterministic scripted validation, and receipt projection.
 
-The end state is not just a view. It is a control plane for a fleet of Agent Mode sessions, with Agent Mode remaining the canonical deep-work surface and the Coordinator view supervising, routing, and eventually directing work.
+## End-state shape for this change
 
-## North Star
+A Coordinator Mission runtime should let an external user/CLI driver or visible app surface:
 
-The Coordinator view should let a user:
+- start or reuse a Coordinator Mission;
+- require a concrete Mission Plan before ordinary delegation;
+- approve, revise, continue, stop, or reroute Mission policy through auditable user decisions;
+- let the Director delegate child Agent Mode work through existing `agent_run` / `agent_explore` primitives;
+- enforce plan, workflow, worktree, flight-cap, childAsk, and terminal-state invariants;
+- observe Mission state through compact/full `mission_status`, `mission_events`, and `wait_for_update`;
+- stop/archive Missions without losing decisions, evidence, events, receipts, or lineage;
+- generate a terminal receipt from Mission-owned state.
 
-- see active and historical agent sessions in the active workspace;
-- understand what needs attention, what is blocked, what is working, and what is done;
-- inspect sourced activity/provenance without parsing assistant prose for meaning;
-- resolve structured pending interactions from the control plane when safe;
-- converse with an addressable Coordinator agent that can spawn or steer child agents;
-- jump into Agent Mode whenever detailed transcript, files, diffs, or provider-specific controls are needed.
+## Core runtime layers
 
-This is a control plane over Agent Mode, not a replacement for Agent Mode.
+### Layer 1 — Mission state
 
-## Four Capability Layers
+Mission state is persisted with the Coordinator backing session. It includes objective summary, Mission Template summary, Mission Plan, observed child phases, follow-through event bookkeeping, last resume state, and child interaction response records.
 
-### Layer 1 — Observation
+The Mission Plan is the durable source of truth for objective, shape, policy, autonomy, workstreams, nodes, routing decisions, decisions, evidence, events, and receipt inputs.
 
-The observation projection plus scoped current-window Coordinator composer already covered by `add-mcp-coordinator-mode-consumer` and `add-coordinator-mode`.
+### Layer 2 — External control surface
 
-User capability:
+`coordinator_chat` is the control and observation API for the demo/runtime baseline. It covers:
 
-- View grouped sessions in a board-first status view, with List as an alternate/fallback.
-- See live attention/working state for current-window sessions.
-- See stale/persisted-only rows without false live urgency.
-- See compact MCP state.
-- Deep-link into Agent Mode for pending-interaction responses and deep detail.
-- Send ordinary user-message directives to a Coordinator session when that Coordinator is live in the current window.
+- mission inventory and selection;
+- mission creation/reuse;
+- directive and checkpoint submission;
+- Mission Plan mutation;
+- status, event, wait, and receipt reads;
+- pace/autonomy user-action parity;
+- stop/archive lifecycle operations;
+- doctor/capability discovery.
 
-Primary contract:
+Runtime callers are constrained by actor-integrity gates: they can update Mission Plan/Director ledgers for their own Mission, but cannot forge user actions, create parent Missions, archive Missions, or inspect arbitrary fleet inventory.
 
-- `CoordinatorModeSnapshot` as the single Coordinator view render projection, composed from active-window Agent Mode state, active-workspace session metadata, and `MCPServerViewModel.dashboard`.
+### Layer 3 — Delegation policy
 
-Completion observation is in-process for v1. Unlike an external controller such as a CLI process driving RepoPrompt across a process boundary, Coordinator mode and the Coordinator share the app runtime with child sessions. A child session completing is already represented as session state, and the Coordinator view observes that transition through the normal coarse snapshot refresh. V1 therefore does not need a Codex-style polling/wait loop or a separate completion callback channel for the Coordinator view to reflect progress; the snapshot is the observation loop.
+Coordinator-owned child starts are allowed only when Mission policy permits:
 
-### Layer 2 — Action in place
+- normal delegation requires an approved non-empty Mission Plan;
+- pre-approval exceptions are narrow and node-bound;
+- workflow-bearing nodes must use matching workflow metadata;
+- mutable work requires explicit child sandboxing;
+- running node count must remain under `maxConcurrent`.
 
-The first broad Coordinator view action path beyond the v1 Coordinator composer.
+Child Agent Mode sessions remain ordinary sessions with their own transcript, worktree, pending interactions, permissions, and routeability.
 
-User capability:
+### Layer 4 — Follow-through
 
-- Approve, decline, retry, respond, or otherwise resolve structured pending interactions directly from the Coordinator view when the target session is reachable and the action can be safely normalized.
+Follow-through is an app-owned wakeup layer, not a workflow engine. It observes child terminal, child question, gate-cleared, and eligible-work events, deduplicates by stable event ID, and submits internal resume directives only when the next safe boundary is clear.
 
-Why it is separate from Layer 1:
+The Director must still inspect compact Mission status, respect dependencies and `maxConcurrent`, and record routing decisions/evidence. Follow-through does not approve irreversible work or create new Coordinator parents.
 
-- Layer 1 observes, routes, and sends one scoped ordinary-message directive to a current-window live Coordinator. Layer 2 writes into other live Agent Mode interaction state.
-- Existing response methods are window/session-local and not universally exposed as a Coordinator-view-facing API.
-- Cross-window action routing is unresolved: a session may appear in Coordinator mode as persisted/stale while its live interaction belongs to another window.
+### Layer 5 — Audit and receipts
 
-Primary future change:
+Decision and evidence ledgers are append-only Mission state. Receipts are deterministic projections from terminal Mission state and include policy, decisions, evidence, and reserved spend reporting. Rendered receipt Markdown is not a separate source of truth.
 
-```text
-add-coordinator-mode-actions
-```
+## Future layers outside this change
 
-Depends on:
+The current baseline deliberately leaves these for later OpenSpec changes:
 
-- Layer 1 snapshot and row identity.
-- A resolved cross-window policy.
-- A Coordinator-view-facing pending-action contract over Agent Mode interaction state.
+- first-class Coordinator role/runtime and durable role/session visibility (`add-coordinator-role`);
+- MCP policy-context refactors and caller metadata hardening (`refactor-agent-mcp-policy-context`);
+- consumer/session list visibility refinements (`add-mcp-coordinator-mode-consumer`, `add-coordinator-list-sessions-visibility`);
+- restart durability for pending checkpoints/questions;
+- recovery/chaos flows for stuck or killed children;
+- toggle dedup beyond current idempotent ledger behavior;
+- worktree garbage collection for Coordinator-created child worktrees;
+- backend fallback between live child providers/backends;
+- spend capture and spend autonomy;
+- custom policy CRUD;
+- hierarchical Coordinator-of-Coordinators;
+- broader Command Center layout, shared boards, or rich activity/provenance UI.
 
-### Layer 3 — Conversational Coordinator
+## Acceptance for this end state
 
-The control-plane signature interaction.
+The core runtime end state is satisfied when:
 
-User capability:
-
-- Read a user↔Coordinator thread in the Coordinator view.
-- Send directives such as “investigate the failing checks,” “split this into two workstreams,” or “stop the stale child and summarize.”
-- Let the Coordinator spawn, steer, or summarize child agents according to explicit runtime rules.
-
-Why it is separate from Layer 2:
-
-- Layer 2 responds to existing pending interactions.
-- Layer 3 originates new intent and routes it to an addressable Coordinator agent.
-- This requires a durable Coordinator identity, directive transport, and agent/runtime behavior that knows how to handle directives.
-
-Primary future change:
-
-```text
-extend-coordinator-directives
-```
-
-Depends on:
-
-- Layer 1 Coordinator identity and row/session identity.
-- The v1 current-window ordinary-message composer, plus any Layer 2 write-path primitives needed for richer directive/action handling.
-- A product decision on whether directives can target only current-window Coordinators or can route to an owning window/session service.
-
-### Layer 4 — Activity and provenance
-
-The missing data subsystem behind the rich mock affordances.
-
-User capability:
-
-- See workflow chips, PR/check links, tool-call rollups, attached artifacts, and sourced activity history.
-- Inspect “what happened” without loading full transcripts or parsing prose.
-
-Why it is separate from Layer 1:
-
-- Layer 1 reads current state and cheap summaries.
-- Activity/provenance needs an event stream or indexed record of transitions, tool calls, workflow launch metadata, PR/check associations, artifact refs, and possibly ownership changes.
-
-Primary future change:
-
-```text
-add-agent-activity-stream
-```
-
-Depends on:
-
-- Agreement on event identity, retention, and source-of-truth boundaries.
-- A clear separation between sourced activity records and derived UI labels.
-
-## Dependency Spine
-
-```text
-Layer 1: Observation
-   │
-   ├──► Layer 4a: Activity/Event adapter
-   │       └─► unlocks workflow chips, PR/check chips, inspector activity, tool-call rollup
-   │
-   ├──► Layer 2: Action in place
-   │       └─► unlocks Approve/Decline/Retry/Respond from Coordinator mode
-   │
-   └──► Layer 3: Conversational Coordinator
-           └─► depends on action/write-path or equivalent directive transport
-```
-
-The two keystones are:
-
-1. **Activity/Event adapter** — unlocks most rich visual/provenance affordances.
-2. **Coordinator view write path** — unlocks inline actions and richer Coordinator directive behavior beyond the v1 current-window ordinary-message composer.
-
-The v1 Coordinator composer is deliberately scoped: current-window live Coordinator only, ordinary user message only, no structured directive envelope, no cross-window routing, and no interrupt/steer semantics. Do not extend it beyond that without a deliberate write-path story; otherwise a “directive box” becomes an ad hoc runtime channel.
-
-## Future OpenSpec Changes
-
-### `add-agent-activity-stream`
-
-Scope:
-
-- Define a per-session activity/provenance stream or index.
-- Include workflow launch metadata, run transitions, tool calls, artifact refs, PR/check associations, and durable source pointers.
-- Make activity cheap enough for Coordinator view summaries without transcript loads.
-
-Unlocks:
-
-- Workflow chips.
-- PR/check chips.
-- Full-log or activity inspector.
-- Tool-call rollups.
-- More precise “what changed” explanations.
-
-Non-goals:
-
-- General observability platform.
-- Raw provider log replacement.
-- Prose parsing for semantic state.
-
-### `add-coordinator-mode-actions`
-
-Scope:
-
-- Define a Coordinator-view-facing action contract for resolving structured pending interactions.
-- Normalize supported actions without embedding Agent Mode UI internals in Coordinator mode.
-- Decide how unsupported/unreachable actions degrade to deep-link-only behavior.
-
-Unlocks:
-
-- Approve / decline / cancel.
-- Respond to question/user input.
-- Retry or resume when backed by structured state.
-
-Required decisions:
-
-- Current-window-only actions vs route-to-owning-window actions.
-- Whether action targets are represented by session ID + interaction ID, or by an owning-window/session handle.
-- How action failure is surfaced when the target session changes before the response lands.
-
-### `extend-coordinator-directives`
-
-Scope:
-
-- Extend the v1 Coordinator composer beyond current-window ordinary user messages.
-- Define structured directive envelopes if plain user messages are insufficient.
-- Define what richer Coordinator runtime behavior is allowed: spawn, steer, cancel, summarize, interrupt, queue, or request clarification.
-- Define whether directives can target owning windows/session services instead of only the current-window Coordinator.
-
-Unlocks:
-
-- Structured “Direct the Coordinator…” commands beyond ordinary user turns.
-- Cross-window Coordinator routing.
-- Coordinator-managed workstream steering with explicit runtime semantics.
-- Selective Coordinator autonomy for transitions that prove safe and useful, such as low-risk follow-up after child-session completion.
-
-Required decisions:
-
-- Is the Coordinator an ordinary Agent Mode session with additional metadata, or a distinct orchestration runtime role?
-- Which directive types remain plain user messages, and which require structured commands or a new control-plane envelope?
-- Does Coordinator mode act only on current-window Coordinator sessions, or can it route directives cross-window?
-- What happens when the Coordinator is mid-run: queue, reject, interrupt, or steer?
-- Should the Coordinator remain human-turn-driven, or can it autonomously act on observed child-session transitions such as completion, blockage, or review readiness?
-
-Autonomy is a deferred authority decision, not a v1 transport problem. V1 is human-driven by design: the user sends ordinary messages to a current-window live Coordinator, and the Coordinator acts within those turns. It does not self-drive by watching child-session completion and dispatching follow-up work on its own. Selective self-drive remains a desired end-state direction, but the system should earn it transition by transition rather than assume full autonomy up front. The open future question is who is authorized to act on observed transitions: the human through an explicit turn, or the Coordinator through selective autonomous follow-up. Decide this from usage of the v1 surface, especially whether per-transition confirmation feels reassuring or obstructive.
-
-## Board/List and Coordinator Interaction Model
-
-V1 is board-first, not board-only. The observation layer defaults to a read-only status board because the board better communicates parallel workstreams and pipeline state, while List remains a first-class alternate and the narrow-width fallback.
-
-### Board/List toggle
-
-- **Board mode** is the v1 default presentation: grouped status columns, lightweight sorting, sourced summaries, and deep links. It is read-only in v1.
-- **List mode** is a first-class alternate for calm triage, scanning, and narrow layouts. It renders the same sourced rows, groups, sorting, stale-row rules, and deep-link constraints as the board.
-- The toggle does not replace v1 grouping semantics. It is a view mode over sourced row/session state, not a second source of truth.
-
-### Board ordering and drag interactions
-
-V1 board columns sort by the active sort mode by default. Once Layer 2 write semantics exist, dragging a card may switch that column to a persisted custom order. Re-applying a sort resets the column back to sorted order.
-
-Dragging is explicitly deferred from v1 because it implies a write: drag-to-reorder persists display/order state, drag-to-dispatch changes ownership or assignment, and drag-to-change-column changes status semantics. V1 therefore keeps board/list sorting read-only and does not expose drag ordering.
-
-### Board responsive behavior
-
-In v1 board mode, the board is the protected content region. The inspector / trailing detail column should collapse first, then Coordinator chat may collapse to a rail, while board columns preserve a usable minimum width and may scroll horizontally. Below the width where two board columns can fit, the board should fall back to the existing List view rather than rendering a cramped board.
-
-### Coordinator chat as command log
-
-The end-state Coordinator chat should read as an auditable command log: user directives, Coordinator acknowledgments, spawned/steered work, and clarification requests should be visible as sourced conversational history. V1 includes a scoped composer only for Coordinators live in the current window. A v1 directive is an ordinary user message delivered through the existing Agent Mode message path.
-
-V1 does not define structured directive envelopes, cross-window directive routing, Coordinator-view-side interrupt/steer semantics, or direct child-session mutation. Coordinator responses and child-session effects should surface through normal coarse Coordinator mode snapshot refresh rather than a live token stream in the rail.
-
-### Future agent roster/context views
-
-The prototype's Coordinator-rail `Agents` tab is not a v1 commitment. The board/list remains the human-facing fleet view, and a Coordinator can enumerate available models or sessions through MCP tools (`agent_manage.list_agents` for the catalog, `agent_manage.list_sessions` for sessions).
-
-If a "who is working" view is needed later, it should be a future board/list grouping mode over the same `CoordinatorModeSnapshot`, not a second Coordinator-rail fleet surface. If a "sessions referenced by the current Coordinator context" view is needed later, it depends on Layer 3 directive/context modeling plus Layer 4 activity/provenance records; do not infer it from prose or session titles.
-
-### Mechanism options for future action surfaces
-
-These are implementation options to evaluate when Layer 2 is scoped, not v1 commitments:
-
-- MCP Apps / elicitation-style agent-rendered widgets for structured approve/reject/respond controls.
-- AG-UI-style synchronization for keeping agent-rendered action state and Coordinator view UI state aligned.
-
-## Cross-Window Decision
-
-This is the hardest end-state fork.
-
-V1 deliberately avoids it:
-
-- Active-workspace rows may render from persisted metadata.
-- Live state enrichment is current-window scoped.
-- Persisted-only rows do not contribute to live `Needs you` / `Working` counts.
-- Actions deep-link to Agent Mode.
-
-Later layers cannot avoid it.
-
-### Option A — Current-window control plane
-
-Coordinator mode can observe active-workspace metadata, but it can only act on sessions live in the current window. Other-window sessions remain stale/read-only and route the user to the owning context when possible.
-
-Pros:
-
-- Fits current architecture.
-- Keeps writes local to the `AgentModeViewModel` that owns the session.
-- Avoids shared mutable session-control services.
-
-Cons:
-
-- Cross-window fleet control remains partial.
-- Inline actions may disappear or degrade for sessions visible in the board/list workspace.
-- Conversational Coordinator is only fully useful when the Coordinator lives in the current window.
-
-### Option B — Route actions to owning windows
-
-Coordinator mode can send actions/directives to the window that owns the live session.
-
-Pros:
-
-- Preserves multi-window UX while enabling central control.
-- Avoids making one Coordinator mode window restore or steal sessions just to act.
-
-Cons:
-
-- Requires reliable live ownership tracking.
-- Requires cross-window action delivery, failure handling, and user feedback.
-- Requires stricter identity and lifetime semantics for pending interactions.
-
-### Option C — Shared session-control service
-
-Agent session control moves behind a shared service so any window can act on any live or restorable session.
-
-Pros:
-
-- Strongest fleet-control model.
-- Natural home for Coordinator directives and activity stream.
-
-Cons:
-
-- Largest architectural change.
-- Risks turning the Coordinator mode effort into an Agent Mode runtime rewrite.
-- Needs migration away from window-local assumptions.
-
-Recommended stance for now:
-
-- Keep v1 current-window write-free.
-- Plan Layer 2 against Option A first, while preserving row/window identity so Option B remains possible.
-- Do not pursue Option C without a separate architecture review.
-
-## Navigation Model
-
-The Coordinator view is not a workspace-entry page and not a subordinate Agent Mode panel. It is a peer surface inside `.main`.
-
-V1 navigation rules:
-
-- Workspace-entry/onboarding remains the gate before `.main`.
-- Opening/selecting a real workspace transitions into `.main`.
-- Agent Mode is the configured default landing surface in v1.
-- A persistent top-level macOS-native surface switcher lets the user move between Agent Mode and Coordinator mode once a real workspace is active.
-- The switcher models Agent Mode and Coordinator mode as peer `.main` surfaces, not as a one-way button.
-- The switcher should render as a native macOS peer-surface control, such as a toolbar segmented control or equivalent adaptive switcher; it should never use an iOS-style tab bar.
-- The same surface choices are reachable from the View menu so navigation remains available when toolbar chrome is hidden or customized.
-- Surface selection is sticky per live window; switching workspaces in the same window keeps the selected surface unless workspace-entry gating takes over. Use `@SceneStorage` or equivalent scene-level state rather than relying only on system window restoration.
-- Coordinator selection has a different lifetime: it is keyed by active workspace, not by the window-level surface choice.
-- `AppLaunchConfiguration.forcedRootRoute == .main` continues to land on Agent Mode unless a future forced-surface knob is added.
-
-End-state implication:
-
-- “Which surface should a workspace open into?” is a configurable landing-surface decision, not a permanent route fact. V1 chooses Agent Mode for compatibility; a future control-plane release can choose Coordinator mode without replacing the `.main` surface-selection seam.
-
-## V1 Forward-Compatibility Hooks
-
-These are cheap to preserve now and expensive to retrofit later.
-
-### Stable row identity
-
-Every Coordinator view row should retain:
-
-- session ID when available;
-- tab ID when available;
-- active workspace ID from context;
-- optional window/ownership identity if known;
-- stale/live classification.
-
-Why:
-
-- Layer 2 needs stable action targets.
-- Layer 3 needs an addressable Coordinator target.
-- Layer 4 needs to attach activity/provenance to the same identity.
-
-### Stable pending interaction identity
-
-`CoordinatorModePendingInteractionSummary` should keep the underlying `AgentRunMCPSnapshot.Interaction.id` even though v1 only renders/deep-links.
-
-Why:
-
-- Layer 2 needs to target the exact pending interaction.
-- Without a stable interaction ID, inline responses risk racing against changed state.
-
-### Nullable route payloads remain explicit
-
-Rows and pending summaries should continue to carry optional route payloads rather than deriving navigation late in leaf views.
-
-Why:
-
-- Route availability is product state, not just button wiring.
-- Layer 2 needs the same “can act here?” distinction.
-
-### Live-state source remains explicit
-
-The snapshot owner should record whether a row was enriched from current-window live `TabSession` state or from persisted metadata only.
-
-Why:
-
-- Prevents false live `Needs you` / `Working` counts.
-- Gives Layer 2 a clean guard for current-window-only actions.
-
-### Activity-stream placeholder
-
-Do not invent workflow/PR/tool-call chips from titles or prose. If v1 has no activity source, omit the chips and leave an explicit extension point in the projection for future sourced activity.
-
-Why:
-
-- Layer 4 should add a real source, not retrofit around heuristic labels.
-
-### Native macOS surface switcher
-
-The Agent Mode ↔ Coordinator mode switcher should stay separate from the Coordinator view's in-surface Coordinator/session rail. The switcher belongs in app chrome such as toolbar/menu; the rail belongs inside the Coordinator Mode leading column. Do not add Agent Mode as an item in the Coordinator view rail.
-
-Why:
-
-- Prevents app-level mode switching from being conflated with Coordinator view content navigation.
-- Keeps the Coordinator view rail shallow and native-feeling.
-- Avoids sidebar-inside-sidebar navigation debt.
-
-### Coordinator identity remains explicit
-
-Do not silently treat every parent-with-children as a Coordinator. Preserve the v1 precedence and keep user-selected Coordinator identity separate from auto-detected candidates.
-
-Why:
-
-- Layer 3 directive extensions require an addressable Coordinator, not a generic thread parent.
-
-## What Stays Out Even in the End State
-
-- Not a replacement for Agent Mode as the deep-work transcript/files/diff surface.
-- Not a general observability/logging platform.
-- Not a PR management system.
-- Not a semantic parser over assistant prose.
-- Not a hidden orchestration runtime bolted onto Coordinator view UI.
-- Not a cross-window control plane until that architecture is explicitly chosen.
-
-## Recommended Roadmap
-
-1. Land Layer 1 observation contracts:
-   - `add-mcp-coordinator-mode-consumer`
-   - `add-coordinator-mode`
-
-2. Implement the board-first Coordinator view with forward-compatible identity hooks:
-   - row/session/tab/workspace identity;
-   - stable pending interaction IDs;
-   - live vs persisted-only classification;
-   - optional route payloads.
-
-3. Plan and spec `add-agent-activity-stream`:
-   - smallest useful activity slice should likely be workflow launch metadata plus run/tool-call summary events.
-
-4. Plan and spec `add-coordinator-mode-actions`:
-   - start current-window-only unless cross-window ownership is solved first;
-   - degrade unsupported/unreachable sessions to deep-link-only.
-
-5. Plan and spec `extend-coordinator-directives`:
-   - only after richer action/write-path semantics are deliberate;
-   - decide which future directives remain ordinary messages and which require structured commands or a new control envelope.
-
-## Implementation Guidance for V1
-
-The current audit against code confirmed two important seams:
-
-- Use `AgentModeViewModel.authoritativeLiveSession(for:)` as the current-window liveness check. Do not infer live `Needs you` / `Working` from persisted `lastRunStateRaw`.
-- Use active workspace context for route `workspaceID`; `AgentSessionMeta` is not a self-contained route payload.
-
-The same audit confirmed the largest deferred source:
-
-- There is no session-level workflow field today. Workflow is item/transcript-level, so workflow labels and Orchestrate workflow auto-detection require a future index/load decision.
-
-## Open Questions
-
-- For Layer 2, is current-window-only action good enough, or must actions route to owning windows?
-- What is the minimal activity/event stream that unlocks useful chips without becoming a logging platform?
-- Should the Coordinator be modeled as an ordinary Agent Mode session with metadata, or as a distinct runtime role?
-- Which Coordinator directives can remain ordinary user messages, and which require structured commands or a new control-plane envelope?
-- What retention policy applies to activity/provenance records?
-- Which activity/event fields must be persisted versus rebuilt from existing session/transcript state?
+1. Focused Swift tests cover Mission Plan persistence/merge behavior, policy/autonomy, actor integrity, childAsk routing, follow-through, MCP serialization, delegated-run policy, receipt projection, prompts, and scripted child lifecycle.
+2. Live E2E scenarios S1, S2, S4, S5, S6, and S7 can validate through `coordinator_chat` using doctor, compact status, mission events, receipts, and lifecycle cleanup.
+3. The OpenSpec proposal, design, tasks, decision record, E2E plan, and split capability specs describe the same runtime baseline without requiring the old mock/UI reference documents.

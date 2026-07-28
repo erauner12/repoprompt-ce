@@ -129,7 +129,8 @@ final class CodexSteerAckTrackerTests: XCTestCase {
             suppressUserNotifications: true,
             forceAutoEditEnabled: false,
             autoEditEnabledBeforeOverride: true,
-            taskLabelKind: nil
+            taskLabelKind: nil,
+            allowsAgentExternalControlTools: false
         )
         viewModel.test_setMCPControlledTabIDs([tabID])
         session.selectedAgent = .codexExec

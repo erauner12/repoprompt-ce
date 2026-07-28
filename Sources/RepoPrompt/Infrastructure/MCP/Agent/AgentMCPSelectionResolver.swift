@@ -11,7 +11,7 @@ import MCP
 /// Resolves `model_id` into agent + model for session configuration.
 ///
 /// Accepts two forms:
-/// 1. **Task label**: `explore`, `engineer`, `pair`, `design` — auto-picks the global effective role default
+/// 1. **Task label**: `explore`, `engineer`, `pair`, `design`, `coordinator` — auto-picks the global effective role default
 /// 2. **Compound ID**: `claudeCode:sonnet`, `codexExec:gpt-5.4-high` — explicit selection
 enum AgentMCPSelectionResolver {
     typealias RoleSelectionProvider = @MainActor (
@@ -31,7 +31,7 @@ enum AgentMCPSelectionResolver {
     ///
     /// - If `modelID` is nil/empty and `defaultTaskLabel` is provided, resolves that role's global effective default.
     /// - If `modelID` is nil/empty and no default is provided, returns nils (use agent defaults).
-    /// - Task labels (`explore`, `engineer`, `pair`, `design`) resolve through global effective role defaults.
+    /// - Task labels (`explore`, `engineer`, `pair`, `design`, `coordinator`) resolve through global effective role defaults.
     /// - Compound IDs are validated against the catalog and are never rewritten by role defaults.
     ///
     /// - Throws: `MCPError.invalidParams` for unrecognized or invalid IDs.
@@ -52,6 +52,16 @@ enum AgentMCPSelectionResolver {
             }
             return ResolvedSelection(agentRaw: nil, modelRaw: nil, taskLabelKind: nil)
         }
+
+        #if DEBUG
+            if AgentScriptedChildModelID.isScriptedSelector(trimmed) {
+                return ResolvedSelection(
+                    agentRaw: AgentProviderKind.codexExec.rawValue,
+                    modelRaw: AgentScriptedChildModelID.modelRaw,
+                    taskLabelKind: nil
+                )
+            }
+        #endif
 
         // Try task label first (no colon = not a compound ID)
         if !trimmed.contains(":") {

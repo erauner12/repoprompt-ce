@@ -1009,6 +1009,8 @@ actor ServerNetworkManager {
         let taskLabelKind: AgentModelCatalog.TaskLabelKind?
         /// Whether role-aware advertisement should allow agent_run/agent_manage for this run
         let allowsAgentExternalControlTools: Bool
+        /// Whether this policy belongs to a Coordinator runtime connection.
+        let isCoordinatorRuntime: Bool
         /// When true, only an MCP peer whose verified PID descends from a registered
         /// expected agent PID may consume this queued policy.
         var requiresExpectedAgentPID: Bool
@@ -1027,6 +1029,7 @@ actor ServerNetworkManager {
         let purpose: MCPRunPurpose
         let taskLabelKind: AgentModelCatalog.TaskLabelKind?
         let allowsAgentExternalControlTools: Bool
+        let isCoordinatorRuntime: Bool
         let updatedAt: Date
     }
 
@@ -2396,7 +2399,7 @@ actor ServerNetworkManager {
         saveRoutingState()
     }
 
-    private func effectivePolicyState(for connectionID: UUID) -> (restricted: Set<String>, additional: Set<String>, preassigned: Bool, purpose: MCPRunPurpose, taskLabelKind: AgentModelCatalog.TaskLabelKind?, allowsAgentExternalControlTools: Bool) {
+    private func effectivePolicyState(for connectionID: UUID) -> (restricted: Set<String>, additional: Set<String>, preassigned: Bool, purpose: MCPRunPurpose, taskLabelKind: AgentModelCatalog.TaskLabelKind?, allowsAgentExternalControlTools: Bool, isCoordinatorRuntime: Bool) {
         let restricted = restrictedToolsByConnection[connectionID] ?? []
         let additional = additionalToolsByConnection[connectionID] ?? []
         let preassigned = preassignedConnections.contains(connectionID)
@@ -2407,13 +2410,19 @@ actor ServerNetworkManager {
         }()
         let taskLabelKind = runState?.taskLabelKind
         let allowsAgentExternalControlTools = runState?.allowsAgentExternalControlTools ?? false
-        return (restricted, additional, preassigned, purpose, taskLabelKind, allowsAgentExternalControlTools)
+        let isCoordinatorRuntime = runState?.isCoordinatorRuntime ?? false
+        return (restricted, additional, preassigned, purpose, taskLabelKind, allowsAgentExternalControlTools, isCoordinatorRuntime)
+    }
+
+    func agentModePolicyContext(for connectionID: UUID) -> (taskLabelKind: AgentModelCatalog.TaskLabelKind?, isCoordinatorRuntime: Bool) {
+        let policy = effectivePolicyState(for: connectionID)
+        return (policy.taskLabelKind, policy.isCoordinatorRuntime)
     }
 
     #if DEBUG
         private func debugPolicyDiagnosticFields(
             connectionID: UUID,
-            policy: (restricted: Set<String>, additional: Set<String>, preassigned: Bool, purpose: MCPRunPurpose, taskLabelKind: AgentModelCatalog.TaskLabelKind?, allowsAgentExternalControlTools: Bool)? = nil,
+            policy: (restricted: Set<String>, additional: Set<String>, preassigned: Bool, purpose: MCPRunPurpose, taskLabelKind: AgentModelCatalog.TaskLabelKind?, allowsAgentExternalControlTools: Bool, isCoordinatorRuntime: Bool)? = nil,
             extra: [String: String] = [:]
         ) -> [String: String] {
             let effective = policy ?? effectivePolicyState(for: connectionID)
@@ -2426,6 +2435,7 @@ actor ServerNetworkManager {
             fields["windowID"] = connectionWindowMap[connectionID].map(String.init) ?? runState.map { String($0.windowID) } ?? "nil"
             fields["purpose"] = effective.purpose.rawValue
             fields["taskLabel"] = effective.taskLabelKind?.rawValue ?? "nil"
+            fields["isCoordinatorRuntime"] = String(effective.isCoordinatorRuntime)
             fields["additionalTools"] = Self.debugDescribeToolSet(effective.additional)
             fields["restrictedTools"] = Self.debugDescribeToolSet(effective.restricted)
             fields["preassigned"] = String(effective.preassigned)
@@ -2439,7 +2449,7 @@ actor ServerNetworkManager {
             return "[" + tools.sorted().joined(separator: ",") + "]"
         }
 
-        private func debugPolicyDiagnostic(_ name: String, connectionID: UUID, policy: (restricted: Set<String>, additional: Set<String>, preassigned: Bool, purpose: MCPRunPurpose, taskLabelKind: AgentModelCatalog.TaskLabelKind?, allowsAgentExternalControlTools: Bool)? = nil, extra: [String: String] = [:]) {
+        private func debugPolicyDiagnostic(_ name: String, connectionID: UUID, policy: (restricted: Set<String>, additional: Set<String>, preassigned: Bool, purpose: MCPRunPurpose, taskLabelKind: AgentModelCatalog.TaskLabelKind?, allowsAgentExternalControlTools: Bool, isCoordinatorRuntime: Bool)? = nil, extra: [String: String] = [:]) {
             AgentModePerfDiagnostics.event(
                 "mcp.policy.\(name)",
                 fields: debugPolicyDiagnosticFields(connectionID: connectionID, policy: policy, extra: extra)
@@ -2886,11 +2896,17 @@ actor ServerNetworkManager {
         purpose: MCPRunPurpose,
         taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
         allowsAgentExternalControlTools: Bool = false,
+        isCoordinatorRuntime: Bool = false,
         updatedAt: Date
     ) {
         if let existing = runPolicyStateByRunID[runID], existing.updatedAt >= updatedAt {
             return
         }
+        // In Agent Mode, `.coordinator` is a runtime marker produced only by
+        // coordinator sessions (`effectiveMCPTaskLabelKind`). External
+        // coordinator_chat attribution still stays conservative unless this
+        // cached run-scoped policy marks the connection as Coordinator runtime.
+        let resolvedIsCoordinatorRuntime = isCoordinatorRuntime || taskLabelKind == .coordinator
         runPolicyStateByRunID[runID] = RunConnectionPolicyState(
             windowID: windowID,
             workspaceID: workspaceID,
@@ -2900,6 +2916,7 @@ actor ServerNetworkManager {
             purpose: purpose,
             taskLabelKind: taskLabelKind,
             allowsAgentExternalControlTools: allowsAgentExternalControlTools,
+            isCoordinatorRuntime: resolvedIsCoordinatorRuntime,
             updatedAt: updatedAt
         )
         windowIDByRunID[runID] = windowID
@@ -2917,6 +2934,7 @@ actor ServerNetworkManager {
             purpose: policy.purpose,
             taskLabelKind: policy.taskLabelKind,
             allowsAgentExternalControlTools: policy.allowsAgentExternalControlTools,
+            isCoordinatorRuntime: policy.isCoordinatorRuntime,
             updatedAt: policy.createdAt
         )
     }
@@ -6607,6 +6625,7 @@ actor ServerNetworkManager {
         purpose: MCPRunPurpose = .unknown,
         taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
         allowsAgentExternalControlTools: Bool = false,
+        isCoordinatorRuntime: Bool = false,
         requiresExpectedAgentPID: Bool = false
     ) async {
         let storageKey = Self.clientStorageKey(clientName)
@@ -6626,13 +6645,16 @@ actor ServerNetworkManager {
             purpose: purpose,
             taskLabelKind: taskLabelKind,
             allowsAgentExternalControlTools: allowsAgentExternalControlTools,
+            // `.coordinator` is not a cosmetic label; it is the durable
+            // Coordinator runtime marker for reconnect/handover policy.
+            isCoordinatorRuntime: isCoordinatorRuntime || taskLabelKind == .coordinator,
             requiresExpectedAgentPID: requiresExpectedAgentPID,
             reservationConnectionID: nil
         )
         let grantDescription = Self.describeGrantedTools(restricted: sanitizedRestricted)
         let restrictedDescription = Self.describeToolList(sanitizedRestricted)
         connectionLog(
-            "Installing connection policy for client \(clientName) window=\(windowID) grants=\(grantDescription) restricted=\(restrictedDescription) oneShot=\(oneShot) ttl=\(ttl) reason=\(reason ?? "-") role=\(taskLabelKind?.rawValue ?? "-")"
+            "Installing connection policy for client \(clientName) window=\(windowID) grants=\(grantDescription) restricted=\(restrictedDescription) oneShot=\(oneShot) ttl=\(ttl) reason=\(reason ?? "-") role=\(taskLabelKind?.rawValue ?? "-") coordinator=\(isCoordinatorRuntime || taskLabelKind == .coordinator)"
         )
         if let runID {
             seedRunPolicyState(
@@ -6645,6 +6667,7 @@ actor ServerNetworkManager {
                 purpose: purpose,
                 taskLabelKind: taskLabelKind,
                 allowsAgentExternalControlTools: allowsAgentExternalControlTools,
+                isCoordinatorRuntime: isCoordinatorRuntime || taskLabelKind == .coordinator,
                 updatedAt: policy.createdAt
             )
         }
@@ -6978,6 +7001,8 @@ actor ServerNetworkManager {
             restrictedTools: Set<String>,
             additionalTools: Set<String>?,
             purpose: MCPRunPurpose,
+            taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
+            isCoordinatorRuntime: Bool = false,
             updatedAt: Date = Date()
         ) {
             seedRunPolicyState(
@@ -6988,6 +7013,8 @@ actor ServerNetworkManager {
                 restrictedTools: restrictedTools,
                 additionalTools: additionalTools,
                 purpose: purpose,
+                taskLabelKind: taskLabelKind,
+                isCoordinatorRuntime: isCoordinatorRuntime,
                 updatedAt: updatedAt
             )
         }
@@ -7056,13 +7083,14 @@ actor ServerNetworkManager {
             )
         }
 
-        func debugEffectivePolicyState(for connectionID: UUID) -> (restrictedTools: Set<String>, additionalTools: Set<String>, purpose: MCPRunPurpose, taskLabelKind: AgentModelCatalog.TaskLabelKind?) {
+        func debugEffectivePolicyState(for connectionID: UUID) -> (restrictedTools: Set<String>, additionalTools: Set<String>, purpose: MCPRunPurpose, taskLabelKind: AgentModelCatalog.TaskLabelKind?, isCoordinatorRuntime: Bool) {
             let policy = effectivePolicyState(for: connectionID)
             return (
                 restrictedTools: policy.restricted,
                 additionalTools: policy.additional,
                 purpose: policy.purpose,
-                taskLabelKind: policy.taskLabelKind
+                taskLabelKind: policy.taskLabelKind,
+                isCoordinatorRuntime: policy.isCoordinatorRuntime
             )
         }
 
@@ -9989,6 +10017,7 @@ actor ServerNetworkManager {
                 purpose: cached.purpose,
                 taskLabelKind: cached.taskLabelKind,
                 allowsAgentExternalControlTools: cached.allowsAgentExternalControlTools,
+                isCoordinatorRuntime: cached.isCoordinatorRuntime,
                 updatedAt: Date()
             )
         }
@@ -10047,6 +10076,7 @@ actor ServerNetworkManager {
                     purpose: cached.purpose,
                     taskLabelKind: cached.taskLabelKind,
                     allowsAgentExternalControlTools: cached.allowsAgentExternalControlTools,
+                    isCoordinatorRuntime: cached.isCoordinatorRuntime,
                     updatedAt: Date()
                 )
             }

@@ -87,6 +87,50 @@ final class CodexAgentModeCoordinatorLivenessTests: XCTestCase {
         XCTAssertEqual(restoredPresentation.detailText, "2 matches")
     }
 
+    func testNativeManageWorktreePreviewResultIsVisibleInTranscript() async throws {
+        let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
+        let viewModel = makeViewModel(controller: controller)
+        let session = preparedCodexSession(in: viewModel, controller: controller)
+        let invocationID = UUID()
+        let argsJSON = #"{"op":"preview","source":"current","target":"main"}"#
+        let resultJSON = """
+        {
+          "op": "preview",
+          "merge": {
+            "status": "preview",
+            "operation_id": "merge_visible",
+            "summary": {
+              "commits": 1,
+              "files": 1,
+              "insertions": 1,
+              "deletions": 0
+            },
+            "next_actions": []
+          }
+        }
+        """
+
+        await viewModel.test_codexCoordinator.test_handleCodexNativeEvent(
+            .toolResult(
+                name: "mcp__RepoPromptCE__manage_worktree",
+                invocationID: invocationID,
+                argsJSON: argsJSON,
+                resultJSON: resultJSON,
+                isError: false
+            ),
+            session: session
+        )
+
+        let item = try XCTUnwrap(session.items.last)
+        XCTAssertEqual(item.kind, .toolResult)
+        XCTAssertEqual(item.toolInvocationID, invocationID)
+        XCTAssertEqual(item.toolName, "mcp__RepoPromptCE__manage_worktree")
+        XCTAssertEqual(item.toolArgsJSON, argsJSON)
+        XCTAssertEqual(item.toolResultJSON, resultJSON)
+        XCTAssertEqual(normalizedToolCardName(item.toolName), "manage_worktree")
+        XCTAssertTrue(ToolCardRouter.isWorktreeMergeResult(item.toolResultJSON))
+    }
+
     func testStructuredRetryAndMissingMetadataFallbackRemainActiveWithoutRows() async {
         let controller = LivenessFakeCodexController(snapshot: .active(activeFlags: []))
         let viewModel = makeViewModel(controller: controller)

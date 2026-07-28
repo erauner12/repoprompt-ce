@@ -34,6 +34,7 @@ enum AgentExternalMCPRunStarter {
         modelRaw: String?,
         reasoningEffortRaw: String?,
         taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
+        allowsAgentExternalControlTools: Bool = false,
         workflow: AgentWorkflowDefinition? = nil
     ) async throws -> StartOutcome {
         let resolvedModel: String?
@@ -67,6 +68,7 @@ enum AgentExternalMCPRunStarter {
             sessionID: sessionID,
             originatingConnectionID: metadata.connectionID,
             taskLabelKind: taskLabelKind,
+            allowsAgentExternalControlTools: allowsAgentExternalControlTools,
             startPending: true
         )
 

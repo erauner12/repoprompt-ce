@@ -324,8 +324,12 @@ enum AgentSessionRestoreSupport {
             parentSessionID: session.parentSessionID,
             hasUnknownConversationContent: hasUnknownConversationContent,
             isMCPOriginated: session.isMCPOriginated,
+            isCoordinatorRuntime: session.isCoordinatorRuntime,
+            coordinatorMissionTemplate: session.coordinatorFollowThroughState?.missionTemplate,
+            coordinatorMissionPlan: session.coordinatorFollowThroughState?.missionPlan,
             worktreeBindingSummaries: session.worktreeBindings.worktreeBindingSummaries,
-            activeWorktreeMergeSummaries: session.worktreeMergeOperations.activeWorktreeMergeSummaries
+            activeWorktreeMergeSummaries: session.worktreeMergeOperations.activeWorktreeMergeSummaries,
+            workflowSummary: AgentSessionMetadataRecord.latestWorkflowSummary(in: session)
         )
     }
 

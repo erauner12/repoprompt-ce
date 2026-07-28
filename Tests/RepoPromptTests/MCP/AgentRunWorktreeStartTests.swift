@@ -1445,6 +1445,111 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
         XCTAssertEqual(Set(bindings.compactMap(\.branch)).count, 2)
     }
 
+    func testCoordinatorAgentExploreStartRequiresApprovedMissionPlanBeforeTargetCreation() async throws {
+        let root = try makeTemporaryDirectory(named: "coordinator-explore-plan-gate")
+        let window = try await makeWindow(root: root)
+        let workspace = try XCTUnwrap(window.workspaceManager.activeWorkspace)
+        let sourceTabID = try XCTUnwrap(workspace.activeComposeTabID)
+        let coordinatorID = UUID()
+        let source = window.agentModeViewModel.session(for: sourceTabID)
+        source.testInstallPersistentSessionBinding(sessionID: coordinatorID)
+        source.mcpControlContext = makeMCPControlContext(sessionID: coordinatorID)
+        source.isCoordinatorRuntime = true
+        source.coordinatorFollowThroughState = CoordinatorFollowThroughState(missionPlan: coordinatorMissionPlan(approvalState: .awaitingApproval))
+
+        let blockedRecorder = ExploreStartRecorder()
+        let blockedService = makeAgentExploreStartService(window: window, sourceTabID: sourceTabID, recorder: blockedRecorder)
+        let initialTabCount = workspace.composeTabs.count
+        do {
+            _ = try await blockedService.execute(args: [
+                "op": .string("start"),
+                "message": .string("Probe provider cleanup entry points. Do not edit."),
+                "detach": .bool(true),
+                "timeout": .int(0)
+            ])
+            XCTFail("Expected coordinator agent_explore.start to require an approved Mission Plan.")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("approval_state"), error.localizedDescription)
+            XCTAssertTrue(error.localizedDescription.contains("agent_explore.start"), error.localizedDescription)
+        }
+        XCTAssertTrue(blockedRecorder.observations.isEmpty)
+        XCTAssertEqual(workspace.composeTabs.count, initialTabCount)
+
+        source.coordinatorFollowThroughState = CoordinatorFollowThroughState(missionPlan: coordinatorMissionPlan(approvalState: .approved))
+        let allowedRecorder = ExploreStartRecorder(activatesControlContext: true)
+        let allowedService = makeAgentExploreStartService(window: window, sourceTabID: sourceTabID, recorder: allowedRecorder)
+
+        _ = try await allowedService.execute(args: [
+            "op": .string("start"),
+            "message": .string("Probe provider cleanup entry points. Do not edit."),
+            "detach": .bool(true),
+            "timeout": .int(0)
+        ])
+
+        XCTAssertEqual(allowedRecorder.observations.count, 1)
+        XCTAssertEqual(allowedRecorder.observations.first?.taskLabelKind, .explore)
+        XCTAssertNil(allowedRecorder.observations.first?.workflow)
+        let exploreSessionID = try XCTUnwrap(allowedRecorder.observations.first?.sessionID)
+        let exploreTabID = try XCTUnwrap(allowedRecorder.observations.first?.tabID)
+        let exploreChild = window.agentModeViewModel.session(for: exploreTabID)
+        XCTAssertEqual(exploreChild.parentSessionID, coordinatorID)
+        XCTAssertEqual(exploreChild.mcpControlContext?.sessionID, exploreSessionID)
+        XCTAssertEqual(exploreChild.mcpControlContext?.allowsAgentExternalControlTools, false)
+    }
+
+    func testCoordinatorAgentRunWorkerReceivesExternalControlToolsWhileRemainingParented() async throws {
+        let root = try makeTemporaryDirectory(named: "coordinator-worker-control")
+        let window = try await makeWindow(root: root)
+        let sourceTabID = try XCTUnwrap(window.workspaceManager.activeWorkspace?.activeComposeTabID)
+        let coordinatorID = UUID()
+        let source = window.agentModeViewModel.session(for: sourceTabID)
+        source.testInstallPersistentSessionBinding(sessionID: coordinatorID)
+        source.mcpControlContext = makeMCPControlContext(sessionID: coordinatorID, taskLabelKind: .coordinator)
+        source.isCoordinatorRuntime = true
+        source.coordinatorFollowThroughState = CoordinatorFollowThroughState(missionPlan: coordinatorMissionPlan(approvalState: .approved))
+
+        let recorder = AgentRunStartRecorder(activatesControlContext: true)
+        let service = makeAgentRunStartService(window: window, sourceTabID: sourceTabID, recorder: recorder)
+
+        _ = try await service.execute(args: [
+            "op": .string("start"),
+            "message": .string("Read-only worker smoke. Do not edit files."),
+            "detach": .bool(true),
+            "timeout": .int(0)
+        ])
+
+        let observation = try XCTUnwrap(recorder.observations.first)
+        XCTAssertEqual(recorder.observations.count, 1)
+        XCTAssertEqual(observation.parentSessionID, coordinatorID)
+        XCTAssertNotEqual(observation.taskLabelKind, .explore)
+        XCTAssertEqual(observation.allowsAgentExternalControlTools, true)
+        let childTab = window.agentModeViewModel.session(for: observation.tabID)
+        XCTAssertEqual(childTab.mcpControlContext?.allowsAgentExternalControlTools, true)
+    }
+
+    func testParentedAgentRunSpawnRequiresExplicitExternalControlPermission() async throws {
+        let root = try makeTemporaryDirectory(named: "parented-worker-control")
+        let window = try await makeWindow(root: root)
+        let sourceTabID = try XCTUnwrap(window.workspaceManager.activeWorkspace?.activeComposeTabID)
+        let parentID = UUID()
+        let workerID = UUID()
+        let source = window.agentModeViewModel.session(for: sourceTabID)
+        source.testInstallPersistentSessionBinding(sessionID: workerID)
+        source.parentSessionID = parentID
+        source.mcpControlContext = makeMCPControlContext(sessionID: workerID, taskLabelKind: .pair)
+
+        XCTAssertThrowsError(try window.agentModeViewModel.mcpValidateAgentRunSpawnAllowed(sourceTabID: sourceTabID)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("Sub-agents cannot start additional agent runs"), error.localizedDescription)
+        }
+
+        source.mcpControlContext = makeMCPControlContext(
+            sessionID: workerID,
+            taskLabelKind: .pair,
+            allowsAgentExternalControlTools: true
+        )
+        XCTAssertNoThrow(try window.agentModeViewModel.mcpValidateAgentRunSpawnAllowed(sourceTabID: sourceTabID))
+    }
+
     func testAgentExploreBatchFailureAndCancellationRetainOnlyStartedChildren() async throws {
         let failureCases: [(label: String, kind: ExploreStartFailureKind)] = [
             ("provider failure", .provider),
@@ -1608,6 +1713,30 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
                 XCTAssertEqual(window.workspaceManager.activeWorkspace?.composeTabs.count, tabCount)
             }
         }
+    }
+
+    func testAgentRunStartHonorsWorkflowName() async throws {
+        let root = try makeTemporaryDirectory(named: "agent-run-workflow-name")
+        let window = try await makeWindow(root: root)
+        let recorder = AgentRunStartRecorder()
+        let service = makeAgentRunStartService(window: window, sourceTabID: nil, recorder: recorder)
+
+        let value = try await service.execute(args: [
+            "op": .string("start"),
+            "message": .string("check the README with Investigate"),
+            "workflow_name": .string("Investigate"),
+            "detach": .bool(true),
+            "timeout": .int(0)
+        ])
+
+        let observation = try XCTUnwrap(recorder.observations.first)
+        XCTAssertEqual(recorder.observations.count, 1)
+        XCTAssertEqual(observation.workflow?.id, AgentWorkflow.investigate.definition.id)
+        XCTAssertEqual(observation.workflow?.displayName, AgentWorkflow.investigate.definition.displayName)
+
+        let object = try XCTUnwrap(value.objectValue)
+        XCTAssertEqual(object["workflow_id"]?.stringValue, AgentWorkflow.investigate.definition.id)
+        XCTAssertEqual(object["workflow_name"]?.stringValue, AgentWorkflow.investigate.definition.displayName)
     }
 
     #if DEBUG
@@ -2088,6 +2217,24 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
         }
     }
 
+    private final class AgentRunStartRecorder {
+        struct Observation {
+            let sessionID: UUID
+            let tabID: UUID
+            let parentSessionID: UUID?
+            let taskLabelKind: AgentModelCatalog.TaskLabelKind?
+            let allowsAgentExternalControlTools: Bool
+            let workflow: AgentWorkflowDefinition?
+        }
+
+        let activatesControlContext: Bool
+        var observations: [Observation] = []
+
+        init(activatesControlContext: Bool = false) {
+            self.activatesControlContext = activatesControlContext
+        }
+    }
+
     private func makeAgentExploreStartService(
         window: WindowState,
         sourceTabID: UUID?,
@@ -2107,7 +2254,7 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
             resolveSpawnParentSessionID: { _, _ in nil },
             bindCurrentRequestToTab: { _, _ in },
             withHeartbeat: { _, _, _, _, operation in try await operation() },
-            startRun: { target, message, _, _, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, workflow in
+            startRun: { target, message, _, _, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, allowsAgentExternalControlTools, workflow in
                 guard let sessionID = target.sessionID else {
                     throw MCPError.internalError("Test explore target did not resolve a session ID.")
                 }
@@ -2119,6 +2266,7 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
                         sessionID: sessionID,
                         originatingConnectionID: nil,
                         taskLabelKind: taskLabelKind,
+                        allowsAgentExternalControlTools: allowsAgentExternalControlTools,
                         startPending: true
                     )
                 }
@@ -2171,7 +2319,11 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
         )
     }
 
-    private func makeAgentRunStartService(window: WindowState, sourceTabID: UUID?) -> AgentRunMCPToolService {
+    private func makeAgentRunStartService(
+        window: WindowState,
+        sourceTabID: UUID?,
+        recorder: AgentRunStartRecorder? = nil
+    ) -> AgentRunMCPToolService {
         var service = AgentRunMCPToolService(
             toolName: MCPWindowToolName.agentRun,
             captureRequestMetadata: {
@@ -2183,12 +2335,30 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
             resolveSpawnParentSessionID: { _, _ in nil },
             bindCurrentRequestToTab: { _, _ in },
             withHeartbeat: { _, _, _, _, operation in try await operation() },
-            startRun: { target, _, _, _, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, _, _ in
+            startRun: { target, _, _, _, agentModeVM, agentRaw, modelRaw, reasoningEffortRaw, taskLabelKind, allowsAgentExternalControlTools, workflow in
                 guard let sessionID = target.sessionID else {
                     throw MCPError.internalError("Test start target did not resolve a session ID.")
                 }
                 let bindings = agentModeVM.worktreeBindings(forAgentSessionID: sessionID, tabID: target.tabID)
                 let session = agentModeVM.session(for: target.tabID)
+                if recorder?.activatesControlContext == true {
+                    try await agentModeVM.mcpActivateControlContext(
+                        forTabID: target.tabID,
+                        sessionID: sessionID,
+                        originatingConnectionID: nil,
+                        taskLabelKind: taskLabelKind,
+                        allowsAgentExternalControlTools: allowsAgentExternalControlTools,
+                        startPending: true
+                    )
+                }
+                recorder?.observations.append(.init(
+                    sessionID: sessionID,
+                    tabID: target.tabID,
+                    parentSessionID: session.parentSessionID,
+                    taskLabelKind: taskLabelKind,
+                    allowsAgentExternalControlTools: allowsAgentExternalControlTools,
+                    workflow: workflow
+                ))
                 let snapshot = AgentRunMCPSnapshot(
                     sessionID: sessionID,
                     tabID: target.tabID,
@@ -2231,7 +2401,8 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
 
     private func makeMCPControlContext(
         sessionID: UUID,
-        taskLabelKind: AgentModelCatalog.TaskLabelKind = .pair
+        taskLabelKind: AgentModelCatalog.TaskLabelKind = .pair,
+        allowsAgentExternalControlTools: Bool = false
     ) -> AgentModeViewModel.AgentMCPControlContext {
         AgentModeViewModel.AgentMCPControlContext(
             sessionID: sessionID,
@@ -2245,7 +2416,32 @@ final class AgentRunWorktreeStartTests: AgentRunWorktreeStartGitSeedTestCase {
             suppressUserNotifications: false,
             forceAutoEditEnabled: false,
             autoEditEnabledBeforeOverride: true,
-            taskLabelKind: taskLabelKind
+            taskLabelKind: taskLabelKind,
+            allowsAgentExternalControlTools: allowsAgentExternalControlTools
+        )
+    }
+
+    private func coordinatorMissionPlan(approvalState: CoordinatorMissionPlanApprovalState) -> CoordinatorMissionPlan {
+        let workstreamID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        return CoordinatorMissionPlan(
+            objective: "Issue 298 provider cleanup",
+            approvalState: approvalState,
+            workstreams: [
+                CoordinatorMissionWorkstreamSummary(
+                    id: workstreamID,
+                    title: "Discovery",
+                    purpose: "Map provider cleanup paths.",
+                    defaultPolicy: .freshReadOnlyChild,
+                    worktreeStrategy: CoordinatorMissionWorktreeStrategy(mode: .noneReadOnly)
+                )
+            ],
+            nodes: [
+                CoordinatorMissionPlanNode(
+                    title: "Probe provider cleanup entry points",
+                    workstreamID: workstreamID,
+                    executionPolicy: .freshReadOnlyChild
+                )
+            ]
         )
     }
 

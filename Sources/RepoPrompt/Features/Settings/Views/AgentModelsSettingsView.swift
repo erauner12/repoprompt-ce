@@ -533,6 +533,7 @@ struct AgentModelsSettingsView: View {
         case .engineer: "hammer.fill"
         case .pair: "person.2.fill"
         case .design: "paintbrush.fill"
+        case .coordinator: "point.3.connected.trianglepath.dotted"
         }
     }
 
@@ -542,6 +543,7 @@ struct AgentModelsSettingsView: View {
         case .engineer: .blue
         case .pair: .purple
         case .design: .orange
+        case .coordinator: .cyan
         }
     }
 

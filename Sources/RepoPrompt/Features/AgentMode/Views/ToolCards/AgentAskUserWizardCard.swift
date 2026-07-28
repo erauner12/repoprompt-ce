@@ -9,6 +9,8 @@ struct AgentAskUserWizardCard: View {
     let onSubmit: () -> Void
     let onSkipAll: () -> Void
     let onUserActivity: () -> Void
+    var showsSkipControls = true
+    var submitLabel = "Submit Answers"
 
     @State private var lastActivitySignalAt: Date?
     @State private var activityWorkGate = WorkItemGate()
@@ -249,21 +251,23 @@ struct AgentAskUserWizardCard: View {
 
     private var actionButtons: some View {
         HStack(spacing: 10) {
-            Button(action: onSkipAll) {
-                Label("Skip All", systemImage: "forward.fill")
-            }
-            .buttonStyle(.plain)
-            .foregroundColor(.secondary)
-
-            if let question = currentQuestion {
-                Button(currentDraft.skipped ? "Answer Question" : "Skip Question") {
-                    if currentDraft.skipped {
-                        emitDraft(AgentAskUserDraft(), for: question)
-                    } else {
-                        skipCurrentQuestion(question)
-                    }
+            if showsSkipControls {
+                Button(action: onSkipAll) {
+                    Label("Skip All", systemImage: "forward.fill")
                 }
                 .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+
+                if let question = currentQuestion {
+                    Button(currentDraft.skipped ? "Answer Question" : "Skip Question") {
+                        if currentDraft.skipped {
+                            emitDraft(AgentAskUserDraft(), for: question)
+                        } else {
+                            skipCurrentQuestion(question)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
             }
 
             Spacer()
@@ -275,7 +279,7 @@ struct AgentAskUserWizardCard: View {
 
             if isLastQuestion {
                 Button(action: onSubmit) {
-                    Label("Submit Answers", systemImage: "checkmark.circle.fill")
+                    Label(submitLabel, systemImage: "checkmark.circle.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!pending.isComplete)

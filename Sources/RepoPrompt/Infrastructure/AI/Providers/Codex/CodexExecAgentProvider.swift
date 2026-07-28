@@ -644,7 +644,11 @@ final class CodexExecAgentProvider: HeadlessAgentProvider {
               itemType != "error" else { return nil }
 
         guard let toolName = codexToolName(from: item, itemType: itemType) else { return nil }
-        guard !isRepoPromptTool(item: item, toolName: toolName) else { return nil }
+        if isRepoPromptTool(item: item, toolName: toolName),
+           !AgentToolTrackingSupport.shouldRenderExplicitRepoPromptProviderEvent(toolName)
+        {
+            return nil
+        }
 
         let itemID = (item["id"] as? String)
             ?? (item["item_id"] as? String)

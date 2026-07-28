@@ -247,6 +247,66 @@ final class AgentModeRunServiceLifecycleTests: XCTestCase {
 
         do {
             let recorder = LifecycleRecorder()
+            let harness = makeHarness(recorder: recorder)
+            let session = harness.host.session(for: UUID())
+            session.selectedAgent = .codexExec
+            session.selectedModelRaw = AgentScriptedChildModelID.modelRaw
+
+            let outcome = await harness.service.startRun(
+                tabID: session.tabID,
+                session: session,
+                initialUserMessage: "SCRIPTED_CHILD_V1 ask_marker token=script-ok options=Alpha,Beta",
+                initialMessageForRun: "SCRIPTED_CHILD_V1 ask_marker token=script-ok options=Alpha,Beta",
+                attachments: []
+            )
+
+            XCTAssertNil(outcome)
+            try await waitUntil("scripted child should publish a real pending question") {
+                session.pendingAskUser?.interaction.questions.first?.id == "marker_choice"
+                    && session.runState == .waitingForQuestion
+            }
+            let interactionID = try XCTUnwrap(session.pendingAskUser?.interaction.id)
+            try harness.host.submitAskUserResponse(
+                tabID: session.tabID,
+                interactionID: interactionID,
+                draftsByQuestionID: [
+                    "marker_choice": AgentAskUserDraft(selectedOptionLabels: ["Alpha"])
+                ]
+            )
+            await session.agentTask?.value
+
+            XCTAssertEqual(session.runState, .completed)
+            XCTAssertTrue(session.items.contains { $0.text.contains("SCRIPTED_CHILD_V1 answer=Alpha token=script-ok") })
+            XCTAssertFalse(recorder.contains("codex:send"))
+            XCTAssertFalse(recorder.contains("factory:headless"))
+        }
+
+        do {
+            let recorder = LifecycleRecorder()
+            let harness = makeHarness(recorder: recorder)
+            let session = harness.host.session(for: UUID())
+            session.selectedAgent = .codexExec
+            session.selectedModelRaw = AgentScriptedChildModelID.modelRaw
+
+            let outcome = await harness.service.startRun(
+                tabID: session.tabID,
+                session: session,
+                initialUserMessage: "missing script",
+                initialMessageForRun: "missing script",
+                attachments: []
+            )
+
+            XCTAssertNil(outcome)
+            await session.agentTask?.value
+            XCTAssertEqual(session.runState, .failed)
+            XCTAssertTrue(session.items.contains { $0.text.contains("SCRIPTED_CHILD_BAD_SCRIPT") })
+            XCTAssertNil(session.pendingAskUser)
+            XCTAssertFalse(recorder.contains("codex:send"))
+            XCTAssertFalse(recorder.contains("factory:headless"))
+        }
+
+        do {
+            let recorder = LifecycleRecorder()
             let provider = LifecycleFakeACPProvider(
                 providerID: .openCode,
                 commandPath: "/usr/bin/true",
@@ -1414,9 +1474,9 @@ final class AgentModeRunServiceLifecycleTests: XCTestCase {
             self?.registerACPController(controller)
             return controller
         }
-        let policyInstaller: AgentModeViewModel.ConnectionPolicyInstaller = { clientName, _, _, _, _, _, _, runID, _, _, _, _, _ in
-            recorder.record("policy:\(clientName):\(runID?.uuidString ?? "nil")")
-            if autoSignalACPRouting, let runID {
+        let policyInstaller: AgentModeViewModel.ConnectionPolicyInstaller = { context in
+            recorder.record("policy:\(context.clientName):\(context.runID?.uuidString ?? "nil")")
+            if autoSignalACPRouting, let runID = context.runID {
                 await MCPRoutingWaiter.notifyRouted(runID: runID)
             }
         }
@@ -1462,7 +1522,10 @@ final class AgentModeRunServiceLifecycleTests: XCTestCase {
                 hooks: makeHooks(
                     recorder: recorder,
                     flushPendingAssistantDelta: flushPendingAssistantDelta,
-                    publishTerminalCommit: publishTerminalCommit
+                    publishTerminalCommit: publishTerminalCommit,
+                    askUserInteraction: { session, interaction in
+                        try await host.askUserInteraction(tabID: session.tabID, interaction: interaction)
+                    }
                 ),
                 toolTrackingHooks: .noOp
             ),
@@ -1485,7 +1548,11 @@ final class AgentModeRunServiceLifecycleTests: XCTestCase {
             AgentSessionRunState,
             UUID?
         ) -> AgentRunTerminalPublicationEnvelope?)? = nil,
-        startFollowUpRun: ((UUID, String) -> Void)? = nil
+        startFollowUpRun: ((UUID, String) -> Void)? = nil,
+        askUserInteraction: ((
+            AgentModeViewModel.TabSession,
+            AgentAskUserInteraction
+        ) async throws -> AgentAskUserResponse)? = nil
     ) -> AgentModeRunService.Hooks {
         let flushPendingAssistantDelta = flushPendingAssistantDelta ?? { _ in
             recorder.record("assistant-flush")
@@ -1509,6 +1576,9 @@ final class AgentModeRunServiceLifecycleTests: XCTestCase {
             notifyAgentTurnComplete: { _ in },
             handleHeadlessStreamResult: { _, _, _, _ in },
             buildHeadlessAgentMessage: { _, text, _, _ in AgentMessage(userMessage: text) },
+            askUserInteraction: askUserInteraction ?? { _, _ in
+                throw LifecycleTestError.userInteractionUnavailable
+            },
             finalizeStreamingItems: { _ in },
             finalizePendingToolCalls: { _, _ in },
             finalizePendingToolCallsWithUpperBound: { _, _, _ in },
@@ -1954,6 +2024,7 @@ enum LifecycleTestError: LocalizedError {
     case unexpectedACPControllerCreation
     case expectedClaudeSendFailure
     case expectedCodexSendFailure
+    case userInteractionUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -1967,6 +2038,8 @@ enum LifecycleTestError: LocalizedError {
             "Expected Claude send failure."
         case .expectedCodexSendFailure:
             "Expected Codex send failure."
+        case .userInteractionUnavailable:
+            "User interaction hook is unavailable."
         }
     }
 }

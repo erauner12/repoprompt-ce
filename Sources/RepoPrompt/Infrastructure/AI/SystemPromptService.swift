@@ -680,7 +680,10 @@ class SystemPromptService {
     static func agentModePrompt(
         agentKind: AgentProviderKind? = nil,
         taskLabelKind: AgentModelCatalog.TaskLabelKind? = nil,
-        codeMapsDisabled: Bool = false
+        allowsAgentExternalControlTools: Bool = false,
+        codeMapsDisabled: Bool = false,
+        coordinatorRuntimeDemo: Bool = false,
+        coordinatorRuntimeAutoMode: Bool = false
     ) -> String {
         // Role-specific prompts: dedicated lean prompts instead of conditional blocks
         switch taskLabelKind {
@@ -692,9 +695,10 @@ class SystemPromptService {
         case .engineer:
             return AgentModePrompts.engineerPrompt(
                 agentKind: agentKind,
+                allowsAgentExternalControlTools: allowsAgentExternalControlTools,
                 codeMapsDisabled: codeMapsDisabled
             )
-        case .pair, .design, nil:
+        case .pair, .design, .coordinator, nil:
             break // Fall through to standard prompt
         }
 
@@ -806,20 +810,21 @@ class SystemPromptService {
         - Keep updates direct and factual: usually 1-2 sentences, no filler.
         """
 
-        // Agent delegation copy branches on whether this is a top-level
-        // agent-mode session or a sub-agent. The advertisement policy
-        // (AgentModeMCPToolAdvertisementPolicy) only exposes `agent_run`
-        // / `agent_manage` to top-level sessions and external MCP
-        // clients; non-explore sub-agents see `agent_explore` instead.
+        // Agent delegation copy branches on whether this agent-mode session
+        // has the external control plane. The advertisement policy
+        // (AgentModeMCPToolAdvertisementPolicy) exposes `agent_run` /
+        // `agent_manage` to top-level sessions and explicitly permitted
+        // Coordinator-supervised workers; ordinary non-explore sub-agents
+        // see `agent_explore` instead.
         // The prompt must never name a delegation tool the caller
         // cannot see in its own `ListTools` response.
-        let isTopLevelAgentSession = taskLabelKind == nil
+        let hasAgentExternalControlTools = taskLabelKind == nil || allowsAgentExternalControlTools
         let codexNativeDelegationNote = agentKind == .codexExec ? """
         - Codex MultiAgentV2 `spawn_agent` children are Codex-native threads, not RepoPrompt-managed `agent_run` sessions. Use `agent_run` when you need a child that RepoPrompt can list, wait, steer, cancel, or permission/profile as a RepoPrompt session; do not expect `spawn_agent` children to appear in `agent_manage` or `AgentRunSessionStore` unless RepoPrompt adds an explicit bridge.
         """ : ""
         let agentDelegationSection: String
         let agentDelegationFinalNote: String
-        if isTopLevelAgentSession {
+        if hasAgentExternalControlTools {
             agentDelegationSection = """
             *Agent Delegation:*
             - `agent_run` - Spawn and control a separate Agent Mode session in another tab
@@ -851,6 +856,15 @@ class SystemPromptService {
             """
         }
 
+        let coordinatorRuntimeDemoGuidance = coordinatorRuntimeDemo ? """
+
+        \(AgentModePrompts.Fragments.coordinatorRuntimeDemoGuidance.trimmingCharacters(in: .whitespacesAndNewlines))
+        """ : ""
+        let coordinatorRuntimeAutoModeGuidance = coordinatorRuntimeDemo && coordinatorRuntimeAutoMode ? """
+
+        \(AgentModePrompts.Fragments.coordinatorRuntimeAutoModeGuidance.trimmingCharacters(in: .whitespacesAndNewlines))
+        """ : ""
+
         let prompt = """
         **Conversation Style**
         - Conversational and concise; expand when asked
@@ -879,6 +893,8 @@ class SystemPromptService {
         - `oracle_chat_log` - Read recent Oracle conversation messages to recover context after compaction
 
         \(agentDelegationSection)
+        \(coordinatorRuntimeDemoGuidance)
+        \(coordinatorRuntimeAutoModeGuidance)
 
         *User Interaction:*
         - `ask_user` - Ask the user a question when you need clarification\(setStatusInList)\(codexToolPriorityGuidance)\(progressUpdatesGuidance)

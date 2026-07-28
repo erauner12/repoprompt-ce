@@ -1650,6 +1650,56 @@ final class TabContextRoutingTests: XCTestCase {
 
     #if DEBUG
         @MainActor
+        func testCoordinatorTaskLabelSeedsRuntimeAttributionPolicy() async {
+            let coordinatorConnectionID = UUID()
+            let coordinatorRunID = UUID()
+            await ServerNetworkManager.shared.debugSeedRunPolicyState(
+                runID: coordinatorRunID,
+                tabID: UUID(),
+                restrictedTools: [],
+                additionalTools: nil,
+                purpose: .agentModeRun,
+                taskLabelKind: .coordinator
+            )
+            await ServerNetworkManager.shared.debugSeedConnectionRunRouting(
+                connectionID: coordinatorConnectionID,
+                runID: coordinatorRunID,
+                purpose: .agentModeRun
+            )
+
+            let coordinatorPolicy = await ServerNetworkManager.shared.debugEffectivePolicyState(
+                for: coordinatorConnectionID
+            )
+            XCTAssertEqual(coordinatorPolicy.taskLabelKind, .coordinator)
+            XCTAssertTrue(coordinatorPolicy.isCoordinatorRuntime)
+
+            let pairConnectionID = UUID()
+            let pairRunID = UUID()
+            await ServerNetworkManager.shared.debugSeedRunPolicyState(
+                runID: pairRunID,
+                tabID: UUID(),
+                restrictedTools: [],
+                additionalTools: nil,
+                purpose: .agentModeRun,
+                taskLabelKind: .pair
+            )
+            await ServerNetworkManager.shared.debugSeedConnectionRunRouting(
+                connectionID: pairConnectionID,
+                runID: pairRunID,
+                purpose: .agentModeRun
+            )
+
+            let pairPolicy = await ServerNetworkManager.shared.debugEffectivePolicyState(
+                for: pairConnectionID
+            )
+            XCTAssertEqual(pairPolicy.taskLabelKind, .pair)
+            XCTAssertFalse(pairPolicy.isCoordinatorRuntime)
+
+            await ServerNetworkManager.shared.cleanupRunRoutingState(for: coordinatorRunID)
+            await ServerNetworkManager.shared.cleanupRunRoutingState(for: pairRunID)
+        }
+
+        @MainActor
         func testValidateAgentRunStartRoutingRejectsCachedNestedOriginWhenRehydrationCannotRestoreSource() async {
             let previousAutoStart = GlobalSettingsStore.shared.mcpAutoStart()
             GlobalSettingsStore.shared.setMCPAutoStart(false, commit: false)
