@@ -1857,7 +1857,10 @@ final class CoordinatorModeViewModel: ObservableObject {
         let checkpointContext: PlanApprovalCheckpointContext?
         if action.requiresCurrentPlanApprovalCheckpoint {
             do {
-                checkpointContext = try currentPlanApprovalCheckpointContext(expected: expectedCheckpointInstanceID)
+                checkpointContext = try currentPlanApprovalCheckpointContext(
+                    expected: expectedCheckpointInstanceID,
+                    allowFailedContinuationRecovery: action == .proceed
+                )
             } catch {
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 composerNotice = message
@@ -1878,15 +1881,23 @@ final class CoordinatorModeViewModel: ObservableObject {
 
         pendingAcceptedDirectiveDecision = nil
         if action == .proceed, let checkpointContext {
-            let approvalResult = approvePlan(checkpointContext)
-            guard approvalResult == .accepted else { return approvalResult }
-            guard recordPostApprovalContinuationDeferral(
-                checkpointContext.coordinatorSessionID,
-                error: "Approved continuation is queued for the next ordinary turn boundary."
-            ) else {
-                let message = "Mission approval was recorded, but the post-approval continuation could not be queued durably. The Director was not resumed. Refresh Mission status and retry."
-                composerNotice = message
-                return .rejected(message: message)
+            if checkpointContext.isFailedContinuationRecovery {
+                guard recordFailedPostApprovalContinuationRetry(checkpointContext) else {
+                    let message = "The failed approved continuation changed before it could be retried. The Director was not resumed. Refresh Mission status and retry."
+                    composerNotice = message
+                    return .rejected(message: message)
+                }
+            } else {
+                let approvalResult = approvePlan(checkpointContext)
+                guard approvalResult == .accepted else { return approvalResult }
+                guard recordPostApprovalContinuationDeferral(
+                    checkpointContext.coordinatorSessionID,
+                    error: "Approved continuation is queued for the next ordinary turn boundary."
+                ) else {
+                    let message = "Mission approval was recorded, but the post-approval continuation could not be queued durably. The Director was not resumed. Refresh Mission status and retry."
+                    composerNotice = message
+                    return .rejected(message: message)
+                }
             }
             guard let persistenceToken = postApprovalContinuationPersistenceToken(for: checkpointContext) else {
                 let message = "Mission approval was recorded, but the post-approval continuation record is missing. The Director was not resumed. Refresh Mission status and retry."
@@ -2051,6 +2062,7 @@ final class CoordinatorModeViewModel: ObservableObject {
         let planID: UUID
         let revision: Int
         let checkpointInstanceID: String
+        let isFailedContinuationRecovery: Bool
     }
 
     private func missionUserDecisionRecord(for action: ContinuationAction) -> PendingMissionUserDecision? {
@@ -2078,7 +2090,8 @@ final class CoordinatorModeViewModel: ObservableObject {
 
     private func currentPlanApprovalCheckpointContext(
         expected: String?,
-        requireExpectedInstance: Bool = true
+        requireExpectedInstance: Bool = true,
+        allowFailedContinuationRecovery: Bool = false
     ) throws -> PlanApprovalCheckpointContext {
         refresh()
         guard let coordinatorSessionID = snapshot.coordinatorRail.coordinatorSessionID,
@@ -2087,6 +2100,37 @@ final class CoordinatorModeViewModel: ObservableObject {
               !plan.status.isTerminal
         else {
             throw MCPError.invalidParams("Checkpoint approval rejected because no nonterminal Mission Plan checkpoint is currently pending. Refresh Mission status and retry.")
+        }
+        if allowFailedContinuationRecovery,
+           plan.approvalState == .approved,
+           plan.pendingRevisionProposal == nil,
+           !plan.hasRevisionProposalDurabilityHold,
+           let continuation = plan.postApprovalContinuation,
+           continuation.status == .failed,
+           continuation.coordinatorSessionID == coordinatorSessionID,
+           continuation.planID == plan.id
+        {
+            guard let expected else {
+                throw MCPError.invalidParams("Failed continuation retry rejected because the authoritative checkpoint instance is missing. Refresh Mission status and retry.")
+            }
+            guard expected == continuation.checkpointInstanceID else {
+                throw MCPError.invalidParams("Failed continuation retry rejected because the checkpoint instance does not match the approved continuation. Refresh Mission status and retry.")
+            }
+            guard plan.decisions.contains(where: { decision in
+                decision.actor == .user
+                    && decision.label == CoordinatorMissionUserDecisionLabel.approvedMissionPlan.rawValue
+                    && decision.checkpointID == Self.planApprovalCheckpointID
+                    && decision.checkpointInstanceID == continuation.checkpointInstanceID
+            }) else {
+                throw MCPError.invalidParams("Failed continuation retry rejected because the authoritative user approval decision is missing.")
+            }
+            return PlanApprovalCheckpointContext(
+                coordinatorSessionID: coordinatorSessionID,
+                planID: continuation.planID,
+                revision: continuation.planRevision,
+                checkpointInstanceID: continuation.checkpointInstanceID,
+                isFailedContinuationRecovery: true
+            )
         }
         if plan.approvalState == .notRequired {
             try migrateLegacyNotRequiredPlanCheckpoint(coordinatorSessionID: coordinatorSessionID)
@@ -2111,7 +2155,8 @@ final class CoordinatorModeViewModel: ObservableObject {
             coordinatorSessionID: coordinatorSessionID,
             planID: plan.id,
             revision: plan.revision,
-            checkpointInstanceID: current
+            checkpointInstanceID: current,
+            isFailedContinuationRecovery: false
         )
     }
 
@@ -2236,7 +2281,8 @@ final class CoordinatorModeViewModel: ObservableObject {
             checkpointInstanceID: planRevisionCheckpointInstanceID(
                 coordinatorSessionID: coordinatorSessionID,
                 revision: plan.revision
-            )
+            ),
+            isFailedContinuationRecovery: false
         )
         let timestamp = Date()
         do {
@@ -2361,6 +2407,27 @@ final class CoordinatorModeViewModel: ObservableObject {
             state.recordPostApprovalContinuation(continuation)
             _ = state.markPostApprovalContinuationFailed(error: error)
             return state.postApprovalContinuation ?? continuation
+        }
+    }
+
+    @discardableResult
+    private func recordFailedPostApprovalContinuationRetry(_ context: PlanApprovalCheckpointContext) -> Bool {
+        refresh()
+        guard let continuation = snapshot.coordinatorRail.availableCoordinators
+            .first(where: { $0.sessionID == context.coordinatorSessionID })?
+            .missionPlan?
+            .postApprovalContinuation,
+            continuation.status == .failed,
+            continuation.checkpointInstanceID == context.checkpointInstanceID,
+            continuation.planID == context.planID,
+            continuation.planRevision == context.revision
+        else { return false }
+        return updatePostApprovalContinuation(context.coordinatorSessionID) { continuation in
+            continuation.updating(
+                status: .deferred,
+                error: "Retrying the failed approved continuation after exact checkpoint resubmission.",
+                at: Date()
+            )
         }
     }
 
